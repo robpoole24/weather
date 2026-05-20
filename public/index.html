@@ -996,6 +996,8 @@ function loadIframe(src, label, isLive) {
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
+  const fsBtn = document.getElementById('fullscreen-btn');
+
   if (isWeatherStar) {
     // Show Matt's full page so zip entry and controls are visible
     frame.style.marginTop = '0';
@@ -1003,12 +1005,16 @@ function loadIframe(src, label, isLive) {
     // White background so Matt's black text is readable against the page
     wrapper.style.background = '#ffffff';
     frame.style.background = '#ffffff';
+    // Hide fullscreen button — cross-origin iframe prevents clean fullscreen for WeatherStar
+    fsBtn.style.display = 'none';
   } else {
     // Full fill for YouTube and everything else — keep video area dark
     frame.style.marginTop = '0';
     frame.style.height = '100%';
     wrapper.style.background = '#000000';
     frame.style.background = '#000000';
+    // Show fullscreen button for YouTube content
+    fsBtn.style.display = 'flex';
   }
 
   frame.src = src;
@@ -1045,6 +1051,7 @@ function clearVideo() {
   frame.style.background = '#000000';
   document.getElementById('live-badge').classList.remove('visible');
   document.getElementById('channel-label').classList.remove('visible');
+  document.getElementById('fullscreen-btn').style.display = 'none';
   currentChannel = null;
 }
 
