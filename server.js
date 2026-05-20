@@ -672,6 +672,30 @@ app.get('/api/yt/quota-status', (req, res) => {
   res.json({ quotaExceeded, lastLiveCheck: cache.lastLiveCheck });
 });
 
+// Manual trigger for live check — for diagnostics
+app.post('/api/admin/trigger-live-check', async (req, res) => {
+  res.json({ ok: true, message: 'Live check triggered' });
+  await scheduledLiveCheck();
+});
+
+// Manual trigger for recent video fetch — for diagnostics
+app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
+  res.json({ ok: true, message: 'Recent video fetch triggered' });
+  await fetchAllRecentVideos();
+});
+
+// Test outbound connectivity to Google
+app.get('/api/admin/test-connectivity', async (req, res) => {
+  const key = getApiKey();
+  try {
+    const url = 'https://www.googleapis.com/youtube/v3/channels?key=' + key + '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
+    const data = await ytFetch(url);
+    res.json({ ok: true, response: data });
+  } catch(e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // Cache management — admin only
 app.post('/api/admin/cache/clear-playlist', (req, res) => {
   cache.playlist = {};
