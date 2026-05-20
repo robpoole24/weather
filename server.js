@@ -38,7 +38,7 @@ function saveData(data) {
 function getDefaultData() {
   return {
     config: {
-      playlistId: '',
+      playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI',
       apiKey: process.env.YOUTUBE_API_KEY || ''
     },
     groups: [
@@ -47,9 +47,10 @@ function getDefaultData() {
         label: 'Weather Forecasters',
         icon: '⛅',
         channels: [
-          { id: 'UCVv7iPzCOe3_-9jPCJFUFbg', name: 'Max Velocity', hasLive: true, enabled: true },
-          { id: 'UCsmI8ovLH-dEkBp_kk6DKJA', name: "Ryan Hall Y'all", hasLive: true, enabled: true },
-          { id: 'UCNQqXMNuK3pPAEGN8OwqXhg', name: 'Evan Fryberger', hasLive: true, enabled: true }
+          { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true },
+          { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true },
+          { id: 'UCp2G_jHO53yj2NVjv8zbDmQ', name: 'Evan Fryberger',    hasLive: true,  enabled: true },
+          { id: 'UCBtR7ynKM9odz-PW_7uyzDw', name: 'Severe Studios',    hasLive: true,  enabled: true },
         ]
       },
       {
@@ -57,22 +58,72 @@ function getDefaultData() {
         label: 'Storm Chasers',
         icon: '🌪',
         channels: [
-          { id: 'UCchasers001', name: 'Reed Timmer', hasLive: true, enabled: true },
-          { id: 'UCo-3ThNQmPmQSQL9WPjMaUQ', name: 'Pecos Hank', hasLive: false, enabled: true },
-          { id: 'UCLMVjB6YhWX-bDxNiSmVNNg', name: 'Connor Croff', hasLive: true, enabled: true },
-          { id: 'UCJ_8JVFhFKEaFRqnv9kxKmA', name: 'Brandon Copic', hasLive: true, enabled: true },
-          { id: 'UCFQfMFWHkIBFSxfS_kI4iKA', name: 'Freddy McKinney', hasLive: true, enabled: true },
-          { id: 'UCm8EwVbQaGVkYnxZVQvCFAw', name: 'Tornado Paigeyy', hasLive: true, enabled: true }
+          { id: 'UC8QZ-OIqfWKek1CpMvs2O3g', name: 'Aaron Jayjack',          hasLive: true,  enabled: true },
+          { id: 'UCXQYQMwU9wc584i7ecZzm_A', name: 'Adri Mozeris',           hasLive: false, enabled: true },
+          { id: 'UCW-db9uRShMINgICqQeyt1Q', name: 'Alexander Spahn',        hasLive: false, enabled: true },
+          { id: 'UCT1IIkU3Yafr6nfNxQlWuSQ', name: 'Andrew Pritchard',       hasLive: true,  enabled: true },
+          { id: 'UCXZJRhrMbtXqjZCZUGp5CTg', name: 'Bamawxcom',              hasLive: false, enabled: true },
+          { id: 'UCD3KREyo3IqCLBC-4khGgIw', name: 'Brandon Clement',        hasLive: true,  enabled: true },
+          { id: 'UCJ_8JVFhFKEaFRqnv9kxKmA', name: 'Brandon Copic',          hasLive: true,  enabled: true },
+          { id: 'UCMmlV4B6Bx2GuYtIaxpLcfw', name: 'Brittney Richardson',    hasLive: true,  enabled: true },
+          { id: 'UCvIqVAaqpx1Q_e9DzIxgk1A', name: 'CF Productions',         hasLive: true,  enabled: true },
+          { id: 'UCLfN3U2O0sEYabjo2lxIttw', name: 'Celton Henderson',       hasLive: false, enabled: true },
+          { id: 'UCGpPbdVAtTUgW_w98lXC9nw', name: 'Chris Riske',            hasLive: true,  enabled: true },
+          { id: 'UCLMVjB6YhWX-bDxNiSmVNNg', name: 'Connor Croff',           hasLive: true,  enabled: true },
+          { id: 'UCRYYy0UrfyGmMKQDU1N1R3g', name: 'Convective Chronicles',  hasLive: true,  enabled: true },
+          { id: 'UCx5ex9rJumpj-oKgVJrP4hA', name: 'Corey Gerken',           hasLive: true,  enabled: true },
+          { id: 'UCemyFpFfu55JvAP_eWW1NdA', name: 'Daniel Shaw',            hasLive: true,  enabled: true },
+          { id: 'UChZ_VT3MrHB53bSqFiVf4eg', name: "Edgar O'Neal",           hasLive: true,  enabled: true },
+          { id: 'UCFQfMFWHkIBFSxfS_kI4iKA', name: 'Freddy McKinney',        hasLive: true,  enabled: true },
+          { id: 'UCPgskHnT1cT_hpfbq9nUK7w', name: 'Jakob McMillin',         hasLive: true,  enabled: true },
+          { id: 'UCWcjww4Wz_UqxSPYCnc9T-A', name: 'Joey Krastel',           hasLive: false, enabled: true },
+          { id: 'UCWMRFAo3Cvd7W8yQpQwsOQA', name: 'John McKinney',          hasLive: true,  enabled: true },
+          { id: 'UCSoEfOMuGNjrrhD4iLTKo_A', name: 'Jonas Piontek',          hasLive: false, enabled: true },
+          { id: 'UC86mOt7YnKgRUQxblDpsN-g', name: 'Jordan Hall',            hasLive: true,  enabled: true },
+          { id: 'UCvRBXkjHG0vbDrO-03ZIWxw', name: 'Justin Noonan',          hasLive: false, enabled: true },
+          { id: 'UClIZx2ESMJVocfMIbji_ujg', name: 'Justin Poublon',         hasLive: true,  enabled: true },
+          { id: 'UCPtizAsfQaJktz0tw9YuKLQ', name: 'Kannon Kalton',          hasLive: true,  enabled: true },
+          { id: 'UC1nJElGcVcTpeZJVyxEbzJw', name: 'Live Storms Media',      hasLive: true,  enabled: true },
+          { id: 'UCeE90n3GWO1XZcwt8xpNRtw', name: 'Melanie Metz',           hasLive: true,  enabled: true },
+          { id: 'UCy5cFthFcECu6DMSBcOX5AQ', name: 'Oklahoma Weather Couple', hasLive: false, enabled: true },
+          { id: 'UCV6hWxB0-u_IX7e-h4fEBAw', name: 'Reed Timmer',            hasLive: true,  enabled: true },
+          { id: 'UChxsy558HhpaqnB1Hk6tHkw', name: 'Reilly Dibble',          hasLive: true,  enabled: true },
+          { id: 'UCqsI0A7OlQTnwPFOUZaISMA', name: 'Scott Currens',          hasLive: false, enabled: true },
+          { id: 'UCqAWcfd0BJBgCW8iyOLOF3g', name: 'Scott Peake',            hasLive: true,  enabled: true },
+          { id: 'UCdSMdTFOfqmOXP-1vD2cxAA', name: 'Storm Chase TV',         hasLive: true,  enabled: true },
+          { id: 'UCAnSuGYTjwbGoBMgF_aBpnQ', name: 'Stormgasm',              hasLive: true,  enabled: true },
+          { id: 'UCBmOfiL9LC3dT4Ps2veVCoQ', name: 'Stormrunner Media',      hasLive: true,  enabled: true },
+          { id: 'UCm8EwVbQaGVkYnxZVQvCFAw', name: 'Tornado Paigeyy',        hasLive: true,  enabled: true },
+          { id: 'UCuer9Sw2UAD5LWZpVXbgKTA', name: 'Tornado TRX',            hasLive: true,  enabled: true },
+        ]
+      },
+      {
+        id: 'creators',
+        label: 'Other Weather Creators',
+        icon: '🎬',
+        channels: [
+          { id: 'UCuFxM1HTY6SONb_FICAl6gQ', name: 'Carly Anna WX',          hasLive: false, enabled: true },
+          { id: 'UCGEZlX4V82wv7_Z2LsXtjPA', name: 'June First',             hasLive: true,  enabled: true },
+          { id: 'UCpYQmszu4IP37xyt3RQb2gw', name: 'More Max Velocity',      hasLive: true,  enabled: true },
+          { id: 'UCo-3ThNQmPmQSQL9WPjMaUQ', name: 'Pecos Hank',             hasLive: false, enabled: true },
+          { id: 'UCCP12NYSDa9KL26PW1zokcA', name: 'Storm Channel Coaching', hasLive: false, enabled: true },
+          { id: 'UCz2BWcrW-njx_py1FR0447A', name: 'Storm Reel',             hasLive: false, enabled: true },
+          { id: 'UCZTme3vf6kXmXfSsIr06lvQ', name: 'Swegle Studios',         hasLive: false, enabled: true },
+          { id: 'UC0CPqIPMHCELm208KiwBwdw', name: 'Tornado Forensics',      hasLive: false, enabled: true },
+          { id: 'UC9c4E_DWmPMel1MelOBTznw', name: 'Tornado Video Library',  hasLive: false, enabled: true },
+          { id: 'UCgGTo_tNrWxArxh3c3aI6bw', name: 'Tornado Warned',         hasLive: false, enabled: true },
+          { id: 'UCCtYdNBm-8C_wZk0n6u8VnQ', name: 'Weatherbox Studios',     hasLive: false, enabled: true },
+          { id: 'UCHf2fy0H-GJNrdVO3KxDV5Q', name: 'WorldStorm',             hasLive: false, enabled: true },
         ]
       }
     ],
     apps: [
-      { name: 'WeatherFront', icon: '🌤', ios: 'https://apps.apple.com/search?term=weatherfront', android: 'https://play.google.com/store/search?q=weatherfront', enabled: true },
-      { name: 'Weather Wise', icon: '🌡', ios: 'https://apps.apple.com/search?term=weather+wise', android: 'https://play.google.com/store/search?q=weather+wise', enabled: true },
-      { name: 'Radar Omega', icon: '🌀', ios: 'https://apps.apple.com/search?term=radar+omega', android: 'https://play.google.com/store/search?q=radar+omega', enabled: true },
-      { name: 'Windy', icon: '💨', ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262', android: 'https://play.google.com/store/apps/details?id=com.windyty.android', enabled: true },
-      { name: 'The Weather Channel', icon: '🌈', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461', android: 'https://play.google.com/store/apps/details?id=com.weather.Weather', enabled: true },
-      { name: 'AccuWeather', icon: '☀️', ios: 'https://apps.apple.com/app/accuweather/id300048137', android: 'https://play.google.com/store/apps/details?id=com.accuweather.android', enabled: true }
+      { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/app/weatherfront/id1580596099',                           android: null,                                                                          androidSoon: true,  enabled: true },
+      { name: 'Weather Wise',        img: 'images/weather-wise.webp',    ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                     android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise', androidSoon: false, enabled: true },
+      { name: 'Radar Omega',         img: 'images/radar-omega.webp',     ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',         android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping', androidSoon: false, enabled: true },
+      { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',             android: 'https://play.google.com/store/apps/details?id=com.windyty.android',          androidSoon: false, enabled: true },
+      { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                     android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',          androidSoon: false, enabled: true },
+      { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                              android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',      androidSoon: false, enabled: true },
     ]
   };
 }
