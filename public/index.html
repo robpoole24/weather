@@ -156,6 +156,41 @@
   #ws-reset-btn.visible { display: block; }
   #ws-reset-btn:hover { background: var(--accent); color: #000; }
 
+  #fullscreen-btn {
+    position: absolute;
+    bottom: 1rem;
+    right: 1rem;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.7);
+    font-size: 1.2rem;
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    transition: all 0.2s;
+    line-height: 1;
+  }
+  #fullscreen-btn:hover {
+    background: rgba(0,0,0,0.85);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* When video area is fullscreen, hide the control bar */
+  #video-area:fullscreen {
+    width: 100vw;
+    height: 100vh;
+  }
+  #video-area:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+  }
+
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
     flex: 0 0 20vh;
@@ -489,6 +524,7 @@
   <div id="live-badge">LIVE</div>
   <div id="channel-label"></div>
   <button id="ws-reset-btn" onclick="showWSPanel()">⟳ Change Settings</button>
+  <button id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">⛶</button>
 
   <!-- Default placeholder -->
   <div id="video-placeholder">
@@ -1261,6 +1297,94 @@ function startClock() {
   update();
   setInterval(update, 1000);
 }
+
+// ═══════════════════════════════════════════
+// FULLSCREEN
+// ═══════════════════════════════════════════
+let fullscreenToastShown = false;
+
+function showFullscreenToast() {
+  // Only show once per session
+  if (fullscreenToastShown) return;
+  fullscreenToastShown = true;
+
+  const toast = document.createElement('div');
+  toast.id = 'fullscreen-toast';
+  toast.textContent = 'Press Escape or click ✕ to return to WeatherTV';
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.85);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.9);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.9rem;
+    letter-spacing: 0.05em;
+    padding: 0.6rem 1.5rem;
+    border-radius: 4px;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+    white-space: nowrap;
+  `;
+  document.body.appendChild(toast);
+
+  // Fade in
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => { toast.style.opacity = '1'; });
+  });
+
+  // Fade out after 3 seconds
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 400);
+  }, 3000);
+}
+
+function toggleFullscreen() {
+  const videoArea = document.getElementById('video-area');
+  const btn = document.getElementById('fullscreen-btn');
+
+  const isFullscreen = document.fullscreenElement ||
+                       document.webkitFullscreenElement ||
+                       document.mozFullScreenElement;
+
+  if (!isFullscreen) {
+    if (videoArea.requestFullscreen) {
+      videoArea.requestFullscreen();
+    } else if (videoArea.webkitRequestFullscreen) {
+      videoArea.webkitRequestFullscreen();
+    } else if (videoArea.mozRequestFullScreen) {
+      videoArea.mozRequestFullScreen();
+    }
+    btn.textContent = '✕';
+    btn.title = 'Exit Fullscreen';
+    // Show hint toast after a short delay so it appears once fullscreen is active
+    setTimeout(showFullscreenToast, 600);
+  } else {
+    if (document.exitFullscreen) {
+      document.exitFullscreen();
+    } else if (document.webkitExitFullscreen) {
+      document.webkitExitFullscreen();
+    } else if (document.mozCancelFullScreen) {
+      document.mozCancelFullScreen();
+    }
+    btn.textContent = '⛶';
+    btn.title = 'Toggle Fullscreen';
+  }
+}
+
+// Reset button icon when user exits fullscreen via Escape key
+document.addEventListener('fullscreenchange', () => {
+  const btn = document.getElementById('fullscreen-btn');
+  if (!document.fullscreenElement) {
+    btn.textContent = '⛶';
+    btn.title = 'Toggle Fullscreen';
+  }
+});
 
 // ═══════════════════════════════════════════
 // ABOUT MODAL
