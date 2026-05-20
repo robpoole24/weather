@@ -727,7 +727,8 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
+// Listen on 0.0.0.0 so Railway can reach the server
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`WeatherTV server running on port ${PORT}`);
   console.log(`App: http://localhost:${PORT}`);
   console.log(`Admin: http://localhost:${PORT}/admin`);
