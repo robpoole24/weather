@@ -1,0 +1,4 @@
+YOUTUBE_API_KEY=AIzaSyAwgmqqP9T_OoUmKrEkSd6N1z-rJDeGE4M
+PORT=3000
+APP_URL=https://weather-tv.up.railway.app
+WEBSUB_SECRET=weathertv-websub-secret-change-me
