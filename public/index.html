@@ -947,7 +947,8 @@ function showWSPanel() {
 // VIDEO CONTROLS
 // ═══════════════════════════════════════════
 // WeatherStar nav bar height to clip — update this if Matt changes his layout
-const WS_NAV_HEIGHT = 48; // px
+const WS_NAV_HEIGHT = 0; // Set to 0 to show Matt's full page including zip entry
+// If Matt's nav bar becomes visually intrusive, increase this value in small increments
 
 function loadIframe(src, label, isLive) {
   const placeholder = document.getElementById('video-placeholder');
@@ -960,9 +961,9 @@ function loadIframe(src, label, isLive) {
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
   if (isWeatherStar) {
-    // Clip the top nav bar by pulling the iframe up and compensating wrapper height
-    frame.style.marginTop = `-${WS_NAV_HEIGHT}px`;
-    frame.style.height = `calc(100% + ${WS_NAV_HEIGHT}px)`;
+    // Show Matt's full page so zip entry and controls are visible
+    frame.style.marginTop = '0';
+    frame.style.height = '100%';
     // White background so Matt's black text is readable against the page
     wrapper.style.background = '#ffffff';
     frame.style.background = '#ffffff';
