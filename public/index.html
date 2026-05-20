@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather TV</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0e14;
+    --surface: #111820;
+    --surface2: #1a2433;
+    --accent: #00b4d8;
+    --accent2: #0077b6;
+    --gold: #f4a261;
+    --text: #e8f4fd;
+    --muted: #7a9bb5;
+    --border: rgba(0,180,216,0.2);
+    --red: #e63946;
+    --green: #52b788;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Barlow', sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── TOP: VIDEO AREA (80%) ── */
+  #video-area {
+    flex: 0 0 80vh;
+    position: relative;
+    background: #000;
+    overflow: hidden;
+  }
+
+  #video-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+  }
+
+  #video-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(ellipse at center, #0d1b2a 0%, #050a0f 100%);
+    gap: 1rem;
+  }
+
+  #video-placeholder .logo {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 4rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  #video-placeholder .logo span { color: var(--gold); }
+
+  #video-placeholder p {
+    color: var(--muted);
+    font-size: 1.1rem;
+  }
+
+  /* Radar animation behind placeholder */
+  .radar-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid rgba(0,180,216,0.15);
+    animation: radarPulse 3s ease-out infinite;
+  }
+  @keyframes radarPulse {
+    0% { transform: scale(0.3); opacity: 0.8; }
+    100% { transform: scale(3); opacity: 0; }
+  }
+
+  /* Live badge */
+  #live-badge {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    background: var(--red);
+    color: white;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 0.25rem 0.75rem;
+    border-radius: 3px;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    z-index: 10;
+  }
+  #live-badge.visible { display: flex; }
+  #live-badge::before {
+    content: '';
+    width: 8px; height: 8px;
+    background: white;
+    border-radius: 50%;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  #channel-label {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 0.25rem 0.75rem;
+    border-radius: 3px;
+    display: none;
+    z-index: 10;
+  }
+  #channel-label.visible { display: block; }
+
+  /* WeatherStar reset button */
+  #ws-reset-btn {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.8);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    padding: 0.5rem 1.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    display: none;
+    z-index: 10;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+  #ws-reset-btn.visible { display: block; }
+  #ws-reset-btn:hover { background: var(--accent); color: #000; }
+
+  /* ── BOTTOM: CONTROL BAR (20%) ── */
+  #control-bar {
+    flex: 0 0 20vh;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Main nav buttons */
+  #main-nav {
+    display: flex;
+    padding: 0.75rem 1rem;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .nav-btn {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.5rem 1.25rem;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
+
+  /* Panels */
+  #panels {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .panel {
+    display: none;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .panel.active { display: flex; align-items: center; }
+
+  /* Channel list panel */
+  .channel-list {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0 1rem;
+    height: 100%;
+  }
+
+  .return-btn {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--muted);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  .return-btn:hover { border-color: var(--text); color: var(--text); }
+
+  .divider {
+    width: 1px;
+    height: 40px;
+    background: var(--border);
+    flex-shrink: 0;
+    margin: 0 0.25rem;
+  }
+
+  .channel-card {
+    flex-shrink: 0;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    min-width: 160px;
+    cursor: default;
+  }
+
+  .channel-name {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--text);
+    margin-bottom: 0.4rem;
+    white-space: nowrap;
+  }
+
+  .channel-btns {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .ch-btn {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.6rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+  }
+
+  .ch-btn.live {
+    background: var(--red);
+    color: white;
+  }
+  .ch-btn.live:hover { background: #c1121f; }
+  .ch-btn.live:disabled {
+    background: rgba(230,57,70,0.2);
+    color: rgba(230,57,70,0.4);
+    cursor: not-allowed;
+  }
+
+  .ch-btn.recent {
+    background: var(--accent2);
+    color: white;
+  }
+  .ch-btn.recent:hover { background: #005f8a; }
+
+  /* Live indicator dot */
+  .live-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: var(--red);
+    border-radius: 50%;
+    margin-right: 4px;
+    animation: blink 1s step-end infinite;
+  }
+
+  /* Recent videos panel (overlay) */
+  #recent-overlay {
+    display: none;
+    position: absolute;
+    bottom: 0; left: 0; right: 0; top: 0;
+    background: var(--surface);
+    z-index: 20;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+  }
+  #recent-overlay.active { display: flex; }
+
+  .recent-header {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 110px;
+  }
+
+  .recent-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .video-cards {
+    display: flex;
+    gap: 0.5rem;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent2) transparent;
+  }
+
+  .video-thumb {
+    flex-shrink: 0;
+    width: 140px;
+    cursor: pointer;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    transition: border-color 0.2s;
+  }
+  .video-thumb:hover { border-color: var(--accent); }
+
+  .video-thumb img {
+    width: 100%;
+    aspect-ratio: 16/9;
+    object-fit: cover;
+    display: block;
+    background: var(--surface2);
+  }
+
+  .video-thumb-title {
+    font-size: 0.68rem;
+    color: var(--muted);
+    padding: 0.3rem 0.4rem;
+    line-height: 1.3;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  /* WeatherStar panel — full site embedded, no custom controls needed */
+
+  /* Weather Apps Panel */
+  #apps-panel {
+    padding: 0.5rem 1rem;
+    gap: 0.5rem;
+  }
+
+  .app-chip {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+  }
+  .app-chip:hover { border-color: var(--accent); }
+
+  .app-icon {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+
+  .app-chip-name {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text);
+  }
+  .app-chip-disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  #playlist-panel { padding: 0.5rem 1rem; gap: 0.75rem; align-items: center; }
+
+  /* Status bar */
+  #status-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.3rem 1rem;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .status-item {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-family: 'Barlow Condensed', sans-serif;
+    letter-spacing: 0.05em;
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--green);
+    margin-right: 4px;
+  }
+
+  /* Loading spinner */
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { height: 3px; width: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--accent2); border-radius: 2px; }
+
+  /* About button */
+  .about-btn {
+    margin-left: auto;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.2rem 0.75rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .about-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     VIDEO AREA
+════════════════════════════════════════════ -->
+<div id="video-area">
+  <div id="live-badge">LIVE</div>
+  <div id="channel-label"></div>
+  <button id="ws-reset-btn" onclick="showWSPanel()">⟳ Change Settings</button>
+
+  <!-- Default placeholder -->
+  <div id="video-placeholder">
+    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">
+      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:0s"></div>
+      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:1s"></div>
+      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:2s"></div>
+    </div>
+    <div class="logo">Weather<span>TV</span></div>
+    <p>Select a channel below to begin</p>
+  </div>
+
+  <!-- Video frame wrapper — clips WeatherStar nav bar via overflow:hidden + negative margin -->
+  <div id="video-wrapper" style="display:none;width:100%;height:100%;overflow:hidden;position:relative;">
+    <iframe id="video-frame"
+      style="width:100%;height:100%;border:none;display:block;"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      allowfullscreen>
+    </iframe>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     CONTROL BAR
+════════════════════════════════════════════ -->
+<div id="control-bar">
+
+  <!-- Main nav -->
+  <div id="main-nav">
+    <button class="nav-btn" onclick="showPanel('forecasters')">⛅ Weather Forecasters</button>
+    <button class="nav-btn" onclick="showPanel('chasers')">🌪 Storm Chasers</button>
+    <button class="nav-btn" onclick="showPanel('creators')">🎬 Other Weather Creators</button>
+    <button class="nav-btn" onclick="showPanel('weatherstar')">📺 WeatherStar 4000+</button>
+    <button class="nav-btn" onclick="showPanel('playlist')">▶ Weather Playlist</button>
+    <button class="nav-btn" onclick="showPanel('apps')" style="margin-left:auto">📱 Weather Apps</button>
+  </div>
+
+  <!-- Panels -->
+  <div id="panels">
+
+    <!-- FORECASTERS -->
+    <div class="panel" id="forecasters-panel">
+      <div id="recent-overlay" id="forecasters-recent"></div>
+      <div class="channel-list" id="forecasters-list"></div>
+    </div>
+
+    <!-- STORM CHASERS -->
+    <div class="panel" id="chasers-panel">
+      <div class="channel-list" id="chasers-list"></div>
+    </div>
+
+    <!-- OTHER WEATHER CREATORS -->
+    <div class="panel" id="creators-panel">
+      <div class="channel-list" id="creators-list"></div>
+    </div>
+
+    <!-- WEATHERSTAR -->
+    <div class="panel" id="weatherstar-panel">
+    </div>
+
+    <!-- PLAYLIST -->
+    <div class="panel" id="playlist-panel">
+      <div class="return-btn" onclick="closePanel('playlist')">← Back</div>
+      <div class="divider"></div>
+      <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;min-width:90px">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.05em">🌦 Playlist</div>
+        <div style="font-size:0.7rem;color:var(--muted)">Click to play</div>
+      </div>
+      <div class="divider"></div>
+      <div id="playlist-thumbs" style="display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:thin;scrollbar-color:var(--accent2) transparent;">
+        <div style="display:flex;align-items:center;gap:0.5rem;color:var(--muted);font-size:0.8rem">
+          <div class="spinner"></div> Loading playlist...
+        </div>
+      </div>
+    </div>
+
+    <!-- APPS -->
+    <div class="panel" id="apps-panel">
+      <div class="return-btn" onclick="closePanel('apps')">← Back</div>
+      <div class="divider"></div>
+    </div>
+
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar">
+    <span class="status-item"><span class="status-dot"></span>WeatherTV v1.0</span>
+    <span class="status-item" id="api-status">Connecting to YouTube API...</span>
+    <span class="status-item" id="time-display"></span>
+    <button class="about-btn" onclick="showAbout()">About</button>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════
+     ABOUT MODAL
+════════════════════════════════════════════ -->
+<div id="about-overlay" onclick="hideAbout()" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,0.75);
+  z-index:1000;
+  align-items:center;
+  justify-content:center;
+">
+  <div onclick="event.stopPropagation()" style="
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:10px;
+    max-width:520px;
+    width:90%;
+    padding:2rem;
+    position:relative;
+    box-shadow:0 8px 40px rgba(0,0,0,0.6);
+  ">
+    <button onclick="hideAbout()" style="
+      position:absolute;top:1rem;right:1rem;
+      background:transparent;border:none;
+      color:var(--muted);font-size:1.2rem;
+      cursor:pointer;line-height:1;
+    ">✕</button>
+
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:1.8rem;font-weight:700;color:var(--accent);letter-spacing:0.05em;margin-bottom:0.25rem">
+      Weather<span style="color:var(--gold)">TV</span>
+    </div>
+    <div style="font-size:0.75rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:1.5rem">
+      Version 1.0
+    </div>
+
+    <div style="font-size:0.9rem;line-height:1.7;color:var(--text)">
+      <p style="margin-bottom:1rem">
+        WeatherTV is a curated weather content platform bringing together the best storm chasers,
+        weather forecasters, and weather creators in one place.
+      </p>
+      <p style="margin-bottom:1rem">
+        This app is a passthrough — all content plays through official YouTube embeds,
+        preserving view counts, ad revenue, and creator support exactly as if you watched directly on YouTube.
+      </p>
+      <p style="margin-bottom:1.5rem">
+        WeatherStar 4000+ is powered by <a href="https://weatherstar.netbymatt.com" target="_blank" style="color:var(--accent)">weatherstar.netbymatt.com</a> —
+        a fantastic recreation of the classic 1990s Weather Channel experience.
+      </p>
+
+      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Version History</div>
+        <div style="font-size:0.82rem;color:var(--muted)">
+          <div><span style="color:var(--accent)">v1.0</span> — Initial release</div>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:1rem">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Contact</div>
+        <div style="font-size:0.85rem;color:var(--muted)">
+          Something broken or a channel to suggest?<br>
+          <a href="mailto:your@email.com" style="color:var(--accent)">your@email.com</a>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:1.5rem">
+      <button onclick="hideAbout()" style="
+        font-family:'Barlow Condensed',sans-serif;font-weight:700;
+        font-size:0.85rem;letter-spacing:0.1em;text-transform:uppercase;
+        padding:0.5rem 2rem;background:var(--accent);
+        border:none;color:#000;border-radius:4px;cursor:pointer;
+      ">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// API key is now stored securely in the .env file on the server
+// You no longer need to edit this file to set your API key
+
+const PLAYLIST_ID = 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI';
+
+// ═══════════════════════════════════════════
+// CHANNEL DATA
+// ═══════════════════════════════════════════
+const CHANNELS = {
+  forecasters: [
+    { name: 'Max Velocity',      id: 'UCvBVK2ymNzPLRJrgip2GeQQ', hasLive: true },
+    { name: "Ryan Hall Y'all",   id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', hasLive: true },
+    { name: 'Evan Fryberger',    id: 'UCp2G_jHO53yj2NVjv8zbDmQ', hasLive: true },
+    { name: 'Severe Studios',    id: 'UCBtR7ynKM9odz-PW_7uyzDw',  hasLive: true },
+  ],
+  chasers: [
+    { name: 'Aaron Jayjack',          id: 'UC8QZ-OIqfWKek1CpMvs2O3g', hasLive: true  },
+    { name: 'Adri Mozeris',           id: 'UCXQYQMwU9wc584i7ecZzm_A', hasLive: false },
+    { name: 'Alexander Spahn',        id: 'UCW-db9uRShMINgICqQeyt1Q', hasLive: false },
+    { name: 'Andrew Pritchard',       id: 'UCT1IIkU3Yafr6nfNxQlWuSQ', hasLive: true  },
+    { name: 'Bamawxcom',              id: 'UCXZJRhrMbtXqjZCZUGp5CTg', hasLive: false },
+    { name: 'Brandon Clement',        id: 'UCD3KREyo3IqCLBC-4khGgIw', hasLive: true  },
+    { name: 'Brandon Copic',          id: 'UCJ_8JVFhFKEaFRqnv9kxKmA', hasLive: true  },
+    { name: 'Brittney Richardson',    id: 'UCMmlV4B6Bx2GuYtIaxpLcfw', hasLive: true  },
+    { name: 'CF Productions',         id: 'UCvIqVAaqpx1Q_e9DzIxgk1A', hasLive: true  },
+    { name: 'Celton Henderson',       id: 'UCLfN3U2O0sEYabjo2lxIttw', hasLive: false },
+    { name: 'Chris Riske',            id: 'UCGpPbdVAtTUgW_w98lXC9nw', hasLive: true  },
+    { name: 'Connor Croff',           id: 'UCLMVjB6YhWX-bDxNiSmVNNg', hasLive: true  },
+    { name: 'Convective Chronicles',  id: 'UCRYYy0UrfyGmMKQDU1N1R3g', hasLive: true  },
+    { name: 'Corey Gerken',           id: 'UCx5ex9rJumpj-oKgVJrP4hA', hasLive: true  },
+    { name: 'Daniel Shaw',            id: 'UCemyFpFfu55JvAP_eWW1NdA', hasLive: true  },
+    { name: "Edgar O'Neal",          id: "UChZ_VT3MrHB53bSqFiVf4eg", hasLive: true  },
+    { name: 'Freddy McKinney',        id: 'UCFQfMFWHkIBFSxfS_kI4iKA', hasLive: true  },
+    { name: 'Jakob McMillin',         id: 'UCPgskHnT1cT_hpfbq9nUK7w', hasLive: true  },
+    { name: 'Joey Krastel',           id: 'UCWcjww4Wz_UqxSPYCnc9T-A', hasLive: false },
+    { name: 'John McKinney',          id: 'UCWMRFAo3Cvd7W8yQpQwsOQA', hasLive: true  },
+    { name: 'Jonas Piontek',          id: 'UCSoEfOMuGNjrrhD4iLTKo_A', hasLive: false },
+    { name: 'Jordan Hall',            id: 'UC86mOt7YnKgRUQxblDpsN-g', hasLive: true  },
+    { name: 'Justin Noonan',          id: 'UCvRBXkjHG0vbDrO-03ZIWxw', hasLive: false },
+    { name: 'Justin Poublon',         id: 'UClIZx2ESMJVocfMIbji_ujg', hasLive: true  },
+    { name: 'Kannon Kalton',          id: 'UCPtizAsfQaJktz0tw9YuKLQ', hasLive: true  },
+    { name: 'Live Storms Media',      id: 'UC1nJElGcVcTpeZJVyxEbzJw', hasLive: true  },
+    { name: 'Melanie Metz',           id: 'UCeE90n3GWO1XZcwt8xpNRtw', hasLive: true  },
+    { name: 'Oklahoma Weather Couple',id: 'UCy5cFthFcECu6DMSBcOX5AQ', hasLive: false },
+    { name: 'Reed Timmer',            id: 'UCV6hWxB0-u_IX7e-h4fEBAw', hasLive: true  },
+    { name: 'Reilly Dibble',          id: 'UChxsy558HhpaqnB1Hk6tHkw', hasLive: true  },
+    { name: 'Scott Currens',          id: 'UCqsI0A7OlQTnwPFOUZaISMA', hasLive: false },
+    { name: 'Scott Peake',            id: 'UCqAWcfd0BJBgCW8iyOLOF3g', hasLive: true  },
+    { name: 'Storm Chase TV',         id: 'UCdSMdTFOfqmOXP-1vD2cxAA', hasLive: true  },
+    { name: 'Stormgasm',              id: 'UCAnSuGYTjwbGoBMgF_aBpnQ', hasLive: true  },
+    { name: 'Stormrunner Media',      id: 'UCBmOfiL9LC3dT4Ps2veVCoQ', hasLive: true  },
+    { name: 'Tornado Paigeyy',        id: 'UCm8EwVbQaGVkYnxZVQvCFAw', hasLive: true  },
+    { name: 'Tornado TRX',            id: 'UCuer9Sw2UAD5LWZpVXbgKTA', hasLive: true  },
+  ],
+  creators: [
+    { name: 'Carly Anna WX',          id: 'UCuFxM1HTY6SONb_FICAl6gQ', hasLive: false },
+    { name: 'June First',             id: 'UCGEZlX4V82wv7_Z2LsXtjPA',  hasLive: true  },
+    { name: 'More Max Velocity',      id: 'UCpYQmszu4IP37xyt3RQb2gw',  hasLive: true  },
+    { name: 'Pecos Hank',             id: 'UCo-3ThNQmPmQSQL9WPjMaUQ',  hasLive: false },
+    { name: 'Storm Channel Coaching', id: 'UCCP12NYSDa9KL26PW1zokcA',  hasLive: false },
+    { name: 'Storm Reel',             id: 'UCz2BWcrW-njx_py1FR0447A',  hasLive: false },
+    { name: 'Swegle Studios',         id: 'UCZTme3vf6kXmXfSsIr06lvQ',  hasLive: false },
+    { name: 'Tornado Forensics',      id: 'UC0CPqIPMHCELm208KiwBwdw',  hasLive: false },
+    { name: 'Tornado Video Library',  id: 'UC9c4E_DWmPMel1MelOBTznw',  hasLive: false },
+    { name: 'Tornado Warned',         id: 'UCgGTo_tNrWxArxh3c3aI6bw',  hasLive: false },
+    { name: 'Weatherbox Studios',     id: 'UCCtYdNBm-8C_wZk0n6u8VnQ',  hasLive: false },
+    { name: 'WorldStorm',             id: 'UCHf2fy0H-GJNrdVO3KxDV5Q',  hasLive: false },
+  ],
+};
+
+const WEATHER_APPS = [
+  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/app/weatherfront/id1580596099',                             android: null,                                                                                       androidSoon: true  },
+  { name: 'Weather Wise',        img: 'images/weather-wise.webp',    ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                       android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise',                             androidSoon: false },
+  { name: 'Radar Omega',         img: 'images/radar-omega.webp',     ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',           android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping',        androidSoon: false },
+  { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',               android: 'https://play.google.com/store/apps/details?id=com.windyty.android',                        androidSoon: false },
+  { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                       android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',                        androidSoon: false },
+  { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                                android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',                    androidSoon: false },
+];
+
+// ═══════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════
+let activePanel = null;
+let liveStatuses = {};
+let currentChannel = null;
+
+// ═══════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════
+async function init() {
+  buildChannelLists();
+  buildAppsPanel();
+  buildWSPanel();
+  startClock();
+  await checkAllLiveStatuses();
+}
+
+// ═══════════════════════════════════════════
+// PANEL NAVIGATION
+// ═══════════════════════════════════════════
+function showPanel(name) {
+  // Update nav buttons
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+
+  // Hide all panels
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+
+  // Show selected
+  const panel = document.getElementById(name + '-panel');
+  if (panel) panel.classList.add('active');
+  activePanel = name;
+
+  // Close any recent overlay
+  closeRecentOverlay();
+
+  // Auto-actions when switching to certain panels
+  if (name === 'weatherstar') {
+    launchWeatherStar();
+  }
+  if (name === 'playlist') {
+    loadPlaylist();
+  }
+}
+
+function closePanel(name) {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  activePanel = null;
+  closeRecentOverlay();
+}
+
+// ═══════════════════════════════════════════
+// BUILD CHANNEL LISTS
+// ═══════════════════════════════════════════
+function buildChannelLists() {
+  ['forecasters', 'chasers', 'creators'].forEach(group => {
+    const list = document.getElementById(group + '-list');
+    if (!list) return;
+
+    // Return button
+    const ret = document.createElement('button');
+    ret.className = 'return-btn';
+    ret.textContent = '← Back';
+    ret.onclick = () => closePanel(group);
+    list.appendChild(ret);
+
+    const div = document.createElement('div');
+    div.className = 'divider';
+    list.appendChild(div);
+
+    CHANNELS[group].forEach(ch => {
+      const card = document.createElement('div');
+      card.className = 'channel-card';
+      card.id = 'card-' + ch.id;
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'channel-name';
+      nameEl.textContent = ch.name;
+      card.appendChild(nameEl);
+
+      const btns = document.createElement('div');
+      btns.className = 'channel-btns';
+
+      // Live button — only rendered if hasLive is true, hidden until confirmed live
+      if (ch.hasLive) {
+        const liveBtn = document.createElement('button');
+        liveBtn.className = 'ch-btn live';
+        liveBtn.id = 'live-' + ch.id;
+        liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
+        liveBtn.style.display = 'none'; // hidden until API confirms live
+        liveBtn.onclick = () => playLive(ch);
+        btns.appendChild(liveBtn);
+      }
+
+      // Recent button
+      const recentBtn = document.createElement('button');
+      recentBtn.className = 'ch-btn recent';
+      recentBtn.textContent = 'RECENT ▸';
+      recentBtn.onclick = () => showRecent(ch, group);
+      btns.appendChild(recentBtn);
+
+      card.appendChild(btns);
+      list.appendChild(card);
+    });
+  });
+}
+
+// ═══════════════════════════════════════════
+// BUILD APPS PANEL
+// ═══════════════════════════════════════════
+function buildAppsPanel() {
+  const panel = document.getElementById('apps-panel');
+
+  const ret = document.createElement('button');
+  ret.className = 'return-btn';
+  ret.textContent = '← Back';
+  ret.onclick = () => closePanel('apps');
+  panel.appendChild(ret);
+
+  const div = document.createElement('div');
+  div.className = 'divider';
+  panel.appendChild(div);
+
+  const os = detectOS();
+
+  WEATHER_APPS.forEach(app => {
+    const isAndroid = os === 'android' || os === 'tizen';
+    const isIOS = os === 'ios';
+    const link = isAndroid ? app.android : app.ios;
+    const comingSoon = isAndroid && !app.android && app.androidSoon;
+    const unavailable = isAndroid && !app.android && !app.androidSoon;
+
+    const chip = document.createElement(link ? 'a' : 'div');
+    chip.className = 'app-chip' + (comingSoon || unavailable ? ' app-chip-disabled' : '');
+
+    if (link) {
+      chip.href = link;
+      chip.target = '_blank';
+      chip.rel = 'noopener';
+    }
+
+    // App icon image
+    const iconWrap = document.createElement('div');
+    iconWrap.style.cssText = 'width:40px;height:40px;flex-shrink:0;border-radius:9px;overflow:hidden;background:var(--surface2);';
+    const img = document.createElement('img');
+    img.src = app.img;
+    img.alt = app.name;
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
+    iconWrap.appendChild(img);
+    chip.appendChild(iconWrap);
+
+    // Name + coming soon badge
+    const nameWrap = document.createElement('div');
+    nameWrap.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+
+    const name = document.createElement('div');
+    name.className = 'app-chip-name';
+    name.textContent = app.name;
+    nameWrap.appendChild(name);
+
+    if (comingSoon) {
+      const badge = document.createElement('div');
+      badge.style.cssText = 'font-family:"Barlow Condensed",sans-serif;font-size:0.62rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gold);';
+      badge.textContent = 'Android coming soon';
+      nameWrap.appendChild(badge);
+    }
+
+    chip.appendChild(nameWrap);
+    panel.appendChild(chip);
+  });
+}
+
+// ═══════════════════════════════════════════
+// BUILD WEATHERSTAR PANEL
+// WeatherStar is a full JS app — we embed the whole site and let
+// Matt's UI handle zip entry, all screen checkboxes, music, speed,
+// WS3000 option, Reset button, and cookie persistence natively.
+// ═══════════════════════════════════════════
+function buildWSPanel() {
+  const panel = document.getElementById('weatherstar-panel');
+  panel.innerHTML = `
+    <div class="return-btn" onclick="closePanel('weatherstar')">← Back</div>
+    <div class="divider"></div>
+    <div style="display:flex;flex-direction:column;justify-content:center;gap:0.2rem">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--accent);letter-spacing:0.05em">WeatherStar 4000+</div>
+      <div style="font-size:0.72rem;color:var(--muted);line-height:1.4">Enter your zip &amp; configure screens directly on the site above.<br>Matt's settings are saved automatically via cookie.</div>
+    </div>
+  `;
+}
+
+// When WeatherStar nav button is clicked, load the full site into the video frame
+function launchWeatherStar() {
+  loadIframe('https://weatherstar.netbymatt.com/', 'WeatherStar 4000+', false);
+  document.getElementById('ws-reset-btn').classList.add('visible');
+}
+
+// Reset button reloads the WS site fresh so user can reconfigure
+function showWSPanel() {
+  loadIframe('https://weatherstar.netbymatt.com/', 'WeatherStar 4000+', false);
+}
+
+// ═══════════════════════════════════════════
+// VIDEO CONTROLS
+// ═══════════════════════════════════════════
+// WeatherStar nav bar height to clip — update this if Matt changes his layout
+const WS_NAV_HEIGHT = 48; // px
+
+function loadIframe(src, label, isLive) {
+  const placeholder = document.getElementById('video-placeholder');
+  const wrapper = document.getElementById('video-wrapper');
+  const frame = document.getElementById('video-frame');
+
+  placeholder.style.display = 'none';
+  wrapper.style.display = 'block';
+
+  const isWeatherStar = src.includes('weatherstar.netbymatt.com');
+
+  if (isWeatherStar) {
+    // Clip the top nav bar by pulling the iframe up and compensating wrapper height
+    frame.style.marginTop = `-${WS_NAV_HEIGHT}px`;
+    frame.style.height = `calc(100% + ${WS_NAV_HEIGHT}px)`;
+    // White background so Matt's black text is readable against the page
+    wrapper.style.background = '#ffffff';
+    frame.style.background = '#ffffff';
+  } else {
+    // Full fill for YouTube and everything else — keep video area dark
+    frame.style.marginTop = '0';
+    frame.style.height = '100%';
+    wrapper.style.background = '#000000';
+    frame.style.background = '#000000';
+  }
+
+  frame.src = src;
+
+  const badge = document.getElementById('live-badge');
+  const labelEl = document.getElementById('channel-label');
+
+  if (isLive) {
+    badge.classList.add('visible');
+  } else {
+    badge.classList.remove('visible');
+  }
+
+  if (label) {
+    labelEl.textContent = label;
+    labelEl.classList.add('visible');
+  } else {
+    labelEl.classList.remove('visible');
+  }
+
+  currentChannel = label;
+}
+
+function clearVideo() {
+  const placeholder = document.getElementById('video-placeholder');
+  const wrapper = document.getElementById('video-wrapper');
+  const frame = document.getElementById('video-frame');
+  placeholder.style.display = 'flex';
+  wrapper.style.display = 'none';
+  frame.src = '';
+  frame.style.marginTop = '0';
+  frame.style.height = '100%';
+  wrapper.style.background = '#000000';
+  frame.style.background = '#000000';
+  document.getElementById('live-badge').classList.remove('visible');
+  document.getElementById('channel-label').classList.remove('visible');
+  currentChannel = null;
+}
+
+function playLive(ch) {
+  // Button only shown when confirmed live, go straight to playback
+  const url = `https://www.youtube.com/embed/live_stream?channel=${ch.id}&autoplay=1`;
+  loadIframe(url, ch.name + ' • LIVE', true);
+  closeRecentOverlay();
+}
+
+function playVideo(videoId, title) {
+  const url = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+  loadIframe(url, title, false);
+  closeRecentOverlay();
+}
+
+let playlistLoaded = false;
+
+async function loadPlaylist() {
+  if (!PLAYLIST_ID || PLAYLIST_ID === 'YOUR_PLAYLIST_ID') {
+    clearVideo();
+    document.getElementById('video-placeholder').querySelector('p').textContent =
+      'No playlist configured — add your Playlist ID to the PLAYLIST_ID config value.';
+    return;
+  }
+
+  // Load first video into player immediately
+  const firstVideoUrl = `https://www.youtube.com/embed/videoseries?list=${PLAYLIST_ID}&autoplay=0&rel=0&index=0`;
+  loadIframe(firstVideoUrl, 'Weather Playlist', false);
+
+  // Only fetch thumbnails once — no need to re-fetch on every panel open
+  if (playlistLoaded) return;
+  playlistLoaded = true;
+
+  const thumbsContainer = document.getElementById('playlist-thumbs');
+
+  try {
+    const res = await fetch(`/api/yt/playlist/${PLAYLIST_ID}`);
+    const data = await res.json();
+
+    if (data.error === 'quota_exceeded') {
+      thumbsContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Quota reached — thumbnails available after midnight Pacific</span>';
+      return;
+    }
+
+    if (!data.items || data.items.length === 0) {
+      thumbsContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No videos found in playlist.</span>';
+      return;
+    }
+
+    thumbsContainer.innerHTML = '';
+    data.items.forEach((item, index) => {
+      const snippet = item.snippet;
+      const videoId = snippet.resourceId && snippet.resourceId.videoId;
+      if (!videoId) return;
+
+      const thumb = document.createElement('div');
+      thumb.className = 'video-thumb';
+      thumb.style.flexShrink = '0';
+      thumb.onclick = () => {
+        // Load this specific video by index in the playlist
+        const url = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
+        loadIframe(url, snippet.title, false);
+      };
+
+      const imgSrc = snippet.thumbnails?.medium?.url
+        || snippet.thumbnails?.default?.url
+        || '';
+
+      thumb.innerHTML = `
+        <img src="${imgSrc}" alt="${snippet.title}" loading="lazy"
+          onerror="this.style.background='var(--surface2)'" />
+        <div class="video-thumb-title">${snippet.title}</div>
+      `;
+      thumbsContainer.appendChild(thumb);
+    });
+
+  } catch(e) {
+    thumbsContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Could not load playlist.</span>';
+  }
+}
+
+// ═══════════════════════════════════════════
+// RECENT VIDEOS OVERLAY
+// ═══════════════════════════════════════════
+async function showRecent(ch, group) {
+  // Find or create overlay inside this panel
+  const panel = document.getElementById(group + '-panel');
+  let overlay = panel.querySelector('.recent-overlay-inner');
+
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'recent-overlay-inner';
+    overlay.style.cssText = `
+      display:flex; align-items:center; gap:0.5rem;
+      padding:0.5rem 1rem; height:100%; width:100%;
+      position:absolute; top:0; left:0;
+      background:var(--surface); z-index:20;
+    `;
+    panel.appendChild(overlay);
+  }
+
+  overlay.innerHTML = `
+    <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:110px">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--accent);text-transform:uppercase;letter-spacing:0.06em">${ch.name}</div>
+      <button class="return-btn" onclick="closeRecentOverlay(this)">← Back</button>
+    </div>
+    <div class="divider"></div>
+    <div style="display:flex;gap:0.5rem;flex:1;overflow-x:auto" id="videos-${ch.id}">
+      <div style="display:flex;align-items:center;gap:0.5rem;color:var(--muted);font-size:0.8rem">
+        <div class="spinner"></div> Loading videos...
+      </div>
+    </div>
+  `;
+
+  overlay.style.display = 'flex';
+
+  // Fetch videos
+  try {
+    const videos = await fetchRecentVideos(ch.id);
+    const container = document.getElementById('videos-' + ch.id);
+    if (!container) return;
+
+    if (!videos || videos.length === 0) {
+      container.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No videos found.</span>';
+      return;
+    }
+
+    container.innerHTML = '';
+    videos.forEach(v => {
+      const thumb = document.createElement('div');
+      thumb.className = 'video-thumb';
+      thumb.onclick = () => playVideo(v.id, v.title);
+      thumb.innerHTML = `
+        <img src="${v.thumbnail}" alt="${v.title}" loading="lazy" onerror="this.style.background='var(--surface2)'">
+        <div class="video-thumb-title">${v.title}</div>
+      `;
+      container.appendChild(thumb);
+    });
+  } catch (e) {
+    const container = document.getElementById('videos-' + ch.id);
+    if (container) container.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Could not load videos.</span>';
+  }
+}
+
+function closeRecentOverlay(btn) {
+  if (btn) {
+    const overlay = btn.closest('.recent-overlay-inner');
+    if (overlay) { overlay.style.display = 'none'; return; }
+  }
+  document.querySelectorAll('.recent-overlay-inner').forEach(o => o.style.display = 'none');
+}
+
+// ═══════════════════════════════════════════
+// YOUTUBE API
+// ═══════════════════════════════════════════
+async function fetchRecentVideos(channelId) {
+  const res = await fetch(`/api/yt/recent/${channelId}`);
+  const data = await res.json();
+  if (data.error === 'quota_exceeded') throw new Error('Daily YouTube quota reached — try again after midnight Pacific time');
+  if (!data.items) return [];
+  return data.items.map(item => ({
+    id: item.id.videoId,
+    title: item.snippet.title,
+    thumbnail: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.default?.url
+  }));
+}
+
+async function checkAllLiveStatuses() {
+  const statusEl = document.getElementById('api-status');
+  statusEl.innerHTML = '<span class="spinner"></span> Checking live status...';
+
+  try {
+    // Single call gets all cached live statuses from server — no per-channel API calls
+    const res = await fetch('/api/yt/live-all');
+    const data = await res.json();
+
+    if (data.quotaExceeded) {
+      statusEl.textContent = 'YouTube quota reached — live checks resume at midnight Pacific';
+      setTimeout(checkAllLiveStatuses, 60 * 60 * 1000);
+      return;
+    }
+
+    // Apply cached statuses to all channel buttons
+    let liveCount = 0;
+    const allChannels = [...CHANNELS.forecasters, ...CHANNELS.chasers, ...CHANNELS.creators];
+    allChannels.forEach(ch => {
+      if (!ch.hasLive) return;
+      const status = data.statuses && data.statuses[ch.id];
+      const isLive = status ? status.isLive : false;
+      liveStatuses[ch.id] = isLive;
+      updateLiveButton(ch.id, isLive);
+      if (isLive) liveCount++;
+    });
+
+    const lastChecked = data.lastChecked
+      ? `Last checked ${Math.round((Date.now() - data.lastChecked) / 60000)}m ago`
+      : 'Awaiting first check...';
+
+    statusEl.textContent = liveCount > 0
+      ? `${liveCount} channel${liveCount > 1 ? 's' : ''} live now`
+      : `No channels live — ${lastChecked}`;
+
+  } catch(e) {
+    statusEl.textContent = 'Could not reach server';
+  }
+
+  // Poll the server cache every 30 seconds — costs zero API quota
+  // The server handles the actual YouTube calls on its own schedule
+  setTimeout(checkAllLiveStatuses, 30 * 1000);
+}
+
+async function checkIfLive(channelId) {
+  const res = await fetch('/api/yt/live/' + channelId);
+  const data = await res.json();
+  if (data.error === 'quota_exceeded') throw new Error('quota_exceeded');
+  return data.items && data.items.length > 0;
+}
+
+async function checkIfLive(channelId) {
+  const res = await fetch(`/api/yt/live/${channelId}`);
+  const data = await res.json();
+  if (data.error === 'quota_exceeded') throw new Error('quota_exceeded');
+  return data.items && data.items.length > 0;
+}
+
+function updateLiveButton(channelId, isLive) {
+  const btn = document.getElementById('live-' + channelId);
+  if (!btn) return;
+  btn.style.display = isLive ? 'inline-flex' : 'none';
+}
+
+// ═══════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════
+function detectOS() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (/iphone|ipad|ipod/.test(ua)) return 'ios';
+  if (/android/.test(ua)) return 'android';
+  if (/tizen/.test(ua)) return 'tizen';
+  return 'other';
+}
+
+function startClock() {
+  function update() {
+    const now = new Date();
+    document.getElementById('time-display').textContent =
+      now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) + ' LOCAL';
+  }
+  update();
+  setInterval(update, 1000);
+}
+
+// ═══════════════════════════════════════════
+// ABOUT MODAL
+// ═══════════════════════════════════════════
+function showAbout() {
+  const overlay = document.getElementById('about-overlay');
+  overlay.style.display = 'flex';
+}
+
+function hideAbout() {
+  const overlay = document.getElementById('about-overlay');
+  overlay.style.display = 'none';
+}
+
+// Close on Escape key
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') hideAbout();
+});
+
+// ═══════════════════════════════════════════
+// START
+// ═══════════════════════════════════════════
+init();
+</script>
+</body>
+</html>
