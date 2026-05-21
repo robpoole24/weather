@@ -6,254 +6,122 @@
 <title>WeatherTV Admin</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  * { margin:0; padding:0; box-sizing:border-box; }
   :root {
-    --bg: #0a0e14;
-    --surface: #111820;
-    --surface2: #1a2433;
-    --accent: #00b4d8;
-    --gold: #f4a261;
-    --text: #e8f4fd;
-    --muted: #7a9bb5;
-    --border: rgba(0,180,216,0.2);
-    --red: #e63946;
-    --green: #52b788;
+    --bg:#0a0e14; --surface:#111820; --surface2:#1a2433;
+    --accent:#00b4d8; --accent2:#0077b6; --gold:#f4a261;
+    --text:#e8f4fd; --muted:#7a9bb5; --border:rgba(0,180,216,0.2);
+    --red:#e63946; --green:#52b788;
   }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Barlow', sans-serif;
-    min-height: 100vh;
-  }
+  body { background:var(--bg); color:var(--text); font-family:'Barlow',sans-serif; min-height:100vh; }
 
   header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 1rem 2rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+    background:var(--surface); border-bottom:1px solid var(--border);
+    padding:1rem 2rem; display:flex; align-items:center; gap:1rem;
   }
+  .admin-logo { font-family:'Barlow Condensed',sans-serif; font-size:1.5rem; font-weight:700; color:var(--accent); letter-spacing:0.05em; }
+  .admin-logo span { color:var(--gold); }
+  .admin-badge { font-family:'Barlow Condensed',sans-serif; font-size:0.7rem; font-weight:700; letter-spacing:0.12em; padding:0.2rem 0.6rem; background:rgba(244,162,97,0.15); border:1px solid rgba(244,162,97,0.3); color:var(--gold); border-radius:3px; }
+  .header-link { margin-left:auto; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:0.85rem; color:var(--accent); text-decoration:none; letter-spacing:0.05em; }
+  .header-link:hover { text-decoration:underline; }
 
-  .admin-logo {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--accent);
-    letter-spacing: 0.05em;
+  .container { max-width:960px; margin:2rem auto; padding:0 2rem; display:flex; flex-direction:column; gap:2rem; }
+
+  .section { background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .section-header { padding:1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:0.5rem; }
+  .section-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.1rem; letter-spacing:0.05em; }
+  .section-body { padding:1.5rem; }
+
+  label { display:block; font-size:0.75rem; font-family:'Barlow Condensed',sans-serif; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem; }
+  input[type=text], input[type=password], select {
+    width:100%; background:var(--surface2); border:1px solid var(--border);
+    color:var(--text); font-family:'Barlow',sans-serif; font-size:0.9rem;
+    padding:0.5rem 0.75rem; border-radius:4px; outline:none; transition:border-color 0.2s; margin-bottom:1rem;
   }
-  .admin-logo span { color: var(--gold); }
+  input[type=text]:focus, input[type=password]:focus, select:focus { border-color:var(--accent); }
 
-  .admin-badge {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    padding: 0.2rem 0.6rem;
-    background: rgba(244,162,97,0.15);
-    border: 1px solid rgba(244,162,97,0.3);
-    color: var(--gold);
-    border-radius: 3px;
+  .btn { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.85rem; letter-spacing:0.1em; text-transform:uppercase; padding:0.5rem 1.25rem; border-radius:4px; cursor:pointer; transition:all 0.2s; border:none; }
+  .btn-primary { background:var(--accent); color:#000; }
+  .btn-primary:hover { background:#00c8f0; }
+  .btn-danger { background:transparent; border:1px solid var(--red); color:var(--red); }
+  .btn-danger:hover { background:var(--red); color:white; }
+  .btn-sm { padding:0.3rem 0.75rem; font-size:0.75rem; }
+  .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--muted); }
+  .btn-ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .btn-gold { background:var(--gold); color:#000; }
+  .btn-gold:hover { background:#f7b733; }
+
+  /* Group card */
+  .group-card { background:var(--surface2); border:1px solid var(--border); border-radius:6px; margin-bottom:1rem; overflow:hidden; }
+  .group-card-header {
+    padding:0.75rem 1rem; display:flex; align-items:center; gap:0.75rem;
+    border-bottom:1px solid var(--border); cursor:pointer;
   }
+  .group-card-header:hover { background:rgba(0,180,216,0.05); }
+  .group-icon { font-size:1.1rem; flex-shrink:0; }
+  .group-name { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1rem; flex:1; }
+  .group-count { font-size:0.75rem; color:var(--muted); }
+  .group-body { display:none; padding:1rem; }
+  .group-body.open { display:block; }
 
-  .header-link {
-    margin-left: auto;
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 600;
-    font-size: 0.85rem;
-    color: var(--accent);
-    text-decoration: none;
-    letter-spacing: 0.05em;
+  /* Channel row */
+  .channel-row {
+    display:flex; align-items:center; gap:0.5rem;
+    padding:0.5rem 0.75rem; border-radius:4px;
+    border:1px solid rgba(0,180,216,0.1);
+    margin-bottom:0.4rem; background:var(--bg);
   }
-  .header-link:hover { text-decoration: underline; }
-
-  .container {
-    max-width: 900px;
-    margin: 2rem auto;
-    padding: 0 2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-  }
-
-  .section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-  }
-
-  .section-header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .section-title {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 700;
-    font-size: 1.1rem;
-    letter-spacing: 0.05em;
-    color: var(--text);
-  }
-
-  .section-body {
-    padding: 1.5rem;
-  }
-
-  /* Form elements */
-  label {
-    display: block;
-    font-size: 0.75rem;
-    font-family: 'Barlow Condensed', sans-serif;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 0.4rem;
-  }
-
-  input[type=text], input[type=password] {
-    width: 100%;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: 'Barlow', sans-serif;
-    font-size: 0.9rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
-    outline: none;
-    transition: border-color 0.2s;
-    margin-bottom: 1rem;
-  }
-  input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); }
-
-  .btn {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 700;
-    font-size: 0.85rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 0.5rem 1.25rem;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s;
-    border: none;
-  }
-
-  .btn-primary { background: var(--accent); color: #000; }
-  .btn-primary:hover { background: #00c8f0; }
-
-  .btn-danger { background: transparent; border: 1px solid var(--red); color: var(--red); }
-  .btn-danger:hover { background: var(--red); color: white; }
-
-  .btn-sm { padding: 0.3rem 0.75rem; font-size: 0.75rem; }
-
-  .btn-ghost {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-  }
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-
-  /* Channel table */
-  .channel-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.875rem;
-  }
-
-  .channel-table th {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.7rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .channel-table td {
-    padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid rgba(0,180,216,0.08);
-    vertical-align: middle;
-  }
-
-  .channel-table tr:last-child td { border-bottom: none; }
-
-  .channel-table tr:hover td { background: var(--surface2); }
+  .channel-row:hover { border-color:var(--border); }
+  .ch-name { flex:1; font-size:0.875rem; }
+  .ch-id { font-size:0.7rem; color:var(--muted); font-family:monospace; flex:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .order-btns { display:flex; flex-direction:column; gap:2px; flex-shrink:0; }
+  .order-btn { background:transparent; border:1px solid var(--border); color:var(--muted); font-size:0.6rem; padding:1px 4px; cursor:pointer; border-radius:2px; line-height:1; }
+  .order-btn:hover { border-color:var(--accent); color:var(--accent); }
 
   /* Toggle */
-  .toggle {
-    position: relative;
-    display: inline-block;
-    width: 36px;
-    height: 20px;
-  }
-  .toggle input { opacity: 0; width: 0; height: 0; }
-  .toggle-slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    transition: 0.2s;
-  }
-  .toggle-slider::before {
-    content: '';
-    position: absolute;
-    width: 12px; height: 12px;
-    left: 3px; top: 3px;
-    background: var(--muted);
-    border-radius: 50%;
-    transition: 0.2s;
-  }
-  .toggle input:checked + .toggle-slider { background: rgba(0,180,216,0.2); border-color: var(--accent); }
-  .toggle input:checked + .toggle-slider::before { transform: translateX(16px); background: var(--accent); }
+  .toggle { position:relative; display:inline-block; width:36px; height:20px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; cursor:pointer; top:0;left:0;right:0;bottom:0; background:var(--surface2); border:1px solid var(--border); border-radius:20px; transition:0.2s; }
+  .toggle-slider::before { content:''; position:absolute; width:12px;height:12px; left:3px;top:3px; background:var(--muted); border-radius:50%; transition:0.2s; }
+  .toggle input:checked + .toggle-slider { background:rgba(0,180,216,0.2); border-color:var(--accent); }
+  .toggle input:checked + .toggle-slider::before { transform:translateX(16px); background:var(--accent); }
 
-  /* Add channel form */
-  .add-form {
-    display: none;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 1rem;
-    margin-top: 1rem;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-  .add-form.open { display: flex; }
+  /* Add form */
+  .add-form { display:none; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:1rem; margin-top:0.75rem; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; }
+  .add-form.open { display:flex; }
+  .add-form > div { flex:1; min-width:120px; }
+  .add-form > div label { margin-bottom:0.3rem; }
+  .add-form > div input { margin-bottom:0; }
 
-  .add-form > div { flex: 1; min-width: 140px; }
-  .add-form > div label { margin-bottom: 0.3rem; }
-  .add-form > div input { margin-bottom: 0; }
+  /* Collections */
+  .collection-section { margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border); }
+  .collection-header { font-family:'Barlow Condensed',sans-serif; font-size:0.75rem; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold); margin-bottom:0.5rem; display:flex; align-items:center; justify-content:space-between; }
+  .collection-row { background:var(--surface2); border:1px solid rgba(244,162,97,0.2); border-radius:4px; padding:0.5rem 0.75rem; margin-bottom:0.4rem; }
+  .collection-row-header { display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem; }
+  .collection-name { font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:0.85rem; color:var(--gold); flex:1; }
+  .collection-channels { font-size:0.72rem; color:var(--muted); margin-top:0.3rem; }
+
+  /* Cache section */
+  .cache-row { display:flex; align-items:center; justify-content:space-between; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.5rem; }
+  .cache-row-info { display:flex; flex-direction:column; gap:0.2rem; }
+  .cache-row-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.9rem; }
+  .cache-row-sub { font-size:0.75rem; color:var(--muted); }
 
   /* Toast */
-  #toast {
-    position: fixed;
-    bottom: 2rem;
-    right: 2rem;
-    background: var(--green);
-    color: #000;
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 700;
-    font-size: 0.9rem;
-    letter-spacing: 0.05em;
-    padding: 0.75rem 1.5rem;
-    border-radius: 6px;
-    opacity: 0;
-    transform: translateY(10px);
-    transition: all 0.3s;
-    pointer-events: none;
-    z-index: 999;
-  }
-  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast { position:fixed; bottom:2rem; right:2rem; background:var(--green); color:#000; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.9rem; letter-spacing:0.05em; padding:0.75rem 1.5rem; border-radius:6px; opacity:0; transform:translateY(10px); transition:all 0.3s; pointer-events:none; z-index:999; }
+  #toast.show { opacity:1; transform:translateY(0); }
+
+  /* Modal */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:100; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1.5rem; max-width:500px; width:90%; max-height:80vh; overflow-y:auto; }
+  .modal-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.1rem; margin-bottom:1rem; color:var(--accent); }
+  .channel-picker { display:flex; flex-direction:column; gap:0.3rem; max-height:300px; overflow-y:auto; margin-bottom:1rem; }
+  .picker-item { display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.5rem; border-radius:4px; cursor:pointer; }
+  .picker-item:hover { background:var(--surface2); }
+  .picker-item input { accent-color:var(--accent); }
+  .picker-item-name { font-size:0.85rem; }
+  .picker-item-group { font-size:0.7rem; color:var(--muted); margin-left:auto; }
 </style>
 </head>
 <body>
@@ -268,12 +136,10 @@
 
   <!-- Config -->
   <div class="section">
-    <div class="section-header">
-      <div class="section-title">⚙️ Configuration</div>
-    </div>
+    <div class="section-header"><div class="section-title">⚙️ Configuration</div></div>
     <div class="section-body">
       <label>YouTube Data API Key</label>
-      <input type="password" id="cfg-apikey" placeholder="AIza..." />
+      <input type="password" id="cfg-apikey" placeholder="Stored in environment variable on server" />
       <label>Weather Playlist ID</label>
       <input type="text" id="cfg-playlist" placeholder="PLxxxxxxxxxxxxxxxxxx" />
       <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
@@ -281,304 +147,453 @@
   </div>
 
   <!-- Groups -->
-  <div id="groups-container"></div>
-
-  <!-- Cache Management -->
   <div class="section">
     <div class="section-header">
-      <div class="section-title">⚡ Cache Management</div>
+      <div class="section-title">📡 Channel Groups</div>
+      <button class="btn btn-primary btn-sm" onclick="showAddGroup()">+ New Group</button>
     </div>
     <div class="section-body">
-      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:1.25rem;line-height:1.6">
-        Content is cached server-side to conserve YouTube API quota. Use these controls
-        to force a fresh fetch without waiting for the cache to expire naturally.
-      </p>
-
-      <div style="display:flex;flex-direction:column;gap:0.75rem">
-
-        <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:0.75rem 1rem;">
-          <div>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--text)">Weather Playlist</div>
-            <div style="font-size:0.75rem;color:var(--muted)">Cached for 48 hours — clear after updating your YouTube playlist</div>
-          </div>
-          <button class="btn btn-ghost btn-sm" onclick="clearCache('playlist')">Clear Cache</button>
+      <div id="groups-container"></div>
+      <div class="add-form" id="add-group-form">
+        <div><label>Group Label</label><input type="text" id="new-group-label" placeholder="e.g. Storm Chasers" /></div>
+        <div><label>Icon (emoji)</label><input type="text" id="new-group-icon" placeholder="🌪" style="width:60px" /></div>
+        <div><label>ID (no spaces)</label><input type="text" id="new-group-id" placeholder="chasers" /></div>
+        <div style="flex:0;display:flex;gap:0.5rem;align-items:flex-end">
+          <button class="btn btn-primary btn-sm" onclick="addGroup()">Add</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('add-group-form').classList.remove('open')">Cancel</button>
         </div>
+      </div>
+    </div>
+  </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:0.75rem 1rem;">
-          <div>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--text)">Recent Videos</div>
-            <div style="font-size:0.75rem;color:var(--muted)" id="recent-cache-sub">Fetched 2x daily (6am &amp; 6pm) — auto-scheduled</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:0.5rem">
-            <div id="recent-cache-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
-            <button class="btn btn-ghost btn-sm" onclick="clearCache('recent')">Clear</button>
-          </div>
+  <!-- Cache -->
+  <div class="section">
+    <div class="section-header"><div class="section-title">⚡ Cache Management</div></div>
+    <div class="section-body">
+      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:1.25rem;line-height:1.6">Content is cached server-side to conserve YouTube API quota.</p>
+      <div class="cache-row">
+        <div class="cache-row-info">
+          <div class="cache-row-title">Weather Playlist</div>
+          <div class="cache-row-sub">Cached 48 hours — clear after updating your YouTube playlist</div>
         </div>
-
-        <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:0.75rem 1rem;">
-          <div>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--text)" id="live-cache-label">Live Status</div>
-            <div style="font-size:0.75rem;color:var(--muted)" id="live-cache-sub">Loading...</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:0.5rem">
-            <div id="cache-status-display" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
-            <button class="btn btn-ghost btn-sm" id="websub-btn" onclick="renewWebSub()" style="display:none">Renew WebSub</button>
-          </div>
+        <button class="btn btn-ghost btn-sm" onclick="clearCache('playlist')">Clear Cache</button>
+      </div>
+      <div class="cache-row">
+        <div class="cache-row-info">
+          <div class="cache-row-title">Recent Videos</div>
+          <div class="cache-row-sub" id="recent-cache-sub">Fetched 2x daily — auto-scheduled</div>
         </div>
-
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <div id="recent-cache-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
+          <button class="btn btn-ghost btn-sm" onclick="clearCache('recent')">Clear</button>
+        </div>
+      </div>
+      <div class="cache-row">
+        <div class="cache-row-info">
+          <div class="cache-row-title" id="live-cache-label">Live Status</div>
+          <div class="cache-row-sub" id="live-cache-sub">Loading...</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <div id="cache-status-display" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
+          <button class="btn btn-ghost btn-sm" id="websub-btn" onclick="renewWebSub()" style="display:none">Renew WebSub</button>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- Apps -->
   <div class="section">
-    <div class="section-header">
-      <div class="section-title">📱 Weather Apps</div>
-    </div>
+    <div class="section-header"><div class="section-title">📱 Weather Apps</div></div>
     <div class="section-body">
-      <table class="channel-table">
+      <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
         <thead>
           <tr>
-            <th>App Name</th>
-            <th>iOS Link</th>
-            <th>Android Link</th>
-            <th>Enabled</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">App</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">iOS Link</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Enabled</th>
           </tr>
         </thead>
         <tbody id="apps-table-body"></tbody>
       </table>
-      <div style="margin-top:1rem">
-        <button class="btn btn-primary btn-sm" onclick="saveApps()">Save Apps</button>
-      </div>
+      <div style="margin-top:1rem"><button class="btn btn-primary btn-sm" onclick="saveApps()">Save Apps</button></div>
     </div>
   </div>
 
 </div>
 
-<div id="toast">✓ Saved successfully</div>
+<!-- Collection Editor Modal -->
+<div class="modal-overlay" id="col-modal" onclick="closeColModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">Edit Collection</div>
+    <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
+      Collections are sub-groups that appear as a third button on a channel card. 
+      To add channels to this collection, use the <strong style="color:var(--gold)">"In Collection?"</strong> 
+      dropdown on each channel row.
+    </p>
+    <label>Collection Name</label>
+    <input type="text" id="col-modal-name" placeholder="e.g. Exclusive Chasers" />
+    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+      <label style="margin:0">Enabled in app</label>
+      <label class="toggle">
+        <input type="checkbox" id="col-modal-enabled" checked />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+      <button class="btn btn-ghost btn-sm" onclick="closeColModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="saveCollection()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast">✓ Saved</div>
 
 <script>
 let appData = null;
+let colModalContext = null; // { groupId, channelId, colId or null }
 
 async function loadData() {
   const res = await fetch('/api/admin/config');
   appData = await res.json();
   renderAll();
+  loadCacheStatus();
 }
 
 function renderAll() {
-  // Config
   document.getElementById('cfg-apikey').value = appData.config.apiKey || '';
   document.getElementById('cfg-playlist').value = appData.config.playlistId || '';
-
-  // Groups
-  const groupsContainer = document.getElementById('groups-container');
-  groupsContainer.innerHTML = '';
-  appData.groups.forEach(group => {
-    groupsContainer.appendChild(renderGroup(group));
-  });
-
-  // Apps
+  renderGroups();
   renderApps();
 }
 
-function renderGroup(group) {
-  const section = document.createElement('div');
-  section.className = 'section';
+// ── Groups ──
+function renderGroups() {
+  const container = document.getElementById('groups-container');
+  container.innerHTML = '';
+  (appData.groups || []).forEach((group, gi) => {
+    container.appendChild(renderGroupCard(group, gi));
+  });
+}
 
-  section.innerHTML = `
-    <div class="section-header">
-      <div class="section-title">${group.icon} ${group.label}</div>
-      <button class="btn btn-ghost btn-sm" onclick="toggleAddForm('${group.id}')">+ Add Channel</button>
-    </div>
-    <div class="section-body">
-      <table class="channel-table">
-        <thead>
-          <tr>
-            <th>Channel Name</th>
-            <th>YouTube Channel ID</th>
-            <th>Live Stream</th>
-            <th>Enabled</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="group-${group.id}"></tbody>
-      </table>
+function renderGroupCard(group, gi) {
+  const card = document.createElement('div');
+  card.className = 'group-card';
+  card.id = 'group-card-' + group.id;
 
-      <div class="add-form" id="add-form-${group.id}">
-        <div>
-          <label>Channel Name</label>
-          <input type="text" id="new-name-${group.id}" placeholder="Channel Name" />
-        </div>
-        <div>
-          <label>YouTube Channel ID</label>
-          <input type="text" id="new-id-${group.id}" placeholder="UCxxxxxxxxxxxxxxxx" />
-        </div>
-        <div style="flex:0;display:flex;gap:0.5rem;align-items:flex-end">
-          <button class="btn btn-primary btn-sm" onclick="addChannel('${group.id}')">Add</button>
-          <button class="btn btn-ghost btn-sm" onclick="toggleAddForm('${group.id}')">Cancel</button>
-        </div>
-      </div>
+  const header = document.createElement('div');
+  header.className = 'group-card-header';
+  header.innerHTML = `
+    <span class="group-icon">${group.icon || '📺'}</span>
+    <span class="group-name">${group.label}</span>
+    <span class="group-count">${(group.channels||[]).length} channels</span>
+    <div style="display:flex;gap:0.3rem">
+      <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','up')">▲</button>
+      <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','down')">▼</button>
+      <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleAddChannelForm('${group.id}')">+ Channel</button>
+      <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGroup('${group.id}','${group.label}')">Delete</button>
     </div>
   `;
+  header.onclick = () => body.classList.toggle('open');
+  card.appendChild(header);
 
-  // Fill tbody
-  setTimeout(() => {
-    const tbody = document.getElementById('group-' + group.id);
-    if (!tbody) return;
-    group.channels.forEach(ch => {
-      tbody.appendChild(renderChannelRow(group.id, ch));
-    });
-  }, 0);
+  const body = document.createElement('div');
+  body.className = 'group-body';
 
-  return section;
+  // Channel rows
+  const channelList = document.createElement('div');
+  channelList.id = 'ch-list-' + group.id;
+  (group.channels || []).forEach(ch => {
+    channelList.appendChild(renderChannelRow(group.id, ch));
+  });
+  body.appendChild(channelList);
+
+  // Add channel form
+  const addForm = document.createElement('div');
+  addForm.className = 'add-form';
+  addForm.id = 'add-ch-form-' + group.id;
+  addForm.innerHTML = `
+    <div><label>Channel Name</label><input type="text" id="new-ch-name-${group.id}" placeholder="Channel Name" /></div>
+    <div><label>YouTube Channel ID</label><input type="text" id="new-ch-id-${group.id}" placeholder="UCxxxxxxxxxxxxxxxx" /></div>
+    <div style="flex:0;display:flex;flex-direction:column;gap:0.3rem;align-items:flex-start;justify-content:flex-end">
+      <label class="toggle" title="Has Live Stream">
+        <input type="checkbox" id="new-ch-live-${group.id}" checked />
+        <span class="toggle-slider"></span>
+      </label>
+      <div style="font-size:0.65rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif">Live</div>
+    </div>
+    <div style="flex:0;display:flex;gap:0.5rem;align-items:flex-end">
+      <button class="btn btn-primary btn-sm" onclick="addChannel('${group.id}')">Add</button>
+      <button class="btn btn-ghost btn-sm" onclick="toggleAddChannelForm('${group.id}')">Cancel</button>
+    </div>
+  `;
+  body.appendChild(addForm);
+  card.appendChild(body);
+  return card;
 }
 
 function renderChannelRow(groupId, ch) {
-  const tr = document.createElement('tr');
-  tr.id = 'row-' + ch.id;
-  tr.innerHTML = `
-    <td>
-      <input type="text" value="${ch.name}" style="margin:0;width:150px"
-        onchange="updateChannelField('${groupId}','${ch.id}','name',this.value)" />
-    </td>
-    <td>
-      <input type="text" value="${ch.id}" style="margin:0;width:200px;font-size:0.75rem;font-family:monospace;color:var(--muted)"
-        onchange="updateChannelField('${groupId}','${ch.id}','id',this.value)" />
-    </td>
-    <td>
-      <label class="toggle">
-        <input type="checkbox" ${ch.hasLive ? 'checked' : ''}
-          onchange="updateChannelField('${groupId}','${ch.id}','hasLive',this.checked)" />
-        <span class="toggle-slider"></span>
-      </label>
-    </td>
-    <td>
-      <label class="toggle">
-        <input type="checkbox" ${ch.enabled !== false ? 'checked' : ''}
-          onchange="updateChannelField('${groupId}','${ch.id}','enabled',this.checked)" />
-        <span class="toggle-slider"></span>
-      </label>
-    </td>
-    <td>
-      <button class="btn btn-danger btn-sm" onclick="deleteChannel('${groupId}','${ch.id}')">Remove</button>
-    </td>
+  const row = document.createElement('div');
+  row.className = 'channel-row';
+  row.id = 'ch-row-' + ch.id;
+
+  // Build collection options from all channels that have collections defined
+  const allCollections = [];
+  (appData.groups || []).forEach(g => {
+    (g.channels || []).forEach(c => {
+      if (c.collections && c.collections.length > 0) {
+        c.collections.forEach(col => {
+          allCollections.push({ 
+            value: c.id + '::' + col.id, 
+            label: c.name + ' → ' + col.label,
+            enabled: col.enabled
+          });
+        });
+      }
+    });
+  });
+
+  const colOptions = '<option value="">None</option>' + 
+    allCollections.map(c => '<option value="' + c.value + '" ' + 
+      (ch.collectionId === c.value ? 'selected' : '') + '>' + c.label + '</option>'
+    ).join('');
+
+  const colDisabled = allCollections.length === 0 ? 'disabled' : '';
+
+  row.innerHTML = `
+    <div class="order-btns">
+      <button class="order-btn" onclick="reorderChannel('${groupId}','${ch.id}','up')">▲</button>
+      <button class="order-btn" onclick="reorderChannel('${groupId}','${ch.id}','down')">▼</button>
+    </div>
+    <div class="ch-name">${ch.name}</div>
+    <div class="ch-id" title="${ch.id}">${ch.id}</div>
+    <select title="In Collection?" ${colDisabled} 
+      onchange="updateChannelMembership('${groupId}','${ch.id}',this.value)"
+      style="margin:0;width:160px;font-size:0.75rem;padding:0.3rem 0.5rem;flex-shrink:0;${allCollections.length===0?'opacity:0.4;':''}"
+    >${colOptions}</select>
+    <label class="toggle" title="Has Live Stream">
+      <input type="checkbox" ${ch.hasLive ? 'checked' : ''} onchange="updateChannel('${groupId}','${ch.id}',{hasLive:this.checked})" />
+      <span class="toggle-slider"></span>
+    </label>
+    <label class="toggle" title="Enabled">
+      <input type="checkbox" ${ch.enabled !== false ? 'checked' : ''} onchange="updateChannel('${groupId}','${ch.id}',{enabled:this.checked})" />
+      <span class="toggle-slider"></span>
+    </label>
+    <button class="btn btn-gold btn-sm" onclick="openColManager('${groupId}','${ch.id}')">+ Collection</button>
+    <button class="btn btn-danger btn-sm" onclick="deleteChannel('${groupId}','${ch.id}','${ch.name}')">✕</button>
   `;
-  return tr;
+
+  // Collections display
+  if (ch.collections && ch.collections.length > 0) {
+    const colSection = document.createElement('div');
+    colSection.style.cssText = 'width:100%;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid rgba(244,162,97,0.15);';
+    ch.collections.forEach(col => {
+      const colRow = document.createElement('div');
+      colRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-size:0.75rem;color:var(--gold);padding:0.2rem 0;';
+      colRow.innerHTML = `
+        <span style="opacity:${col.enabled ? 1 : 0.4}">${col.enabled ? '●' : '○'} ${col.label}</span>
+        <span style="color:var(--muted)">(${(col.channelIds||[]).length} channels)</span>
+        <button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="editCollection('${groupId}','${ch.id}','${col.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="deleteCollection('${groupId}','${ch.id}','${col.id}')">✕</button>
+      `;
+      colSection.appendChild(colRow);
+    });
+    // Make the row wrap
+    row.style.flexWrap = 'wrap';
+    row.appendChild(colSection);
+  }
+
+  return row;
 }
 
+// ── Group actions ──
+function showAddGroup() { document.getElementById('add-group-form').classList.toggle('open'); }
+
+async function addGroup() {
+  const label = document.getElementById('new-group-label').value.trim();
+  const icon = document.getElementById('new-group-icon').value.trim() || '📺';
+  const id = document.getElementById('new-group-id').value.trim().replace(/\s+/g, '-').toLowerCase();
+  if (!label || !id) { alert('Please fill in label and ID'); return; }
+  const res = await fetch('/api/admin/groups', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ label, icon, id })
+  });
+  const data = await res.json();
+  if (data.ok) { showToast('Group added'); await loadData(); }
+}
+
+async function deleteGroup(groupId, label) {
+  if (!confirm('Delete group "' + label + '" and all its channels?')) return;
+  await fetch('/api/admin/groups/' + groupId, { method:'DELETE' });
+  showToast('Group deleted');
+  await loadData();
+}
+
+async function reorderGroup(groupId, direction) {
+  await fetch('/api/admin/groups/reorder', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ groupId, direction })
+  });
+  await loadData();
+}
+
+// ── Channel actions ──
+function toggleAddChannelForm(groupId) {
+  document.getElementById('add-ch-form-' + groupId).classList.toggle('open');
+}
+
+async function addChannel(groupId) {
+  const name = document.getElementById('new-ch-name-' + groupId).value.trim();
+  const id = document.getElementById('new-ch-id-' + groupId).value.trim();
+  const hasLive = document.getElementById('new-ch-live-' + groupId).checked;
+  if (!name || !id) { alert('Please fill in both fields'); return; }
+  const res = await fetch('/api/admin/groups/' + groupId + '/channels', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name, id, hasLive, enabled: true })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    showToast('Channel added');
+    document.getElementById('new-ch-name-' + groupId).value = '';
+    document.getElementById('new-ch-id-' + groupId).value = '';
+    toggleAddChannelForm(groupId);
+    await loadData();
+  }
+}
+
+async function updateChannel(groupId, channelId, fields) {
+  await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(fields)
+  });
+  showToast('Saved');
+}
+
+async function updateChannelMembership(groupId, channelId, collectionId) {
+  await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/collection-membership', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ collectionId: collectionId || null })
+  });
+  showToast('Collection membership saved');
+}
+
+async function deleteChannel(groupId, channelId, name) {
+  if (!confirm('Remove ' + name + '?')) return;
+  await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId, { method:'DELETE' });
+  showToast('Channel removed');
+  await loadData();
+}
+
+async function reorderChannel(groupId, channelId, direction) {
+  await fetch('/api/admin/groups/' + groupId + '/channels/reorder', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ channelId, direction })
+  });
+  await loadData();
+}
+
+// ── Collections ──
+function openColManager(groupId, channelId) {
+  colModalContext = { groupId, channelId, colId: null };
+  document.getElementById('col-modal-name').value = '';
+  document.getElementById('col-modal-enabled').checked = true;
+  document.getElementById('col-modal').classList.add('open');
+}
+
+function editCollection(groupId, channelId, colId) {
+  const group = appData.groups.find(g => g.id === groupId);
+  const ch = group && group.channels.find(c => c.id === channelId);
+  const col = ch && ch.collections && ch.collections.find(c => c.id === colId);
+  if (!col) return;
+  colModalContext = { groupId, channelId, colId };
+  document.getElementById('col-modal-name').value = col.label;
+  document.getElementById('col-modal-enabled').checked = col.enabled !== false;
+  document.getElementById('col-modal').classList.add('open');
+}
+
+async function saveCollection() {
+  const { groupId, channelId, colId } = colModalContext;
+  const label = document.getElementById('col-modal-name').value.trim();
+  const enabled = document.getElementById('col-modal-enabled').checked;
+  if (!label) { alert('Please enter a collection name'); return; }
+
+  if (colId) {
+    await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/collections/' + colId, {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ label, enabled })
+    });
+  } else {
+    await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/collections', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ label, enabled })
+    });
+  }
+  showToast('Collection saved');
+  closeColModal();
+  await loadData();
+}
+
+async function deleteCollection(groupId, channelId, colId) {
+  if (!confirm('Delete this collection?')) return;
+  await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/collections/' + colId, { method:'DELETE' });
+  showToast('Collection deleted');
+  await loadData();
+}
+
+function closeColModal() { document.getElementById('col-modal').classList.remove('open'); }
+
+// ── Config ──
+async function saveConfig() {
+  await fetch('/api/admin/config', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ apiKey: document.getElementById('cfg-apikey').value, playlistId: document.getElementById('cfg-playlist').value })
+  });
+  showToast('Configuration saved');
+}
+
+// ── Apps ──
 function renderApps() {
   const tbody = document.getElementById('apps-table-body');
   tbody.innerHTML = '';
-  appData.apps.forEach((app, i) => {
+  (appData.apps || []).forEach((app, i) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><strong>${app.icon} ${app.name}</strong></td>
-      <td><input type="text" value="${app.ios}" style="margin:0;font-size:0.75rem"
-        onchange="appData.apps[${i}].ios=this.value" /></td>
-      <td><input type="text" value="${app.android}" style="margin:0;font-size:0.75rem"
-        onchange="appData.apps[${i}].android=this.value" /></td>
-      <td>
-        <label class="toggle">
-          <input type="checkbox" ${app.enabled !== false ? 'checked' : ''}
-            onchange="appData.apps[${i}].enabled=this.checked" />
-          <span class="toggle-slider"></span>
-        </label>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)"><strong>${app.name}</strong></td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <input type="text" value="${app.ios||''}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value" />
+      </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <label class="toggle"><input type="checkbox" ${app.enabled!==false?'checked':''} onchange="appData.apps[${i}].enabled=this.checked"><span class="toggle-slider"></span></label>
       </td>
     `;
     tbody.appendChild(tr);
   });
 }
 
-// ── Actions ──
-async function saveConfig() {
-  await fetch('/api/admin/config', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      apiKey: document.getElementById('cfg-apikey').value,
-      playlistId: document.getElementById('cfg-playlist').value
-    })
-  });
-  showToast('Configuration saved');
-}
-
-async function updateChannelField(groupId, channelId, field, value) {
-  await fetch(`/api/admin/groups/${groupId}/channels/${channelId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ [field]: value })
-  });
-  showToast('Saved');
-}
-
-async function deleteChannel(groupId, channelId) {
-  if (!confirm('Remove this channel?')) return;
-  await fetch(`/api/admin/groups/${groupId}/channels/${channelId}`, { method: 'DELETE' });
-  const row = document.getElementById('row-' + channelId);
-  if (row) row.remove();
-  showToast('Channel removed');
-}
-
-async function addChannel(groupId) {
-  const name = document.getElementById('new-name-' + groupId).value.trim();
-  const id = document.getElementById('new-id-' + groupId).value.trim();
-  if (!name || !id) { alert('Please fill in both fields.'); return; }
-
-  const res = await fetch(`/api/admin/groups/${groupId}/channels`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, id, hasLive: true, enabled: true })
-  });
-  const data = await res.json();
-
-  const tbody = document.getElementById('group-' + groupId);
-  if (tbody && data.channel) tbody.appendChild(renderChannelRow(groupId, data.channel));
-
-  document.getElementById('new-name-' + groupId).value = '';
-  document.getElementById('new-id-' + groupId).value = '';
-  toggleAddForm(groupId);
-  showToast('Channel added');
-}
-
 async function saveApps() {
-  await fetch('/api/admin/apps', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(appData.apps)
-  });
+  await fetch('/api/admin/apps', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(appData.apps) });
   showToast('Apps saved');
 }
 
-function toggleAddForm(groupId) {
-  const form = document.getElementById('add-form-' + groupId);
-  form.classList.toggle('open');
-}
-
-function showToast(msg) {
-  const toast = document.getElementById('toast');
-  toast.textContent = '✓ ' + msg;
-  toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2500);
-}
-
+// ── Cache ──
 async function clearCache(type) {
-  const endpoint = type === 'playlist' ? '/api/admin/cache/clear-playlist' : '/api/admin/cache/clear-recent';
-  const res = await fetch(endpoint, { method: 'POST' });
+  const res = await fetch('/api/admin/cache/clear-' + type, { method:'POST' });
   const data = await res.json();
   showToast(data.message || 'Cache cleared');
+}
+
+async function renewWebSub() {
+  const res = await fetch('/api/admin/websub/subscribe', { method:'POST' });
+  const data = await res.json();
+  showToast(data.message || data.error || 'Done');
 }
 
 async function loadCacheStatus() {
   try {
     const res = await fetch('/api/admin/cache/status');
     const data = await res.json();
-
-    // Live status row
     const liveEl = document.getElementById('cache-status-display');
     const liveSub = document.getElementById('live-cache-sub');
     const websubBtn = document.getElementById('websub-btn');
-
     if (data.websubActive) {
       liveSub.textContent = 'WebSub push notifications active — YouTube notifies us instantly';
       liveEl.textContent = data.liveStatuses.entries + ' channels monitored';
@@ -589,37 +604,25 @@ async function loadCacheStatus() {
       if (data.liveStatuses.lastChecked) {
         const mins = Math.round((Date.now() - data.liveStatuses.lastChecked) / 60000);
         liveEl.textContent = 'Last checked ' + mins + 'm ago';
-      } else {
-        liveEl.textContent = 'Awaiting first check...';
-      }
+      } else { liveEl.textContent = 'Awaiting first check...'; }
     }
-
-    if (data.quotaExceeded) {
-      liveEl.textContent = '⚠ Quota exceeded — resets midnight Pacific';
-      liveEl.style.color = 'var(--red)';
-    }
-
-    // Recent videos row
+    if (data.quotaExceeded) { liveEl.textContent = '⚠ Quota exceeded'; liveEl.style.color = 'var(--red)'; }
     const recentEl = document.getElementById('recent-cache-status');
     if (data.recentVideos.lastFetch) {
       const hrs = Math.round((Date.now() - data.recentVideos.lastFetch) / 3600000 * 10) / 10;
       recentEl.textContent = data.recentVideos.entries + ' channels cached (' + hrs + 'h ago)';
-    } else {
-      recentEl.textContent = 'Awaiting first fetch...';
-    }
-
-  } catch(e) { /* server not ready */ }
+    } else { recentEl.textContent = 'Awaiting first fetch...'; }
+  } catch(e) {}
 }
 
-async function renewWebSub() {
-  const res = await fetch('/api/admin/websub/subscribe', { method: 'POST' });
-  const data = await res.json();
-  showToast(data.message || data.error || 'Done');
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = '✓ ' + msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
 }
 
 loadData();
-loadCacheStatus();
-// Refresh cache status every 30 seconds
 setInterval(loadCacheStatus, 30000);
 </script>
 </body>

@@ -554,32 +554,16 @@
 
   <!-- Main nav -->
   <div id="main-nav">
-    <button class="nav-btn" onclick="showPanel('forecasters')">⛅ Weather Forecasters</button>
-    <button class="nav-btn" onclick="showPanel('chasers')">🌪 Storm Chasers</button>
-    <button class="nav-btn" onclick="showPanel('creators')">🎬 Other Weather Creators</button>
-    <button class="nav-btn" onclick="showPanel('weatherstar')">📺 WeatherStar 4000+</button>
-    <button class="nav-btn" onclick="showPanel('playlist')">▶ Weather Playlist</button>
-    <button class="nav-btn" onclick="showPanel('apps')" style="margin-left:auto">📱 Weather Apps</button>
+    <!-- Group buttons injected here dynamically by buildNavButtons() -->
+    <button class="nav-btn" onclick="showPanel('weatherstar', event)">📺 WeatherStar 4000+</button>
+    <button class="nav-btn" onclick="showPanel('playlist', event)">▶ Weather Playlist</button>
+    <button class="nav-btn" onclick="showPanel('apps', event)" style="margin-left:auto">📱 Weather Apps</button>
   </div>
 
   <!-- Panels -->
   <div id="panels">
 
-    <!-- FORECASTERS -->
-    <div class="panel" id="forecasters-panel">
-      <div id="recent-overlay" id="forecasters-recent"></div>
-      <div class="channel-list" id="forecasters-list"></div>
-    </div>
-
-    <!-- STORM CHASERS -->
-    <div class="panel" id="chasers-panel">
-      <div class="channel-list" id="chasers-list"></div>
-    </div>
-
-    <!-- OTHER WEATHER CREATORS -->
-    <div class="panel" id="creators-panel">
-      <div class="channel-list" id="creators-list"></div>
-    </div>
+    <!-- Group panels are injected dynamically by buildChannelPanels() -->
 
     <!-- WEATHERSTAR -->
     <div class="panel" id="weatherstar-panel">
@@ -703,69 +687,11 @@
 const PLAYLIST_ID = 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI';
 
 // ═══════════════════════════════════════════
-// CHANNEL DATA
+// CHANNEL DATA — loaded dynamically from server
+// Edit channels via admin panel or server.js only
 // ═══════════════════════════════════════════
-const CHANNELS = {
-  forecasters: [
-    { name: 'Max Velocity',      id: 'UCvBVK2ymNzPLRJrgip2GeQQ', hasLive: true },
-    { name: "Ryan Hall Y'all",   id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', hasLive: true },
-    { name: 'Evan Fryberger',    id: 'UCp2G_jHO53yj2NVjv8zbDmQ', hasLive: true },
-    { name: 'Severe Studios',    id: 'UCBtR7ynKM9odz-PW_7uyzDw',  hasLive: true },
-  ],
-  chasers: [
-    { name: 'Aaron Jayjack',          id: 'UC8QZ-OIqfWKek1CpMvs2O3g', hasLive: true  },
-    { name: 'Adri Mozeris',           id: 'UCXQYQMwU9wc584i7ecZzm_A', hasLive: false },
-    { name: 'Alexander Spahn',        id: 'UCW-db9uRShMINgICqQeyt1Q', hasLive: false },
-    { name: 'Andrew Pritchard',       id: 'UCT1IIkU3Yafr6nfNxQlWuSQ', hasLive: true  },
-    { name: 'Bamawxcom',              id: 'UCXZJRhrMbtXqjZCZUGp5CTg', hasLive: false },
-    { name: 'Brandon Clement',        id: 'UCD3KREyo3IqCLBC-4khGgIw', hasLive: true  },
-    { name: 'Brandon Copic',          id: 'UCJ_8JVFhFKEaFRqnv9kxKmA', hasLive: true  },
-    { name: 'Brittney Richardson',    id: 'UCMmlV4B6Bx2GuYtIaxpLcfw', hasLive: true  },
-    { name: 'CF Productions',         id: 'UCvIqVAaqpx1Q_e9DzIxgk1A', hasLive: true  },
-    { name: 'Celton Henderson',       id: 'UCLfN3U2O0sEYabjo2lxIttw', hasLive: false },
-    { name: 'Chris Riske',            id: 'UCGpPbdVAtTUgW_w98lXC9nw', hasLive: true  },
-    { name: 'Connor Croff',           id: 'UCLMVjB6YhWX-bDxNiSmVNNg', hasLive: true  },
-    { name: 'Convective Chronicles',  id: 'UCRYYy0UrfyGmMKQDU1N1R3g', hasLive: true  },
-    { name: 'Corey Gerken',           id: 'UCx5ex9rJumpj-oKgVJrP4hA', hasLive: true  },
-    { name: 'Daniel Shaw',            id: 'UCemyFpFfu55JvAP_eWW1NdA', hasLive: true  },
-    { name: "Edgar O'Neal",          id: "UChZ_VT3MrHB53bSqFiVf4eg", hasLive: true  },
-    { name: 'Freddy McKinney',        id: 'UCFQfMFWHkIBFSxfS_kI4iKA', hasLive: true  },
-    { name: 'Jakob McMillin',         id: 'UCPgskHnT1cT_hpfbq9nUK7w', hasLive: true  },
-    { name: 'Joey Krastel',           id: 'UCWcjww4Wz_UqxSPYCnc9T-A', hasLive: false },
-    { name: 'John McKinney',          id: 'UCWMRFAo3Cvd7W8yQpQwsOQA', hasLive: true  },
-    { name: 'Jonas Piontek',          id: 'UCSoEfOMuGNjrrhD4iLTKo_A', hasLive: false },
-    { name: 'Jordan Hall',            id: 'UC86mOt7YnKgRUQxblDpsN-g', hasLive: true  },
-    { name: 'Justin Noonan',          id: 'UCvRBXkjHG0vbDrO-03ZIWxw', hasLive: false },
-    { name: 'Justin Poublon',         id: 'UClIZx2ESMJVocfMIbji_ujg', hasLive: true  },
-    { name: 'Kannon Kalton',          id: 'UCPtizAsfQaJktz0tw9YuKLQ', hasLive: true  },
-    { name: 'Live Storms Media',      id: 'UC1nJElGcVcTpeZJVyxEbzJw', hasLive: true  },
-    { name: 'Melanie Metz',           id: 'UCeE90n3GWO1XZcwt8xpNRtw', hasLive: true  },
-    { name: 'Oklahoma Weather Couple',id: 'UCy5cFthFcECu6DMSBcOX5AQ', hasLive: false },
-    { name: 'Reed Timmer',            id: 'UCV6hWxB0-u_IX7e-h4fEBAw', hasLive: true  },
-    { name: 'Reilly Dibble',          id: 'UChxsy558HhpaqnB1Hk6tHkw', hasLive: true  },
-    { name: 'Scott Currens',          id: 'UCqsI0A7OlQTnwPFOUZaISMA', hasLive: false },
-    { name: 'Scott Peake',            id: 'UCqAWcfd0BJBgCW8iyOLOF3g', hasLive: true  },
-    { name: 'Storm Chase TV',         id: 'UCdSMdTFOfqmOXP-1vD2cxAA', hasLive: true  },
-    { name: 'Stormgasm',              id: 'UCAnSuGYTjwbGoBMgF_aBpnQ', hasLive: true  },
-    { name: 'Stormrunner Media',      id: 'UCBmOfiL9LC3dT4Ps2veVCoQ', hasLive: true  },
-    { name: 'Tornado Paigeyy',        id: 'UCm8EwVbQaGVkYnxZVQvCFAw', hasLive: true  },
-    { name: 'Tornado TRX',            id: 'UCuer9Sw2UAD5LWZpVXbgKTA', hasLive: true  },
-  ],
-  creators: [
-    { name: 'Carly Anna WX',          id: 'UCuFxM1HTY6SONb_FICAl6gQ', hasLive: false },
-    { name: 'June First',             id: 'UCGEZlX4V82wv7_Z2LsXtjPA',  hasLive: true  },
-    { name: 'More Max Velocity',      id: 'UCpYQmszu4IP37xyt3RQb2gw',  hasLive: true  },
-    { name: 'Pecos Hank',             id: 'UCo-3ThNQmPmQSQL9WPjMaUQ',  hasLive: false },
-    { name: 'Storm Channel Coaching', id: 'UCCP12NYSDa9KL26PW1zokcA',  hasLive: false },
-    { name: 'Storm Reel',             id: 'UCz2BWcrW-njx_py1FR0447A',  hasLive: false },
-    { name: 'Swegle Studios',         id: 'UCZTme3vf6kXmXfSsIr06lvQ',  hasLive: false },
-    { name: 'Tornado Forensics',      id: 'UC0CPqIPMHCELm208KiwBwdw',  hasLive: false },
-    { name: 'Tornado Video Library',  id: 'UC9c4E_DWmPMel1MelOBTznw',  hasLive: false },
-    { name: 'Tornado Warned',         id: 'UCgGTo_tNrWxArxh3c3aI6bw',  hasLive: false },
-    { name: 'Weatherbox Studios',     id: 'UCCtYdNBm-8C_wZk0n6u8VnQ',  hasLive: false },
-    { name: 'WorldStorm',             id: 'UCHf2fy0H-GJNrdVO3KxDV5Q',  hasLive: false },
-  ],
-};
+let GROUPS = [];   // array of { id, label, icon, channels[] }
+let CHANNELS = {}; // { groupId: channels[] } for quick lookup
 
 const WEATHER_APPS = [
   { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/app/weatherfront/id1580596099',                             android: null,                                                                                       androidSoon: true  },
@@ -784,23 +710,105 @@ let liveStatuses = {};
 let currentChannel = null;
 
 // ═══════════════════════════════════════════
-// INIT
+// INIT — loads groups from server then builds UI
 // ═══════════════════════════════════════════
 async function init() {
-  buildChannelLists();
+  startClock();
+  await loadGroupsFromServer();
+  buildNavButtons();
+  buildChannelPanels();
   buildAppsPanel();
   buildWSPanel();
-  startClock();
   await checkAllLiveStatuses();
+}
+
+// Load all group/channel data from the server API
+async function loadGroupsFromServer() {
+  // Show loading state in nav
+  const nav = document.getElementById('main-nav');
+  const loadingEl = document.createElement('span');
+  loadingEl.id = 'nav-loading';
+  loadingEl.style.cssText = 'font-family:"Barlow Condensed",sans-serif;font-size:0.8rem;color:var(--muted);letter-spacing:0.05em;display:flex;align-items:center;gap:0.5rem;';
+  loadingEl.innerHTML = '<span class="spinner"></span> Loading channels...';
+  nav.insertBefore(loadingEl, nav.firstChild);
+
+  try {
+    const res = await fetch('/api/groups');
+    const groups = await res.json();
+    GROUPS = groups;
+    CHANNELS = {};
+    groups.forEach(g => {
+      CHANNELS[g.id] = g.channels.filter(ch => ch.enabled !== false);
+    });
+    console.log('[WeatherTV] Loaded', groups.length, 'groups from server');
+  } catch(e) {
+    console.error('[WeatherTV] Failed to load groups from server:', e.message);
+    loadingEl.innerHTML = '⚠ Could not load channels — refresh to retry';
+    loadingEl.style.color = 'var(--red)';
+    GROUPS = [];
+    CHANNELS = {};
+  } finally {
+    // Remove loading indicator
+    const el = document.getElementById('nav-loading');
+    if (el) el.remove();
+  }
+}
+
+// Build nav buttons dynamically from loaded groups
+function buildNavButtons() {
+  const nav = document.getElementById('main-nav');
+  // Remove existing group buttons (keep weatherstar, playlist, apps)
+  nav.querySelectorAll('.nav-btn.group-btn').forEach(b => b.remove());
+
+  // Insert group buttons before the fixed buttons
+  const fixedBtns = nav.querySelectorAll('.nav-btn:not(.group-btn)');
+  const firstFixed = fixedBtns[0];
+
+  GROUPS.forEach(group => {
+    const btn = document.createElement('button');
+    btn.className = 'nav-btn group-btn';
+    btn.textContent = group.icon + ' ' + group.label;
+    btn.dataset.group = group.id;
+    btn.onclick = (e) => showPanel(group.id, e);
+    nav.insertBefore(btn, firstFixed);
+  });
+}
+
+// Build channel panels dynamically from loaded groups
+function buildChannelPanels() {
+  const panelsContainer = document.getElementById('panels');
+
+  // Remove any existing group panels
+  panelsContainer.querySelectorAll('.panel.group-panel').forEach(p => p.remove());
+
+  // Create a panel for each group
+  GROUPS.forEach(group => {
+    const panel = document.createElement('div');
+    panel.className = 'panel group-panel';
+    panel.id = group.id + '-panel';
+
+    const list = document.createElement('div');
+    list.className = 'channel-list';
+    list.id = group.id + '-list';
+    panel.appendChild(list);
+
+    // Insert before the weatherstar panel
+    const wsPanelEl = document.getElementById('weatherstar-panel');
+    panelsContainer.insertBefore(panel, wsPanelEl);
+  });
+
+  // Now build the channel cards
+  buildChannelLists();
 }
 
 // ═══════════════════════════════════════════
 // PANEL NAVIGATION
 // ═══════════════════════════════════════════
-function showPanel(name) {
+function showPanel(name, e) {
   // Update nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  event.currentTarget.classList.add('active');
+  const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]');
+  if (btn) btn.classList.add('active');
 
   // Hide all panels
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -833,22 +841,24 @@ function closePanel(name) {
 // BUILD CHANNEL LISTS
 // ═══════════════════════════════════════════
 function buildChannelLists() {
-  ['forecasters', 'chasers', 'creators'].forEach(group => {
-    const list = document.getElementById(group + '-list');
+  GROUPS.forEach(group => {
+    const list = document.getElementById(group.id + '-list');
     if (!list) return;
+    list.innerHTML = ''; // clear any existing content
 
     // Return button
     const ret = document.createElement('button');
     ret.className = 'return-btn';
     ret.textContent = '← Back';
-    ret.onclick = () => closePanel(group);
+    ret.onclick = () => closePanel(group.id);
     list.appendChild(ret);
 
     const div = document.createElement('div');
     div.className = 'divider';
     list.appendChild(div);
 
-    CHANNELS[group].forEach(ch => {
+    const channels = CHANNELS[group.id] || [];
+    channels.forEach(ch => {
       const card = document.createElement('div');
       card.className = 'channel-card';
       card.id = 'card-' + ch.id;
@@ -876,13 +886,112 @@ function buildChannelLists() {
       const recentBtn = document.createElement('button');
       recentBtn.className = 'ch-btn recent';
       recentBtn.textContent = 'RECENT ▸';
-      recentBtn.onclick = () => showRecent(ch, group);
+      recentBtn.onclick = () => showRecent(ch, group.id);
       btns.appendChild(recentBtn);
+
+      // Collections buttons — only shown when collection is enabled AND has members
+      if (ch.collections && ch.collections.length > 0) {
+        const allChannels = GROUPS.flatMap(g => g.channels || []);
+        ch.collections.forEach(col => {
+          if (!col.enabled) return;
+          // Check if any channels are assigned to this collection
+          const colKey = ch.id + '::' + col.id;
+          const hasMembers = allChannels.some(c => c.collectionId === colKey && c.enabled !== false);
+          if (!hasMembers) return;
+          const colBtn = document.createElement('button');
+          colBtn.className = 'ch-btn collection';
+          colBtn.textContent = col.label + ' ▸';
+          colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.65rem;';
+          colBtn.onclick = () => showCollection(ch, col);
+          btns.appendChild(colBtn);
+        });
+      }
 
       card.appendChild(btns);
       list.appendChild(card);
     });
   });
+}
+
+// Show a sub-collection — finds channels by their collectionId field
+// Format: parentChannelId::collectionId
+function showCollection(parentCh, collection) {
+  const collectionKey = parentCh.id + '::' + collection.id;
+
+  const activePanelEl = document.querySelector('.panel.active');
+  if (!activePanelEl) return;
+
+  let overlay = activePanelEl.querySelector('.collection-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'collection-overlay recent-overlay-inner';
+    overlay.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.5rem 1rem;height:100%;width:100%;position:absolute;top:0;left:0;background:var(--surface);z-index:20;';
+    activePanelEl.appendChild(overlay);
+  }
+
+  overlay.innerHTML = '';
+  overlay.style.display = 'flex';
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:130px;';
+  header.innerHTML =
+    '<div style="font-family:&quot;Barlow Condensed&quot;,sans-serif;font-weight:700;font-size:0.85rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.06em">' + parentCh.name + '</div>' +
+    '<div style="font-family:&quot;Barlow Condensed&quot;,sans-serif;font-size:0.75rem;color:var(--muted)">' + collection.label + '</div>';
+  const backBtn = document.createElement('button');
+  backBtn.className = 'return-btn';
+  backBtn.textContent = '← Back';
+  backBtn.onclick = () => { overlay.style.display = 'none'; };
+  header.appendChild(backBtn);
+  overlay.appendChild(header);
+
+  const divEl = document.createElement('div');
+  divEl.className = 'divider';
+  overlay.appendChild(divEl);
+
+  const cardContainer = document.createElement('div');
+  cardContainer.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;';
+
+  // Find channels whose collectionId matches this collection key
+  const allChannels = GROUPS.flatMap(g => g.channels || []);
+  const members = allChannels.filter(ch => ch.collectionId === collectionKey && ch.enabled !== false);
+
+  if (members.length === 0) {
+    cardContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No channels assigned to this collection yet. Use the "In Collection?" dropdown in the admin panel.</span>';
+  } else {
+    members.forEach(ch => {
+      const card = document.createElement('div');
+      card.className = 'channel-card';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'channel-name';
+      nameEl.textContent = ch.name;
+      card.appendChild(nameEl);
+
+      const btns = document.createElement('div');
+      btns.className = 'channel-btns';
+
+      if (ch.hasLive) {
+        const liveBtn = document.createElement('button');
+        liveBtn.className = 'ch-btn live';
+        liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
+        liveBtn.style.display = liveStatuses[ch.id] ? 'inline-flex' : 'none';
+        liveBtn.onclick = () => playLive(ch);
+        btns.appendChild(liveBtn);
+      }
+
+      const recentBtn = document.createElement('button');
+      recentBtn.className = 'ch-btn recent';
+      recentBtn.textContent = 'RECENT ▸';
+      recentBtn.onclick = () => showRecent(ch, 'col-' + collection.id);
+      btns.appendChild(recentBtn);
+
+      card.appendChild(btns);
+      cardContainer.appendChild(card);
+    });
+  }
+
+  overlay.appendChild(cardContainer);
 }
 
 // ═══════════════════════════════════════════
@@ -1237,7 +1346,7 @@ async function checkAllLiveStatuses() {
 
     // Apply cached statuses to all channel buttons
     let liveCount = 0;
-    const allChannels = [...CHANNELS.forecasters, ...CHANNELS.chasers, ...CHANNELS.creators];
+    const allChannels = GROUPS.flatMap(g => g.channels || []);
     allChannels.forEach(ch => {
       if (!ch.hasLive) return;
       const status = data.statuses && data.statuses[ch.id];

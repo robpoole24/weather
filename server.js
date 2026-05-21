@@ -47,8 +47,16 @@ function getDefaultData() {
         label: 'Weather Forecasters',
         icon: '⛅',
         channels: [
-          { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true },
-          { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true },
+          { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true,
+            collections: [
+              { id: 'max-chasers', label: 'Exclusive Chasers', enabled: false }
+            ]
+          },
+          { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true,
+            collections: [
+              { id: 'ryan-chasers', label: 'Exclusive Chasers', enabled: false }
+            ]
+          },
           { id: 'UCp2G_jHO53yj2NVjv8zbDmQ', name: 'Evan Fryberger',    hasLive: true,  enabled: true },
           { id: 'UCBtR7ynKM9odz-PW_7uyzDw', name: 'Severe Studios',    hasLive: true,  enabled: true },
         ]
@@ -105,10 +113,12 @@ function getDefaultData() {
           { id: 'UCuFxM1HTY6SONb_FICAl6gQ', name: 'Carly Anna WX',          hasLive: false, enabled: true },
           { id: 'UCGEZlX4V82wv7_Z2LsXtjPA', name: 'June First',             hasLive: true,  enabled: true },
           { id: 'UCpYQmszu4IP37xyt3RQb2gw', name: 'More Max Velocity',      hasLive: true,  enabled: true },
+          { id: 'UCTRPdC_jSFKsBVOUFQ52jGg', name: 'Out of the Whirlwind',   hasLive: false, enabled: true },
           { id: 'UCo-3ThNQmPmQSQL9WPjMaUQ', name: 'Pecos Hank',             hasLive: false, enabled: true },
           { id: 'UCCP12NYSDa9KL26PW1zokcA', name: 'Storm Channel Coaching', hasLive: false, enabled: true },
           { id: 'UCz2BWcrW-njx_py1FR0447A', name: 'Storm Reel',             hasLive: false, enabled: true },
           { id: 'UCZTme3vf6kXmXfSsIr06lvQ', name: 'Swegle Studios',         hasLive: false, enabled: true },
+          { id: 'UCbxfONPDpv4r3IXwppgcTdA', name: 'The Twister Archives',   hasLive: false, enabled: true },
           { id: 'UC0CPqIPMHCELm208KiwBwdw', name: 'Tornado Forensics',      hasLive: false, enabled: true },
           { id: 'UC9c4E_DWmPMel1MelOBTznw', name: 'Tornado Video Library',  hasLive: false, enabled: true },
           { id: 'UCgGTo_tNrWxArxh3c3aI6bw', name: 'Tornado Warned',         hasLive: false, enabled: true },
@@ -199,6 +209,123 @@ app.delete('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
   res.json({ ok: true });
 });
 
+// Reorder channels within a group
+app.put('/api/admin/groups/:groupId/channels/reorder', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const { channelId, direction } = req.body;
+  const idx = group.channels.findIndex(c => c.id === channelId);
+  if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= group.channels.length) return res.json({ ok: true });
+  const tmp = group.channels[idx];
+  group.channels[idx] = group.channels[newIdx];
+  group.channels[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Add group
+app.post('/api/admin/groups', (req, res) => {
+  const data = loadData();
+  const newGroup = {
+    id: req.body.id || 'group-' + Date.now(),
+    label: req.body.label || 'New Group',
+    icon: req.body.icon || '📺',
+    channels: []
+  };
+  data.groups.push(newGroup);
+  saveData(data);
+  res.json({ ok: true, group: newGroup });
+});
+
+// Delete group
+app.delete('/api/admin/groups/:groupId', (req, res) => {
+  const data = loadData();
+  data.groups = data.groups.filter(g => g.id !== req.params.groupId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Reorder groups
+app.put('/api/admin/groups/reorder', (req, res) => {
+  const data = loadData();
+  const { groupId, direction } = req.body;
+  const idx = data.groups.findIndex(g => g.id === groupId);
+  if (idx === -1) return res.status(404).json({ error: 'Group not found' });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= data.groups.length) return res.json({ ok: true });
+  const tmp = data.groups[idx];
+  data.groups[idx] = data.groups[newIdx];
+  data.groups[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// ── Collection (sub-group) routes ──
+
+// Add collection to a channel
+app.post('/api/admin/groups/:groupId/channels/:channelId/collections', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  if (!channel.collections) channel.collections = [];
+  const col = {
+    id: req.body.id || 'col-' + Date.now(),
+    label: req.body.label || 'New Collection',
+    enabled: req.body.enabled !== false
+    // No channelIds — channels declare membership via their own collectionId field
+  };
+  channel.collections.push(col);
+  saveData(data);
+  res.json({ ok: true, collection: col });
+});
+
+// Update collection
+app.put('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel || !channel.collections) return res.status(404).json({ error: 'Not found' });
+  const colIdx = channel.collections.findIndex(c => c.id === req.params.colId);
+  if (colIdx === -1) return res.status(404).json({ error: 'Collection not found' });
+  // Only update label and enabled — membership managed via channel's collectionId
+  const { label, enabled } = req.body;
+  if (label !== undefined) channel.collections[colIdx].label = label;
+  if (enabled !== undefined) channel.collections[colIdx].enabled = enabled;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Update a channel's collection membership
+app.put('/api/admin/groups/:groupId/channels/:channelId/collection-membership', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  // collectionId format: 'parentChannelId::colId' or null
+  channel.collectionId = req.body.collectionId || null;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Delete collection
+app.delete('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel || !channel.collections) return res.status(404).json({ error: 'Not found' });
+  channel.collections = channel.collections.filter(c => c.id !== req.params.colId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
 // Update apps
 app.put('/api/admin/apps', (req, res) => {
   const data = loadData();
@@ -274,23 +401,42 @@ const cache = {
 };
 
 const CACHE_TTL = {
-  recentVideos: 12 * 60 * 60 * 1000,  // 12 hours (fetched 2x daily by scheduler)
+  recentVideos: 24 * 60 * 60 * 1000,  // 24 hours (fetched once daily at 6pm EST)
   playlist:     48 * 60 * 60 * 1000,  // 48 hours
   liveCheck:    15 * 60 * 1000,       // 15 min fallback polling (used only if WebSub inactive)
 };
 
-// ── Helper: get all enabled channels with hasLive ──
+// ── Helper: get channels eligible for live check based on time (EST) ──
+// Forecasters: checked 6am-2am EST (stop 2am-6am)
+// Chasers/Creators: checked 6am-midnight EST (stop midnight-6am)
 function getLiveChannels() {
   const channels = [];
   try {
     const data = loadData();
-    if (data.groups) {
-      data.groups.forEach(g => {
-        g.channels.forEach(ch => {
-          if (ch.hasLive && ch.enabled !== false) channels.push(ch);
-        });
+    if (!data.groups) return channels;
+
+    // Current hour in EST
+    const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const estHour = estNow.getHours(); // 0-23
+
+    // Forecaster group ID — only they get the extended 2am window
+    const FORECASTER_GROUP = 'forecasters';
+
+    data.groups.forEach(g => {
+      g.channels.forEach(ch => {
+        if (!ch.hasLive || ch.enabled === false) return;
+
+        if (g.id === FORECASTER_GROUP) {
+          // Forecasters: active 6am-2am EST (pause 2am-6am)
+          const active = estHour >= 6 || estHour < 2;
+          if (active) channels.push({ ...ch, _group: g.id });
+        } else {
+          // All others: active 6am-midnight EST (pause midnight-6am)
+          const active = estHour >= 6 && estHour < 24;
+          if (active) channels.push({ ...ch, _group: g.id });
+        }
       });
-    }
+    });
   } catch(e) {}
   return channels;
 }
@@ -330,6 +476,7 @@ async function checkLiveStatus(channelId) {
 // ── Scheduled Live Check ──
 // Falls back to polling only when WebSub is not active (local dev)
 // On Railway, WebSub push notifications handle live status instead
+// Time-aware: chasers/creators stop at midnight EST, forecasters at 2am EST
 async function scheduledLiveCheck() {
   if (cache.websubActive) {
     console.log('[WeatherTV] WebSub active — skipping poll-based live check');
@@ -349,7 +496,8 @@ async function scheduledLiveCheck() {
     return;
   }
 
-  console.log('[WeatherTV] Running live check (' + channels.length + ' channels, 1 unit each)...');
+  const estHour = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getHours();
+  console.log('[WeatherTV] Running live check (' + channels.length + ' channels, 1 unit each) — EST hour: ' + estHour + '...');
   let liveCount = 0;
 
   for (const ch of channels) {
@@ -508,9 +656,9 @@ setTimeout(subscribeAllChannels, 10000);
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER
-// Runs at 6am and 6pm server time — fetches recent videos for all
-// channels and caches results. Costs 100 units per channel, 2x daily.
-// All users get served from cache — zero additional quota per request.
+// Runs once daily at 6pm EST — fetches recent videos for all channels.
+// Costs 100 units per channel, once daily = ~5,300 units/day for 53 channels.
+// All users served from cache — zero additional quota per request.
 // ════════════════════════════════════════════
 async function fetchAllRecentVideos() {
   if (quotaExceeded) {
@@ -553,23 +701,21 @@ async function fetchAllRecentVideos() {
 }
 
 function scheduleNextRecentFetch() {
-  // Schedule for next 6am or 6pm server time, whichever comes first
+  // Schedule for next 6pm EST
   const now = new Date();
-  const next = new Date(now);
-  const hour = now.getHours();
+  const estNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const next = new Date(estNow);
+  next.setHours(18, 0, 0, 0); // 6pm EST
 
-  if (hour < 6) {
-    next.setHours(6, 0, 0, 0);
-  } else if (hour < 18) {
-    next.setHours(18, 0, 0, 0);
-  } else {
+  // If 6pm EST has already passed today, schedule for tomorrow
+  if (estNow >= next) {
     next.setDate(next.getDate() + 1);
-    next.setHours(6, 0, 0, 0);
   }
 
-  const msUntilNext = next - now;
+  // Convert back to UTC ms offset
+  const msUntilNext = next - estNow;
   const minsUntilNext = Math.round(msUntilNext / 60000);
-  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (' + next.toLocaleTimeString() + ')');
+  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (6:00 PM EST)');
   setTimeout(fetchAllRecentVideos, msUntilNext);
 }
 
