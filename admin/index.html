@@ -181,10 +181,11 @@
       <div class="cache-row">
         <div class="cache-row-info">
           <div class="cache-row-title">Recent Videos</div>
-          <div class="cache-row-sub" id="recent-cache-sub">Fetched 2x daily — auto-scheduled</div>
+          <div class="cache-row-sub">Scheduled daily at 6pm EST — or fetch manually below</div>
         </div>
         <div style="display:flex;align-items:center;gap:0.5rem">
           <div id="recent-cache-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
+          <button class="btn btn-primary btn-sm" onclick="triggerRecentFetch()">Fetch Now</button>
           <button class="btn btn-ghost btn-sm" onclick="clearCache('recent')">Clear</button>
         </div>
       </div>
@@ -579,6 +580,17 @@ async function clearCache(type) {
   const res = await fetch('/api/admin/cache/clear-' + type, { method:'POST' });
   const data = await res.json();
   showToast(data.message || 'Cache cleared');
+}
+
+async function triggerRecentFetch() {
+  const res = await fetch('/api/admin/trigger-recent-fetch', { method:'POST' });
+  const data = await res.json();
+  if (data.error) {
+    showToast('⚠ ' + data.message);
+  } else {
+    showToast('Fetching recent videos — check status in ~1 minute');
+    setTimeout(loadCacheStatus, 60000);
+  }
 }
 
 async function renewWebSub() {

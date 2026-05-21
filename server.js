@@ -719,10 +719,10 @@ function scheduleNextRecentFetch() {
   setTimeout(fetchAllRecentVideos, msUntilNext);
 }
 
-// Run initial recent video fetch 15s after boot, then schedule 6am/6pm runs
-setTimeout(() => {
-  fetchAllRecentVideos();
-}, 15000);
+// Schedule first fetch at 6pm EST — no fetch on startup to preserve quota across restarts
+// On first deploy you'll see no recent videos until 6pm EST — this is intentional
+scheduleNextRecentFetch();
+console.log('[WeatherTV] Recent video fetch scheduled — no startup fetch to preserve quota');
 
 // ── API Routes ──
 
@@ -824,10 +824,13 @@ app.post('/api/admin/trigger-live-check', async (req, res) => {
   await scheduledLiveCheck();
 });
 
-// Manual trigger for recent video fetch — for diagnostics
+// Manual trigger for recent video fetch — use from admin panel after deploys
 app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
-  res.json({ ok: true, message: 'Recent video fetch triggered' });
-  await fetchAllRecentVideos();
+  if (quotaExceeded) {
+    return res.status(429).json({ error: 'quota_exceeded', message: 'Quota exceeded — resets at midnight Pacific' });
+  }
+  res.json({ ok: true, message: 'Recent video fetch started — check cache status in a minute' });
+  fetchAllRecentVideos(); // don't await — let it run in background
 });
 
 // Test outbound connectivity to Google
