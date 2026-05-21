@@ -678,7 +678,7 @@ async function fetchAllRecentVideos() {
   for (const ch of channels) {
     try {
       const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
-        '&channelId=' + ch.id + '&part=snippet&order=date&type=video&maxResults=5';
+        '&channelId=' + ch.id + '&part=snippet&order=date&type=video&maxResults=10';
       const data = await ytFetch(url);
 
       if (checkQuotaError(data)) {
@@ -768,7 +768,7 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
   if (!key) return res.status(500).json({ error: 'No API key configured' });
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?key=${key}&channelId=${channelId}&part=snippet&order=date&type=video&maxResults=5`;
+    const url = `https://www.googleapis.com/youtube/v3/search?key=${key}&channelId=${channelId}&part=snippet&order=date&type=video&maxResults=10`;
     const data = await ytFetch(url);
     if (checkQuotaError(data)) {
       markQuotaExceeded();

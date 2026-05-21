@@ -134,62 +134,8 @@
   #channel-label.visible { display: block; }
 
   /* WeatherStar reset button */
-  #ws-reset-btn {
-    position: absolute;
-    bottom: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0,0,0,0.8);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    padding: 0.5rem 1.5rem;
-    border-radius: 4px;
-    cursor: pointer;
-    display: none;
-    z-index: 10;
-    font-size: 0.9rem;
-    transition: all 0.2s;
-  }
-  #ws-reset-btn.visible { display: block; }
-  #ws-reset-btn:hover { background: var(--accent); color: #000; }
 
-  #fullscreen-btn {
-    position: absolute;
-    bottom: 1rem;
-    right: 1rem;
-    background: rgba(0,0,0,0.6);
-    border: 1px solid rgba(255,255,255,0.2);
-    color: rgba(255,255,255,0.7);
-    font-size: 1.2rem;
-    width: 36px;
-    height: 36px;
-    border-radius: 4px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10;
-    transition: all 0.2s;
-    line-height: 1;
-  }
-  #fullscreen-btn:hover {
-    background: rgba(0,0,0,0.85);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
 
-  /* When video area is fullscreen, hide the control bar */
-  #video-area:fullscreen {
-    width: 100vw;
-    height: 100vh;
-  }
-  #video-area:-webkit-full-screen {
-    width: 100vw;
-    height: 100vh;
-  }
 
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
@@ -491,10 +437,34 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Scrollbar */
+  /* Scrollbar — hidden on video strips that use arrow navigation */
   ::-webkit-scrollbar { height: 3px; width: 3px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--accent2); border-radius: 2px; }
+  #playlist-thumbs::-webkit-scrollbar,
+  .recent-overlay-inner > div[id^="videos-"]::-webkit-scrollbar { display: none; }
+
+  /* Scroll arrows for video strips */
+  .scroll-arrow {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .scroll-arrow:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,0,0,0.85); }
+  .scroll-arrow:disabled { opacity: 0.15; cursor: default; pointer-events: none; }
+  .scroll-arrow.hidden { visibility: hidden; }
 
   /* About button */
   .about-btn {
@@ -523,8 +493,6 @@
 <div id="video-area">
   <div id="live-badge">LIVE</div>
   <div id="channel-label"></div>
-  <button id="ws-reset-btn" onclick="showWSPanel()">⟳ Change Settings</button>
-  <button id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">⛶</button>
 
   <!-- Default placeholder -->
   <div id="video-placeholder">
@@ -573,9 +541,15 @@
     <div class="panel" id="playlist-panel">
       <div class="return-btn" onclick="closePanel('playlist')">← Back</div>
       <div class="divider"></div>
-      <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;min-width:90px">
+      <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.3rem;min-width:90px">
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.05em">🌦 Playlist</div>
         <div style="font-size:0.7rem;color:var(--muted)">Click to play</div>
+        <a href="#" target="_blank" rel="noopener"
+          id="playlist-yt-link"
+          style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gold);text-decoration:none;"
+          onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+          ↗ View on YouTube
+        </a>
       </div>
       <div class="divider"></div>
       <div id="playlist-thumbs" style="display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:thin;scrollbar-color:var(--accent2) transparent;">
@@ -1080,7 +1054,6 @@ function buildWSPanel() {
 // When WeatherStar nav button is clicked, load the full site into the video frame
 function launchWeatherStar() {
   loadIframe('https://weatherstar.netbymatt.com/', 'WeatherStar 4000+', false);
-  document.getElementById('ws-reset-btn').classList.add('visible');
 }
 
 // Reset button reloads the WS site fresh so user can reconfigure
@@ -1105,25 +1078,16 @@ function loadIframe(src, label, isLive) {
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
-  const fsBtn = document.getElementById('fullscreen-btn');
-
   if (isWeatherStar) {
-    // Show Matt's full page so zip entry and controls are visible
     frame.style.marginTop = '0';
     frame.style.height = '100%';
-    // White background so Matt's black text is readable against the page
     wrapper.style.background = '#ffffff';
     frame.style.background = '#ffffff';
-    // Hide fullscreen button — cross-origin iframe prevents clean fullscreen for WeatherStar
-    fsBtn.style.display = 'none';
   } else {
-    // Full fill for YouTube and everything else — keep video area dark
     frame.style.marginTop = '0';
     frame.style.height = '100%';
     wrapper.style.background = '#000000';
     frame.style.background = '#000000';
-    // Show fullscreen button for YouTube content
-    fsBtn.style.display = 'flex';
   }
 
   frame.src = src;
@@ -1160,7 +1124,6 @@ function clearVideo() {
   frame.style.background = '#000000';
   document.getElementById('live-badge').classList.remove('visible');
   document.getElementById('channel-label').classList.remove('visible');
-  document.getElementById('fullscreen-btn').style.display = 'none';
   currentChannel = null;
 }
 
@@ -1180,6 +1143,12 @@ function playVideo(videoId, title) {
 let playlistLoaded = false;
 
 async function loadPlaylist() {
+  // Update the View on YouTube link with the real playlist ID
+  const ytLink = document.getElementById('playlist-yt-link');
+  if (ytLink && PLAYLIST_ID && PLAYLIST_ID !== 'YOUR_PLAYLIST_ID') {
+    ytLink.href = 'https://www.youtube.com/playlist?list=' + PLAYLIST_ID;
+  }
+
   if (!PLAYLIST_ID || PLAYLIST_ID === 'YOUR_PLAYLIST_ID') {
     clearVideo();
     document.getElementById('video-placeholder').querySelector('p').textContent =
@@ -1211,7 +1180,20 @@ async function loadPlaylist() {
       return;
     }
 
-    thumbsContainer.innerHTML = '';
+    // Add scroll arrows around the playlist thumbs container
+  const playlistPanel = document.getElementById('playlist-panel');
+  const existingLeft = playlistPanel.querySelector('.scroll-arrow');
+  if (!existingLeft) {
+    const { leftBtn: plLeft, rightBtn: plRight } = createScrollArrows(thumbsContainer);
+    // Insert left arrow before thumbsContainer, right arrow after
+    thumbsContainer.parentNode.insertBefore(plLeft, thumbsContainer);
+    thumbsContainer.parentNode.insertBefore(plRight, thumbsContainer.nextSibling);
+    // Hide native scrollbar on thumbs container
+    thumbsContainer.style.scrollbarWidth = 'none';
+    thumbsContainer.style.msOverflowStyle = 'none';
+  }
+
+  thumbsContainer.innerHTML = '';
     data.items.forEach((item, index) => {
       const snippet = item.snippet;
       const videoId = snippet.resourceId && snippet.resourceId.videoId;
@@ -1264,18 +1246,29 @@ async function showRecent(ch, group) {
   }
 
   overlay.innerHTML = `
-    <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:110px">
+    <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:120px">
       <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--accent);text-transform:uppercase;letter-spacing:0.06em">${ch.name}</div>
       <button class="return-btn" onclick="closeRecentOverlay(this)">← Back</button>
+      <a href="https://www.youtube.com/channel/${ch.id}" target="_blank" rel="noopener"
+        style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gold);text-decoration:none;padding:0.25rem 0;display:block;"
+        onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+        ↗ Go to Channel
+      </a>
     </div>
     <div class="divider"></div>
-    <div style="display:flex;gap:0.5rem;flex:1;overflow-x:auto" id="videos-${ch.id}">
-      <div style="display:flex;align-items:center;gap:0.5rem;color:var(--muted);font-size:0.8rem">
-        <div class="spinner"></div> Loading videos...
-      </div>
-    </div>
   `;
 
+  // Add left arrow, scrollable video strip, right arrow
+  const videoStrip = document.createElement('div');
+  videoStrip.id = 'videos-' + ch.id;
+  videoStrip.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;';
+  videoStrip.innerHTML = '<div style="display:flex;align-items:center;gap:0.5rem;color:var(--muted);font-size:0.8rem"><div class="spinner"></div> Loading videos...</div>';
+
+  const { leftBtn, rightBtn } = createScrollArrows(videoStrip);
+
+  overlay.appendChild(leftBtn);
+  overlay.appendChild(videoStrip);
+  overlay.appendChild(rightBtn);
   overlay.style.display = 'flex';
 
   // Fetch videos
@@ -1414,93 +1407,47 @@ function startClock() {
   setInterval(update, 1000);
 }
 
+
 // ═══════════════════════════════════════════
-// FULLSCREEN
+// SCROLL ARROWS
 // ═══════════════════════════════════════════
-let fullscreenToastShown = false;
+function createScrollArrows(scrollEl) {
+  const leftBtn = document.createElement('button');
+  leftBtn.className = 'scroll-arrow';
+  leftBtn.innerHTML = '&#8249;';
+  leftBtn.title = 'Scroll left';
 
-function showFullscreenToast() {
-  // Only show once per session
-  if (fullscreenToastShown) return;
-  fullscreenToastShown = true;
+  const rightBtn = document.createElement('button');
+  rightBtn.className = 'scroll-arrow';
+  rightBtn.innerHTML = '&#8250;';
+  rightBtn.title = 'Scroll right';
 
-  const toast = document.createElement('div');
-  toast.id = 'fullscreen-toast';
-  toast.textContent = 'Press Escape or click ✕ to return to WeatherTV';
-  toast.style.cssText = `
-    position: fixed;
-    bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0,0,0,0.85);
-    border: 1px solid rgba(255,255,255,0.2);
-    color: rgba(255,255,255,0.9);
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.9rem;
-    letter-spacing: 0.05em;
-    padding: 0.6rem 1.5rem;
-    border-radius: 4px;
-    z-index: 9999;
-    opacity: 0;
-    transition: opacity 0.4s;
-    pointer-events: none;
-    white-space: nowrap;
-  `;
-  document.body.appendChild(toast);
+  const SCROLL_AMOUNT = 300;
 
-  // Fade in
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => { toast.style.opacity = '1'; });
-  });
-
-  // Fade out after 3 seconds
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    setTimeout(() => toast.remove(), 400);
-  }, 3000);
-}
-
-function toggleFullscreen() {
-  const videoArea = document.getElementById('video-area');
-  const btn = document.getElementById('fullscreen-btn');
-
-  const isFullscreen = document.fullscreenElement ||
-                       document.webkitFullscreenElement ||
-                       document.mozFullScreenElement;
-
-  if (!isFullscreen) {
-    if (videoArea.requestFullscreen) {
-      videoArea.requestFullscreen();
-    } else if (videoArea.webkitRequestFullscreen) {
-      videoArea.webkitRequestFullscreen();
-    } else if (videoArea.mozRequestFullScreen) {
-      videoArea.mozRequestFullScreen();
-    }
-    btn.textContent = '✕';
-    btn.title = 'Exit Fullscreen';
-    // Show hint toast after a short delay so it appears once fullscreen is active
-    setTimeout(showFullscreenToast, 600);
-  } else {
-    if (document.exitFullscreen) {
-      document.exitFullscreen();
-    } else if (document.webkitExitFullscreen) {
-      document.webkitExitFullscreen();
-    } else if (document.mozCancelFullScreen) {
-      document.mozCancelFullScreen();
-    }
-    btn.textContent = '⛶';
-    btn.title = 'Toggle Fullscreen';
+  function updateArrows() {
+    const atStart = scrollEl.scrollLeft <= 2;
+    const atEnd = scrollEl.scrollLeft >= scrollEl.scrollWidth - scrollEl.clientWidth - 2;
+    leftBtn.classList.toggle('hidden', atStart);
+    rightBtn.classList.toggle('hidden', atEnd);
   }
-}
 
-// Reset button icon when user exits fullscreen via Escape key
-document.addEventListener('fullscreenchange', () => {
-  const btn = document.getElementById('fullscreen-btn');
-  if (!document.fullscreenElement) {
-    btn.textContent = '⛶';
-    btn.title = 'Toggle Fullscreen';
-  }
-});
+  leftBtn.onclick = () => {
+    scrollEl.scrollBy({ left: -SCROLL_AMOUNT, behavior: 'smooth' });
+    setTimeout(updateArrows, 350);
+  };
+
+  rightBtn.onclick = () => {
+    scrollEl.scrollBy({ left: SCROLL_AMOUNT, behavior: 'smooth' });
+    setTimeout(updateArrows, 350);
+  };
+
+  scrollEl.addEventListener('scroll', updateArrows, { passive: true });
+
+  // Initial state
+  setTimeout(updateArrows, 100);
+
+  return { leftBtn, rightBtn, updateArrows };
+}
 
 // ═══════════════════════════════════════════
 // ABOUT MODAL
