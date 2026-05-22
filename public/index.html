@@ -861,6 +861,13 @@ function showPanel(name, e) {
   if (name === 'playlist') {
     loadPlaylist();
   }
+
+  // Add channel list arrows when a group panel is shown
+  // Must run after panel is visible so scrollWidth measures correctly
+  const isGroup = GROUPS.some(g => g.id === name);
+  if (isGroup) {
+    setTimeout(() => addChannelListArrows(name), 50);
+  }
 }
 
 function closePanel(name) {
@@ -971,8 +978,6 @@ function buildChannelLists() {
       card.appendChild(btns);
       list.appendChild(card);
     });
-    // Add scroll arrows after cards are rendered
-    setTimeout(() => addChannelListArrows(group.id), 50);
   });
 }
 
