@@ -690,6 +690,41 @@
         </div>
       </div>
 
+      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">App Versions Coming Soon</div>
+        <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+          <!-- iOS -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M21.5 2C21.5 2 21.9 6.2 19.5 8.8C17.1 11.4 14.2 11 14.2 11C14.2 11 13.6 7.2 16 4.6C18.4 2 21.5 2 21.5 2Z" fill="#7a9bb5"/>
+              <path d="M26.5 21.5C25.4 23.9 24.9 25 23.5 27.1C21.6 29.9 18.9 30 17.5 30C16.1 30 14.8 29.1 13.3 29.1C11.7 29.1 10 30 8.5 30C7 30 4.5 28 2.8 25C0.8 21.5 0.5 17.3 2 13.9C3 11.5 5.3 10 7.5 10C9.2 10 10.8 11 12 11C13.1 11 15 9.8 17.1 10C18.5 10.1 21.5 10.8 23.4 13.5C23.4 13.5 19.8 15.5 20 19.8C20.2 24.1 23.5 25.5 23.5 25.5C23.5 25.5 25 23.7 26.5 21.5Z" fill="#7a9bb5"/>
+            </svg>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">iOS</div>
+          </div>
+          <!-- Android -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M6 12C6 9.8 7.8 8 10 8H22C24.2 8 26 9.8 26 12V22C26 24.2 24.2 26 22 26H10C7.8 26 6 24.2 6 22V12Z" fill="#7a9bb5"/>
+              <circle cx="12" cy="17" r="1.5" fill="#111820"/>
+              <circle cx="20" cy="17" r="1.5" fill="#111820"/>
+              <path d="M10 8L8 4M22 8L24 4" stroke="#7a9bb5" stroke-width="1.5" stroke-linecap="round"/>
+              <path d="M4 14H6M26 14H28" stroke="#7a9bb5" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Android</div>
+          </div>
+          <!-- Samsung TV -->
+          <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2" y="5" width="28" height="18" rx="2" fill="#7a9bb5"/>
+              <rect x="4" y="7" width="24" height="14" rx="1" fill="#111820"/>
+              <rect x="12" y="23" width="8" height="2" fill="#7a9bb5"/>
+              <rect x="10" y="25" width="12" height="2" rx="1" fill="#7a9bb5"/>
+            </svg>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Samsung TV</div>
+          </div>
+        </div>
+      </div>
+
       <div style="border-top:1px solid var(--border);padding-top:1rem">
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Contact</div>
         <div style="font-size:0.85rem;color:var(--muted)">
@@ -724,12 +759,12 @@ let GROUPS = [];   // array of { id, label, icon, channels[] }
 let CHANNELS = {}; // { groupId: channels[] } for quick lookup
 
 const WEATHER_APPS = [
-  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/app/weatherfront/id1580596099',                             android: null,                                                                                       androidSoon: true  },
-  { name: 'Weather Wise',        img: 'images/weather-wise.webp',    ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                       android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise',                             androidSoon: false },
-  { name: 'Radar Omega',         img: 'images/radar-omega.webp',     ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',           android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping',        androidSoon: false },
-  { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',               android: 'https://play.google.com/store/apps/details?id=com.windyty.android',                        androidSoon: false },
-  { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                       android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',                        androidSoon: false },
-  { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                                android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',                    androidSoon: false },
+  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/app/weatherfront/id1580596099',                             iosSoon: false, android: null,                                                                                       androidSoon: true  },
+  { name: 'Weather Wise',        img: 'images/weather-wise.webp',    ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                       iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise',                             androidSoon: false },
+  { name: 'Radar Omega',         img: 'images/radar-omega.webp',     ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',           iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping',        androidSoon: false },
+  { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',               iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.windyty.android',                        androidSoon: false },
+  { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                       iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',                        androidSoon: false },
+  { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                                iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',                    androidSoon: false },
 ];
 
 // ═══════════════════════════════════════════
@@ -1070,61 +1105,96 @@ function buildAppsPanel() {
 
   const ret = document.createElement('button');
   ret.className = 'return-btn';
+  ret.style.flexShrink = '0';
   ret.textContent = '← Back';
   ret.onclick = () => closePanel('apps');
   panel.appendChild(ret);
 
   const div = document.createElement('div');
   div.className = 'divider';
+  div.style.flexShrink = '0';
   panel.appendChild(div);
 
-  const os = detectOS();
-
   WEATHER_APPS.forEach(app => {
-    const isAndroid = os === 'android' || os === 'tizen';
-    const isIOS = os === 'ios';
-    const link = isAndroid ? app.android : app.ios;
-    const comingSoon = isAndroid && !app.android && app.androidSoon;
-    const unavailable = isAndroid && !app.android && !app.androidSoon;
+    const chip = document.createElement('div');
+    chip.className = 'app-chip';
+    chip.style.cssText = 'flex-direction:column;align-items:flex-start;gap:0.4rem;min-width:130px;';
 
-    const chip = document.createElement(link ? 'a' : 'div');
-    chip.className = 'app-chip' + (comingSoon || unavailable ? ' app-chip-disabled' : '');
+    // App icon + name row
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;';
 
-    if (link) {
-      chip.href = link;
-      chip.target = '_blank';
-      chip.rel = 'noopener';
-    }
-
-    // App icon image
     const iconWrap = document.createElement('div');
-    iconWrap.style.cssText = 'width:40px;height:40px;flex-shrink:0;border-radius:9px;overflow:hidden;background:var(--surface2);';
+    iconWrap.style.cssText = 'width:36px;height:36px;flex-shrink:0;border-radius:8px;overflow:hidden;background:var(--surface2);';
     const img = document.createElement('img');
     img.src = app.img;
     img.alt = app.name;
     img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
     iconWrap.appendChild(img);
-    chip.appendChild(iconWrap);
-
-    // Name + coming soon badge
-    const nameWrap = document.createElement('div');
-    nameWrap.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+    topRow.appendChild(iconWrap);
 
     const name = document.createElement('div');
     name.className = 'app-chip-name';
     name.textContent = app.name;
-    nameWrap.appendChild(name);
+    topRow.appendChild(name);
+    chip.appendChild(topRow);
 
-    if (comingSoon) {
-      const badge = document.createElement('div');
-      badge.style.cssText = 'font-family:"Barlow Condensed",sans-serif;font-size:0.62rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gold);';
-      badge.textContent = 'Android coming soon';
-      nameWrap.appendChild(badge);
-    }
+    // iOS and Android buttons row
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:0.3rem;flex-wrap:wrap;';
 
-    chip.appendChild(nameWrap);
+    // iOS button
+    const iosBtn = makeStoreBtn(
+      app.ios, app.iosSoon, '🍎 iOS',
+      app.ios ? null : (app.iosSoon ? 'iOS coming soon' : null)
+    );
+    btnRow.appendChild(iosBtn);
+
+    // Android button
+    const androidBtn = makeStoreBtn(
+      app.android, app.androidSoon, '🤖 Android',
+      app.android ? null : (app.androidSoon ? 'Android coming soon' : null)
+    );
+    btnRow.appendChild(androidBtn);
+
+    chip.appendChild(btnRow);
     panel.appendChild(chip);
   });
+}
+
+function makeStoreBtn(link, comingSoon, label, tooltip) {
+  const btn = document.createElement(link ? 'a' : 'div');
+  btn.style.cssText = [
+    'font-family:"Barlow Condensed",sans-serif',
+    'font-size:0.68rem',
+    'font-weight:700',
+    'letter-spacing:0.06em',
+    'text-transform:uppercase',
+    'padding:0.25rem 0.5rem',
+    'border-radius:3px',
+    'border:1px solid',
+    'text-decoration:none',
+    'white-space:nowrap',
+    link
+      ? 'border-color:var(--accent);color:var(--accent);cursor:pointer;'
+      : comingSoon
+        ? 'border-color:var(--gold);color:var(--gold);opacity:0.7;cursor:default;'
+        : 'border-color:var(--border);color:var(--muted);opacity:0.4;cursor:default;'
+  ].join(';');
+
+  if (link) {
+    btn.href = link;
+    btn.target = '_blank';
+    btn.rel = 'noopener';
+    btn.textContent = label;
+  } else if (comingSoon) {
+    btn.textContent = label + ' — Soon';
+    btn.title = tooltip || '';
+  } else {
+    btn.textContent = label + ' N/A';
+  }
+
+  return btn;
 }
 
 // ═══════════════════════════════════════════
