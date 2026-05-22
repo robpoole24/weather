@@ -39,7 +39,9 @@ function getDefaultData() {
   return {
     config: {
       playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI',
-      apiKey: process.env.YOUTUBE_API_KEY || ''
+      apiKey: process.env.YOUTUBE_API_KEY || '',
+      liveCheckIntervalHours: 12,   // hours between background live polls
+      recentFetchHourEST: 18,       // hour (0-23) in EST to fetch recent videos daily
     },
     groups: [
       {
@@ -400,11 +402,29 @@ const cache = {
   websubActive: false,   // true once Railway is deployed and webhooks are live
 };
 
+// Intervals are configurable via admin panel — stored in channels.json config
+// Defaults shown here, overridden by loadData().config values
 const CACHE_TTL = {
-  recentVideos: 24 * 60 * 60 * 1000,  // 24 hours (fetched once daily at 6pm EST)
-  playlist:     48 * 60 * 60 * 1000,  // 48 hours
-  liveCheck:    12 * 60 * 60 * 1000,  // 12 hours fallback polling — WebSub handles real-time detection
+  recentVideos: 24 * 60 * 60 * 1000,  // 24 hours default
+  playlist:     48 * 60 * 60 * 1000,  // 48 hours (not configurable — rarely changes)
+  liveCheck:    12 * 60 * 60 * 1000,  // 12 hours default fallback poll
 };
+
+function getLiveCheckInterval() {
+  try {
+    const cfg = loadData().config;
+    if (cfg.liveCheckIntervalHours) return cfg.liveCheckIntervalHours * 60 * 60 * 1000;
+  } catch(e) {}
+  return CACHE_TTL.liveCheck;
+}
+
+function getRecentFetchHour() {
+  try {
+    const cfg = loadData().config;
+    if (cfg.recentFetchHourEST !== undefined) return cfg.recentFetchHourEST;
+  } catch(e) {}
+  return 18; // 6pm EST default
+}
 
 // ── Helper: get channels eligible for live check based on time (EST) ──
 // Forecasters: checked 6am-2am EST (stop 2am-6am)
@@ -516,7 +536,7 @@ async function scheduledLiveCheck() {
 
   cache.lastLiveCheck = Date.now();
   console.log('[WeatherTV] Live check complete — ' + liveCount + ' channel(s) live (' + channels.length + ' units used)');
-  setTimeout(scheduledLiveCheck, CACHE_TTL.liveCheck);
+  setTimeout(scheduledLiveCheck, getLiveCheckInterval());
 }
 
 // Start live check 5s after boot
@@ -610,29 +630,39 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   res.status(200).send('OK'); // Always respond quickly
 
   const channelId = req.params.channelId;
-  const body = req.body ? req.body.toString() : '';
+  console.log('[WebSub] Notification received for channel: ' + channelId);
 
-  // Parse the Atom feed to detect live vs new video
-  const isLive = body.includes('<yt:liveBroadcastContent>live</yt:liveBroadcastContent>') ||
-                 body.includes('live_stream');
+  // WebSub tells us the channel published something — could be a new video or live stream
+  // We can't reliably detect live status from the Atom feed alone
+  // So we do a targeted single-channel live check via the API (100 units, only when triggered)
+  if (!quotaExceeded) {
+    const key = getApiKey();
+    if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
+      const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+        '&channelId=' + channelId + '&part=id&eventType=live&type=video';
+      ytFetch(url).then(data => {
+        if (checkQuotaError(data)) { markQuotaExceeded(); return; }
+        const isLive = !!(data.items && data.items.length > 0);
+        const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
+        const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
 
-  const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+        cache.liveStatuses[channelId] = { isLive, videoId, checkedAt: Date.now(), source: 'websub' };
+        cache.lastLiveCheck = Date.now();
 
-  // Update live status from push notification
-  cache.liveStatuses[channelId] = {
-    isLive,
-    checkedAt: Date.now(),
-    source: 'websub'
-  };
-  cache.lastLiveCheck = Date.now();
-
-  if (isLive && !wasLive) {
-    console.log('[WebSub] LIVE: ' + channelId + ' just went live!');
-  } else if (!isLive && wasLive) {
-    console.log('[WebSub] OFFLINE: ' + channelId + ' stream ended');
+        if (isLive && !wasLive) {
+          console.log('[WebSub] LIVE CONFIRMED: ' + channelId + ' just went live!');
+        } else if (!isLive && wasLive) {
+          console.log('[WebSub] OFFLINE: ' + channelId + ' stream ended');
+        } else {
+          console.log('[WebSub] ' + channelId + ' posted new content (not live)');
+        }
+      }).catch(e => {
+        console.error('[WebSub] Live check error for ' + channelId + ':', e.message);
+      });
+    }
   }
 
-  // Also invalidate recent videos cache for this channel so next request gets fresh content
+  // Always invalidate recent videos cache so next request gets fresh content
   delete cache.recentVideos[channelId];
 });
 
@@ -704,11 +734,12 @@ async function fetchAllRecentVideos() {
 }
 
 function scheduleNextRecentFetch() {
-  // Schedule for next 6pm EST
+  // Schedule for next fetch hour EST (default 6pm, configurable via admin)
+  const fetchHour = getRecentFetchHour();
   const now = new Date();
   const estNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const next = new Date(estNow);
-  next.setHours(18, 0, 0, 0); // 6pm EST
+  next.setHours(fetchHour, 0, 0, 0);
 
   // If 6pm EST has already passed today, schedule for tomorrow
   if (estNow >= next) {
@@ -718,7 +749,7 @@ function scheduleNextRecentFetch() {
   // Convert back to UTC ms offset
   const msUntilNext = next - estNow;
   const minsUntilNext = Math.round(msUntilNext / 60000);
-  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (6:00 PM EST)');
+  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (' + fetchHour + ':00 EST)');
   setTimeout(fetchAllRecentVideos, msUntilNext);
 }
 
