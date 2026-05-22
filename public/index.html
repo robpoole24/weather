@@ -186,7 +186,7 @@
     height: 100%;
     overflow: hidden;
   }
-  .panel.active { display: flex; align-items: center; width: 100%; }
+  .panel.active { display: flex !important; flex-direction: row; align-items: center; width: 100%; overflow: hidden; }
 
   /* Channel list panel */
   .channel-list {
@@ -666,7 +666,7 @@
     </div>
     <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem">
       <div style="font-size:0.7rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;letter-spacing:0.08em;text-transform:uppercase;flex-shrink:0">A product of</div>
-      <img src="images/altruistic-apps.jpg" alt="Altruistic Apps" style="height:32px;object-fit:contain;border-radius:4px;background:#ffffff;padding:3px 8px;" />
+      <img src="images/altruistic-apps.png" alt="Altruistic Apps" style="height:52px;object-fit:contain;border-radius:4px;" />
     </div>
 
     <div style="font-size:0.9rem;line-height:1.7;color:var(--text)">
@@ -694,7 +694,7 @@
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Contact</div>
         <div style="font-size:0.85rem;color:var(--muted)">
           Something broken or a channel to suggest?<br>
-          <a href="mailto:your@email.com" style="color:var(--accent)">your@email.com</a>
+          <a href="mailto:contactaltruisticapps@gmail.com" style="color:var(--accent)">contactaltruisticapps@gmail.com</a>
         </div>
       </div>
     </div>
@@ -816,46 +816,14 @@ function buildChannelPanels() {
     const panel = document.createElement('div');
     panel.className = 'panel group-panel';
     panel.id = group.id + '-panel';
+    panel.style.cssText = 'display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;';
 
-    // Left arrow — fixed outside scroll area
-    const leftArrow = document.createElement('button');
-    leftArrow.className = 'scroll-arrow';
-    leftArrow.innerHTML = '&#8249;';
-    leftArrow.style.visibility = 'hidden';
-    leftArrow.style.flexShrink = '0';
-
-    // Scrollable channel list
+    // Simple scrollable list — arrows added after channels are populated
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
-    list.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0 0.25rem;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;flex:1;min-width:0;';
-
-    // Right arrow — fixed outside scroll area
-    const rightArrow = document.createElement('button');
-    rightArrow.className = 'scroll-arrow';
-    rightArrow.innerHTML = '&#8250;';
-    rightArrow.style.flexShrink = '0';
-
-    const SCROLL_AMT = 320;
-
-    function updateChArrows() {
-      const canScrollLeft = list.scrollLeft > 2;
-      const canScrollRight = list.scrollLeft < list.scrollWidth - list.clientWidth - 2;
-      leftArrow.style.visibility = canScrollLeft ? 'visible' : 'hidden';
-      rightArrow.style.visibility = canScrollRight ? 'visible' : 'hidden';
-    }
-
-    leftArrow.onclick = () => { list.scrollBy({ left: -SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateChArrows, 350); };
-    rightArrow.onclick = () => { list.scrollBy({ left: SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateChArrows, 350); };
-    list.addEventListener('scroll', updateChArrows, { passive: true });
-
-    // Append directly to panel — panel is already display:flex
-    panel.appendChild(leftArrow);
+    list.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0 0.5rem;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;flex:1;min-width:0;';
     panel.appendChild(list);
-    panel.appendChild(rightArrow);
-
-    // Check arrow state after channels are built
-    setTimeout(updateChArrows, 300);
 
     // Insert before the weatherstar panel
     const wsPanelEl = document.getElementById('weatherstar-panel');
@@ -905,6 +873,40 @@ function closePanel(name) {
 // ═══════════════════════════════════════════
 // BUILD CHANNEL LISTS
 // ═══════════════════════════════════════════
+function addChannelListArrows(groupId) {
+  const list = document.getElementById(groupId + '-list');
+  if (!list || !list.parentElement) return;
+
+  // Remove any existing arrows
+  list.parentElement.querySelectorAll('.ch-list-arrow').forEach(a => a.remove());
+
+  const SCROLL_AMT = 320;
+
+  const leftArrow = document.createElement('button');
+  leftArrow.className = 'scroll-arrow ch-list-arrow';
+  leftArrow.innerHTML = '&#8249;';
+  leftArrow.style.cssText = 'flex-shrink:0;visibility:hidden;position:relative;z-index:2;';
+
+  const rightArrow = document.createElement('button');
+  rightArrow.className = 'scroll-arrow ch-list-arrow';
+  rightArrow.innerHTML = '&#8250;';
+  rightArrow.style.cssText = 'flex-shrink:0;position:relative;z-index:2;';
+
+  function updateArrows() {
+    leftArrow.style.visibility = list.scrollLeft > 2 ? 'visible' : 'hidden';
+    rightArrow.style.visibility = (list.scrollLeft < list.scrollWidth - list.clientWidth - 2) ? 'visible' : 'hidden';
+  }
+
+  leftArrow.onclick = () => { list.scrollBy({ left: -SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateArrows, 350); };
+  rightArrow.onclick = () => { list.scrollBy({ left: SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateArrows, 350); };
+  list.addEventListener('scroll', updateArrows, { passive: true });
+
+  list.parentElement.insertBefore(leftArrow, list);
+  list.parentElement.appendChild(rightArrow);
+
+  setTimeout(updateArrows, 100);
+}
+
 function buildChannelLists() {
   GROUPS.forEach(group => {
     const list = document.getElementById(group.id + '-list');
@@ -987,6 +989,8 @@ function buildChannelLists() {
       card.appendChild(btns);
       list.appendChild(card);
     });
+    // Add scroll arrows after cards are rendered
+    setTimeout(() => addChannelListArrows(group.id), 50);
   });
 }
 
