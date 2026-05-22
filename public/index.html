@@ -466,6 +466,53 @@
   .scroll-arrow:disabled { opacity: 0.15; cursor: default; pointer-events: none; }
   .scroll-arrow.hidden { visibility: hidden; }
 
+  /* Subscribe button */
+  .ch-btn.subscribe {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.8);
+    font-size: 0.65rem;
+  }
+  .ch-btn.subscribe:hover {
+    background: #ff0000;
+    border-color: #ff0000;
+    color: white;
+  }
+
+  /* Live chat panel */
+  #live-chat-panel {
+    display: none;
+    flex-direction: column;
+    width: 33.333%;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    position: relative;
+  }
+  #live-chat-panel.visible { display: flex; }
+  #live-chat-panel iframe {
+    flex: 1;
+    border: none;
+    width: 100%;
+  }
+  #chat-close-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    cursor: pointer;
+    z-index: 5;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+  #chat-close-btn:hover { color: var(--text); border-color: var(--text); }
+
   /* About button */
   .about-btn {
     margin-left: auto;
@@ -505,13 +552,19 @@
     <p>Select a channel below to begin</p>
   </div>
 
-  <!-- Video frame wrapper — clips WeatherStar nav bar via overflow:hidden + negative margin -->
-  <div id="video-wrapper" style="display:none;width:100%;height:100%;overflow:hidden;position:relative;">
-    <iframe id="video-frame"
-      style="width:100%;height:100%;border:none;display:block;"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-      allowfullscreen>
-    </iframe>
+  <!-- Video frame wrapper with optional live chat panel -->
+  <div id="video-area-inner" style="display:none;width:100%;height:100%;flex-direction:row;">
+    <div id="video-wrapper" style="flex:1;overflow:hidden;position:relative;">
+      <iframe id="video-frame"
+        style="width:100%;height:100%;border:none;display:block;"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowfullscreen>
+      </iframe>
+    </div>
+    <div id="live-chat-panel">
+      <button id="chat-close-btn" onclick="closeLiveChat()">✕ Hide Chat</button>
+      <iframe id="chat-frame" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media"></iframe>
+    </div>
   </div>
 </div>
 
@@ -611,6 +664,10 @@
     </div>
     <div style="font-size:0.75rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:1.5rem">
       Version 1.0
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem">
+      <div style="font-size:0.7rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;letter-spacing:0.08em;text-transform:uppercase;flex-shrink:0">A product of</div>
+      <img src="images/altruistic-apps.jpg" alt="Altruistic Apps" style="height:28px;object-fit:contain;border-radius:4px;" />
     </div>
 
     <div style="font-size:0.9rem;line-height:1.7;color:var(--text)">
@@ -761,10 +818,26 @@ function buildChannelPanels() {
     panel.className = 'panel group-panel';
     panel.id = group.id + '-panel';
 
+    // Scroll arrow wrapper for channel list
+    const listWrapper = document.createElement('div');
+    listWrapper.style.cssText = 'display:flex;align-items:center;flex:1;overflow:hidden;';
+
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
-    panel.appendChild(list);
+    list.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0 0.5rem;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;flex:1;';
+
+    listWrapper.appendChild(list);
+    panel.appendChild(listWrapper);
+
+    // Add scroll arrows after list is populated (defer until channels are built)
+    setTimeout(() => {
+      const { leftBtn, rightBtn } = createScrollArrows(list);
+      leftBtn.style.flexShrink = '0';
+      rightBtn.style.flexShrink = '0';
+      listWrapper.insertBefore(leftBtn, list);
+      listWrapper.appendChild(rightBtn);
+    }, 100);
 
     // Insert before the weatherstar panel
     const wsPanelEl = document.getElementById('weatherstar-panel');
@@ -818,17 +891,19 @@ function buildChannelLists() {
   GROUPS.forEach(group => {
     const list = document.getElementById(group.id + '-list');
     if (!list) return;
-    list.innerHTML = ''; // clear any existing content
+    list.innerHTML = '';
 
     // Return button
     const ret = document.createElement('button');
     ret.className = 'return-btn';
+    ret.style.flexShrink = '0';
     ret.textContent = '← Back';
     ret.onclick = () => closePanel(group.id);
     list.appendChild(ret);
 
     const div = document.createElement('div');
     div.className = 'divider';
+    div.style.flexShrink = '0';
     list.appendChild(div);
 
     const channels = CHANNELS[group.id] || [];
@@ -862,6 +937,16 @@ function buildChannelLists() {
       recentBtn.textContent = 'RECENT ▸';
       recentBtn.onclick = () => showRecent(ch, group.id);
       btns.appendChild(recentBtn);
+
+      // Subscribe button — opens YouTube subscribe dialog for this channel
+      const subBtn = document.createElement('button');
+      subBtn.className = 'ch-btn subscribe';
+      subBtn.innerHTML = '+ SUB';
+      subBtn.title = 'Subscribe to ' + ch.name + ' on YouTube';
+      subBtn.onclick = () => {
+        window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener');
+      };
+      btns.appendChild(subBtn);
 
       // Collections buttons — only shown when collection is enabled AND has members
       if (ch.collections && ch.collections.length > 0) {
@@ -1070,11 +1155,12 @@ const WS_NAV_HEIGHT = 0; // Set to 0 to show Matt's full page including zip entr
 
 function loadIframe(src, label, isLive) {
   const placeholder = document.getElementById('video-placeholder');
+  const areaInner = document.getElementById('video-area-inner');
   const wrapper = document.getElementById('video-wrapper');
   const frame = document.getElementById('video-frame');
 
   placeholder.style.display = 'none';
-  wrapper.style.display = 'block';
+  areaInner.style.display = 'flex';
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
@@ -1113,10 +1199,11 @@ function loadIframe(src, label, isLive) {
 
 function clearVideo() {
   const placeholder = document.getElementById('video-placeholder');
+  const areaInner = document.getElementById('video-area-inner');
   const wrapper = document.getElementById('video-wrapper');
   const frame = document.getElementById('video-frame');
   placeholder.style.display = 'flex';
-  wrapper.style.display = 'none';
+  areaInner.style.display = 'none';
   frame.src = '';
   frame.style.marginTop = '0';
   frame.style.height = '100%';
@@ -1124,14 +1211,83 @@ function clearVideo() {
   frame.style.background = '#000000';
   document.getElementById('live-badge').classList.remove('visible');
   document.getElementById('channel-label').classList.remove('visible');
+  closeLiveChat();
   currentChannel = null;
 }
 
-function playLive(ch) {
+async function playLive(ch) {
   // Button only shown when confirmed live, go straight to playback
-  const url = `https://www.youtube.com/embed/live_stream?channel=${ch.id}&autoplay=1`;
+  const url = 'https://www.youtube.com/embed/live_stream?channel=' + ch.id + '&autoplay=1';
   loadIframe(url, ch.name + ' • LIVE', true);
   closeRecentOverlay();
+
+  // Show chat button in the bottom bar
+  showChatButton(ch);
+}
+
+let currentLiveCh = null;
+
+function showChatButton(ch) {
+  currentLiveCh = ch;
+  // Remove any existing chat button
+  const existing = document.getElementById('chat-toggle-btn');
+  if (existing) existing.remove();
+
+  // Find the recent overlay or current panel header area to put the button
+  // We'll add it to the status bar area for visibility
+  const statusBar = document.getElementById('status-bar');
+  const chatBtn = document.createElement('button');
+  chatBtn.id = 'chat-toggle-btn';
+  chatBtn.className = 'about-btn';
+  chatBtn.style.cssText = 'margin-left:0;border-color:var(--red);color:var(--red);';
+  chatBtn.innerHTML = '💬 Live Chat';
+  chatBtn.onclick = () => toggleLiveChat(ch);
+  // Insert before the About button
+  const aboutBtn = statusBar.querySelector('.about-btn');
+  statusBar.insertBefore(chatBtn, aboutBtn);
+}
+
+async function toggleLiveChat(ch) {
+  const chatPanel = document.getElementById('live-chat-panel');
+  if (chatPanel.classList.contains('visible')) {
+    closeLiveChat();
+    return;
+  }
+  // Fetch the live video ID to get the chat URL
+  try {
+    const res = await fetch('/api/yt/live/' + ch.id);
+    const data = await res.json();
+    if (data.items && data.items.length > 0 && data.items[0].id && data.items[0].id !== 'live') {
+      const videoId = data.items[0].id;
+      openLiveChat(videoId);
+    } else {
+      // Fallback — try to get video ID from the live stream embed
+      openLiveChatFallback(ch.id);
+    }
+  } catch(e) {
+    openLiveChatFallback(ch.id);
+  }
+}
+
+function openLiveChat(videoId) {
+  const chatFrame = document.getElementById('chat-frame');
+  const domain = window.location.hostname;
+  chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain;
+  document.getElementById('live-chat-panel').classList.add('visible');
+}
+
+function openLiveChatFallback(channelId) {
+  // If we can't get video ID, link to channel page live tab
+  window.open('https://www.youtube.com/channel/' + channelId + '/live', '_blank', 'noopener');
+}
+
+function closeLiveChat() {
+  document.getElementById('live-chat-panel').classList.remove('visible');
+  document.getElementById('chat-frame').src = '';
+  // Remove chat button from status bar
+  const btn = document.getElementById('chat-toggle-btn');
+  if (btn) btn.remove();
+  currentLiveCh = null;
 }
 
 function playVideo(videoId, title) {

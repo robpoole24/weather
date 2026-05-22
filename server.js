@@ -77,7 +77,7 @@ function getDefaultData() {
           { id: 'UCvIqVAaqpx1Q_e9DzIxgk1A', name: 'CF Productions',         hasLive: true,  enabled: true },
           { id: 'UCLfN3U2O0sEYabjo2lxIttw', name: 'Celton Henderson',       hasLive: false, enabled: true },
           { id: 'UCGpPbdVAtTUgW_w98lXC9nw', name: 'Chris Riske',            hasLive: true,  enabled: true },
-          { id: 'UCLMVjB6YhWX-bDxNiSmVNNg', name: 'Connor Croff',           hasLive: true,  enabled: true },
+          { id: 'UCb0U1g5r4kH_NDMGiGRhysA', name: 'Connor Croff',           hasLive: true,  enabled: true },
           { id: 'UCRYYy0UrfyGmMKQDU1N1R3g', name: 'Convective Chronicles',  hasLive: true,  enabled: true },
           { id: 'UCx5ex9rJumpj-oKgVJrP4hA', name: 'Corey Gerken',           hasLive: true,  enabled: true },
           { id: 'UCemyFpFfu55JvAP_eWW1NdA', name: 'Daniel Shaw',            hasLive: true,  enabled: true },
@@ -730,14 +730,12 @@ console.log('[WeatherTV] Recent video fetch scheduled — no startup fetch to pr
 app.get('/api/yt/live/:channelId', (req, res) => {
   const cached = cache.liveStatuses[req.params.channelId];
   if (cached) {
-    // Return in same format as YouTube API so frontend doesn't need changes
     return res.json({
-      items: cached.isLive ? [{ id: 'live' }] : [],
+      items: cached.isLive ? [{ id: cached.videoId || 'live' }] : [],
       _cached: true,
       _checkedAt: cached.checkedAt
     });
   }
-  // Not yet checked — return not live (will be updated on next scheduled check)
   res.json({ items: [], _cached: false });
 });
 
