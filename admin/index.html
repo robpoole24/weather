@@ -142,7 +142,32 @@
       <input type="password" id="cfg-apikey" placeholder="Stored in environment variable on server" />
       <label>Weather Playlist ID</label>
       <input type="text" id="cfg-playlist" placeholder="PLxxxxxxxxxxxxxxxxxx" />
+
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+        <div style="flex:1;min-width:180px;">
+          <label>Live Check Interval (hours)</label>
+          <input type="number" id="cfg-live-interval" min="1" max="24" placeholder="12"
+            style="margin-bottom:0.25rem;" />
+          <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
+            How often the server polls for live streams as a safety net.<br>
+            WebSub handles real-time detection. Recommended: 12.<br>
+            <strong style="color:var(--gold);">Cost: ~${channels} × 100 units per check.</strong>
+          </div>
+        </div>
+        <div style="flex:1;min-width:180px;">
+          <label>Daily Video Fetch Hour (EST, 0–23)</label>
+          <input type="number" id="cfg-fetch-hour" min="0" max="23" placeholder="18"
+            style="margin-bottom:0.25rem;" />
+          <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
+            Hour in EST (0=midnight, 18=6pm) when recent videos are fetched.<br>
+            Recommended: 18 (6pm EST).<br>
+            <strong style="color:var(--gold);">Cost: ~${channels} × 100 units once daily.</strong>
+          </div>
+        </div>
+      </div>
+
       <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+      <div style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Note: Interval changes take effect after the next scheduled run or server restart.</div>
     </div>
   </div>
 
@@ -267,6 +292,15 @@ async function loadData() {
 function renderAll() {
   document.getElementById('cfg-apikey').value = appData.config.apiKey || '';
   document.getElementById('cfg-playlist').value = appData.config.playlistId || '';
+  document.getElementById('cfg-live-interval').value = appData.config.liveCheckIntervalHours || 12;
+  document.getElementById('cfg-fetch-hour').value = appData.config.recentFetchHourEST !== undefined ? appData.config.recentFetchHourEST : 18;
+
+  // Show channel count in cost estimates
+  const totalChannels = (appData.groups||[]).reduce((sum, g) => sum + (g.channels||[]).filter(c => c.hasLive && c.enabled !== false).length, 0);
+  document.querySelectorAll('.section-body strong').forEach(el => {
+    el.innerHTML = el.innerHTML.replace('${channels}', totalChannels);
+  });
+
   renderGroups();
   renderApps();
 }
@@ -548,11 +582,20 @@ function closeColModal() { document.getElementById('col-modal').classList.remove
 
 // ── Config ──
 async function saveConfig() {
+  const liveInterval = parseInt(document.getElementById('cfg-live-interval').value) || 12;
+  const fetchHour = parseInt(document.getElementById('cfg-fetch-hour').value);
+  const fetchHourValid = !isNaN(fetchHour) && fetchHour >= 0 && fetchHour <= 23;
+
   await fetch('/api/admin/config', {
     method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ apiKey: document.getElementById('cfg-apikey').value, playlistId: document.getElementById('cfg-playlist').value })
+    body: JSON.stringify({
+      apiKey: document.getElementById('cfg-apikey').value,
+      playlistId: document.getElementById('cfg-playlist').value,
+      liveCheckIntervalHours: Math.min(24, Math.max(1, liveInterval)),
+      recentFetchHourEST: fetchHourValid ? fetchHour : 18,
+    })
   });
-  showToast('Configuration saved');
+  showToast('Configuration saved — changes take effect on next scheduled run');
 }
 
 // ── Apps ──
