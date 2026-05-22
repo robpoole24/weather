@@ -186,7 +186,7 @@
     height: 100%;
     overflow: hidden;
   }
-  .panel.active { display: flex; align-items: center; }
+  .panel.active { display: flex; align-items: center; width: 100%; }
 
   /* Channel list panel */
   .channel-list {
@@ -666,7 +666,7 @@
     </div>
     <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem;display:flex;align-items:center;gap:0.75rem">
       <div style="font-size:0.7rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;letter-spacing:0.08em;text-transform:uppercase;flex-shrink:0">A product of</div>
-      <img src="images/altruistic-apps.jpg" alt="Altruistic Apps" style="height:28px;object-fit:contain;border-radius:4px;" />
+      <img src="images/altruistic-apps.jpg" alt="Altruistic Apps" style="height:32px;object-fit:contain;border-radius:4px;background:#ffffff;padding:3px 8px;" />
     </div>
 
     <div style="font-size:0.9rem;line-height:1.7;color:var(--text)">
@@ -817,46 +817,45 @@ function buildChannelPanels() {
     panel.className = 'panel group-panel';
     panel.id = group.id + '-panel';
 
-    // Wrapper: [left arrow] [scrollable list] [right arrow]
-    // Arrows sit outside the scroll area so cards never slide under them
-    const listWrapper = document.createElement('div');
-    listWrapper.style.cssText = 'display:flex;align-items:center;width:100%;height:100%;min-width:0;overflow:hidden;';
-
+    // Left arrow — fixed outside scroll area
     const leftArrow = document.createElement('button');
     leftArrow.className = 'scroll-arrow';
     leftArrow.innerHTML = '&#8249;';
-    leftArrow.style.cssText = 'flex-shrink:0;visibility:hidden;';
+    leftArrow.style.visibility = 'hidden';
+    leftArrow.style.flexShrink = '0';
 
+    // Scrollable channel list
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
     list.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0 0.25rem;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;flex:1;min-width:0;';
 
+    // Right arrow — fixed outside scroll area
     const rightArrow = document.createElement('button');
     rightArrow.className = 'scroll-arrow';
     rightArrow.innerHTML = '&#8250;';
-    rightArrow.style.cssText = 'flex-shrink:0;';
+    rightArrow.style.flexShrink = '0';
 
     const SCROLL_AMT = 320;
 
     function updateChArrows() {
-      const atStart = list.scrollLeft <= 2;
-      const atEnd = list.scrollLeft >= list.scrollWidth - list.clientWidth - 2;
-      leftArrow.style.visibility = atStart ? 'hidden' : 'visible';
-      rightArrow.style.visibility = atEnd ? 'hidden' : 'visible';
+      const canScrollLeft = list.scrollLeft > 2;
+      const canScrollRight = list.scrollLeft < list.scrollWidth - list.clientWidth - 2;
+      leftArrow.style.visibility = canScrollLeft ? 'visible' : 'hidden';
+      rightArrow.style.visibility = canScrollRight ? 'visible' : 'hidden';
     }
 
     leftArrow.onclick = () => { list.scrollBy({ left: -SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateChArrows, 350); };
     rightArrow.onclick = () => { list.scrollBy({ left: SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateChArrows, 350); };
     list.addEventListener('scroll', updateChArrows, { passive: true });
 
-    listWrapper.appendChild(leftArrow);
-    listWrapper.appendChild(list);
-    listWrapper.appendChild(rightArrow);
-    panel.appendChild(listWrapper);
+    // Append directly to panel — panel is already display:flex
+    panel.appendChild(leftArrow);
+    panel.appendChild(list);
+    panel.appendChild(rightArrow);
 
-    // Initial arrow state after channels are rendered
-    setTimeout(updateChArrows, 200);
+    // Check arrow state after channels are built
+    setTimeout(updateChArrows, 300);
 
     // Insert before the weatherstar panel
     const wsPanelEl = document.getElementById('weatherstar-panel');
