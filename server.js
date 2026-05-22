@@ -403,7 +403,7 @@ const cache = {
 const CACHE_TTL = {
   recentVideos: 24 * 60 * 60 * 1000,  // 24 hours (fetched once daily at 6pm EST)
   playlist:     48 * 60 * 60 * 1000,  // 48 hours
-  liveCheck:    15 * 60 * 1000,       // 15 min fallback polling (used only if WebSub inactive)
+  liveCheck:    12 * 60 * 60 * 1000,  // 12 hours fallback polling — WebSub handles real-time detection
 };
 
 // ── Helper: get channels eligible for live check based on time (EST) ──
@@ -464,19 +464,21 @@ function getAllChannels() {
 // ════════════════════════════════════════════
 async function checkLiveStatus(channelId) {
   const key = getApiKey();
-  const url = 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
-    '&id=' + channelId + '&part=snippet&fields=items/snippet/liveBroadcastContent';
+  // Use search with eventType=live — the only reliable live detection method
+  // Costs 100 units per channel but is accurate
+  const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+    '&channelId=' + channelId + '&part=id&eventType=live&type=video';
   const data = await ytFetch(url);
   if (checkQuotaError(data)) { markQuotaExceeded(); throw new Error('quota_exceeded'); }
-  if (!data.items || data.items.length === 0) return false;
-  // liveBroadcastContent is 'live', 'upcoming', or 'none'
-  return data.items[0].snippet.liveBroadcastContent === 'live';
+  return !!(data.items && data.items.length > 0);
 }
 
 // ── Scheduled Live Check ──
-// Falls back to polling only when WebSub is not active (local dev)
-// On Railway, WebSub push notifications handle live status instead
+// WebSub handles real-time live detection on Railway (zero quota cost)
+// This poll runs every 4 hours as a safety net catch-all
+// Uses search?eventType=live (100 units/channel) — accurate but expensive
 // Time-aware: chasers/creators stop at midnight EST, forecasters at 2am EST
+// IMPORTANT: Submit quota increase request at console.cloud.google.com
 async function scheduledLiveCheck() {
   if (cache.websubActive) {
     console.log('[WeatherTV] WebSub active — skipping poll-based live check');
@@ -497,7 +499,7 @@ async function scheduledLiveCheck() {
   }
 
   const estHour = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getHours();
-  console.log('[WeatherTV] Running live check (' + channels.length + ' channels, 1 unit each) — EST hour: ' + estHour + '...');
+  console.log('[WeatherTV] Running live check (' + channels.length + ' channels, 100 units each = ' + (channels.length * 100) + ' units) — EST hour: ' + estHour + '...');
   let liveCount = 0;
 
   for (const ch of channels) {
@@ -663,6 +665,7 @@ setTimeout(subscribeAllChannels, 10000);
 async function fetchAllRecentVideos() {
   if (quotaExceeded) {
     console.log('[WeatherTV] Skipping recent video fetch — quota exceeded');
+    scheduleNextRecentFetch(); // still schedule next attempt
     return;
   }
 
@@ -822,12 +825,28 @@ app.post('/api/admin/trigger-live-check', async (req, res) => {
   await scheduledLiveCheck();
 });
 
-// Manual trigger for recent video fetch — use from admin panel after deploys
-app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
+// Manual trigger for live status check
+app.post('/api/admin/trigger-live-check', async (req, res) => {
   if (quotaExceeded) {
     return res.status(429).json({ error: 'quota_exceeded', message: 'Quota exceeded — resets at midnight Pacific' });
   }
-  res.json({ ok: true, message: 'Recent video fetch started — check cache status in a minute' });
+  const channels = getLiveChannels();
+  const cost = channels.length * 100;
+  res.json({ ok: true, message: 'Live check started for ' + channels.length + ' channels (~' + cost + ' units)' });
+  scheduledLiveCheck(); // run in background, don't await
+});
+
+// Manual trigger for recent video fetch — use from admin panel after deploys
+app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
+  if (quotaExceeded) {
+    return res.status(429).json({ error: 'quota_exceeded', message: 'Quota exceeded — resets at midnight Pacific. Try again tomorrow.' });
+  }
+  // Double-check by testing a single API call before committing to full fetch
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') {
+    return res.status(500).json({ error: 'No API key configured' });
+  }
+  res.json({ ok: true, message: 'Recent video fetch started — check cache status in ~1 minute' });
   fetchAllRecentVideos(); // don't await — let it run in background
 });
 

@@ -196,6 +196,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:0.5rem">
           <div id="cache-status-display" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
+          <button class="btn btn-primary btn-sm" onclick="triggerLiveCheck()">Check Now</button>
           <button class="btn btn-ghost btn-sm" id="websub-btn" onclick="renewWebSub()" style="display:none">Renew WebSub</button>
         </div>
       </div>
@@ -598,6 +599,17 @@ async function clearCache(type) {
   const res = await fetch('/api/admin/cache/clear-' + type, { method:'POST' });
   const data = await res.json();
   showToast(data.message || 'Cache cleared');
+}
+
+async function triggerLiveCheck() {
+  const res = await fetch('/api/admin/trigger-live-check', { method: 'POST' });
+  const data = await res.json();
+  if (data.error) {
+    showToast('⚠ ' + data.message);
+  } else {
+    showToast(data.message);
+    setTimeout(loadCacheStatus, 8000);
+  }
 }
 
 async function triggerRecentFetch() {
