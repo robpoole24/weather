@@ -822,7 +822,7 @@ function buildChannelPanels() {
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
-    list.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0 0.5rem;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;flex:1;min-width:0;';
+    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;';
     panel.appendChild(list);
 
     // Insert before the weatherstar panel
@@ -877,34 +877,16 @@ function addChannelListArrows(groupId) {
   const list = document.getElementById(groupId + '-list');
   if (!list || !list.parentElement) return;
 
-  // Remove any existing arrows
+  // Remove any existing arrows first
   list.parentElement.querySelectorAll('.ch-list-arrow').forEach(a => a.remove());
 
-  const SCROLL_AMT = 320;
+  // Use the same createScrollArrows function the playlist uses
+  const { leftBtn, rightBtn } = createScrollArrows(list);
+  leftBtn.classList.add('ch-list-arrow');
+  rightBtn.classList.add('ch-list-arrow');
 
-  const leftArrow = document.createElement('button');
-  leftArrow.className = 'scroll-arrow ch-list-arrow';
-  leftArrow.innerHTML = '&#8249;';
-  leftArrow.style.cssText = 'flex-shrink:0;visibility:hidden;position:relative;z-index:2;';
-
-  const rightArrow = document.createElement('button');
-  rightArrow.className = 'scroll-arrow ch-list-arrow';
-  rightArrow.innerHTML = '&#8250;';
-  rightArrow.style.cssText = 'flex-shrink:0;position:relative;z-index:2;';
-
-  function updateArrows() {
-    leftArrow.style.visibility = list.scrollLeft > 2 ? 'visible' : 'hidden';
-    rightArrow.style.visibility = (list.scrollLeft < list.scrollWidth - list.clientWidth - 2) ? 'visible' : 'hidden';
-  }
-
-  leftArrow.onclick = () => { list.scrollBy({ left: -SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateArrows, 350); };
-  rightArrow.onclick = () => { list.scrollBy({ left: SCROLL_AMT, behavior: 'smooth' }); setTimeout(updateArrows, 350); };
-  list.addEventListener('scroll', updateArrows, { passive: true });
-
-  list.parentElement.insertBefore(leftArrow, list);
-  list.parentElement.appendChild(rightArrow);
-
-  setTimeout(updateArrows, 100);
+  list.parentElement.insertBefore(leftBtn, list);
+  list.parentElement.appendChild(rightBtn);
 }
 
 function buildChannelLists() {
