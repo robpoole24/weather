@@ -211,6 +211,8 @@
           <tr>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">App</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">iOS Link</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Android Link</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Android Soon</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Enabled</th>
           </tr>
         </thead>
@@ -558,9 +560,18 @@ function renderApps() {
   (appData.apps || []).forEach((app, i) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)"><strong>${app.name}</strong></td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08);white-space:nowrap"><strong>${app.name}</strong></td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <input type="text" value="${app.ios||''}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value" />
+      </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <input type="text" value="${app.android||''}" placeholder="${app.androidSoon ? 'Coming soon' : 'No Android link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].android=this.value||null" />
+      </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <label class="toggle" title="Show 'Android coming soon' badge">
+          <input type="checkbox" ${app.androidSoon?'checked':''} onchange="appData.apps[${i}].androidSoon=this.checked">
+          <span class="toggle-slider"></span>
+        </label>
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <label class="toggle"><input type="checkbox" ${app.enabled!==false?'checked':''} onchange="appData.apps[${i}].enabled=this.checked"><span class="toggle-slider"></span></label>
