@@ -184,8 +184,7 @@
   .panel {
     display: none;
     height: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: hidden;
   }
   .panel.active { display: flex; align-items: center; }
 
@@ -194,8 +193,8 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0 1rem;
     height: 100%;
+    /* padding and overflow handled inline per panel */
   }
 
   .return-btn {
@@ -821,7 +820,7 @@ function buildChannelPanels() {
     // Wrapper: [left arrow] [scrollable list] [right arrow]
     // Arrows sit outside the scroll area so cards never slide under them
     const listWrapper = document.createElement('div');
-    listWrapper.style.cssText = 'display:flex;align-items:center;width:100%;height:100%;';
+    listWrapper.style.cssText = 'display:flex;align-items:center;width:100%;height:100%;min-width:0;overflow:hidden;';
 
     const leftArrow = document.createElement('button');
     leftArrow.className = 'scroll-arrow';
