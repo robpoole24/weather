@@ -145,12 +145,12 @@
 
       <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">
         <div style="flex:1;min-width:180px;">
-          <label>Live Check Interval (hours)</label>
-          <input type="number" id="cfg-live-interval" min="1" max="24" placeholder="12"
+          <label>Live Check Interval (hours, decimals ok)</label>
+          <input type="number" id="cfg-live-interval" min="0.1" max="24" step="0.05" placeholder="0.25"
             style="margin-bottom:0.25rem;" />
           <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
-            How often the server polls for live streams as a safety net.<br>
-            WebSub handles real-time detection. Recommended: 12.<br>
+            0.25 = 15 min, 0.5 = 30 min, 1 = 1 hour. Recommended: 0.25.<br>
+            WebSub handles real-time — this is the safety net poll.<br>
             <strong style="color:var(--gold);">Cost: ~${channels} × 100 units per check.</strong>
           </div>
         </div>

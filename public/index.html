@@ -623,6 +623,8 @@
   <div id="status-bar">
     <span class="status-item"><span class="status-dot"></span>WeatherTV v1.0</span>
     <span class="status-item" id="api-status">Connecting to YouTube API...</span>
+    <span class="status-item" id="live-update-status" style="color:var(--muted);font-size:0.75rem;"></span>
+    <span class="status-item" id="video-update-status" style="color:var(--muted);font-size:0.75rem;"></span>
     <span class="status-item" id="time-display"></span>
     <button class="about-btn" onclick="showAbout()">About</button>
   </div>
@@ -785,6 +787,8 @@ async function init() {
   buildAppsPanel();
   buildWSPanel();
   await checkAllLiveStatuses();
+  updateCacheStatus();
+  setInterval(updateCacheStatus, 60000); // refresh status every minute
 }
 
 // Load all group/channel data from the server API
@@ -1695,6 +1699,40 @@ function startClock() {
   }
   update();
   setInterval(update, 1000);
+}
+
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return 'never';
+  const mins = Math.round((Date.now() - timestamp) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.round(hrs / 24) + 'd ago';
+}
+
+async function updateCacheStatus() {
+  try {
+    const res = await fetch('/api/admin/cache/status');
+    const data = await res.json();
+
+    const liveEl = document.getElementById('live-update-status');
+    const videoEl = document.getElementById('video-update-status');
+
+    if (liveEl) {
+      const liveTime = data.liveStatuses && data.liveStatuses.lastChecked;
+      liveEl.textContent = '📡 Live: ' + formatTimeAgo(liveTime);
+      liveEl.title = 'Live channels last checked ' + (liveTime ? new Date(liveTime).toLocaleTimeString() : 'never');
+    }
+
+    if (videoEl) {
+      const videoTime = data.recentVideos && data.recentVideos.lastFetch;
+      videoEl.textContent = '🎬 Videos: ' + formatTimeAgo(videoTime);
+      videoEl.title = 'Recent videos last fetched ' + (videoTime ? new Date(videoTime).toLocaleTimeString() : 'never');
+    }
+  } catch(e) {
+    // silently fail — status bar is informational only
+  }
 }
 
 

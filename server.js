@@ -110,7 +110,7 @@ function getDefaultData() {
     config: {
       playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI',
       apiKey: process.env.YOUTUBE_API_KEY || '',
-      liveCheckIntervalHours: 12,   // hours between background live polls
+      liveCheckIntervalHours: 2,    // 2 hours between live polls — set to 0.25 after quota increase to 50k
       recentFetchHourEST: 18,       // hour (0-23) in EST to fetch recent videos daily
     },
     groups: [
@@ -525,7 +525,7 @@ const cache = {
 
 const REDIS_TTL = {
   recentVideos: 25 * 60 * 60,  // 25 hours
-  liveStatus:   13 * 60 * 60,  // 13 hours
+  liveStatus:   24 * 60 * 60,  // 24 hours — keep last known status
   playlist:     49 * 60 * 60,  // 49 hours
 };
 
@@ -601,7 +601,7 @@ async function restoreCacheFromRedis() {
 const CACHE_TTL = {
   recentVideos: 24 * 60 * 60 * 1000,  // 24 hours default
   playlist:     48 * 60 * 60 * 1000,  // 48 hours (not configurable — rarely changes)
-  liveCheck:    12 * 60 * 60 * 1000,  // 12 hours default fallback poll
+  liveCheck:    2 * 60 * 60 * 1000,   // 2 hours default — reduce to 15min after quota increase
 };
 
 function getLiveCheckInterval() {
@@ -732,12 +732,17 @@ async function scheduledLiveCheck() {
 
   cache.lastLiveCheck = Date.now();
   await rSet('wt:lastLive', cache.lastLiveCheck);
-  console.log('[WeatherTV] Live check complete — ' + liveCount + ' channel(s) live (' + channels.length + ' units used)');
-  setTimeout(scheduledLiveCheck, getLiveCheckInterval());
+  console.log('[WeatherTV] Live check complete — ' + liveCount + ' channel(s) live (' + (channels.length * 100) + ' units used)');
+
+  // No automatic rescheduling — this function is called manually via admin panel only
+  // WebSub handles ongoing live detection
 }
 
-// Start live check 5s after boot
-setTimeout(scheduledLiveCheck, 5000);
+// Scheduled live polling removed — WebSub handles real-time live detection at zero quota cost
+// YouTube notifies us instantly when a channel goes live via WebSub push
+// Use the manual 'Check Now' button in admin panel if you need to verify live status
+// The scheduledLiveCheck function is still available for the manual Check Now button
+console.log('[WeatherTV] Live detection via WebSub only — no scheduled polling');
 
 // ════════════════════════════════════════════
 // WEBSUB / PUBSUBHUBBUB
@@ -846,18 +851,40 @@ app.get('/websub/callback/:channelId', (req, res) => {
 });
 
 // WebSub notification — YouTube pushes this when a channel posts or goes live
+// Rate limit: only do API live check if we haven't checked this channel in last 10 minutes
+const websubLastCheck = {}; // channelId -> timestamp
+const WEBSUB_RATE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+
 app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   res.status(200).send('OK'); // Always respond quickly
 
   const channelId = req.params.channelId;
-  console.log('[WebSub] Notification received for channel: ' + channelId);
+  const body = req.body ? req.body.toString() : '';
 
-  // WebSub tells us the channel published something — could be a new video or live stream
-  // We can't reliably detect live status from the Atom feed alone
-  // So we do a targeted single-channel live check via the API (100 units, only when triggered)
+  // Step 1: Parse Atom feed for live indicators — free, no quota
+  const looksLive = body.includes('yt:liveBroadcastContent>live') ||
+                    body.includes('live_stream') ||
+                    body.includes('isLiveBroadcast');
+  const looksUpcoming = body.includes('yt:liveBroadcastContent>upcoming');
+
+  // Step 2: Rate limit — skip API call if checked recently AND not looking live
+  const lastCheck = websubLastCheck[channelId] || 0;
+  const timeSinceCheck = Date.now() - lastCheck;
+  const recentlyChecked = timeSinceCheck < WEBSUB_RATE_LIMIT_MS;
+
+  if (recentlyChecked && !looksLive) {
+    // Just invalidate recent video cache — no quota spend
+    delete cache.recentVideos[channelId];
+    rDel('wt:recent:' + channelId);
+    console.log('[WebSub] ' + channelId + ' posted (skipping live check — checked ' + Math.round(timeSinceCheck/60000) + 'm ago)');
+    return;
+  }
+
+  // Step 3: Do targeted API live check (100 units) — only when needed
   if (!quotaExceeded) {
     const key = getApiKey();
     if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
+      websubLastCheck[channelId] = Date.now();
       const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
         '&channelId=' + channelId + '&part=id&eventType=live&type=video';
       ytFetch(url).then(data => {
