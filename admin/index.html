@@ -171,6 +171,28 @@
     </div>
   </div>
 
+  <!-- Backup / Restore -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">💾 Backup &amp; Restore</div>
+    </div>
+    <div class="section-body" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:0.85rem;color:var(--muted);line-height:1.6;">
+          Download a backup of all your groups, channels, and collections. 
+          Restore it any time to recover from a bad deploy.
+        </div>
+      </div>
+      <div style="display:flex;gap:0.75rem;flex-shrink:0;">
+        <a href="/api/admin/backup" download class="btn btn-primary btn-sm">⬇ Download Backup</a>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0;">
+          ⬆ Restore Backup
+          <input type="file" accept=".json" style="display:none" onchange="restoreBackup(this)" />
+        </label>
+      </div>
+    </div>
+  </div>
+
   <!-- Groups -->
   <div class="section">
     <div class="section-header">
@@ -251,6 +273,13 @@
 
 </div>
 
+<!-- Save All Button -->
+<div style="position:fixed;bottom:2rem;right:2rem;z-index:50;">
+  <button class="btn btn-primary" onclick="saveAll()" style="font-size:1rem;padding:0.75rem 2rem;box-shadow:0 4px 20px rgba(0,180,216,0.3);">
+    💾 Save All Changes
+  </button>
+</div>
+
 <!-- Collection Editor Modal -->
 <div class="modal-overlay" id="col-modal" onclick="closeColModal()">
   <div class="modal" onclick="event.stopPropagation()">
@@ -282,11 +311,63 @@
 let appData = null;
 let colModalContext = null; // { groupId, channelId, colId or null }
 
+// Save all current appData to Redis via restore endpoint
+async function saveAll() {
+  if (!appData) { showToast('⚠ No data to save'); return; }
+  try {
+    const res = await fetch('/api/admin/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(appData)
+    });
+    const result = await res.json();
+    if (result.ok) {
+      showToast('✓ All changes saved to server');
+    } else {
+      showToast('⚠ ' + (result.error || 'Save failed'));
+    }
+  } catch(e) {
+    showToast('⚠ Save failed — check connection');
+  }
+}
+
 async function loadData() {
   const res = await fetch('/api/admin/config');
   appData = await res.json();
   renderAll();
   loadCacheStatus();
+}
+
+async function restoreBackup(input) {
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (!data.groups || !data.config) {
+      showToast('⚠ Invalid backup file');
+      return;
+    }
+    if (!confirm('Restore from backup? This will overwrite all current groups, channels, and collections.')) {
+      input.value = '';
+      return;
+    }
+    const res = await fetch('/api/admin/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (result.ok) {
+      showToast('✓ ' + result.message);
+      await loadData();
+    } else {
+      showToast('⚠ ' + (result.error || 'Restore failed'));
+    }
+  } catch(e) {
+    showToast('⚠ Could not read backup file');
+  }
+  input.value = '';
 }
 
 function renderAll() {

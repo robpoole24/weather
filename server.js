@@ -239,6 +239,25 @@ app.get('/api/admin/config', (req, res) => {
   res.json(loadData());
 });
 
+// Export full config as downloadable JSON backup
+app.get('/api/admin/backup', (req, res) => {
+  const data = loadData();
+  const filename = 'weathertv-backup-' + new Date().toISOString().split('T')[0] + '.json';
+  res.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
+  res.setHeader('Content-Type', 'application/json');
+  res.json(data);
+});
+
+// Restore from JSON backup — overwrites current data
+app.post('/api/admin/restore', express.json({ limit: '5mb' }), (req, res) => {
+  const data = req.body;
+  if (!data || !data.groups || !data.config) {
+    return res.status(400).json({ error: 'Invalid backup file — must contain groups and config' });
+  }
+  saveData(data);
+  res.json({ ok: true, message: 'Restored — ' + data.groups.length + ' groups, ' + data.groups.reduce((s,g) => s + (g.channels||[]).length, 0) + ' channels loaded' });
+});
+
 // Update config
 app.put('/api/admin/config', (req, res) => {
   const data = loadData();
