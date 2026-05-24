@@ -363,11 +363,14 @@ app.put('/api/admin/groups/:groupId/channels/:channelId/collection-membership', 
   if (!group) return res.status(404).json({ error: 'Group not found' });
   const channel = group.channels.find(c => c.id === req.params.channelId);
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  // collectionIds: array of 'parentChannelId::colId' strings
-  // Also keep collectionId (singular) as first entry for backwards compatibility
   const ids = req.body.collectionIds || [];
   channel.collectionIds = ids;
-  channel.collectionId = ids.length > 0 ? ids[0] : null; // backwards compat
+  channel.collectionId = ids.length > 0 ? ids[0] : null;
+  // hiddenInGroup: hide this channel from the main group list
+  // Only visible through its collection button on the parent channel card
+  if (req.body.hiddenInGroup !== undefined) {
+    channel.hiddenInGroup = req.body.hiddenInGroup;
+  }
   saveData(data);
   res.json({ ok: true });
 });

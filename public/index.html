@@ -950,7 +950,7 @@ function buildChannelLists() {
     div.style.flexShrink = '0';
     list.appendChild(div);
 
-    const channels = CHANNELS[group.id] || [];
+    const channels = (CHANNELS[group.id] || []).filter(ch => !ch.hiddenInGroup);
     channels.forEach(ch => {
       const card = document.createElement('div');
       card.className = 'channel-card';
@@ -994,7 +994,7 @@ function buildChannelLists() {
 
       // Collections buttons — only shown when collection is enabled AND has members
       if (ch.collections && ch.collections.length > 0) {
-        const allChannels = GROUPS.flatMap(g => g.channels || []);
+        const allChannels = GROUPS.flatMap(g => g.channels || []); // includes hiddenInGroup channels
         ch.collections.forEach(col => {
           if (!col.enabled) return;
           const colKey = ch.id + '::' + col.id;

@@ -412,7 +412,8 @@ function renderChannelRow(groupId, ch) {
       }).join(', ');
 
   const colCount = currentIds.length;
-  const colLabel = colCount === 0 ? 'No Collections' : colCount + ' Collection' + (colCount > 1 ? 's' : '');
+  const isHidden = ch.hiddenInGroup ? ' 👁' : '';
+  const colLabel = colCount === 0 ? 'No Collections' : colCount + ' Collection' + (colCount > 1 ? 's' : '') + isHidden;
 
   row.innerHTML =
     '<div class="order-btns">' +
@@ -528,21 +529,21 @@ async function updateChannel(groupId, channelId, fields) {
   showToast('Saved');
 }
 
-async function updateChannelMembership(groupId, channelId, collectionIds) {
+async function updateChannelMembership(groupId, channelId, collectionIds, hiddenInGroup) {
   await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/collection-membership', {
     method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ collectionIds })
+    body: JSON.stringify({ collectionIds, hiddenInGroup: hiddenInGroup || false })
   });
   showToast('Collection memberships saved');
 
-  // Update appData in place without re-rendering (avoids collapsing groups)
+  // Update appData in place
   const group = appData.groups.find(g => g.id === groupId);
   const ch = group && group.channels.find(c => c.id === channelId);
   if (ch) {
     ch.collectionIds = collectionIds;
     ch.collectionId = collectionIds.length > 0 ? collectionIds[0] : null;
+    ch.hiddenInGroup = hiddenInGroup || false;
   }
-  // Re-render just the groups section to update counts
   renderGroups();
 }
 
@@ -596,12 +597,28 @@ function openMembershipEditor(groupId, channelId) {
     checklist.appendChild(item);
   });
 
+  // Add hiddenInGroup checkbox
+  let hideSection = modal.querySelector('.hide-in-group-section');
+  if (!hideSection) {
+    hideSection = document.createElement('div');
+    hideSection.className = 'hide-in-group-section';
+    hideSection.style.cssText = 'margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:0.75rem;';
+    hideSection.innerHTML =
+      '<label class="toggle" title="Hide from group list"><input type="checkbox" id="col-modal-hidden" /><span class="toggle-slider"></span></label>' +
+      '<div style="font-size:0.8rem;line-height:1.4;">' +
+        '<div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.85rem;">Hide from group list</div>' +
+        '<div style="color:var(--muted);font-size:0.75rem;">Channel only appears through a collection button, not in the main scroll bar</div>' +
+      '</div>';
+    checklist.after(hideSection);
+  }
+  document.getElementById('col-modal-hidden').checked = ch.hiddenInGroup || false;
+
   // Override save button
   const saveBtn = modal.querySelector('.btn-primary');
   saveBtn.onclick = async () => {
     const selected = Array.from(checklist.querySelectorAll('input:checked')).map(i => i.value);
-    await updateChannelMembership(groupId, channelId, selected);
-    // Reset modal
+    const hiddenInGroup = document.getElementById('col-modal-hidden').checked;
+    await updateChannelMembership(groupId, channelId, selected, hiddenInGroup);
     closeColModal();
   };
 
@@ -674,13 +691,13 @@ async function deleteCollection(groupId, channelId, colId) {
 function closeColModal() {
   const modal = document.getElementById('col-modal');
   modal.classList.remove('open');
-  // Reset to collection editor mode
   modal.querySelector('.modal-title').textContent = 'Edit Collection';
   document.getElementById('col-modal-name').style.display = '';
   modal.querySelectorAll('label').forEach(l => { l.style.display = ''; });
   const checklist = modal.querySelector('.membership-checklist');
   if (checklist) checklist.remove();
-  // Restore save button
+  const hideSection = modal.querySelector('.hide-in-group-section');
+  if (hideSection) hideSection.remove();
   const saveBtn = modal.querySelector('.btn-primary');
   saveBtn.onclick = saveCollection;
 }
