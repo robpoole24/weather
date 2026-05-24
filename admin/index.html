@@ -139,7 +139,7 @@
     <div class="section-header"><div class="section-title">⚙️ Configuration</div></div>
     <div class="section-body">
       <label>YouTube Data API Key</label>
-      <input type="password" id="cfg-apikey" placeholder="Stored in environment variable on server" />
+      <input type="text" id="cfg-apikey" placeholder="Stored in environment variable on server" autocomplete="off" style="font-family:monospace;font-size:0.8rem;" />
       <label>Weather Playlist ID</label>
       <input type="text" id="cfg-playlist" placeholder="PLxxxxxxxxxxxxxxxxxx" />
 
@@ -308,9 +308,21 @@ function renderAll() {
 // ── Groups ──
 function renderGroups() {
   const container = document.getElementById('groups-container');
+  // Remember which groups are open
+  const openGroups = new Set();
+  container.querySelectorAll('.group-body.open').forEach(b => {
+    const card = b.closest('.group-card');
+    if (card) openGroups.add(card.id);
+  });
+
   container.innerHTML = '';
   (appData.groups || []).forEach((group, gi) => {
-    container.appendChild(renderGroupCard(group, gi));
+    const card = renderGroupCard(group, gi);
+    container.appendChild(card);
+    // Restore open state
+    if (openGroups.has('group-card-' + group.id)) {
+      card.querySelector('.group-body').classList.add('open');
+    }
   });
 }
 
@@ -428,14 +440,21 @@ function renderChannelRow(groupId, ch) {
     const colSection = document.createElement('div');
     colSection.style.cssText = 'width:100%;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid rgba(244,162,97,0.15);';
     ch.collections.forEach(col => {
+      const colKey = ch.id + '::' + col.id;
+      const memberCount = (appData.groups || []).reduce((sum, g) => {
+        return sum + (g.channels || []).filter(c => {
+          if (Array.isArray(c.collectionIds)) return c.collectionIds.includes(colKey);
+          return c.collectionId === colKey;
+        }).length;
+      }, 0);
+
       const colRow = document.createElement('div');
       colRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-size:0.75rem;color:var(--gold);padding:0.2rem 0;';
-      colRow.innerHTML = `
-        <span style="opacity:${col.enabled ? 1 : 0.4}">${col.enabled ? '●' : '○'} ${col.label}</span>
-        <span style="color:var(--muted)">(${(col.channelIds||[]).length} channels)</span>
-        <button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="editCollection('${groupId}','${ch.id}','${col.id}')">Edit</button>
-        <button class="btn btn-danger btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="deleteCollection('${groupId}','${ch.id}','${col.id}')">✕</button>
-      `;
+      colRow.innerHTML =
+        '<span style="opacity:' + (col.enabled ? 1 : 0.4) + '">' + (col.enabled ? '●' : '○') + ' ' + col.label + '</span>' +
+        '<span style="color:var(--muted)">(' + memberCount + ' channel' + (memberCount !== 1 ? 's' : '') + ')</span>' +
+        '<button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="editCollection(\'' + groupId + '\',\'' + ch.id + '\',\'' + col.id + '\')">Edit</button>' +
+        '<button class="btn btn-danger btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="deleteCollection(\'' + groupId + '\',\'' + ch.id + '\',\'' + col.id + '\')">✕</button>';
       colSection.appendChild(colRow);
     });
     // Make the row wrap
@@ -515,7 +534,16 @@ async function updateChannelMembership(groupId, channelId, collectionIds) {
     body: JSON.stringify({ collectionIds })
   });
   showToast('Collection memberships saved');
-  await loadData();
+
+  // Update appData in place without re-rendering (avoids collapsing groups)
+  const group = appData.groups.find(g => g.id === groupId);
+  const ch = group && group.channels.find(c => c.id === channelId);
+  if (ch) {
+    ch.collectionIds = collectionIds;
+    ch.collectionId = collectionIds.length > 0 ? collectionIds[0] : null;
+  }
+  // Re-render just the groups section to update counts
+  renderGroups();
 }
 
 function openMembershipEditor(groupId, channelId) {
