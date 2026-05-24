@@ -308,15 +308,18 @@ app.put('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', (re
   res.json({ ok: true });
 });
 
-// Update a channel's collection membership
+// Update a channel's collection memberships (supports multiple)
 app.put('/api/admin/groups/:groupId/channels/:channelId/collection-membership', (req, res) => {
   const data = loadData();
   const group = data.groups.find(g => g.id === req.params.groupId);
   if (!group) return res.status(404).json({ error: 'Group not found' });
   const channel = group.channels.find(c => c.id === req.params.channelId);
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  // collectionId format: 'parentChannelId::colId' or null
-  channel.collectionId = req.body.collectionId || null;
+  // collectionIds: array of 'parentChannelId::colId' strings
+  // Also keep collectionId (singular) as first entry for backwards compatibility
+  const ids = req.body.collectionIds || [];
+  channel.collectionIds = ids;
+  channel.collectionId = ids.length > 0 ? ids[0] : null; // backwards compat
   saveData(data);
   res.json({ ok: true });
 });

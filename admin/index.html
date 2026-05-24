@@ -375,51 +375,53 @@ function renderChannelRow(groupId, ch) {
   row.className = 'channel-row';
   row.id = 'ch-row-' + ch.id;
 
-  // Build collection options from all channels that have collections defined
+  // Build all available collections across the app
   const allCollections = [];
   (appData.groups || []).forEach(g => {
     (g.channels || []).forEach(c => {
-      if (c.collections && c.collections.length > 0) {
-        c.collections.forEach(col => {
-          allCollections.push({ 
-            value: c.id + '::' + col.id, 
-            label: c.name + ' → ' + col.label,
-            enabled: col.enabled
-          });
+      (c.collections || []).forEach(col => {
+        allCollections.push({
+          value: c.id + '::' + col.id,
+          label: c.name + ' → ' + col.label,
         });
-      }
+      });
     });
   });
 
-  const colOptions = '<option value="">None</option>' + 
-    allCollections.map(c => '<option value="' + c.value + '" ' + 
-      (ch.collectionId === c.value ? 'selected' : '') + '>' + c.label + '</option>'
-    ).join('');
+  // Current memberships — support both array and legacy single
+  const currentIds = Array.isArray(ch.collectionIds) ? ch.collectionIds
+    : (ch.collectionId ? [ch.collectionId] : []);
 
-  const colDisabled = allCollections.length === 0 ? 'disabled' : '';
+  // Build membership summary for display
+  const memberSummary = currentIds.length === 0 ? 'None'
+    : currentIds.map(id => {
+        const col = allCollections.find(c => c.value === id);
+        return col ? col.label : id;
+      }).join(', ');
 
-  row.innerHTML = `
+  row.innerHTML = \`
     <div class="order-btns">
-      <button class="order-btn" onclick="reorderChannel('${groupId}','${ch.id}','up')">▲</button>
-      <button class="order-btn" onclick="reorderChannel('${groupId}','${ch.id}','down')">▼</button>
+      <button class="order-btn" onclick="reorderChannel('\${groupId}','\${ch.id}','up')">▲</button>
+      <button class="order-btn" onclick="reorderChannel('\${groupId}','\${ch.id}','down')">▼</button>
     </div>
-    <div class="ch-name">${ch.name}</div>
-    <div class="ch-id" title="${ch.id}">${ch.id}</div>
-    <select title="In Collection?" ${colDisabled} 
-      onchange="updateChannelMembership('${groupId}','${ch.id}',this.value)"
-      style="margin:0;width:160px;font-size:0.75rem;padding:0.3rem 0.5rem;flex-shrink:0;${allCollections.length===0?'opacity:0.4;':''}"
-    >${colOptions}</select>
+    <div class="ch-name">\${ch.name}</div>
+    <div class="ch-id" title="\${ch.id}">\${ch.id}</div>
+    <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;"
+      title="Collections: \${memberSummary}"
+      onclick="openMembershipEditor('\${groupId}','\${ch.id}')">
+      📋 \${currentIds.length === 0 ? 'No Collections' : currentIds.length + ' Collection' + (currentIds.length > 1 ? 's' : '')}
+    </button>
     <label class="toggle" title="Has Live Stream">
-      <input type="checkbox" ${ch.hasLive ? 'checked' : ''} onchange="updateChannel('${groupId}','${ch.id}',{hasLive:this.checked})" />
+      <input type="checkbox" \${ch.hasLive ? 'checked' : ''} onchange="updateChannel('\${groupId}','\${ch.id}',{hasLive:this.checked})" />
       <span class="toggle-slider"></span>
     </label>
     <label class="toggle" title="Enabled">
-      <input type="checkbox" ${ch.enabled !== false ? 'checked' : ''} onchange="updateChannel('${groupId}','${ch.id}',{enabled:this.checked})" />
+      <input type="checkbox" \${ch.enabled !== false ? 'checked' : ''} onchange="updateChannel('\${groupId}','\${ch.id}',{enabled:this.checked})" />
       <span class="toggle-slider"></span>
     </label>
-    <button class="btn btn-gold btn-sm" onclick="openColManager('${groupId}','${ch.id}')">+ Collection</button>
-    <button class="btn btn-danger btn-sm" onclick="deleteChannel('${groupId}','${ch.id}','${ch.name}')">✕</button>
-  `;
+    <button class="btn btn-gold btn-sm" onclick="openColManager('\${groupId}','\${ch.id}')">+ Collection</button>
+    <button class="btn btn-danger btn-sm" onclick="deleteChannel('\${groupId}','\${ch.id}','\${ch.name}')">✕</button>
+  \`;
 
   // Collections display
   if (ch.collections && ch.collections.length > 0) {
@@ -507,12 +509,75 @@ async function updateChannel(groupId, channelId, fields) {
   showToast('Saved');
 }
 
-async function updateChannelMembership(groupId, channelId, collectionId) {
+async function updateChannelMembership(groupId, channelId, collectionIds) {
   await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/collection-membership', {
     method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ collectionId: collectionId || null })
+    body: JSON.stringify({ collectionIds })
   });
-  showToast('Collection membership saved');
+  showToast('Collection memberships saved');
+  await loadData();
+}
+
+function openMembershipEditor(groupId, channelId) {
+  const group = appData.groups.find(g => g.id === groupId);
+  const ch = group && group.channels.find(c => c.id === channelId);
+  if (!ch) return;
+
+  // Build all available collections
+  const allCollections = [];
+  (appData.groups || []).forEach(g => {
+    (g.channels || []).forEach(c => {
+      (c.collections || []).forEach(col => {
+        allCollections.push({ value: c.id + '::' + col.id, label: c.name + ' → ' + col.label });
+      });
+    });
+  });
+
+  if (allCollections.length === 0) {
+    showToast('No collections exist yet — create one with the + Collection button first');
+    return;
+  }
+
+  const currentIds = Array.isArray(ch.collectionIds) ? ch.collectionIds
+    : (ch.collectionId ? [ch.collectionId] : []);
+
+  // Show membership modal
+  const modal = document.getElementById('col-modal');
+  const modalTitle = modal.querySelector('.modal-title');
+  modalTitle.textContent = ch.name + ' — Collections';
+
+  // Hide the name/enabled fields, show checklist instead
+  document.getElementById('col-modal-name').style.display = 'none';
+  modal.querySelectorAll('label').forEach(l => {
+    if (l.htmlFor === 'col-modal-name' || l.querySelector('#col-modal-enabled')) l.style.display = 'none';
+  });
+
+  // Build checklist
+  let checklist = modal.querySelector('.membership-checklist');
+  if (!checklist) {
+    checklist = document.createElement('div');
+    checklist.className = 'membership-checklist channel-picker';
+    modal.querySelector('.modal-title').after(checklist);
+  }
+  checklist.innerHTML = '';
+  allCollections.forEach(col => {
+    const item = document.createElement('label');
+    item.className = 'picker-item';
+    item.innerHTML = \`<input type="checkbox" value="\${col.value}" \${currentIds.includes(col.value) ? 'checked' : ''} />
+      <span class="picker-item-name">\${col.label}</span>\`;
+    checklist.appendChild(item);
+  });
+
+  // Override save button
+  const saveBtn = modal.querySelector('.btn-primary');
+  saveBtn.onclick = async () => {
+    const selected = Array.from(checklist.querySelectorAll('input:checked')).map(i => i.value);
+    await updateChannelMembership(groupId, channelId, selected);
+    // Reset modal
+    closeColModal();
+  };
+
+  modal.classList.add('open');
 }
 
 async function deleteChannel(groupId, channelId, name) {
@@ -578,7 +643,19 @@ async function deleteCollection(groupId, channelId, colId) {
   await loadData();
 }
 
-function closeColModal() { document.getElementById('col-modal').classList.remove('open'); }
+function closeColModal() {
+  const modal = document.getElementById('col-modal');
+  modal.classList.remove('open');
+  // Reset to collection editor mode
+  modal.querySelector('.modal-title').textContent = 'Edit Collection';
+  document.getElementById('col-modal-name').style.display = '';
+  modal.querySelectorAll('label').forEach(l => { l.style.display = ''; });
+  const checklist = modal.querySelector('.membership-checklist');
+  if (checklist) checklist.remove();
+  // Restore save button
+  const saveBtn = modal.querySelector('.btn-primary');
+  saveBtn.onclick = saveCollection;
+}
 
 // ── Config ──
 async function saveConfig() {

@@ -998,7 +998,11 @@ function buildChannelLists() {
         ch.collections.forEach(col => {
           if (!col.enabled) return;
           const colKey = ch.id + '::' + col.id;
-          const hasMembers = allChannels.some(c => c.collectionId === colKey && c.enabled !== false);
+          const hasMembers = allChannels.some(c => {
+            if (c.enabled === false) return false;
+            if (Array.isArray(c.collectionIds)) return c.collectionIds.includes(colKey);
+            return c.collectionId === colKey;
+          });
           if (!hasMembers) return;
 
           const colBtn = document.createElement('button');
@@ -1079,9 +1083,14 @@ function showCollection(parentCh, collection) {
   const cardContainer = document.createElement('div');
   cardContainer.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;';
 
-  // Find channels whose collectionId matches this collection key
+  // Find channels whose collectionIds includes this collection key
+  // Also supports legacy single collectionId field
   const allChannels = GROUPS.flatMap(g => g.channels || []);
-  const members = allChannels.filter(ch => ch.collectionId === collectionKey && ch.enabled !== false);
+  const members = allChannels.filter(ch => {
+    if (ch.enabled === false) return false;
+    if (Array.isArray(ch.collectionIds)) return ch.collectionIds.includes(collectionKey);
+    return ch.collectionId === collectionKey; // legacy fallback
+  });
 
   if (members.length === 0) {
     cardContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No channels assigned to this collection yet. Use the "In Collection?" dropdown in the admin panel.</span>';
