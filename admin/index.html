@@ -399,29 +399,29 @@ function renderChannelRow(groupId, ch) {
         return col ? col.label : id;
       }).join(', ');
 
-  row.innerHTML = \`
-    <div class="order-btns">
-      <button class="order-btn" onclick="reorderChannel('\${groupId}','\${ch.id}','up')">▲</button>
-      <button class="order-btn" onclick="reorderChannel('\${groupId}','\${ch.id}','down')">▼</button>
-    </div>
-    <div class="ch-name">\${ch.name}</div>
-    <div class="ch-id" title="\${ch.id}">\${ch.id}</div>
-    <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;"
-      title="Collections: \${memberSummary}"
-      onclick="openMembershipEditor('\${groupId}','\${ch.id}')">
-      📋 \${currentIds.length === 0 ? 'No Collections' : currentIds.length + ' Collection' + (currentIds.length > 1 ? 's' : '')}
-    </button>
-    <label class="toggle" title="Has Live Stream">
-      <input type="checkbox" \${ch.hasLive ? 'checked' : ''} onchange="updateChannel('\${groupId}','\${ch.id}',{hasLive:this.checked})" />
-      <span class="toggle-slider"></span>
-    </label>
-    <label class="toggle" title="Enabled">
-      <input type="checkbox" \${ch.enabled !== false ? 'checked' : ''} onchange="updateChannel('\${groupId}','\${ch.id}',{enabled:this.checked})" />
-      <span class="toggle-slider"></span>
-    </label>
-    <button class="btn btn-gold btn-sm" onclick="openColManager('\${groupId}','\${ch.id}')">+ Collection</button>
-    <button class="btn btn-danger btn-sm" onclick="deleteChannel('\${groupId}','\${ch.id}','\${ch.name}')">✕</button>
-  \`;
+  const colCount = currentIds.length;
+  const colLabel = colCount === 0 ? 'No Collections' : colCount + ' Collection' + (colCount > 1 ? 's' : '');
+
+  row.innerHTML =
+    '<div class="order-btns">' +
+      '<button class="order-btn" onclick="reorderChannel(\'' + groupId + '\',\'' + ch.id + '\',\'up\')">▲</button>' +
+      '<button class="order-btn" onclick="reorderChannel(\'' + groupId + '\',\'' + ch.id + '\',\'down\')">▼</button>' +
+    '</div>' +
+    '<div class="ch-name">' + ch.name + '</div>' +
+    '<div class="ch-id" title="' + ch.id + '">' + ch.id + '</div>' +
+    '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;"' +
+      ' title="Collections: ' + memberSummary + '"' +
+      ' onclick="openMembershipEditor(\'' + groupId + '\',\'' + ch.id + '\')">📋 ' + colLabel + '</button>' +
+    '<label class="toggle" title="Has Live Stream">' +
+      '<input type="checkbox" ' + (ch.hasLive ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{hasLive:this.checked})" />' +
+      '<span class="toggle-slider"></span>' +
+    '</label>' +
+    '<label class="toggle" title="Enabled">' +
+      '<input type="checkbox" ' + (ch.enabled !== false ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{enabled:this.checked})" />' +
+      '<span class="toggle-slider"></span>' +
+    '</label>' +
+    '<button class="btn btn-gold btn-sm" onclick="openColManager(\'' + groupId + '\',\'' + ch.id + '\')">+ Collection</button>' +
+    '<button class="btn btn-danger btn-sm" onclick="deleteChannel(\'' + groupId + '\',\'' + ch.id + '\',\'' + ch.name + '\')">✕</button>';
 
   // Collections display
   if (ch.collections && ch.collections.length > 0) {
@@ -563,8 +563,8 @@ function openMembershipEditor(groupId, channelId) {
   allCollections.forEach(col => {
     const item = document.createElement('label');
     item.className = 'picker-item';
-    item.innerHTML = \`<input type="checkbox" value="\${col.value}" \${currentIds.includes(col.value) ? 'checked' : ''} />
-      <span class="picker-item-name">\${col.label}</span>\`;
+    item.innerHTML = '<input type="checkbox" value="' + col.value + '" ' + (currentIds.includes(col.value) ? 'checked' : '') + ' />' +
+      '<span class="picker-item-name">' + col.label + '</span>';
     checklist.appendChild(item);
   });
 
