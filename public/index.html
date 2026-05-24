@@ -950,7 +950,25 @@ function buildChannelLists() {
     div.style.flexShrink = '0';
     list.appendChild(div);
 
-    const channels = (CHANNELS[group.id] || []).filter(ch => !ch.hiddenInGroup);
+    const allGroupChannels = CHANNELS[group.id] || [];
+    const allChannels = GROUPS.flatMap(g => g.channels || []);
+
+    // Show channel if:
+    // - Not hidden, OR
+    // - Hidden but has enabled collections with members (needs to show collection button)
+    const channels = allGroupChannels.filter(ch => {
+      if (!ch.hiddenInGroup) return true;
+      if (!ch.collections || ch.collections.length === 0) return false;
+      return ch.collections.some(col => {
+        if (!col.enabled) return false;
+        const colKey = ch.id + '::' + col.id;
+        return allChannels.some(c => {
+          if (Array.isArray(c.collectionIds)) return c.collectionIds.includes(colKey);
+          return c.collectionId === colKey;
+        });
+      });
+    });
+
     channels.forEach(ch => {
       const card = document.createElement('div');
       card.className = 'channel-card';
@@ -964,33 +982,37 @@ function buildChannelLists() {
       const btns = document.createElement('div');
       btns.className = 'channel-btns';
 
-      // Live button — only rendered if hasLive is true, hidden until confirmed live
-      if (ch.hasLive) {
-        const liveBtn = document.createElement('button');
-        liveBtn.className = 'ch-btn live';
-        liveBtn.id = 'live-' + ch.id;
-        liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
-        liveBtn.style.display = 'none'; // hidden until API confirms live
-        liveBtn.onclick = () => playLive(ch);
-        btns.appendChild(liveBtn);
+      // Only show Live/Recent/Subscribe if not hidden from group list
+      // Hidden channels show collection button only — they're entry points to collections
+      if (!ch.hiddenInGroup) {
+        // Live button — only rendered if hasLive is true, hidden until confirmed live
+        if (ch.hasLive) {
+          const liveBtn = document.createElement('button');
+          liveBtn.className = 'ch-btn live';
+          liveBtn.id = 'live-' + ch.id;
+          liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
+          liveBtn.style.display = 'none'; // hidden until API confirms live
+          liveBtn.onclick = () => playLive(ch);
+          btns.appendChild(liveBtn);
+        }
+
+        // Recent button
+        const recentBtn = document.createElement('button');
+        recentBtn.className = 'ch-btn recent';
+        recentBtn.textContent = 'RECENT ▸';
+        recentBtn.onclick = () => showRecent(ch, group.id);
+        btns.appendChild(recentBtn);
+
+        // Subscribe button
+        const subBtn = document.createElement('button');
+        subBtn.className = 'ch-btn subscribe';
+        subBtn.innerHTML = 'Subscribe';
+        subBtn.title = 'Subscribe to ' + ch.name + ' on YouTube';
+        subBtn.onclick = () => {
+          window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener');
+        };
+        btns.appendChild(subBtn);
       }
-
-      // Recent button
-      const recentBtn = document.createElement('button');
-      recentBtn.className = 'ch-btn recent';
-      recentBtn.textContent = 'RECENT ▸';
-      recentBtn.onclick = () => showRecent(ch, group.id);
-      btns.appendChild(recentBtn);
-
-      // Subscribe button — opens YouTube subscribe dialog for this channel
-      const subBtn = document.createElement('button');
-      subBtn.className = 'ch-btn subscribe';
-      subBtn.innerHTML = 'Subscribe';
-      subBtn.title = 'Subscribe to ' + ch.name + ' on YouTube';
-      subBtn.onclick = () => {
-        window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener');
-      };
-      btns.appendChild(subBtn);
 
       // Collections buttons — only shown when collection is enabled AND has members
       if (ch.collections && ch.collections.length > 0) {

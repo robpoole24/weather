@@ -63,11 +63,42 @@ async function restoreAppDataFromRedis() {
   try {
     const stored = await rGet('wt:appData');
     if (stored && stored.groups && stored.groups.length > 0) {
-      appDataStore = stored;
-      console.log('[Redis] App data restored — ' + stored.groups.length + ' groups, ' + 
-        stored.groups.reduce((s, g) => s + (g.channels||[]).length, 0) + ' channels');
+      // Merge stored data with current defaults:
+      // - Keep all groups/channels from current code (adds new channels)
+      // - Preserve collection, collectionIds, hiddenInGroup, enabled from Redis (keeps admin changes)
+      const defaults = getDefaultData();
+      const merged = JSON.parse(JSON.stringify(defaults)); // deep copy of defaults
+
+      merged.groups.forEach(defGroup => {
+        const storedGroup = stored.groups.find(g => g.id === defGroup.id);
+        if (!storedGroup) return;
+
+        defGroup.channels.forEach(defCh => {
+          const storedCh = storedGroup.channels.find(c => c.id === defCh.id);
+          if (!storedCh) return;
+          // Preserve admin-managed fields from Redis
+          if (storedCh.collections) defCh.collections = storedCh.collections;
+          if (storedCh.collectionIds) defCh.collectionIds = storedCh.collectionIds;
+          if (storedCh.collectionId) defCh.collectionId = storedCh.collectionId;
+          if (storedCh.hiddenInGroup) defCh.hiddenInGroup = storedCh.hiddenInGroup;
+          if (storedCh.enabled === false) defCh.enabled = false;
+        });
+      });
+
+      // Preserve config overrides from Redis
+      if (stored.config) {
+        merged.config.liveCheckIntervalHours = stored.config.liveCheckIntervalHours || merged.config.liveCheckIntervalHours;
+        merged.config.recentFetchHourEST = stored.config.recentFetchHourEST !== undefined ? stored.config.recentFetchHourEST : merged.config.recentFetchHourEST;
+      }
+
+      appDataStore = merged;
+      // Save merged data back to Redis
+      rSet('wt:appData', merged);
+
+      const chCount = merged.groups.reduce((s, g) => s + (g.channels||[]).length, 0);
+      console.log('[Redis] App data merged — ' + merged.groups.length + ' groups, ' + chCount + ' channels (new channels from code incorporated)');
     } else {
-      console.log('[Redis] No app data in Redis — using file or defaults');
+      console.log('[Redis] No app data in Redis — using defaults');
     }
   } catch(e) {
     console.error('[Redis] App data restore error:', e.message);
