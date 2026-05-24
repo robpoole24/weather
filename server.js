@@ -397,15 +397,100 @@ function checkQuotaError(data) {
   return data.error && data.error.errors && data.error.errors[0].reason === 'quotaExceeded';
 }
 
-// ── Server-Side Cache ──
+// ── Redis Persistent Cache ──
+const Redis = require('ioredis');
+
+let redis = null;
+if (process.env.REDIS_URL) {
+  redis = new Redis(process.env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 2 });
+  redis.on('connect', () => console.log('[Redis] Connected — cache persists across deploys'));
+  redis.on('error', (e) => console.error('[Redis] Error:', e.message));
+} else {
+  console.warn('[Redis] No REDIS_URL — using in-memory cache only');
+}
+
+// In-memory mirrors (fast reads, Redis for persistence)
 const cache = {
-  liveStatuses: {},      // { channelId: { isLive, checkedAt, source } }
-  recentVideos: {},      // { channelId: { items, cachedAt } }
-  playlist: {},          // { playlistId: { items, cachedAt } }
+  liveStatuses: {},
+  recentVideos: {},
+  playlist: {},
   lastLiveCheck: null,
   lastRecentFetch: null,
-  websubActive: false,   // true once Railway is deployed and webhooks are live
+  websubActive: false,
 };
+
+const REDIS_TTL = {
+  recentVideos: 25 * 60 * 60,  // 25 hours
+  liveStatus:   13 * 60 * 60,  // 13 hours
+  playlist:     49 * 60 * 60,  // 49 hours
+};
+
+async function rSet(key, value, ttl) {
+  if (!redis) return;
+  try {
+    if (ttl) await redis.setex(key, ttl, JSON.stringify(value));
+    else await redis.set(key, JSON.stringify(value));
+  } catch(e) { console.error('[Redis] SET error ' + key + ':', e.message); }
+}
+
+async function rGet(key) {
+  if (!redis) return null;
+  try {
+    const v = await redis.get(key);
+    return v ? JSON.parse(v) : null;
+  } catch(e) { console.error('[Redis] GET error ' + key + ':', e.message); return null; }
+}
+
+async function rDel(key) {
+  if (!redis) return;
+  try { await redis.del(key); } catch(e) {}
+}
+
+async function rKeys(pattern) {
+  if (!redis) return [];
+  try { return await redis.keys(pattern); } catch(e) { return []; }
+}
+
+// Restore cache from Redis on startup — survives deploys and restarts
+async function restoreCacheFromRedis() {
+  if (!redis) return;
+  try {
+    console.log('[Redis] Restoring cache from Redis...');
+
+    // Metadata
+    const lastFetch = await rGet('wt:lastFetch');
+    if (lastFetch) cache.lastRecentFetch = lastFetch;
+    const lastLive = await rGet('wt:lastLive');
+    if (lastLive) cache.lastLiveCheck = lastLive;
+    const websubActive = await rGet('wt:websubActive');
+    if (websubActive !== null) cache.websubActive = websubActive;
+
+    // Live statuses
+    const liveKeys = await rKeys('wt:live:*');
+    for (const key of liveKeys) {
+      const val = await rGet(key);
+      if (val) cache.liveStatuses[key.replace('wt:live:', '')] = val;
+    }
+
+    // Recent videos
+    const recentKeys = await rKeys('wt:recent:*');
+    for (const key of recentKeys) {
+      const val = await rGet(key);
+      if (val) cache.recentVideos[key.replace('wt:recent:', '')] = val;
+    }
+
+    // Playlist
+    const plKeys = await rKeys('wt:playlist:*');
+    for (const key of plKeys) {
+      const val = await rGet(key);
+      if (val) cache.playlist[key.replace('wt:playlist:', '')] = val;
+    }
+
+    console.log('[Redis] Restored — ' + recentKeys.length + ' video caches, ' + liveKeys.length + ' live statuses');
+  } catch(e) {
+    console.error('[Redis] Restore error:', e.message);
+  }
+}
 
 // Intervals are configurable via admin panel — stored in channels.json config
 // Defaults shown here, overridden by loadData().config values
@@ -530,7 +615,9 @@ async function scheduledLiveCheck() {
   for (const ch of channels) {
     try {
       const isLive = await checkLiveStatus(ch.id);
-      cache.liveStatuses[ch.id] = { isLive, checkedAt: Date.now(), source: 'poll' };
+      const liveEntry = { isLive, checkedAt: Date.now(), source: 'poll' };
+      cache.liveStatuses[ch.id] = liveEntry;
+      rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
       if (isLive) liveCount++;
       await new Promise(r => setTimeout(r, 100));
     } catch(e) {
@@ -540,6 +627,7 @@ async function scheduledLiveCheck() {
   }
 
   cache.lastLiveCheck = Date.now();
+  await rSet('wt:lastLive', cache.lastLiveCheck);
   console.log('[WeatherTV] Live check complete — ' + liveCount + ' channel(s) live (' + channels.length + ' units used)');
   setTimeout(scheduledLiveCheck, getLiveCheckInterval());
 }
@@ -595,6 +683,27 @@ async function websubSubscribe(channelId) {
   });
 }
 
+// ── Startup sequence ──
+// Restore cache from Redis first, then check for missed fetches, then subscribe WebSub
+(async () => {
+  await restoreCacheFromRedis();
+
+  // Check if today's scheduled fetch was missed after restore
+  const fetchHour = getRecentFetchHour();
+  const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const estHour = estNow.getHours();
+  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+  const lastFetch = cache.lastRecentFetch;
+
+  if (estHour >= fetchHour && (!lastFetch || lastFetch < oneDayAgo)) {
+    console.log('[WeatherTV] Missed scheduled fetch detected — running now');
+    fetchAllRecentVideos(); // don't await — run in background
+  } else {
+    console.log('[WeatherTV] Cache restored from Redis — no fetch needed');
+  }
+  scheduleNextRecentFetch();
+})();
+
 // Subscribe all hasLive channels on startup (only when APP_URL is set)
 async function subscribeAllChannels() {
   if (!process.env.APP_URL) {
@@ -615,6 +724,7 @@ async function subscribeAllChannels() {
   }
 
   cache.websubActive = true;
+  rSet('wt:websubActive', true);
   console.log('[WebSub] All channels subscribed — push notifications active');
 }
 
@@ -651,8 +761,11 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
         const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
         const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
 
-        cache.liveStatuses[channelId] = { isLive, videoId, checkedAt: Date.now(), source: 'websub' };
+        const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub' };
+        cache.liveStatuses[channelId] = wsEntry;
         cache.lastLiveCheck = Date.now();
+        rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
+        rSet('wt:lastLive', cache.lastLiveCheck);
 
         if (isLive && !wasLive) {
           console.log('[WebSub] LIVE CONFIRMED: ' + channelId + ' just went live!');
@@ -667,8 +780,9 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
     }
   }
 
-  // Always invalidate recent videos cache so next request gets fresh content
+  // Invalidate recent video cache so next request fetches fresh content
   delete cache.recentVideos[channelId];
+  rDel('wt:recent:' + channelId);
 });
 
 // Re-subscribe all channels every 8 days (before 9-day lease expires)
@@ -728,17 +842,15 @@ async function fetchAllRecentVideos() {
       const newItems = data.items || [];
 
       if (newItems.length > 0) {
-        // We got real results — update the cache
         cache.recentVideos[ch.id] = { items: newItems, cachedAt: Date.now() };
+        await rSet('wt:recent:' + ch.id, { items: newItems, cachedAt: Date.now() }, REDIS_TTL.recentVideos);
         fetched++;
       } else if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items.length > 0) {
-        // Empty result but we have previous good data — keep it, just refresh the timestamp
-        // so it doesn't expire while the channel is temporarily quiet
         cache.recentVideos[ch.id].cachedAt = Date.now();
+        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideos);
         console.log('[WeatherTV] No new videos for ' + ch.id + ' — keeping previous cache');
         fetched++;
       } else {
-        // Empty result and no previous cache — store empty but don't count as success
         console.log('[WeatherTV] No videos found for ' + ch.id + ' — channel may have wrong ID');
       }
 
@@ -749,6 +861,7 @@ async function fetchAllRecentVideos() {
   }
 
   cache.lastRecentFetch = Date.now();
+  await rSet('wt:lastFetch', cache.lastRecentFetch);
   console.log('[WeatherTV] Recent video fetch complete — ' + fetched + '/' + channels.length + ' channels cached');
   scheduleNextRecentFetch();
 }
@@ -773,29 +886,7 @@ function scheduleNextRecentFetch() {
   setTimeout(fetchAllRecentVideos, msUntilNext);
 }
 
-// On startup, check if today's scheduled fetch was missed
-// If current EST time is past the fetch hour and we have no cache or stale cache, run now
-// This handles Railway restarts that occur after the scheduled fetch time
-(async () => {
-  try {
-    const fetchHour = getRecentFetchHour();
-    const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const estHour = estNow.getHours();
-    const lastFetch = cache.lastRecentFetch;
-    const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
 
-    // If past today's fetch hour AND we haven't fetched in the last 24 hours, run now
-    if (estHour >= fetchHour && (!lastFetch || lastFetch < oneDayAgo)) {
-      console.log('[WeatherTV] Missed scheduled fetch detected — running now (EST hour: ' + estHour + ', fetch hour: ' + fetchHour + ')');
-      await fetchAllRecentVideos();
-    } else {
-      console.log('[WeatherTV] Recent video fetch scheduled — next run at ' + fetchHour + ':00 EST');
-    }
-  } catch(e) {
-    console.error('[WeatherTV] Startup fetch check error:', e.message);
-  }
-  scheduleNextRecentFetch();
-})();
 
 // ── API Routes ──
 
@@ -847,14 +938,13 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
     }
     const newItems = data.items || [];
     if (newItems.length > 0) {
-      // Real results — update cache and return fresh data
-      cache.recentVideos[channelId] = { items: newItems, cachedAt: Date.now() };
+      const entry = { items: newItems, cachedAt: Date.now() };
+      cache.recentVideos[channelId] = entry;
+      await rSet('wt:recent:' + channelId, entry, REDIS_TTL.recentVideos);
       res.json(data);
     } else if (cache.recentVideos[channelId] && cache.recentVideos[channelId].items.length > 0) {
-      // Empty result — return previous good cache rather than empty
       res.json({ items: cache.recentVideos[channelId].items, _cached: true, _preserved: true });
     } else {
-      // Genuinely no videos found
       cache.recentVideos[channelId] = { items: [], cachedAt: Date.now() };
       res.json(data);
     }
@@ -887,7 +977,9 @@ app.get('/api/yt/playlist/:playlistId', async (req, res) => {
       markQuotaExceeded();
       return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
     }
-    cache.playlist[playlistId] = { items: data.items || [], cachedAt: Date.now() };
+    const plEntry = { items: data.items || [], cachedAt: Date.now() };
+    cache.playlist[playlistId] = plEntry;
+    rSet('wt:playlist:' + playlistId, plEntry, REDIS_TTL.playlist);
     res.json(data);
   } catch(e) {
     res.status(500).json({ error: e.message });
@@ -943,14 +1035,18 @@ app.get('/api/admin/test-connectivity', async (req, res) => {
 });
 
 // Cache management — admin only
-app.post('/api/admin/cache/clear-playlist', (req, res) => {
+app.post('/api/admin/cache/clear-playlist', async (req, res) => {
   cache.playlist = {};
+  const plKeys = await rKeys('wt:playlist:*');
+  for (const key of plKeys) await rDel(key);
   console.log('[WeatherTV] Playlist cache cleared by admin');
   res.json({ ok: true, message: 'Playlist cache cleared — will fetch fresh on next request' });
 });
 
-app.post('/api/admin/cache/clear-recent', (req, res) => {
+app.post('/api/admin/cache/clear-recent', async (req, res) => {
   cache.recentVideos = {};
+  const keys = await rKeys('wt:recent:*');
+  for (const key of keys) await rDel(key);
   console.log('[WeatherTV] Recent videos cache cleared by admin');
   res.json({ ok: true, message: 'Recent videos cache cleared — will fetch fresh on next request' });
 });
