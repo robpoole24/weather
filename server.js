@@ -24,15 +24,54 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
 
 // ── Load / Save data ──
+// In-memory data store — loaded from Redis or file on startup
+let appDataStore = null;
+
 function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return getDefaultData();
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  if (appDataStore) return appDataStore;
+  // Fall back to file if Redis hasn't loaded yet
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      appDataStore = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      return appDataStore;
+    } catch(e) {}
+  }
+  appDataStore = getDefaultData();
+  return appDataStore;
 }
 
 function saveData(data) {
-  const dir = path.dirname(DATA_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  // Update in-memory store
+  appDataStore = data;
+
+  // Write to Redis (primary persistent store)
+  rSet('wt:appData', data);
+
+  // Also write to file as backup
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch(e) {
+    console.warn('[WeatherTV] Could not write channels.json:', e.message);
+  }
+}
+
+// Load app data from Redis into memory on startup
+async function restoreAppDataFromRedis() {
+  if (!redis) return;
+  try {
+    const stored = await rGet('wt:appData');
+    if (stored && stored.groups && stored.groups.length > 0) {
+      appDataStore = stored;
+      console.log('[Redis] App data restored — ' + stored.groups.length + ' groups, ' + 
+        stored.groups.reduce((s, g) => s + (g.channels||[]).length, 0) + ' channels');
+    } else {
+      console.log('[Redis] No app data in Redis — using file or defaults');
+    }
+  } catch(e) {
+    console.error('[Redis] App data restore error:', e.message);
+  }
 }
 
 function getDefaultData() {
@@ -84,9 +123,13 @@ function getDefaultData() {
           { id: 'UCLfN3U2O0sEYabjo2lxIttw', name: 'Celton Henderson',       hasLive: false, enabled: true },
           { id: 'UCGpPbdVAtTUgW_w98lXC9nw', name: 'Chris Riske',            hasLive: true,  enabled: true },
           { id: 'UCb0U1g5r4kH_NDMGiGRhysA', name: 'Connor Croff',           hasLive: true,  enabled: true },
+          { id: 'UC1dcRoXHbZ0QFOBB6DKPmdg', name: 'Dan Robinson',            hasLive: false, enabled: true },
           { id: 'UCRYYy0UrfyGmMKQDU1N1R3g', name: 'Convective Chronicles',  hasLive: true,  enabled: true },
           { id: 'UCx5ex9rJumpj-oKgVJrP4hA', name: 'Corey Gerken',           hasLive: true,  enabled: true },
           { id: 'UCemyFpFfu55JvAP_eWW1NdA', name: 'Daniel Shaw',            hasLive: true,  enabled: true },
+          { id: 'UC1dcRoXHbZ0QFOBB6DKPmdg', name: 'Dan Robinson',           hasLive: false, enabled: true },
+          { id: 'UCixgOrfusZuPt_FVO1sIXAw', name: 'Dilly Dilly Dalton',     hasLive: true,  enabled: true },
+          { id: 'UCixgOrfusZuPt_FVO1sIXAw', name: 'Dilly Dilly Dalton',      hasLive: true,  enabled: true },
           { id: 'UChZ_VT3MrHB53bSqFiVf4eg', name: "Edgar O'Neal",           hasLive: true,  enabled: true },
           { id: 'UCZSDkxJS7PRw9V0_Sm6U7jg', name: 'Freddy McKinney',        hasLive: true,  enabled: true },
           { id: 'UCPgskHnT1cT_hpfbq9nUK7w', name: 'Jakob McMillin',         hasLive: true,  enabled: true },
@@ -99,17 +142,30 @@ function getDefaultData() {
           { id: 'UCPtizAsfQaJktz0tw9YuKLQ', name: 'Kannon Kalton',          hasLive: true,  enabled: true },
           { id: 'UC1nJElGcVcTpeZJVyxEbzJw', name: 'Live Storms Media',      hasLive: true,  enabled: true },
           { id: 'UCeE90n3GWO1XZcwt8xpNRtw', name: 'Melanie Metz',           hasLive: true,  enabled: true },
+          { id: 'UCXUU-_dJ-eGBh3-bjPNsalQ', name: 'Nathan Moore',           hasLive: true,  enabled: true },
+          { id: 'UCXUU-_dJ-eGBh3-bjPNsalQ', name: 'Nathan Moore',            hasLive: true,  enabled: true },
           { id: 'UCy5cFthFcECu6DMSBcOX5AQ', name: 'Oklahoma Weather Couple', hasLive: false, enabled: true },
           { id: 'UCV6hWxB0-u_IX7e-h4fEBAw', name: 'Reed Timmer',            hasLive: true,  enabled: true },
           { id: 'UChxsy558HhpaqnB1Hk6tHkw', name: 'Reilly Dibble',          hasLive: true,  enabled: true },
+          { id: 'UCY4Vj4lQZ-TSrz66RDi-DJA', name: 'Ryan Miller',             hasLive: true,  enabled: true },
           { id: 'UCSQH3qItz0gZ5oXw8cSNR2w', name: 'Ryan Scholl',            hasLive: true,  enabled: true },
+          { id: 'UCY4Vj4lQZ-TSrz66RDi-DJA', name: 'Ryan Miller',            hasLive: true,  enabled: true },
+          { id: 'UCIQ1bii18GuNOICBA86HUMQ', name: 'Sawyer Spiral',           hasLive: false, enabled: true },
           { id: 'UCqsI0A7OlQTnwPFOUZaISMA', name: 'Scott Currens',          hasLive: false, enabled: true },
           { id: 'UCqAWcfd0BJBgCW8iyOLOF3g', name: 'Scott Peake',            hasLive: true,  enabled: true },
           { id: 'UCdSMdTFOfqmOXP-1vD2cxAA', name: 'Storm Chase TV',         hasLive: true,  enabled: true },
+          { id: 'UCWAN-rRJFLosqgiiIFVpkEQ', name: 'Storm Chasing Video',    hasLive: true,  enabled: true },
+          { id: 'UCapcjkwRd5jNJ6vbE7NWIkw', name: 'Storm Hunters',           hasLive: true,  enabled: true },
+          { id: 'UCAdsKTAapDXhosiq7B237SA', name: 'Tanner Charles',           hasLive: true,  enabled: true },
+          { id: 'UCWAN-rRJFLosqgiiIFVpkEQ', name: 'Storm Chasing Video',  hasLive: true,  enabled: true },
           { id: 'UCAnSuGYTjwbGoBMgF_aBpnQ', name: 'Stormgasm',              hasLive: true,  enabled: true },
+          { id: 'UCapcjkwRd5jNJ6vbE7NWIkw', name: 'Storm Hunters',         hasLive: true,  enabled: true },
           { id: 'UCBmOfiL9LC3dT4Ps2veVCoQ', name: 'Stormrunner Media',      hasLive: true,  enabled: true },
+          { id: 'UCAdsKTAapDXhosiq7B237SA', name: 'Tanner Charles',         hasLive: true,  enabled: true },
           { id: 'UCCzfjxXs0o9h1cOgnnmc2Zw', name: 'Tornado Paigeyy',        hasLive: true,  enabled: true },
+          { id: 'UCaS1PyCKSyoDlel7iVOI2Vw', name: 'Tornado Crew',            hasLive: true,  enabled: true },
           { id: 'UCuer9Sw2UAD5LWZpVXbgKTA', name: 'Tornado TRX',            hasLive: false, enabled: true },
+          { id: 'UCaS1PyCKSyoDlel7iVOI2Vw', name: 'Tornado Crew Storm Chasers', hasLive: true, enabled: true },
         ]
       },
       {
@@ -687,9 +743,10 @@ async function websubSubscribe(channelId) {
 }
 
 // ── Startup sequence ──
-// Restore cache from Redis first, then check for missed fetches, then subscribe WebSub
+// Restore app data and cache from Redis first
 (async () => {
-  await restoreCacheFromRedis();
+  await restoreAppDataFromRedis();  // groups, channels, collections
+  await restoreCacheFromRedis();    // video cache, live statuses
 
   // Check if today's scheduled fetch was missed after restore
   const fetchHour = getRecentFetchHour();
