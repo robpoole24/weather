@@ -798,18 +798,34 @@ async function websubSubscribe(channelId) {
   await restoreAppDataFromRedis();  // groups, channels, collections
   await restoreCacheFromRedis();    // video cache, live statuses
 
-  // Check if today's scheduled fetch was missed after restore
+  // Check if today's scheduled fetch was missed
+  // Compare dates not just timestamps to prevent double-fetching on same day
   const fetchHour = getRecentFetchHour();
   const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const estHour = estNow.getHours();
-  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
   const lastFetch = cache.lastRecentFetch;
 
-  if (estHour >= fetchHour && (!lastFetch || lastFetch < oneDayAgo)) {
-    console.log('[WeatherTV] Missed scheduled fetch detected — running now');
+  let missedFetch = false;
+  if (estHour >= fetchHour) {
+    if (!lastFetch) {
+      // Never fetched — run now
+      missedFetch = true;
+    } else {
+      // Check if last fetch was before today's scheduled fetch time
+      const lastFetchEST = new Date(new Date(lastFetch).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const fetchedTodayAfterSchedule = 
+        lastFetchEST.toDateString() === estNow.toDateString() && 
+        lastFetchEST.getHours() >= fetchHour;
+      missedFetch = !fetchedTodayAfterSchedule;
+    }
+  }
+
+  if (missedFetch) {
+    console.log('[WeatherTV] Missed scheduled fetch detected — running now (last fetch: ' + (lastFetch ? new Date(lastFetch).toLocaleString() : 'never') + ')');
     fetchAllRecentVideos(); // don't await — run in background
   } else {
-    console.log('[WeatherTV] Cache restored from Redis — no fetch needed');
+    const minsAgo = lastFetch ? Math.round((Date.now() - lastFetch) / 60000) : null;
+    console.log('[WeatherTV] No missed fetch — ' + (minsAgo ? 'last fetch ' + minsAgo + 'm ago' : 'before scheduled time'));
   }
   scheduleNextRecentFetch();
 })();
@@ -958,6 +974,7 @@ async function fetchAllRecentVideos() {
 
   console.log('[WeatherTV] Fetching recent videos for ' + channels.length + ' channels...');
   let fetched = 0;
+  let quotaHit = false;
 
   for (const ch of channels) {
     try {
@@ -967,17 +984,20 @@ async function fetchAllRecentVideos() {
 
       if (checkQuotaError(data)) {
         markQuotaExceeded();
-        console.warn('[WeatherTV] Quota hit during recent video fetch after ' + fetched + ' channels');
+        quotaHit = true;
+        console.warn('[WeatherTV] Quota hit during recent video fetch after ' + fetched + ' channels — preserving all previous caches');
         break;
       }
 
       const newItems = data.items || [];
 
       if (newItems.length > 0) {
+        // Got fresh results — update cache
         cache.recentVideos[ch.id] = { items: newItems, cachedAt: Date.now() };
         await rSet('wt:recent:' + ch.id, { items: newItems, cachedAt: Date.now() }, REDIS_TTL.recentVideos);
         fetched++;
       } else if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items.length > 0) {
+        // Empty result but have previous good data — keep it, refresh TTL
         cache.recentVideos[ch.id].cachedAt = Date.now();
         await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideos);
         console.log('[WeatherTV] No new videos for ' + ch.id + ' — keeping previous cache');
@@ -992,9 +1012,23 @@ async function fetchAllRecentVideos() {
     }
   }
 
-  cache.lastRecentFetch = Date.now();
-  await rSet('wt:lastFetch', cache.lastRecentFetch);
-  console.log('[WeatherTV] Recent video fetch complete — ' + fetched + '/' + channels.length + ' channels cached');
+  if (!quotaHit) {
+    // Only mark fetch as complete if we finished without hitting quota
+    // Partial fetches don't count — tomorrow's startup will detect the miss and retry
+    cache.lastRecentFetch = Date.now();
+    await rSet('wt:lastFetch', cache.lastRecentFetch);
+    console.log('[WeatherTV] Recent video fetch complete — ' + fetched + '/' + channels.length + ' channels cached');
+  } else {
+    // Refresh TTL on all channels we didn't get to — keeps their previous data alive
+    const remaining = channels.slice(fetched);
+    for (const ch of remaining) {
+      if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items && cache.recentVideos[ch.id].items.length > 0) {
+        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideos);
+      }
+    }
+    console.log('[WeatherTV] Partial fetch — ' + fetched + '/' + channels.length + ' updated, previous cache preserved for remaining ' + remaining.length + ' channels');
+  }
+
   scheduleNextRecentFetch();
 }
 
