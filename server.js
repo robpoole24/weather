@@ -69,14 +69,18 @@ function getDefaultData() {
         icon: '🌪',
         channels: [
           { id: 'UC8QZ-OIqfWKek1CpMvs2O3g', name: 'Aaron Jayjack',          hasLive: true,  enabled: true },
+          { id: 'UCf8dNCufHlKZp-CgU8NPryw', name: 'Adam Lucio',             hasLive: true,  enabled: true },
           { id: 'UCXQYQMwU9wc584i7ecZzm_A', name: 'Adri Mozeris',           hasLive: false, enabled: true },
           { id: 'UCW-db9uRShMINgICqQeyt1Q', name: 'Alexander Spahn',        hasLive: false, enabled: true },
           { id: 'UCT1IIkU3Yafr6nfNxQlWuSQ', name: 'Andrew Pritchard',       hasLive: true,  enabled: true },
           { id: 'UCXZJRhrMbtXqjZCZUGp5CTg', name: 'Bamawxcom',              hasLive: false, enabled: true },
+          { id: 'UCj6aoh3tZuQoqfHs4ZWpHcA', name: 'Brad Arnold',            hasLive: true,  enabled: true },
           { id: 'UCD3KREyo3IqCLBC-4khGgIw', name: 'Brandon Clement',        hasLive: true,  enabled: true },
-          { id: 'UCJ_8JVFhFKEaFRqnv9kxKmA', name: 'Brandon Copic',          hasLive: true,  enabled: true },
+          { id: 'UCPqLI_AohMn1jnFg8ocMyHA', name: 'Brandon Copic Live',     hasLive: true,  enabled: true },
+          { id: 'UCniY5-9rLWSE6c3iA4fh73w', name: 'Brandon Copic Archive',  hasLive: false, enabled: true },
           { id: 'UCMmlV4B6Bx2GuYtIaxpLcfw', name: 'Brittney Richardson',    hasLive: true,  enabled: true },
           { id: 'UCvIqVAaqpx1Q_e9DzIxgk1A', name: 'CF Productions',         hasLive: true,  enabled: true },
+          { id: 'UCx_mcHxMvZ8PBmVTtg6Ddtw', name: 'CJ Ziegler',             hasLive: true,  enabled: true },
           { id: 'UCLfN3U2O0sEYabjo2lxIttw', name: 'Celton Henderson',       hasLive: false, enabled: true },
           { id: 'UCGpPbdVAtTUgW_w98lXC9nw', name: 'Chris Riske',            hasLive: true,  enabled: true },
           { id: 'UCb0U1g5r4kH_NDMGiGRhysA', name: 'Connor Croff',           hasLive: true,  enabled: true },
@@ -84,12 +88,12 @@ function getDefaultData() {
           { id: 'UCx5ex9rJumpj-oKgVJrP4hA', name: 'Corey Gerken',           hasLive: true,  enabled: true },
           { id: 'UCemyFpFfu55JvAP_eWW1NdA', name: 'Daniel Shaw',            hasLive: true,  enabled: true },
           { id: 'UChZ_VT3MrHB53bSqFiVf4eg', name: "Edgar O'Neal",           hasLive: true,  enabled: true },
-          { id: 'UCFQfMFWHkIBFSxfS_kI4iKA', name: 'Freddy McKinney',        hasLive: true,  enabled: true },
+          { id: 'UCZSDkxJS7PRw9V0_Sm6U7jg', name: 'Freddy McKinney',        hasLive: true,  enabled: true },
           { id: 'UCPgskHnT1cT_hpfbq9nUK7w', name: 'Jakob McMillin',         hasLive: true,  enabled: true },
-          { id: 'UCWcjww4Wz_UqxSPYCnc9T-A', name: 'Joey Krastel',           hasLive: false, enabled: true },
           { id: 'UCWMRFAo3Cvd7W8yQpQwsOQA', name: 'John McKinney',          hasLive: true,  enabled: true },
           { id: 'UCSoEfOMuGNjrrhD4iLTKo_A', name: 'Jonas Piontek',          hasLive: false, enabled: true },
           { id: 'UC86mOt7YnKgRUQxblDpsN-g', name: 'Jordan Hall',            hasLive: true,  enabled: true },
+          { id: 'UC6lUxl1KxmI7TWnAA6go1EQ', name: 'Jaden Pappenheim',       hasLive: true,  enabled: true },
           { id: 'UCvRBXkjHG0vbDrO-03ZIWxw', name: 'Justin Noonan',          hasLive: false, enabled: true },
           { id: 'UClIZx2ESMJVocfMIbji_ujg', name: 'Justin Poublon',         hasLive: true,  enabled: true },
           { id: 'UCPtizAsfQaJktz0tw9YuKLQ', name: 'Kannon Kalton',          hasLive: true,  enabled: true },
@@ -98,13 +102,14 @@ function getDefaultData() {
           { id: 'UCy5cFthFcECu6DMSBcOX5AQ', name: 'Oklahoma Weather Couple', hasLive: false, enabled: true },
           { id: 'UCV6hWxB0-u_IX7e-h4fEBAw', name: 'Reed Timmer',            hasLive: true,  enabled: true },
           { id: 'UChxsy558HhpaqnB1Hk6tHkw', name: 'Reilly Dibble',          hasLive: true,  enabled: true },
+          { id: 'UCSQH3qItz0gZ5oXw8cSNR2w', name: 'Ryan Scholl',            hasLive: true,  enabled: true },
           { id: 'UCqsI0A7OlQTnwPFOUZaISMA', name: 'Scott Currens',          hasLive: false, enabled: true },
           { id: 'UCqAWcfd0BJBgCW8iyOLOF3g', name: 'Scott Peake',            hasLive: true,  enabled: true },
           { id: 'UCdSMdTFOfqmOXP-1vD2cxAA', name: 'Storm Chase TV',         hasLive: true,  enabled: true },
           { id: 'UCAnSuGYTjwbGoBMgF_aBpnQ', name: 'Stormgasm',              hasLive: true,  enabled: true },
           { id: 'UCBmOfiL9LC3dT4Ps2veVCoQ', name: 'Stormrunner Media',      hasLive: true,  enabled: true },
-          { id: 'UCm8EwVbQaGVkYnxZVQvCFAw', name: 'Tornado Paigeyy',        hasLive: true,  enabled: true },
-          { id: 'UCuer9Sw2UAD5LWZpVXbgKTA', name: 'Tornado TRX',            hasLive: true,  enabled: true },
+          { id: 'UCCzfjxXs0o9h1cOgnnmc2Zw', name: 'Tornado Paigeyy',        hasLive: true,  enabled: true },
+          { id: 'UCuer9Sw2UAD5LWZpVXbgKTA', name: 'Tornado TRX',            hasLive: false, enabled: true },
         ]
       },
       {
@@ -720,8 +725,23 @@ async function fetchAllRecentVideos() {
         break;
       }
 
-      cache.recentVideos[ch.id] = { items: data.items || [], cachedAt: Date.now() };
-      fetched++;
+      const newItems = data.items || [];
+
+      if (newItems.length > 0) {
+        // We got real results — update the cache
+        cache.recentVideos[ch.id] = { items: newItems, cachedAt: Date.now() };
+        fetched++;
+      } else if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items.length > 0) {
+        // Empty result but we have previous good data — keep it, just refresh the timestamp
+        // so it doesn't expire while the channel is temporarily quiet
+        cache.recentVideos[ch.id].cachedAt = Date.now();
+        console.log('[WeatherTV] No new videos for ' + ch.id + ' — keeping previous cache');
+        fetched++;
+      } else {
+        // Empty result and no previous cache — store empty but don't count as success
+        console.log('[WeatherTV] No videos found for ' + ch.id + ' — channel may have wrong ID');
+      }
+
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
     } catch(e) {
       console.error('[WeatherTV] Recent fetch error for ' + ch.id + ':', e.message);
@@ -753,10 +773,29 @@ function scheduleNextRecentFetch() {
   setTimeout(fetchAllRecentVideos, msUntilNext);
 }
 
-// Schedule first fetch at 6pm EST — no fetch on startup to preserve quota across restarts
-// On first deploy you'll see no recent videos until 6pm EST — this is intentional
-scheduleNextRecentFetch();
-console.log('[WeatherTV] Recent video fetch scheduled — no startup fetch to preserve quota');
+// On startup, check if today's scheduled fetch was missed
+// If current EST time is past the fetch hour and we have no cache or stale cache, run now
+// This handles Railway restarts that occur after the scheduled fetch time
+(async () => {
+  try {
+    const fetchHour = getRecentFetchHour();
+    const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const estHour = estNow.getHours();
+    const lastFetch = cache.lastRecentFetch;
+    const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+
+    // If past today's fetch hour AND we haven't fetched in the last 24 hours, run now
+    if (estHour >= fetchHour && (!lastFetch || lastFetch < oneDayAgo)) {
+      console.log('[WeatherTV] Missed scheduled fetch detected — running now (EST hour: ' + estHour + ', fetch hour: ' + fetchHour + ')');
+      await fetchAllRecentVideos();
+    } else {
+      console.log('[WeatherTV] Recent video fetch scheduled — next run at ' + fetchHour + ':00 EST');
+    }
+  } catch(e) {
+    console.error('[WeatherTV] Startup fetch check error:', e.message);
+  }
+  scheduleNextRecentFetch();
+})();
 
 // ── API Routes ──
 
@@ -806,9 +845,19 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
       markQuotaExceeded();
       return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
     }
-    // Store in cache
-    cache.recentVideos[channelId] = { items: data.items || [], cachedAt: Date.now() };
-    res.json(data);
+    const newItems = data.items || [];
+    if (newItems.length > 0) {
+      // Real results — update cache and return fresh data
+      cache.recentVideos[channelId] = { items: newItems, cachedAt: Date.now() };
+      res.json(data);
+    } else if (cache.recentVideos[channelId] && cache.recentVideos[channelId].items.length > 0) {
+      // Empty result — return previous good cache rather than empty
+      res.json({ items: cache.recentVideos[channelId].items, _cached: true, _preserved: true });
+    } else {
+      // Genuinely no videos found
+      cache.recentVideos[channelId] = { items: [], cachedAt: Date.now() };
+      res.json(data);
+    }
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -912,7 +961,7 @@ app.get('/api/admin/cache/status', (req, res) => {
   const liveCached = Object.keys(cache.liveStatuses).length;
   res.json({
     playlist: { entries: playlistCached, ttlHours: 48 },
-    recentVideos: { entries: recentCached, ttlHours: 12, lastFetch: cache.lastRecentFetch },
+    recentVideos: { entries: recentCached, ttlHours: 24, lastFetch: cache.lastRecentFetch },
     liveStatuses: { entries: liveCached, lastChecked: cache.lastLiveCheck },
     websubActive: cache.websubActive,
     quotaExceeded

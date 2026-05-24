@@ -997,15 +997,39 @@ function buildChannelLists() {
         const allChannels = GROUPS.flatMap(g => g.channels || []);
         ch.collections.forEach(col => {
           if (!col.enabled) return;
-          // Check if any channels are assigned to this collection
           const colKey = ch.id + '::' + col.id;
           const hasMembers = allChannels.some(c => c.collectionId === colKey && c.enabled !== false);
           if (!hasMembers) return;
+
           const colBtn = document.createElement('button');
           colBtn.className = 'ch-btn collection';
-          colBtn.textContent = col.label + ' ▸';
-          colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.65rem;';
+          colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.65rem;display:inline-flex;align-items:center;gap:4px;padding:0.25rem 0.5rem;';
           colBtn.onclick = () => showCollection(ch, col);
+
+          // Check for sponsor app logo
+          const sponsorMap = {
+            'weatherfront': 'images/weatherfront.webp',
+            'weather wise': 'images/weather-wise.webp',
+            'weatherwise': 'images/weather-wise.webp',
+          };
+          const labelLower = col.label.toLowerCase();
+          let sponsorImg = null;
+          for (const [key, src] of Object.entries(sponsorMap)) {
+            if (labelLower.includes(key)) { sponsorImg = src; break; }
+          }
+
+          if (sponsorImg) {
+            const img = document.createElement('img');
+            img.src = sponsorImg;
+            img.alt = '';
+            img.style.cssText = 'height:14px;width:auto;object-fit:contain;border-radius:2px;flex-shrink:0;';
+            colBtn.appendChild(img);
+          }
+
+          const label = document.createElement('span');
+          label.textContent = col.label + ' ▸';
+          colBtn.appendChild(label);
+
           btns.appendChild(colBtn);
         });
       }
