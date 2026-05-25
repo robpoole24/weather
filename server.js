@@ -185,6 +185,7 @@ function getDefaultData() {
           { id: 'UCqsI0A7OlQTnwPFOUZaISMA', name: 'Scott Currens',          hasLive: false, enabled: true },
           { id: 'UCqAWcfd0BJBgCW8iyOLOF3g', name: 'Scott Peake',            hasLive: true,  enabled: true },
           { id: 'UCkB7RBehEqHvsD60C1yfAAg', name: 'Skip Talbot', hasLive: false, enabled: true },
+          { id: 'UCddpbBha4DGhxy5KI9smjow', name: 'Storm Chase HQ',        hasLive: true,  enabled: true },
           { id: 'UCdSMdTFOfqmOXP-1vD2cxAA', name: 'Storm Chase TV',         hasLive: true,  enabled: true },
           { id: 'UCWAN-rRJFLosqgiiIFVpkEQ', name: 'Storm Chasing Video',    hasLive: true,  enabled: true },
           { id: 'UCapcjkwRd5jNJ6vbE7NWIkw', name: 'Storm Hunters',           hasLive: true,  enabled: true },
