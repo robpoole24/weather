@@ -1742,17 +1742,21 @@ async function updateCacheStatus() {
     const liveEl = document.getElementById('live-update-status');
     const videoEl = document.getElementById('video-update-status');
 
-    if (liveEl) {
-      const liveTime = data.liveStatuses && data.liveStatuses.lastChecked;
-      liveEl.textContent = 'Last Checked — Live: ' + formatPreciseTime(liveTime);
+    if (!liveEl || !videoEl) {
+      console.warn('[WeatherTV] Status bar elements not found');
+      return;
     }
 
-    if (videoEl) {
-      const videoTime = data.recentVideos && data.recentVideos.lastFetch;
-      videoEl.textContent = 'Recent Videos: ' + formatPreciseTime(videoTime);
-    }
+    const liveTime = data.liveStatuses && data.liveStatuses.lastChecked;
+    const videoTime = data.recentVideos && data.recentVideos.lastFetch;
+
+    console.log('[WeatherTV] Cache status:', { liveTime, videoTime, data });
+
+    liveEl.textContent = 'Last Checked — Live: ' + formatPreciseTime(liveTime);
+    videoEl.textContent = 'Recent Videos: ' + formatPreciseTime(videoTime);
+
   } catch(e) {
-    // silently fail
+    console.error('[WeatherTV] Cache status error:', e);
   }
 }
 
