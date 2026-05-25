@@ -79,7 +79,7 @@
   .radar-ring {
     position: absolute;
     border-radius: 50%;
-    border: 1px solid rgba(0,180,216,0.15);
+    border: 2px solid rgba(0,180,216,0.35);
     animation: radarPulse 3s ease-out infinite;
   }
   @keyframes radarPulse {
@@ -554,8 +554,7 @@
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:1s"></div>
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:2s"></div>
     </div>
-    <img src="images/weathertv-logo.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:2;" />
-    <p>Select a channel below to begin</p>
+    <img src="images/weathertv-logo.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:1;" />
   </div>
 
   <!-- Video frame wrapper with optional live chat panel -->
@@ -588,6 +587,7 @@
   </div>
 
   <!-- Panels -->
+  <div id="channel-hint" style="text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.85rem;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;padding:0.25rem 0;flex-shrink:0;">Select a channel below to begin</div>
   <div id="panels">
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
@@ -1303,6 +1303,8 @@ const WS_NAV_HEIGHT = 0; // Set to 0 to show Matt's full page including zip entr
 // If Matt's nav bar becomes visually intrusive, increase this value in small increments
 
 function loadIframe(src, label, isLive) {
+  const hint = document.getElementById('channel-hint');
+  if (hint) hint.style.display = 'none';
   const placeholder = document.getElementById('video-placeholder');
   const areaInner = document.getElementById('video-area-inner');
   const wrapper = document.getElementById('video-wrapper');
