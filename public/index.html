@@ -28,7 +28,7 @@
     color: var(--text);
     font-family: 'Barlow', sans-serif;
     height: 100vh;
-    height: 100dvh; /* dvh accounts for browser chrome on mobile/Xbox */
+    height: 100svh; /* svh = small viewport height, excludes browser chrome */
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -36,8 +36,8 @@
 
   /* ── TOP: VIDEO AREA (80%) ── */
   #video-area {
-    flex: 0 0 80vh;
-    flex: 0 0 80dvh;
+    flex: 4;  /* takes 4/5 of available space = 80% */
+    min-height: 0;
     position: relative;
     background: #000;
     overflow: hidden;
@@ -141,8 +141,8 @@
 
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
-    flex: 0 0 20vh;
-    flex: 0 0 20dvh;
+    flex: 1;  /* takes 1/5 of available space = 20% */
+    min-height: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
     display: flex;
