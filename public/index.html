@@ -798,7 +798,7 @@ async function init() {
   buildAppsPanel();
   buildWSPanel();
   await checkAllLiveStatuses();
-  updateCacheStatus();
+  setTimeout(updateCacheStatus, 1500); // slight delay to ensure server is ready
   setInterval(updateCacheStatus, 60000); // refresh status every minute
 }
 
