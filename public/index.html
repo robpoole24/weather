@@ -1724,7 +1724,7 @@ function formatTimeAgo(timestamp) {
 }
 
 function formatPreciseTime(timestamp) {
-  if (!timestamp) return 'never';
+  if (!timestamp) return 'awaiting data';
   const now = Date.now();
   const mins = Math.floor((now - timestamp) / 60000);
   const hrs = Math.floor(mins / 60);
