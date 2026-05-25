@@ -187,6 +187,7 @@ function getDefaultData() {
           { id: 'UCkB7RBehEqHvsD60C1yfAAg', name: 'Skip Talbot', hasLive: false, enabled: true },
           { id: 'UCddpbBha4DGhxy5KI9smjow', name: 'Storm Chase HQ',        hasLive: true,  enabled: true },
           { id: 'UCdSMdTFOfqmOXP-1vD2cxAA', name: 'Storm Chase TV',         hasLive: true,  enabled: true },
+          { id: 'UCrqV52vTW5wksR-8vCZgAyA', name: 'Storm Chaser Dana',     hasLive: true,  enabled: true },
           { id: 'UCWAN-rRJFLosqgiiIFVpkEQ', name: 'Storm Chasing Video',    hasLive: true,  enabled: true },
           { id: 'UCapcjkwRd5jNJ6vbE7NWIkw', name: 'Storm Hunters',           hasLive: true,  enabled: true },
           { id: 'UCGS82m2ORvg1nfeAJsFqWDg', name: 'Storm of Passion', hasLive: true, enabled: true },
@@ -757,6 +758,40 @@ async function scheduledLiveCheck() {
 // Use the manual 'Check Now' button in admin panel if you need to verify live status
 // The scheduledLiveCheck function is still available for the manual Check Now button
 console.log('[WeatherTV] Live detection via WebSub only — no scheduled polling');
+
+// Startup live check — only checks channels with no cached status in Redis
+// Catches channels that were already live before server subscribed to WebSub
+// Disabled until quota increase approved — set STARTUP_LIVE_CHECK=true to enable
+if (process.env.STARTUP_LIVE_CHECK === 'true') {
+  setTimeout(async () => {
+    if (quotaExceeded) return;
+    const channels = getLiveChannels();
+    const unchecked = channels.filter(ch => !cache.liveStatuses[ch.id]);
+    if (unchecked.length === 0) {
+      console.log('[WeatherTV] Startup live check — all channels already have cached status');
+      return;
+    }
+    console.log('[WeatherTV] Startup live check for ' + unchecked.length + ' unchecked channels (' + (unchecked.length * 100) + ' units)...');
+    const key = getApiKey();
+    if (!key) return;
+    for (const ch of unchecked) {
+      if (quotaExceeded) break;
+      try {
+        const isLive = await checkLiveStatus(ch.id);
+        const liveEntry = { isLive, checkedAt: Date.now(), source: 'startup' };
+        cache.liveStatuses[ch.id] = liveEntry;
+        rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
+        if (isLive) console.log('[WeatherTV] Startup check — ' + ch.name + ' is LIVE');
+        await new Promise(r => setTimeout(r, 150));
+      } catch(e) {
+        if (e.message === 'quota_exceeded') break;
+      }
+    }
+    cache.lastLiveCheck = Date.now();
+    rSet('wt:lastLive', cache.lastLiveCheck);
+    console.log('[WeatherTV] Startup live check complete');
+  }, 5000);
+}
 
 // ════════════════════════════════════════════
 // WEBSUB / PUBSUBHUBBUB

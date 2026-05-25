@@ -28,6 +28,7 @@
     color: var(--text);
     font-family: 'Barlow', sans-serif;
     height: 100vh;
+    height: 100dvh; /* dvh accounts for browser chrome on mobile/Xbox */
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -36,6 +37,7 @@
   /* ── TOP: VIDEO AREA (80%) ── */
   #video-area {
     flex: 0 0 80vh;
+    flex: 0 0 80dvh;
     position: relative;
     background: #000;
     overflow: hidden;
@@ -140,6 +142,7 @@
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
     flex: 0 0 20vh;
+    flex: 0 0 20dvh;
     background: var(--surface);
     border-top: 1px solid var(--border);
     display: flex;
