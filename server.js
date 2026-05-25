@@ -924,7 +924,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
 
         const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub' };
         cache.liveStatuses[channelId] = wsEntry;
-        cache.lastLiveCheck = Date.now();
+        cache.lastLiveCheck = Date.now(); // update global timestamp on every WebSub check
         rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
         rSet('wt:lastLive', cache.lastLiveCheck);
 
@@ -1234,10 +1234,27 @@ app.get('/api/admin/cache/status', (req, res) => {
   const playlistCached = Object.keys(cache.playlist).length;
   const recentCached = Object.keys(cache.recentVideos).length;
   const liveCached = Object.keys(cache.liveStatuses).length;
+
+  // Derive lastFetch from most recently cached video if global timestamp is missing
+  let lastFetch = cache.lastRecentFetch;
+  if (!lastFetch && recentCached > 0) {
+    const timestamps = Object.values(cache.recentVideos)
+      .map(v => v.cachedAt).filter(Boolean);
+    if (timestamps.length > 0) lastFetch = Math.max(...timestamps);
+  }
+
+  // Derive lastLiveCheck from most recently checked live status if global is missing
+  let lastLiveCheck = cache.lastLiveCheck;
+  if (!lastLiveCheck && liveCached > 0) {
+    const timestamps = Object.values(cache.liveStatuses)
+      .map(v => v.checkedAt).filter(Boolean);
+    if (timestamps.length > 0) lastLiveCheck = Math.max(...timestamps);
+  }
+
   res.json({
     playlist: { entries: playlistCached, ttlHours: 48 },
-    recentVideos: { entries: recentCached, ttlHours: 24, lastFetch: cache.lastRecentFetch },
-    liveStatuses: { entries: liveCached, lastChecked: cache.lastLiveCheck },
+    recentVideos: { entries: recentCached, ttlHours: 24, lastFetch },
+    liveStatuses: { entries: liveCached, lastChecked: lastLiveCheck },
     websubActive: cache.websubActive,
     quotaExceeded
   });
