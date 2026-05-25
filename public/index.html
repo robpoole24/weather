@@ -80,7 +80,7 @@
     position: absolute;
     border-radius: 50%;
     border: 2px solid rgba(0,180,216,0.35);
-    animation: radarPulse 3s ease-out infinite;
+    animation: radarPulse 4.5s ease-out infinite;
   }
   @keyframes radarPulse {
     0% { transform: scale(0.3); opacity: 0.8; }
@@ -551,10 +551,11 @@
   <div id="video-placeholder">
     <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:0s"></div>
-      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:1s"></div>
-      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:2s"></div>
+      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:1.5s"></div>
+      <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:3s"></div>
     </div>
     <img src="images/weathertv-logo.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:1;" />
+    <div id="channel-hint" style="position:absolute;bottom:1.25rem;left:0;right:0;text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);letter-spacing:0.12em;text-transform:uppercase;z-index:3;">Select a channel below to begin</div>
   </div>
 
   <!-- Video frame wrapper with optional live chat panel -->
@@ -587,7 +588,6 @@
   </div>
 
   <!-- Panels -->
-  <div id="channel-hint" style="text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.85rem;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;padding:0.25rem 0;flex-shrink:0;">Select a channel below to begin</div>
   <div id="panels">
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
