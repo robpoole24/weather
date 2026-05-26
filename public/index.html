@@ -47,21 +47,7 @@
     background: #000;
     overflow: hidden;
   }
-  /* On mobile give more space to control bar */
-  @media (max-width: 767px) {
-    #video-area { flex: 0 0 52vh; }
-    #control-bar { flex: 1; min-height: 0; }
-    .channel-card { min-width: 120px; max-width: 160px; padding: 0.3rem 0.5rem; }
-    .channel-name { font-size: 0.78rem; }
-    .ch-btn { padding: 0.22rem 0.4rem; font-size: 0.62rem; min-height: 26px; }
-    #main-nav { padding: 0.35rem 0.6rem; gap: 0.35rem; }
-    .nav-btn { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
-    #status-bar { padding: 0.2rem 0.6rem; gap: 0.4rem; }
-    .status-item { font-size: 0.62rem; }
-    /* Hide live chat on phones — screen too small to be useful */
-    #live-chat-btn { display: none !important; }
-    #live-chat-panel { display: none !important; }
-  }
+  /* On mobile give more space to control bar — handled in main media query below */
 
   #video-frame {
     width: 100%;
@@ -95,6 +81,29 @@
   #video-placeholder p {
     color: var(--muted);
     font-size: 1.1rem;
+  }
+
+  /* Portrait phone — fixed control bar, horizontal card layout */
+  @media (max-width: 767px) and (orientation: portrait) {
+    #video-area { flex: 1; min-height: 0; }
+    #control-bar { flex: 0 0 155px; }
+    #main-nav { padding: 0.25rem 0.5rem; gap: 0.3rem; }
+    .nav-btn { padding: 0.25rem 0.55rem; font-size: 0.7rem; }
+    .channel-card {
+      min-width: 110px; max-width: 145px;
+      padding: 0.2rem 0.35rem;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.25rem;
+    }
+    .channel-name { font-size: 0.7rem; margin-bottom: 0; flex-shrink: 1; min-width: 0; }
+    .channel-btns { flex-direction: column; gap: 0.15rem; flex-shrink: 0; }
+    .ch-btn { padding: 0.18rem 0.3rem; font-size: 0.56rem; min-height: 20px; white-space: nowrap; }
+    #status-bar { padding: 0.15rem 0.5rem; gap: 0.3rem; }
+    .status-item { font-size: 0.56rem; }
+    #live-chat-btn { display: none !important; }
+    #live-chat-panel { display: none !important; }
   }
 
   /* Landscape orientation on mobile phones — stacked but compact */
