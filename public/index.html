@@ -1,5 +1,6 @@
 <!-- WeatherTV App — updated 2026-05-25 -->
 <!-- WeatherTV App — updated 2026-05-25 -->
+<!-- WeatherTV App — updated 2026-05-25 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -118,6 +119,10 @@
     animation: blink 1s step-end infinite;
   }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  @keyframes livePulse {
+    0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 4px var(--red); }
+    50% { opacity: 0.4; transform: scale(0.65); box-shadow: 0 0 8px var(--red); }
+  }
 
   #channel-label {
     position: absolute;
@@ -604,13 +609,13 @@
   <!-- Main nav -->
   <div id="main-nav">
     <!-- Group buttons injected here dynamically by buildNavButtons() -->
-    <button id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)">
-      <span style="width:7px;height:7px;border-radius:50%;background:var(--red);animation:livePulse 1s ease-in-out infinite;flex-shrink:0;box-shadow:0 0 4px var(--red);display:inline-block;"></span>
-      LIVE NOW
+    <!-- Live Now appears after group buttons, before fixed buttons -->
+    <button id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)" style="display:none;">
+      <span class="live-dot" style="margin-right:4px;"></span>LIVE NOW
     </button>
-    <button class="nav-btn" onclick="showPanel('weatherstar', event)">📺 WeatherStar 4000+</button>
+    <button class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto">📺 WeatherStar 4000+</button>
     <button class="nav-btn" onclick="showPanel('playlist', event)">▶ Weather Playlist</button>
-    <button class="nav-btn" onclick="showPanel('apps', event)" style="margin-left:auto">📱 Weather Apps</button>
+    <button class="nav-btn" onclick="showPanel('apps', event)">📱 Weather Apps</button>
   </div>
 
   <!-- Panels -->
@@ -867,12 +872,11 @@ async function loadGroupsFromServer() {
 // Build nav buttons dynamically from loaded groups
 function buildNavButtons() {
   const nav = document.getElementById('main-nav');
-  // Remove existing group buttons (keep weatherstar, playlist, apps)
+  // Remove existing group buttons
   nav.querySelectorAll('.nav-btn.group-btn').forEach(b => b.remove());
 
-  // Insert group buttons before the fixed buttons
-  const fixedBtns = nav.querySelectorAll('.nav-btn:not(.group-btn)');
-  const firstFixed = fixedBtns[0];
+  // Insert group buttons before the Live Now button
+  const liveNowBtn = document.getElementById('live-now-btn');
 
   GROUPS.forEach(group => {
     const btn = document.createElement('button');
@@ -880,7 +884,7 @@ function buildNavButtons() {
     btn.textContent = group.icon + ' ' + group.label;
     btn.dataset.group = group.id;
     btn.onclick = (e) => showPanel(group.id, e);
-    nav.insertBefore(btn, firstFixed);
+    nav.insertBefore(btn, liveNowBtn);
   });
 }
 
@@ -1668,7 +1672,7 @@ function buildLiveNowPanel(liveChannels) {
   const panel = document.getElementById('live-now-panel');
   if (!panel) return;
   panel.innerHTML = '';
-  panel.style.display = 'flex';
+  // Don't set display here — showPanel handles visibility
 
   const ret = document.createElement('button');
   ret.className = 'return-btn';
@@ -1747,12 +1751,14 @@ async function checkAllLiveStatuses() {
     const liveNowBtn = document.getElementById('live-now-btn');
     if (liveNowBtn) {
       if (liveCount > 0) {
-        liveNowBtn.classList.add('visible');
+        liveNowBtn.style.display = 'inline-flex';
         buildLiveNowPanel(liveChannels);
       } else {
-        liveNowBtn.classList.remove('visible');
-        // If Live Now panel was active, close it
-        if (activePanel === 'live-now') closePanel('live-now');
+        liveNowBtn.style.display = 'none';
+        if (activePanel === 'live-now') {
+          // Switch to first group panel if live-now closes
+          if (GROUPS.length > 0) showPanel(GROUPS[0].id, null);
+        }
       }
     }
 
