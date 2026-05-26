@@ -924,15 +924,21 @@ function buildChannelPanels() {
 function showPanel(name, e) {
   // Update nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]');
+  const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
   if (btn) btn.classList.add('active');
 
-  // Hide all panels
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  // Hide ALL panels including live-now-panel (reset inline styles too)
+  document.querySelectorAll('.panel').forEach(p => {
+    p.classList.remove('active');
+    p.style.display = 'none';
+  });
 
-  // Show selected
+  // Show selected panel
   const panel = document.getElementById(name + '-panel');
-  if (panel) panel.classList.add('active');
+  if (panel) {
+    panel.style.display = 'flex';
+    panel.classList.add('active');
+  }
   activePanel = name;
 
   // Close any recent overlay
@@ -945,14 +951,8 @@ function showPanel(name, e) {
   if (name === 'playlist') {
     loadPlaylist();
   }
-  if (name === 'live-now') {
-    // Panel already built by checkAllLiveStatuses — just ensure visible
-    const livePanel = document.getElementById('live-now-panel');
-    if (livePanel) livePanel.style.display = 'flex';
-  }
 
   // Add channel list arrows when a group panel is shown
-  // Must run after panel is visible so scrollWidth measures correctly
   const isGroup = GROUPS.some(g => g.id === name);
   if (isGroup) {
     setTimeout(() => addChannelListArrows(name), 50);
