@@ -1,6 +1,6 @@
 # WeatherTV 🌩️
 
-A curated weather content app with live YouTube channel integration, WeatherStar 4000+ passthrough, and a weather playlist viewer.
+A curated weather content app with live YouTube channel integration, WeatherStar 4000+ passthrough, and a weather playlist viewer. 
 
 ---
 
