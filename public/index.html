@@ -87,13 +87,26 @@
     font-size: 1.1rem;
   }
 
-  /* Landscape orientation adjustments */
+  /* Landscape orientation on mobile phones */
   @media (orientation: landscape) and (max-height: 500px) {
-    #video-area { flex: 2; }
-    #control-bar { flex: 1; }
-    .placeholder-logo { width: min(260px, 50%) !important; }
-    #channel-hint { bottom: 0.4rem !important; font-size: 0.65rem !important; }
+    body { flex-direction: row; }
+    #video-area { flex: 1; min-width: 0; }
+    #control-bar {
+      flex: 0 0 55%;
+      border-top: none;
+      border-left: 1px solid var(--border);
+      flex-direction: column;
+    }
+    .placeholder-logo { width: min(200px, 80%) !important; }
+    #channel-hint { bottom: 0.3rem !important; font-size: 0.6rem !important; }
     .radar-ring { display: none; }
+    #status-bar { font-size: 0.6rem; padding: 0.2rem 0.5rem; gap: 0.4rem; }
+    .status-item { font-size: 0.6rem; }
+    #main-nav { padding: 0.3rem 0.5rem; gap: 0.4rem; }
+    .nav-btn { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+    .channel-card { min-width: 130px; padding: 0.3rem 0.5rem; }
+    .channel-name { font-size: 0.8rem; margin-bottom: 0.2rem; }
+    .ch-btn { padding: 0.2rem 0.4rem; font-size: 0.65rem; min-height: 26px; }
   }
 
   /* Radar animation behind placeholder */
