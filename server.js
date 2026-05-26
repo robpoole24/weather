@@ -119,17 +119,18 @@ function getDefaultData() {
         label: 'Weather Forecasters',
         icon: '⛅',
         channels: [
-          { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true,
-            collections: [
               { id: 'max-chasers', label: 'Exclusive Chasers', enabled: false }
             ]
           },
-          { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true,
-            collections: [
               { id: 'ryan-chasers', label: 'Exclusive Chasers', enabled: false }
             ]
           },
+          { id: 'UCuYqi3hOfz6-3Hdp6tEJjAg', name: 'AccuWeather',         hasLive: true,  enabled: true },
           { id: 'UCp2G_jHO53yj2NVjv8zbDmQ', name: 'Evan Fryberger',    hasLive: true,  enabled: true },
+          { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true,
+            collections: [
+          { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true,
+            collections: [
           { id: 'UCBtR7ynKM9odz-PW_7uyzDw', name: 'Severe Studios',    hasLive: true,  enabled: true },
         ]
       },
@@ -219,6 +220,7 @@ function getDefaultData() {
           { id: 'UCZTme3vf6kXmXfSsIr06lvQ', name: 'Swegle Studios',         hasLive: false, enabled: true },
           { id: 'UCVdfIdcYEQfUJ9bpmGMaK4Q', name: 'The Old Callisto', hasLive: false, enabled: true },
           { id: 'UCbxfONPDpv4r3IXwppgcTdA', name: 'The Twister Archives',   hasLive: false, enabled: true },
+          { id: 'UCGTUbwceCMibvpbd2NaIP7A', name: 'The Weather Channel', hasLive: false, enabled: true },
           { id: 'UC0CPqIPMHCELm208KiwBwdw', name: 'Tornado Forensics',      hasLive: false, enabled: true },
           { id: 'UC9c4E_DWmPMel1MelOBTznw', name: 'Tornado Video Library',  hasLive: false, enabled: true },
           { id: 'UCgGTo_tNrWxArxh3c3aI6bw', name: 'Tornado Warned',         hasLive: false, enabled: true },
@@ -1192,10 +1194,24 @@ app.get('/api/yt/playlist/:playlistId', async (req, res) => {
       markQuotaExceeded();
       return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
     }
-    const plEntry = { items: data.items || [], cachedAt: Date.now() };
+    // Filter out deleted and private videos — they return with generic titles
+    const allItems = data.items || [];
+    const validItems = allItems.filter(item => {
+      const title = item.snippet && item.snippet.title;
+      if (!title) return false;
+      if (title === 'Deleted video' || title === 'Private video') return false;
+      // Also filter if thumbnail is missing (another sign of deleted/private)
+      const thumb = item.snippet && item.snippet.thumbnails;
+      if (!thumb || Object.keys(thumb).length === 0) return false;
+      return true;
+    });
+    if (allItems.length !== validItems.length) {
+      console.log('[WeatherTV] Playlist: filtered ' + (allItems.length - validItems.length) + ' deleted/private videos (' + validItems.length + ' valid)');
+    }
+    const plEntry = { items: validItems, cachedAt: Date.now() };
     cache.playlist[playlistId] = plEntry;
     rSet('wt:playlist:' + playlistId, plEntry, REDIS_TTL.playlist);
-    res.json(data);
+    res.json({ ...data, items: validItems });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
