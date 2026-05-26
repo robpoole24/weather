@@ -87,26 +87,20 @@
     font-size: 1.1rem;
   }
 
-  /* Landscape orientation on mobile phones */
+  /* Landscape orientation on mobile phones — stacked but compact */
   @media (orientation: landscape) and (max-height: 500px) {
-    body { flex-direction: row; }
-    #video-area { flex: 1; min-width: 0; }
-    #control-bar {
-      flex: 0 0 55%;
-      border-top: none;
-      border-left: 1px solid var(--border);
-      flex-direction: column;
-    }
-    .placeholder-logo { width: min(200px, 80%) !important; }
-    #channel-hint { bottom: 0.3rem !important; font-size: 0.6rem !important; }
+    #video-area { flex: 0 0 52vh; }
+    #control-bar { flex: 1; min-height: 0; }
+    .placeholder-logo { width: min(180px, 40%) !important; }
+    #channel-hint { bottom: 0.2rem !important; font-size: 0.6rem !important; }
     .radar-ring { display: none; }
-    #status-bar { font-size: 0.6rem; padding: 0.2rem 0.5rem; gap: 0.4rem; }
-    .status-item { font-size: 0.6rem; }
-    #main-nav { padding: 0.3rem 0.5rem; gap: 0.4rem; }
-    .nav-btn { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+    #status-bar { padding: 0.15rem 0.75rem; gap: 0.5rem; }
+    .status-item { font-size: 0.62rem; }
+    #main-nav { padding: 0.3rem 0.75rem; gap: 0.4rem; }
+    .nav-btn { padding: 0.25rem 0.7rem; font-size: 0.75rem; }
     .channel-card { min-width: 130px; padding: 0.3rem 0.5rem; }
     .channel-name { font-size: 0.8rem; margin-bottom: 0.2rem; }
-    .ch-btn { padding: 0.2rem 0.4rem; font-size: 0.65rem; min-height: 26px; }
+    .ch-btn { padding: 0.2rem 0.4rem; font-size: 0.62rem; min-height: 26px; }
   }
 
   /* Radar animation behind placeholder */
@@ -1103,18 +1097,7 @@ function buildChannelLists() {
     if (!list) return;
     list.innerHTML = '';
 
-    // Return button
-    const ret = document.createElement('button');
-    ret.className = 'return-btn';
-    ret.style.flexShrink = '0';
-    ret.textContent = '← Back';
-    ret.onclick = () => closePanel(group.id);
-    list.appendChild(ret);
-
-    const div = document.createElement('div');
-    div.className = 'divider';
-    div.style.flexShrink = '0';
-    list.appendChild(div);
+    // No back button — nav group buttons handle switching between groups
 
     const allGroupChannels = CHANNELS[group.id] || [];
     const allChannels = GROUPS.flatMap(g => g.channels || []);
@@ -1326,13 +1309,6 @@ function showCollection(parentCh, collection) {
 // ═══════════════════════════════════════════
 function buildAppsPanel() {
   const panel = document.getElementById('apps-panel');
-
-  const ret = document.createElement('button');
-  ret.className = 'return-btn';
-  ret.style.flexShrink = '0';
-  ret.textContent = '← Back';
-  ret.onclick = () => closePanel('apps');
-  panel.appendChild(ret);
 
   const div = document.createElement('div');
   div.className = 'divider';
@@ -1817,17 +1793,7 @@ function buildLiveNowPanel(liveChannels) {
   panel.innerHTML = '';
   // Don't set display here — showPanel handles visibility
 
-  const ret = document.createElement('button');
-  ret.className = 'return-btn';
-  ret.style.flexShrink = '0';
-  ret.textContent = '← Back';
-  ret.onclick = () => closePanel('live-now');
-  panel.appendChild(ret);
-
-  const div = document.createElement('div');
-  div.className = 'divider';
-  div.style.flexShrink = '0';
-  panel.appendChild(div);
+  // No back button — use nav buttons to switch away from Live Now
 
   liveChannels.forEach(ch => {
     const card = document.createElement('div');
