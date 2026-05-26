@@ -1,3 +1,5 @@
+<!-- WeatherTV App — updated 2026-05-26 -->
+<!-- WeatherTV App — updated 2026-05-26 -->
 <!-- WeatherTV App — updated 2026-05-25 -->
 <!-- WeatherTV App — updated 2026-05-25 -->
 <!-- WeatherTV App — updated 2026-05-25 -->
@@ -5,7 +7,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#050a0f">
 <title>Weather TV</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
@@ -37,13 +43,18 @@
     overflow: hidden;
   }
 
-  /* ── TOP: VIDEO AREA (80%) ── */
+  /* ── TOP: VIDEO AREA ── */
   #video-area {
-    flex: 4;  /* takes 4/5 of available space = 80% */
+    flex: 4;
     min-height: 0;
     position: relative;
     background: #000;
     overflow: hidden;
+  }
+  /* On mobile give more space to control bar */
+  @media (max-width: 768px) {
+    #video-area { flex: 3; }
+    #control-bar { flex: 2; }
   }
 
   #video-frame {
@@ -160,11 +171,18 @@
   /* Main nav buttons */
   #main-nav {
     display: flex;
-    padding: 0.75rem 1rem;
-    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    gap: 0.5rem;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
   }
+  #main-nav::-webkit-scrollbar { display: none; }
 
   .nav-btn {
     font-family: 'Barlow Condensed', sans-serif;
@@ -172,7 +190,7 @@
     font-size: 0.85rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    padding: 0.5rem 1.25rem;
+    padding: 0.5rem 1rem;
     border: 1px solid var(--border);
     background: transparent;
     color: var(--muted);
@@ -180,8 +198,14 @@
     cursor: pointer;
     transition: all 0.2s;
     white-space: nowrap;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: rgba(0,180,216,0.2);
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .nav-btn:active { border-color: var(--accent); color: var(--accent); }
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
 
   /* Panels */
@@ -240,7 +264,10 @@
     padding: 0.5rem 0.75rem;
     min-width: 160px;
     cursor: default;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
+  .channel-card:active { border-color: var(--accent); }
 
   .channel-name {
     font-family: 'Barlow Condensed', sans-serif;
@@ -254,6 +281,7 @@
   .channel-btns {
     display: flex;
     gap: 0.4rem;
+    flex-wrap: nowrap;
   }
 
   .ch-btn {
@@ -262,11 +290,16 @@
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    padding: 0.25rem 0.6rem;
+    padding: 0.35rem 0.6rem;
     border-radius: 3px;
     cursor: pointer;
     transition: all 0.2s;
     border: none;
+    min-height: 30px;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .ch-btn.live {
@@ -437,18 +470,27 @@
   #status-bar {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    padding: 0.3rem 1rem;
+    gap: 0.6rem;
+    padding: 0.25rem 0.75rem;
     background: var(--bg);
     border-top: 1px solid var(--border);
     flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
   }
+  #status-bar::-webkit-scrollbar { display: none; }
 
   .status-item {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     color: var(--muted);
     font-family: 'Barlow Condensed', sans-serif;
     letter-spacing: 0.05em;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .status-dot {
@@ -457,6 +499,54 @@
     border-radius: 50%;
     background: var(--green);
     margin-right: 4px;
+  }
+
+  /* Skip to content link (screen readers / keyboard nav) */
+  .skip-link {
+    position: absolute;
+    top: -100px;
+    left: 0;
+    background: var(--accent);
+    color: #000;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+    padding: 0.5rem 1rem;
+    text-decoration: none;
+    z-index: 9999;
+    border-radius: 0 0 4px 0;
+    transition: top 0.1s;
+  }
+  .skip-link:focus { top: 0; }
+
+  /* Focus styles — visible keyboard navigation indicators */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(0,180,216,0.2);
+  }
+  /* Remove default focus for mouse users, keep for keyboard */
+  :focus:not(:focus-visible) { outline: none; }
+
+  /* Reduced motion — disable all animations for users who prefer it */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+    .live-dot, .radar-ring, #live-now-btn { animation: none !important; }
+  }
+
+  /* High contrast mode support */
+  @media (forced-colors: active) {
+    .ch-btn, .nav-btn { border: 2px solid ButtonText; }
+    .ch-btn.live { border: 2px solid red; }
+    .nav-btn.active { background: Highlight; color: HighlightText; }
   }
 
   /* Loading spinner */
@@ -567,10 +657,12 @@
 </head>
 <body>
 
+<a href="#panels" class="skip-link">Skip to channel list</a>
+
 <!-- ═══════════════════════════════════════════
      VIDEO AREA
 ════════════════════════════════════════════ -->
-<div id="video-area">
+<div id="video-area" role="main" aria-label="Video player">
   <div id="live-badge">LIVE</div>
   <div id="channel-label"></div>
 
@@ -595,7 +687,7 @@
       </iframe>
     </div>
     <div id="live-chat-panel">
-      <button id="chat-close-btn" onclick="closeLiveChat()">✕ Hide Chat</button>
+      <button type="button" id="chat-close-btn" onclick="closeLiveChat()">✕ Hide Chat</button>
       <iframe id="chat-frame" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media"></iframe>
     </div>
   </div>
@@ -604,22 +696,22 @@
 <!-- ═══════════════════════════════════════════
      CONTROL BAR
 ════════════════════════════════════════════ -->
-<div id="control-bar">
+<div id="control-bar" role="region" aria-label="Channel navigation">
 
   <!-- Main nav -->
-  <div id="main-nav">
+  <nav id="main-nav" aria-label="Channel groups">
     <!-- Group buttons injected here dynamically by buildNavButtons() -->
     <!-- Live Now appears after group buttons, before fixed buttons -->
-    <button id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)" style="display:none;">
-      <span class="live-dot" style="margin-right:4px;"></span>LIVE NOW
+    <button type="button" id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)" style="display:none;" aria-label="View live channels">
+      <span class="live-dot" style="margin-right:4px;" aria-hidden="true"></span>LIVE NOW
     </button>
-    <button class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto">📺 WeatherStar 4000+</button>
-    <button class="nav-btn" onclick="showPanel('playlist', event)">▶ Weather Playlist</button>
-    <button class="nav-btn" onclick="showPanel('apps', event)">📱 Weather Apps</button>
-  </div>
+    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto" aria-label="WeatherStar 4000 plus weather display">📺 WeatherStar 4000+</button>
+    <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
+    <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
+  </nav>
 
   <!-- Panels -->
-  <div id="panels">
+  <div id="panels" role="region" aria-label="Channel list">
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
 
@@ -662,7 +754,7 @@
   </div>
 
   <!-- Status bar -->
-  <div id="status-bar">
+  <div id="status-bar" role="status" aria-live="polite" aria-atomic="false">
     <span class="status-item"><span class="status-dot"></span>WeatherTV v1.0</span>
     <span class="status-item status-divider">|</span>
     <span class="status-item" id="live-count-status">0 Channels Currently Live</span>
@@ -672,7 +764,7 @@
     <span class="status-item" id="video-update-status">Recent Videos: —</span>
     <span class="status-item status-divider">|</span>
     <span class="status-item" id="time-display"></span>
-    <button class="about-btn" onclick="showAbout()">About</button>
+    <button type="button" class="about-btn" onclick="showAbout()">About</button>
   </div>
 
 </div>
@@ -699,7 +791,7 @@
     position:relative;
     box-shadow:0 8px 40px rgba(0,0,0,0.6);
   ">
-    <button onclick="hideAbout()" style="
+    <button type="button" onclick="hideAbout()" style="
       position:absolute;top:1rem;right:1rem;
       background:transparent;border:none;
       color:var(--muted);font-size:1.2rem;
@@ -783,7 +875,7 @@
     </div>
 
     <div style="text-align:center;margin-top:1.5rem">
-      <button onclick="hideAbout()" style="
+      <button type="button" onclick="hideAbout()" style="
         font-family:'Barlow Condensed',sans-serif;font-weight:700;
         font-size:0.85rem;letter-spacing:0.1em;text-transform:uppercase;
         padding:0.5rem 2rem;background:var(--accent);
@@ -900,13 +992,15 @@ function buildChannelPanels() {
     const panel = document.createElement('div');
     panel.className = 'panel group-panel';
     panel.id = group.id + '-panel';
-    panel.style.cssText = 'display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;';
+    panel.setAttribute('role', 'region');
+  panel.setAttribute('aria-label', group.label + ' channels');
+  panel.style.cssText = 'display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;';
 
     // Simple scrollable list — arrows added after channels are populated
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
-    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;';
+    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;';
     panel.appendChild(list);
 
     // Insert before the weatherstar panel
@@ -1044,7 +1138,8 @@ function buildChannelLists() {
           const liveBtn = document.createElement('button');
           liveBtn.className = 'ch-btn live';
           liveBtn.id = 'live-' + ch.id;
-          liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
+          liveBtn.innerHTML = '<span class="live-dot" aria-hidden="true"></span>LIVE';
+          liveBtn.setAttribute('aria-label', 'Watch ' + ch.name + ' live stream');
           liveBtn.style.display = 'none'; // hidden until API confirms live
           liveBtn.onclick = () => playLive(ch);
           btns.appendChild(liveBtn);
@@ -1054,6 +1149,7 @@ function buildChannelLists() {
         const recentBtn = document.createElement('button');
         recentBtn.className = 'ch-btn recent';
         recentBtn.textContent = 'RECENT ▸';
+        recentBtn.setAttribute('aria-label', 'Recent videos from ' + ch.name);
         recentBtn.onclick = () => showRecent(ch, group.id);
         btns.appendChild(recentBtn);
 
@@ -1061,6 +1157,7 @@ function buildChannelLists() {
         const subBtn = document.createElement('button');
         subBtn.className = 'ch-btn subscribe';
         subBtn.innerHTML = 'Subscribe';
+        subBtn.setAttribute('aria-label', 'Subscribe to ' + ch.name + ' on YouTube');
         subBtn.title = 'Subscribe to ' + ch.name + ' on YouTube';
         subBtn.onclick = () => {
           window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener');
@@ -1594,7 +1691,7 @@ async function showRecent(ch, group) {
   overlay.innerHTML = `
     <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:120px">
       <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--accent);text-transform:uppercase;letter-spacing:0.06em">${ch.name}</div>
-      <button class="return-btn" onclick="closeRecentOverlay(this)">← Back</button>
+      <button type="button" class="return-btn" onclick="closeRecentOverlay(this)">← Back</button>
       <a href="https://www.youtube.com/channel/${ch.id}" target="_blank" rel="noopener"
         style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gold);text-decoration:none;padding:0.25rem 0;display:block;"
         onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
@@ -1690,8 +1787,11 @@ function buildLiveNowPanel(liveChannels) {
     const card = document.createElement('div');
     card.className = 'channel-card';
 
+    card.setAttribute('aria-label', ch.name + ' channel');
+
     const nameEl = document.createElement('div');
     nameEl.className = 'channel-name';
+    nameEl.setAttribute('aria-hidden', 'true');
     nameEl.textContent = ch.name;
     card.appendChild(nameEl);
 
@@ -1701,7 +1801,8 @@ function buildLiveNowPanel(liveChannels) {
     const liveBtn = document.createElement('button');
     liveBtn.className = 'ch-btn live';
     liveBtn.style.display = 'inline-flex';
-    liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
+    liveBtn.innerHTML = '<span class="live-dot" aria-hidden="true"></span>LIVE';
+    liveBtn.setAttribute('aria-label', 'Watch ' + ch.name + ' live stream');
     liveBtn.onclick = () => { playLive(ch); closePanel('live-now'); };
     btns.appendChild(liveBtn);
 
