@@ -718,7 +718,10 @@ async function reorderChannel(groupId, channelId, direction) {
     method:'PUT', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ channelId, direction })
   });
-  await loadData();
+  // Re-fetch data and re-render keeping groups open
+  const res = await fetch('/api/admin/config');
+  appData = await res.json();
+  renderGroups();
 }
 
 // ── Collections ──

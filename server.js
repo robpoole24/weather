@@ -310,6 +310,22 @@ app.post('/api/admin/groups/:groupId/channels', (req, res) => {
 });
 
 // Update channel
+app.put('/api/admin/groups/:groupId/channels/reorder', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const { channelId, direction } = req.body;
+  const idx = group.channels.findIndex(c => c.id === channelId);
+  if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= group.channels.length) return res.json({ ok: true });
+  const tmp = group.channels[idx];
+  group.channels[idx] = group.channels[newIdx];
+  group.channels[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
 app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
   const data = loadData();
   const group = data.groups.find(g => g.id === req.params.groupId);
@@ -332,22 +348,6 @@ app.delete('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
 });
 
 // Reorder channels within a group
-app.put('/api/admin/groups/:groupId/channels/reorder', (req, res) => {
-  const data = loadData();
-  const group = data.groups.find(g => g.id === req.params.groupId);
-  if (!group) return res.status(404).json({ error: 'Group not found' });
-  const { channelId, direction } = req.body;
-  const idx = group.channels.findIndex(c => c.id === channelId);
-  if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
-  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-  if (newIdx < 0 || newIdx >= group.channels.length) return res.json({ ok: true });
-  const tmp = group.channels[idx];
-  group.channels[idx] = group.channels[newIdx];
-  group.channels[newIdx] = tmp;
-  saveData(data);
-  res.json({ ok: true });
-});
-
 // Add group
 app.post('/api/admin/groups', (req, res) => {
   const data = loadData();
