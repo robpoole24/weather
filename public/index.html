@@ -87,6 +87,15 @@
     font-size: 1.1rem;
   }
 
+  /* Landscape orientation adjustments */
+  @media (orientation: landscape) and (max-height: 500px) {
+    #video-area { flex: 2; }
+    #control-bar { flex: 1; }
+    .placeholder-logo { width: min(260px, 50%) !important; }
+    #channel-hint { bottom: 0.4rem !important; font-size: 0.65rem !important; }
+    .radar-ring { display: none; }
+  }
+
   /* Radar animation behind placeholder */
   .radar-ring {
     position: absolute;
@@ -670,7 +679,7 @@
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:3s"></div>
     </div>
     <img src="images/weathertv-logo.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:1;" />
-    <div id="channel-hint" style="position:absolute;bottom:1.25rem;left:0;right:0;text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);letter-spacing:0.12em;text-transform:uppercase;z-index:3;">Select a channel below to begin</div>
+    <div id="channel-hint" style="position:absolute;bottom:1.25rem;left:0;right:0;text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);letter-spacing:0.12em;text-transform:uppercase;z-index:3;transition:opacity 0.2s;">Select a channel below to begin</div>
   </div>
 
   <!-- Video frame wrapper with optional live chat panel -->
@@ -1459,7 +1468,19 @@ function loadIframe(src, label, isLive) {
     frame.style.background = '#000000';
   }
 
-  frame.src = src;
+  // Forcibly replace the iframe element to immediately kill any playing video
+  // Setting src='' is not enough on all browsers — recreation is the only reliable method
+  const newFrame = document.createElement('iframe');
+  newFrame.id = 'video-frame';
+  newFrame.allow = frame.allow;
+  newFrame.allowFullscreen = true;
+  newFrame.style.cssText = frame.style.cssText;
+  newFrame.style.width = '100%';
+  newFrame.style.height = '100%';
+  newFrame.style.border = 'none';
+  newFrame.style.display = 'block';
+  frame.parentNode.replaceChild(newFrame, frame);
+  newFrame.src = src;
 
   const badge = document.getElementById('live-badge');
   const labelEl = document.getElementById('channel-label');
@@ -1484,14 +1505,20 @@ function clearVideo() {
   const placeholder = document.getElementById('video-placeholder');
   const areaInner = document.getElementById('video-area-inner');
   const wrapper = document.getElementById('video-wrapper');
-  const frame = document.getElementById('video-frame');
   placeholder.style.display = 'flex';
   areaInner.style.display = 'none';
-  frame.src = '';
-  frame.style.marginTop = '0';
-  frame.style.height = '100%';
   wrapper.style.background = '#000000';
-  frame.style.background = '#000000';
+  // Replace iframe to fully stop any playing video
+  const frame = document.getElementById('video-frame');
+  if (frame) {
+    const newFrame = document.createElement('iframe');
+    newFrame.id = 'video-frame';
+    newFrame.allow = frame.allow;
+    newFrame.allowFullscreen = true;
+    newFrame.style.cssText = 'width:100%;height:100%;border:none;display:block;background:#000;';
+    newFrame.src = '';
+    frame.parentNode.replaceChild(newFrame, frame);
+  }
   document.getElementById('live-badge').classList.remove('visible');
   document.getElementById('channel-label').classList.remove('visible');
   closeLiveChat();
@@ -1499,12 +1526,22 @@ function clearVideo() {
 }
 
 async function playLive(ch) {
-  // Button only shown when confirmed live, go straight to playback
-  const url = 'https://www.youtube.com/embed/live_stream?channel=' + ch.id + '&autoplay=1';
-  loadIframe(url, ch.name + ' • LIVE', true);
   closeRecentOverlay();
+  closeLiveChat();
 
-  // Show chat button in the bottom bar
+  // Use stored videoId if available (more reliable than live_stream?channel=)
+  // Fall back to live_stream channel embed if no videoId cached
+  const status = liveStatuses[ch.id];
+  const videoId = status && typeof status === 'object' ? status.videoId : null;
+
+  let url;
+  if (videoId && videoId !== 'live') {
+    url = 'https://www.youtube.com/embed/' + videoId + '?autoplay=1&rel=0';
+  } else {
+    url = 'https://www.youtube.com/embed/live_stream?channel=' + ch.id + '&autoplay=1';
+  }
+
+  loadIframe(url, ch.name + ' • LIVE', true);
   showChatButton(ch);
 }
 
@@ -1830,7 +1867,8 @@ async function checkAllLiveStatuses() {
       if (!ch.hasLive) return;
       const status = data.statuses && data.statuses[ch.id];
       const isLive = status ? status.isLive : false;
-      liveStatuses[ch.id] = isLive;
+      // Store full status object including videoId, not just boolean
+      liveStatuses[ch.id] = isLive ? (data.statuses[ch.id] || true) : false;
       updateLiveButton(ch.id, isLive);
       if (isLive) {
         liveCount++;
