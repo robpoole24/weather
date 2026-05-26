@@ -1,4 +1,5 @@
 <!-- WeatherTV App — updated 2026-05-25 -->
+<!-- WeatherTV App — updated 2026-05-25 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -264,10 +265,13 @@
   }
 
   .ch-btn.live {
-    background: var(--red);
-    color: white;
+    background: #0a0e14;
+    color: var(--red);
+    border: 1px solid var(--red) !important;
+    font-weight: 800;
+    letter-spacing: 0.12em;
   }
-  .ch-btn.live:hover { background: #c1121f; }
+  .ch-btn.live:hover { background: var(--red); color: white; }
   .ch-btn.live:disabled {
     background: rgba(230,57,70,0.2);
     color: rgba(230,57,70,0.4);
@@ -283,12 +287,26 @@
   /* Live indicator dot */
   .live-dot {
     display: inline-block;
-    width: 6px; height: 6px;
+    width: 7px; height: 7px;
     background: var(--red);
     border-radius: 50%;
     margin-right: 4px;
-    animation: blink 1s step-end infinite;
+    box-shadow: 0 0 5px var(--red);
+    animation: livePulse 1s ease-in-out infinite;
   }
+
+  /* Live Now nav button */
+  #live-now-btn {
+    background: #0a0e14;
+    color: var(--red);
+    border-color: var(--red) !important;
+    display: none;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  #live-now-btn.visible { display: flex; }
+  #live-now-btn:hover { background: var(--red) !important; color: white !important; }
+  #live-now-btn.active { background: var(--red) !important; color: white !important; }
 
   /* Recent videos panel (overlay) */
   #recent-overlay {
@@ -586,6 +604,10 @@
   <!-- Main nav -->
   <div id="main-nav">
     <!-- Group buttons injected here dynamically by buildNavButtons() -->
+    <button id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)">
+      <span style="width:7px;height:7px;border-radius:50%;background:var(--red);animation:livePulse 1s ease-in-out infinite;flex-shrink:0;box-shadow:0 0 4px var(--red);display:inline-block;"></span>
+      LIVE NOW
+    </button>
     <button class="nav-btn" onclick="showPanel('weatherstar', event)">📺 WeatherStar 4000+</button>
     <button class="nav-btn" onclick="showPanel('playlist', event)">▶ Weather Playlist</button>
     <button class="nav-btn" onclick="showPanel('apps', event)" style="margin-left:auto">📱 Weather Apps</button>
@@ -595,6 +617,10 @@
   <div id="panels">
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
+
+    <!-- LIVE NOW -->
+    <div class="panel" id="live-now-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+    </div>
 
     <!-- WEATHERSTAR -->
     <div class="panel" id="weatherstar-panel">
@@ -914,6 +940,11 @@ function showPanel(name, e) {
   }
   if (name === 'playlist') {
     loadPlaylist();
+  }
+  if (name === 'live-now') {
+    // Panel already built by checkAllLiveStatuses — just ensure visible
+    const livePanel = document.getElementById('live-now-panel');
+    if (livePanel) livePanel.style.display = 'flex';
   }
 
   // Add channel list arrows when a group panel is shown
@@ -1633,6 +1664,48 @@ async function fetchRecentVideos(channelId) {
   }));
 }
 
+function buildLiveNowPanel(liveChannels) {
+  const panel = document.getElementById('live-now-panel');
+  if (!panel) return;
+  panel.innerHTML = '';
+  panel.style.display = 'flex';
+
+  const ret = document.createElement('button');
+  ret.className = 'return-btn';
+  ret.style.flexShrink = '0';
+  ret.textContent = '← Back';
+  ret.onclick = () => closePanel('live-now');
+  panel.appendChild(ret);
+
+  const div = document.createElement('div');
+  div.className = 'divider';
+  div.style.flexShrink = '0';
+  panel.appendChild(div);
+
+  liveChannels.forEach(ch => {
+    const card = document.createElement('div');
+    card.className = 'channel-card';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'channel-name';
+    nameEl.textContent = ch.name;
+    card.appendChild(nameEl);
+
+    const btns = document.createElement('div');
+    btns.className = 'channel-btns';
+
+    const liveBtn = document.createElement('button');
+    liveBtn.className = 'ch-btn live';
+    liveBtn.style.display = 'inline-flex';
+    liveBtn.innerHTML = '<span class="live-dot"></span>LIVE';
+    liveBtn.onclick = () => { playLive(ch); closePanel('live-now'); };
+    btns.appendChild(liveBtn);
+
+    card.appendChild(btns);
+    panel.appendChild(card);
+  });
+}
+
 async function checkAllLiveStatuses() {
   const statusEl = document.getElementById('api-status');
   if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Checking live status...';
@@ -1650,6 +1723,7 @@ async function checkAllLiveStatuses() {
 
     // Apply cached statuses to all channel buttons
     let liveCount = 0;
+    const liveChannels = [];
     const allChannels = GROUPS.flatMap(g => g.channels || []);
     allChannels.forEach(ch => {
       if (!ch.hasLive) return;
@@ -1657,13 +1731,29 @@ async function checkAllLiveStatuses() {
       const isLive = status ? status.isLive : false;
       liveStatuses[ch.id] = isLive;
       updateLiveButton(ch.id, isLive);
-      if (isLive) liveCount++;
+      if (isLive) {
+        liveCount++;
+        liveChannels.push(ch);
+      }
     });
 
     // Update live count in status bar
     const liveCountEl = document.getElementById('live-count-status');
     if (liveCountEl) {
       liveCountEl.textContent = liveCount + ' Channel' + (liveCount !== 1 ? 's' : '') + ' Currently Live';
+    }
+
+    // Show/hide Live Now nav button
+    const liveNowBtn = document.getElementById('live-now-btn');
+    if (liveNowBtn) {
+      if (liveCount > 0) {
+        liveNowBtn.classList.add('visible');
+        buildLiveNowPanel(liveChannels);
+      } else {
+        liveNowBtn.classList.remove('visible');
+        // If Live Now panel was active, close it
+        if (activePanel === 'live-now') closePanel('live-now');
+      }
     }
 
     // Hide old api-status element
