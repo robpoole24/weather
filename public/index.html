@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-26 build.1779842342 -->
+<!-- WeatherTV App — updated 2026-05-26 build.1779855278 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1275,14 +1275,14 @@ function buildChannelLists() {
 function showCollection(parentCh, collection) {
   const collectionKey = parentCh.id + '::' + collection.id;
 
-  const activePanelEl = document.querySelector('.panel.active');
+  const activePanelEl = document.getElementById(activePanel + '-panel') || document.querySelector('.panel[style*="flex"]');
   if (!activePanelEl) return;
 
   let overlay = activePanelEl.querySelector('.collection-overlay');
   if (!overlay) {
     overlay = document.createElement('div');
-    overlay.className = 'collection-overlay recent-overlay-inner';
-    overlay.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.5rem 1rem;height:100%;width:100%;position:absolute;top:0;left:0;background:var(--surface);z-index:20;';
+    overlay.className = 'collection-overlay';
+    overlay.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.5rem 1rem;height:100%;width:100%;position:absolute;top:0;left:0;background:var(--surface);z-index:20;overflow:hidden;';
     activePanelEl.appendChild(overlay);
   }
 
@@ -1345,8 +1345,16 @@ function showCollection(parentCh, collection) {
       const recentBtn = document.createElement('button');
       recentBtn.className = 'ch-btn recent';
       recentBtn.textContent = 'RECENT ▸';
-      recentBtn.onclick = () => showRecent(ch, 'col-' + collection.id);
+      recentBtn.setAttribute('aria-label', 'Recent videos from ' + ch.name);
+      recentBtn.onclick = (e) => { e.stopPropagation(); showRecent(ch, activePanel); };
       btns.appendChild(recentBtn);
+
+      const subBtn = document.createElement('button');
+      subBtn.className = 'ch-btn subscribe';
+      subBtn.textContent = 'Subscribe';
+      subBtn.setAttribute('aria-label', 'Subscribe to ' + ch.name + ' on YouTube');
+      subBtn.onclick = (e) => { e.stopPropagation(); window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener'); };
+      btns.appendChild(subBtn);
 
       card.appendChild(btns);
       cardContainer.appendChild(card);

@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-26 build.1779842342
+// WeatherTV Server — updated 2026-05-26 build.1779855278
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
