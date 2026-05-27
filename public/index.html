@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-26 -->
+<!-- WeatherTV App — updated 2026-05-26 build.1779840836 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -83,38 +83,16 @@
     font-size: 1.1rem;
   }
 
-  /* Portrait phone — fixed control bar, compact horizontal card layout */
+  /* Portrait phone layout */
   @media (max-width: 767px) and (orientation: portrait) {
     #video-area { flex: 1; min-height: 0; }
     #control-bar { flex: 0 0 155px; }
     #main-nav { padding: 0.25rem 0.5rem; gap: 0.3rem; }
     .nav-btn { padding: 0.25rem 0.55rem; font-size: 0.7rem; }
-    .channel-card {
-      min-width: 110px; max-width: 145px;
-      padding: 0.2rem 0.35rem;
-      flex-direction: row !important;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.25rem;
-    }
-    .channel-name { font-size: 0.7rem; margin-bottom: 0 !important; flex-shrink: 1; min-width: 0; }
-    .channel-btns { flex-direction: column !important; gap: 0.15rem; flex-shrink: 0; }
-    .ch-btn { padding: 0.18rem 0.3rem; font-size: 0.56rem; min-height: 20px; white-space: nowrap; }
     #status-bar { padding: 0.15rem 0.5rem; gap: 0.3rem; }
     .status-item { font-size: 0.56rem; }
     #live-chat-btn { display: none !important; }
     #live-chat-panel { display: none !important; }
-  }
-
-  /* Ensure desktop cards stay vertical */
-  @media (min-width: 768px) {
-    .channel-card {
-      flex-direction: column !important;
-      justify-content: space-between;
-      align-items: flex-start;
-    }
-    .channel-btns { flex-direction: row !important; }
-    .channel-name { margin-bottom: 0.3rem !important; }
   }
 
   /* Landscape orientation on mobile phones — stacked but compact */
@@ -316,6 +294,33 @@
     justify-content: space-between;
     align-self: stretch;
     box-sizing: border-box;
+  }
+  /* Phone portrait — card class override */
+  .channel-card.phone-portrait {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 110px;
+    max-width: 145px;
+    padding: 0.2rem 0.35rem;
+    gap: 0.25rem;
+  }
+  .channel-card.phone-portrait .channel-name {
+    font-size: 0.7rem;
+    margin-bottom: 0;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .channel-card.phone-portrait .channel-btns {
+    flex-direction: column;
+    gap: 0.15rem;
+    flex-shrink: 0;
+  }
+  .channel-card.phone-portrait .ch-btn {
+    padding: 0.18rem 0.3rem;
+    font-size: 0.56rem;
+    min-height: 20px;
+    white-space: nowrap;
   }
   .channel-card:active { border-color: var(--accent); }
 
@@ -982,8 +987,9 @@ async function init() {
   buildAppsPanel();
   buildWSPanel();
   await checkAllLiveStatuses();
-  setTimeout(updateCacheStatus, 1500); // slight delay to ensure server is ready
-  setInterval(updateCacheStatus, 60000); // refresh status every minute
+  setTimeout(updateCacheStatus, 1500);
+  setInterval(updateCacheStatus, 60000);
+  applyMobileCardLayout();
 }
 
 // Load all group/channel data from the server API
@@ -1966,15 +1972,28 @@ function detectOS() {
   return 'other';
 }
 
-// Close live chat if window resized to phone width
-window.addEventListener('resize', () => {
+// Apply phone-portrait class to cards when on small portrait screens
+function applyMobileCardLayout() {
+  const isPhonePortrait = window.innerWidth < 768 && window.innerHeight > window.innerWidth;
+  document.querySelectorAll('.channel-card').forEach(card => {
+    if (isPhonePortrait) {
+      card.classList.add('phone-portrait');
+    } else {
+      card.classList.remove('phone-portrait');
+    }
+  });
+
+  // Close live chat on phones
   if (window.innerWidth < 768) {
     const chatPanel = document.getElementById('live-chat-panel');
     if (chatPanel && chatPanel.classList.contains('visible')) {
       closeLiveChat();
     }
   }
-});
+}
+
+window.addEventListener('resize', applyMobileCardLayout);
+window.addEventListener('orientationchange', () => setTimeout(applyMobileCardLayout, 100));
 
 function startClock() {
   function update() {
