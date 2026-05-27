@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-26 build.1779855278
+// WeatherTV Server — updated 2026-05-27 build.1779921391
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -179,6 +179,10 @@ function getDefaultData() {
           { id: 'UCuer9Sw2UAD5LWZpVXbgKTA', name: 'Tornado TRX',            hasLive: false, enabled: true },
           { id: 'UCTWhf2uDTdr3pVNKUCdgnDQ', name: 'Twister Chasers', hasLive: true, enabled: true },
           { id: 'UC-4XLQqaY8y7K2aNGbOAJfQ', name: 'White Weather', hasLive: false, enabled: true },
+          { id: 'UCuDoeT6EEdOTtuZh0s_gcpQ', name: 'DL Scales', hasLive: true, enabled: true },
+          { id: 'UCMARQE2OVE9a6kzOMhKuPVw', name: 'Moderate Motley', hasLive: true, enabled: true },
+          { id: 'UCqSk-ojoH2rgAuYadPLJgJA', name: 'Vince Waelti', hasLive: true, enabled: true },
+          { id: 'UCG6jXdmfKUqR_OiPsRLDAnw', name: 'The UK Storm Chaser', hasLive: true, enabled: true },
         ]
       },
       {
