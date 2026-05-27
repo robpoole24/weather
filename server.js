@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-27 build.1779921391
+// WeatherTV Server — updated 2026-05-27 build.1779922553
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -249,13 +249,23 @@ app.get('/api/admin/backup', (req, res) => {
 });
 
 // Restore from JSON backup — overwrites current data
-app.post('/api/admin/restore', express.json({ limit: '5mb' }), (req, res) => {
+app.post('/api/admin/restore', express.json({ limit: '5mb' }), async (req, res) => {
   const data = req.body;
   if (!data || !data.groups || !data.config) {
     return res.status(400).json({ error: 'Invalid backup file — must contain groups and config' });
   }
-  saveData(data);
-  res.json({ ok: true, message: 'Restored — ' + data.groups.length + ' groups, ' + data.groups.reduce((s,g) => s + (g.channels||[]).length, 0) + ' channels loaded' });
+  // Update in-memory immediately
+  appDataStore = data;
+  // Wait for Redis to confirm save before responding
+  await rSet('wt:appData', data);
+  // Also write to filesystem
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch(e) {}
+  const totalChannels = data.groups.reduce((s,g) => s + (g.channels||[]).length, 0);
+  res.json({ ok: true, message: 'Restored — ' + data.groups.length + ' groups, ' + totalChannels + ' channels loaded' });
 });
 
 // Update config
