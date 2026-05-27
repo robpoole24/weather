@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-26 build.1779840836 -->
+<!-- WeatherTV App — updated 2026-05-26 build.1779841336 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -85,8 +85,8 @@
 
   /* Portrait phone layout */
   @media (max-width: 767px) and (orientation: portrait) {
-    #video-area { flex: 1; min-height: 0; }
-    #control-bar { flex: 0 0 155px; }
+    #video-area { flex: 0 0 62%; }
+    #control-bar { flex: 0 0 38%; min-height: 155px; }
     #main-nav { padding: 0.25rem 0.5rem; gap: 0.3rem; }
     .nav-btn { padding: 0.25rem 0.55rem; font-size: 0.7rem; }
     #status-bar { padding: 0.15rem 0.5rem; gap: 0.3rem; }
@@ -179,7 +179,7 @@
 
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
-    flex: 1;  /* takes 1/5 of available space = 20% */
+    flex: 1;
     min-height: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
@@ -283,17 +283,17 @@
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 0.4rem 0.6rem;
-    min-width: 140px;
-    max-width: 180px;
+    padding: 0.5rem 0.65rem;
+    min-width: 150px;
+    max-width: 200px;
     cursor: default;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    align-self: stretch;
-    box-sizing: border-box;
+    justify-content: flex-start;
+    gap: 0.35rem;
+    align-self: center;
   }
   /* Phone portrait — card class override */
   .channel-card.phone-portrait {
@@ -1063,7 +1063,7 @@ function buildChannelPanels() {
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
-    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:stretch;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.5rem;box-sizing:border-box;';
+    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.75rem;box-sizing:border-box;';
     panel.appendChild(list);
 
     // Insert before the weatherstar panel
