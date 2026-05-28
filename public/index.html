@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-27 build.1779922553 -->
+<!-- WeatherTV App — updated 2026-05-28 build.1780001000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,7 +33,7 @@
     color: var(--text);
     font-family: 'Barlow', sans-serif;
     height: 100vh;
-    height: 100svh; /* svh = small viewport height, excludes browser chrome */
+    height: 100dvh; /* dvh = dynamic viewport height — accounts for mobile browser chrome */
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -83,32 +83,67 @@
     font-size: 1.1rem;
   }
 
-  /* Portrait phone layout */
+  /* ═══════════════════════════════════════════
+     MOBILE RESPONSIVE — Clean unified system
+     Breakpoint: 768px = phone, 768px+ = tablet/desktop
+     ═══════════════════════════════════════════ */
+
+  /* Portrait phone */
   @media (max-width: 767px) and (orientation: portrait) {
-    #video-area { flex: 0 0 62%; }
-    #control-bar { flex: 0 0 38%; min-height: 155px; }
+    body { height: 100dvh; } /* dvh accounts for mobile browser chrome correctly */
+
+    /* Video takes top 55%, control bar gets 45% */
+    #video-area { flex: 0 0 55dvh; max-height: 55dvh; }
+    #control-bar { flex: 1; min-height: 0; overflow: hidden; }
+
+    /* Compact nav */
     #main-nav { padding: 0.25rem 0.5rem; gap: 0.3rem; }
-    .nav-btn { padding: 0.25rem 0.55rem; font-size: 0.7rem; }
+    .nav-btn { padding: 0.25rem 0.55rem; font-size: 0.68rem; }
+
+    /* Status bar single line */
     #status-bar { padding: 0.15rem 0.5rem; gap: 0.3rem; }
-    .status-item { font-size: 0.56rem; }
+    .status-item { font-size: 0.55rem; }
+
+    /* No live chat on phones */
     #live-chat-btn { display: none !important; }
     #live-chat-panel { display: none !important; }
   }
 
-  /* Landscape orientation on mobile phones — stacked but compact */
-  @media (orientation: landscape) and (max-height: 500px) {
-    #video-area { flex: 0 0 52vh; }
-    #control-bar { flex: 1; min-height: 0; }
-    .placeholder-logo { width: min(180px, 40%) !important; }
-    #channel-hint { bottom: 0.2rem !important; font-size: 0.6rem !important; }
+  /* Landscape phone */
+  @media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+    body { height: 100dvh; }
+
+    /* Video 50% height, control bar gets rest */
+    #video-area { flex: 0 0 50dvh; max-height: 50dvh; }
+    #control-bar { flex: 1; min-height: 0; overflow: hidden; }
+
+    /* Hide radar rings — too tall */
     .radar-ring { display: none; }
-    #status-bar { padding: 0.15rem 0.75rem; gap: 0.5rem; }
-    .status-item { font-size: 0.62rem; }
-    #main-nav { padding: 0.3rem 0.75rem; gap: 0.4rem; }
-    .nav-btn { padding: 0.25rem 0.7rem; font-size: 0.75rem; }
-    .channel-card { min-width: 130px; padding: 0.3rem 0.5rem; }
-    .channel-name { font-size: 0.8rem; margin-bottom: 0.2rem; }
-    .ch-btn { padding: 0.2rem 0.4rem; font-size: 0.62rem; min-height: 26px; }
+
+    /* Compact everything */
+    #main-nav { padding: 0.2rem 0.5rem; gap: 0.25rem; }
+    .nav-btn { padding: 0.2rem 0.5rem; font-size: 0.65rem; }
+    #status-bar { padding: 0.1rem 0.5rem; gap: 0.3rem; }
+    .status-item { font-size: 0.52rem; }
+
+    /* Scroll arrows are mouse-only controls — hide on touch phones */
+    .ch-list-arrow { display: none !important; }
+
+    /* No live chat on phones */
+    #live-chat-btn { display: none !important; }
+    #live-chat-panel { display: none !important; }
+  }
+
+  /* Tablet (768px+) — full experience, no restrictions */
+  @media (min-width: 768px) {
+    /* Cards always vertical on tablet/desktop */
+    .channel-card {
+      flex-direction: column !important;
+      justify-content: space-between !important;
+      align-items: flex-start !important;
+    }
+    .channel-btns { flex-direction: row !important; }
+    .channel-name { margin-bottom: 0.3rem !important; }
   }
 
   /* Radar animation behind placeholder */
@@ -295,34 +330,41 @@
     align-self: stretch;
     box-sizing: border-box;
   }
-  /* Phone portrait — card class override */
-  .channel-card.phone-portrait {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    min-width: 110px;
-    max-width: 145px;
-    padding: 0.2rem 0.35rem;
-    gap: 0.25rem;
-  }
-  .channel-card.phone-portrait .channel-name {
-    font-size: 0.7rem;
-    margin-bottom: 0;
-    flex-shrink: 1;
-    min-width: 0;
-  }
-  .channel-card.phone-portrait .channel-btns {
-    flex-direction: column;
-    gap: 0.15rem;
-    flex-shrink: 0;
-  }
-  .channel-card.phone-portrait .ch-btn {
-    padding: 0.18rem 0.3rem;
-    font-size: 0.56rem;
-    min-height: 20px;
-    white-space: nowrap;
-  }
   .channel-card:active { border-color: var(--accent); }
+
+  /* Phone portrait — horizontal card layout via pure CSS */
+  @media (max-width: 767px) and (orientation: portrait) {
+    .channel-card {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      min-width: 120px;
+      max-width: 160px;
+      padding: 0.25rem 0.4rem;
+      gap: 0.3rem;
+      align-self: center;
+    }
+    .channel-name {
+      font-size: 0.68rem !important;
+      margin-bottom: 0 !important;
+      flex-shrink: 1;
+      min-width: 0;
+    }
+    .channel-btns {
+      flex-direction: column !important;
+      gap: 0.15rem !important;
+      flex-shrink: 0;
+      flex-wrap: nowrap !important;
+    }
+    .ch-btn {
+      padding: 0.18rem 0.3rem !important;
+      font-size: 0.54rem !important;
+      min-height: 30px !important; /* matches accessibility spec — was 22px */
+      white-space: nowrap;
+    }
+    /* Scroll arrows are mouse-only controls — hide on touch phones */
+    .ch-list-arrow { display: none !important; }
+  }
 
   .channel-name {
     font-family: 'Barlow Condensed', sans-serif;
@@ -660,7 +702,7 @@
     color: white;
   }
 
-  /* Live chat panel */
+  /* Live chat panel — desktop/tablet: side-by-side with video */
   #live-chat-panel {
     display: none;
     flex-direction: column;
@@ -673,9 +715,6 @@
     position: relative;
   }
   #live-chat-panel.visible { display: flex; }
-  @media (max-width: 768px) {
-    #live-chat-panel { width: 38%; min-width: 160px; max-width: 260px; }
-  }
   #live-chat-panel iframe {
     flex: 1;
     border: none;
@@ -698,6 +737,43 @@
     letter-spacing: 0.05em;
   }
   #chat-close-btn:hover { color: var(--text); border-color: var(--text); }
+
+  /* Mobile chat — full-screen overlay (phone portrait & landscape) */
+  @media (max-width: 767px) {
+    #live-chat-panel.visible {
+      position: fixed !important;
+      inset: 0;
+      z-index: 200;
+      width: 100% !important;
+      max-width: none !important;
+      min-width: unset !important;
+      border-left: none;
+      background: var(--bg);
+    }
+    /* Repurpose close button as a full-width header bar */
+    #chat-close-btn {
+      position: relative !important;
+      top: auto !important;
+      right: auto !important;
+      width: 100%;
+      padding: 0.9rem 1.25rem;
+      min-height: 52px;
+      border-radius: 0;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      font-size: 0.85rem;
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      z-index: auto;
+      text-align: center;
+      touch-action: manipulation;
+    }
+  }
 
   /* About button */
   .about-btn {
@@ -935,6 +1011,15 @@
           <a href="mailto:contact@altruisticapps.com" style="color:var(--accent)">contact@altruisticapps.com</a>
         </div>
       </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Learn More</div>
+        <div style="font-size:0.85rem;color:var(--muted);line-height:1.6;">
+          Want to know how WeatherTV works, how we handle creator content,
+          or why this app is always free?<br>
+          <a href="https://altruistic-apps.up.railway.app/weathertv.html" target="_blank" style="color:var(--accent);font-weight:600;">Read the full WeatherTV story →</a>
+        </div>
+      </div>
     </div>
 
     <div style="text-align:center;margin-top:1.5rem">
@@ -990,7 +1075,6 @@ async function init() {
   await checkAllLiveStatuses();
   setTimeout(updateCacheStatus, 1500);
   setInterval(updateCacheStatus, 60000);
-  applyMobileCardLayout();
 }
 
 // Load all group/channel data from the server API
@@ -1064,7 +1148,7 @@ function buildChannelPanels() {
     const list = document.createElement('div');
     list.className = 'channel-list';
     list.id = group.id + '-list';
-    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:stretch;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.75rem;box-sizing:border-box;';
+    list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.5rem;box-sizing:border-box;height:100%;';
     panel.appendChild(list);
 
     // Insert before the weatherstar panel
@@ -1597,8 +1681,6 @@ async function playLive(ch) {
 let currentLiveCh = null;
 
 function showChatButton(ch) {
-  // Don't show chat button on phones — screen too small
-  if (window.innerWidth < 768) return;
   currentLiveCh = ch;
   // Remove any existing chat button
   const existing = document.getElementById('chat-toggle-btn');
@@ -1981,28 +2063,7 @@ function detectOS() {
   return 'other';
 }
 
-// Apply phone-portrait class to cards when on small portrait screens
-function applyMobileCardLayout() {
-  const isPhonePortrait = window.innerWidth < 768 && window.innerHeight > window.innerWidth;
-  document.querySelectorAll('.channel-card').forEach(card => {
-    if (isPhonePortrait) {
-      card.classList.add('phone-portrait');
-    } else {
-      card.classList.remove('phone-portrait');
-    }
-  });
-
-  // Close live chat on phones
-  if (window.innerWidth < 768) {
-    const chatPanel = document.getElementById('live-chat-panel');
-    if (chatPanel && chatPanel.classList.contains('visible')) {
-      closeLiveChat();
-    }
-  }
-}
-
-window.addEventListener('resize', applyMobileCardLayout);
-window.addEventListener('orientationchange', () => setTimeout(applyMobileCardLayout, 100));
+// Chat overlay works at all sizes — no resize close needed
 
 function startClock() {
   function update() {
