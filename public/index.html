@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-29 build.1780035000 -->
+<!-- WeatherTV App — updated 2026-05-29 build.1780040000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -88,47 +88,14 @@
      Breakpoint: 768px = phone, 768px+ = tablet/desktop
      ═══════════════════════════════════════════ */
 
-  /* Phone card layout — width-only so Samsung Internet orientation bugs don't break it */
+  /* Mobile — replicate desktop card layout (cards stretch wide to fit buttons,
+     channel list scrolls horizontally via swipe). Only override what's needed. */
   @media (max-width: 767px) {
-    .channel-card {
-      flex-direction: row;
-      align-items: flex-start; /* align tops so name + buttons start level */
-      min-width: 120px;
-      /* no max-width — cards grow to fit collection buttons naturally */
-      padding: 0.25rem 0.4rem;
-      gap: 0.3rem;
-      align-self: center;
-    }
-    .channel-name {
-      font-size: 0.68rem !important;
-      margin-bottom: 0 !important;
-      padding-top: 0.2rem; /* nudge name down to align with button tops */
-      flex: 0 0 75px; /* fixed name column — predictable, never crushed */
-      min-width: 0;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .channel-btns {
-      flex-direction: column !important;
-      gap: 0.15rem !important;
-      flex-shrink: 0;
-      flex-wrap: nowrap !important;
-    }
-    .ch-btn {
-      padding: 0.18rem 0.3rem !important;
-      font-size: 0.54rem !important;
-      min-height: 30px !important;
-      white-space: nowrap;
-    }
-    /* Collection buttons (gold, no ch-btn class) — compact on mobile */
-    .channel-btns button:not(.ch-btn) {
-      font-size: 0.5rem !important;
-      padding: 0.12rem 0.28rem !important;
-      min-height: 26px !important;
-    }
-    .ch-list-arrow { display: none !important; }
+    .channel-card { align-self: center; } /* don't stretch to full panel height */
+    .ch-btn { min-height: 30px !important; } /* comfortable tap targets */
+    .ch-list-arrow { display: none !important; } /* swipe instead */
     #playlist-panel .scroll-arrow { display: none !important; }
+    #channel-hint { display: none !important; }
   }
 
   /* Portrait phone structural layout — video/control sizing */
@@ -817,23 +784,33 @@
   }
   #chat-close-btn:hover { color: var(--text); border-color: var(--text); }
 
-  /* Mobile chat — full-screen overlay (phone portrait & landscape) */
+  /* Mobile chat — YouTube-app style: video above, chat below (portrait)
+     or side-by-side (landscape). Control bar hidden. Back button to return. */
   @media (max-width: 767px) {
-    #live-chat-panel.visible {
-      position: fixed !important;
-      inset: 0;
-      z-index: 200;
+    body.mobile-chat-open #control-bar { display: none !important; }
+    body.mobile-chat-open #video-area {
+      flex: 1 !important;
+      max-height: none !important;
+    }
+    body.mobile-chat-open #video-area-inner {
+      flex-direction: column !important;
+      height: 100% !important;
+    }
+    body.mobile-chat-open #video-wrapper { flex: 0 0 42% !important; }
+    body.mobile-chat-open #live-chat-panel.visible {
+      position: relative !important;
+      inset: auto !important;
+      z-index: auto !important;
       width: 100% !important;
       max-width: none !important;
       min-width: unset !important;
+      flex: 1 !important;
       border-left: none;
-      background: var(--bg);
+      border-top: 1px solid var(--border);
     }
-    /* Repurpose close button as a full-width header bar */
-    #chat-close-btn {
+    body.mobile-chat-open #chat-close-btn {
       position: relative !important;
-      top: auto !important;
-      right: auto !important;
+      top: auto !important; right: auto !important;
       width: 100%;
       padding: 0.9rem 1.25rem;
       min-height: 52px;
@@ -842,15 +819,34 @@
       border-bottom: 1px solid var(--border);
       background: var(--surface2);
       color: var(--text);
+      font-size: 0; /* hide original text */
+      flex-shrink: 0;
+      touch-action: manipulation;
+    }
+    body.mobile-chat-open #chat-close-btn::before {
+      content: '← Back to WeatherTV';
       font-size: 0.85rem;
       font-family: 'Barlow Condensed', sans-serif;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      flex-shrink: 0;
-      z-index: auto;
-      text-align: center;
-      touch-action: manipulation;
+    }
+  }
+
+  /* Landscape mobile chat — side by side (already desktop layout, just hide control bar) */
+  @media (orientation: landscape) and (max-height: 500px) {
+    body.mobile-chat-open #control-bar { display: none !important; }
+    body.mobile-chat-open #video-area { flex: 1 !important; max-height: none !important; }
+    body.mobile-chat-open #video-area-inner { height: 100% !important; }
+    body.mobile-chat-open #video-wrapper { flex: 6 !important; }
+    body.mobile-chat-open #live-chat-panel.visible {
+      position: relative !important;
+      inset: auto !important;
+      z-index: auto !important;
+      flex: 4 !important;
+      width: auto !important;
+      max-width: none !important;
+      min-width: unset !important;
     }
   }
 
@@ -1780,8 +1776,6 @@ async function playLive(ch) {
 let currentLiveCh = null;
 
 function showChatButton(ch) {
-  // Hide chat button on phones until mobile chat is confirmed working
-  if (window.innerWidth < 768) return;
   currentLiveCh = ch;
   // Remove any existing chat button
   const existing = document.getElementById('chat-toggle-btn');
@@ -1828,6 +1822,7 @@ function openLiveChat(videoId) {
   const domain = window.location.hostname;
   chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain;
   document.getElementById('live-chat-panel').classList.add('visible');
+  if (window.innerWidth < 768) document.body.classList.add('mobile-chat-open');
 }
 
 function openLiveChatFallback(channelId) {
@@ -1836,6 +1831,7 @@ function openLiveChatFallback(channelId) {
 }
 
 function closeLiveChat() {
+  document.body.classList.remove('mobile-chat-open');
   document.getElementById('live-chat-panel').classList.remove('visible');
   document.getElementById('chat-frame').src = '';
   // Remove chat button from status bar
