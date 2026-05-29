@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-29 build.1780045000 -->
+<!-- WeatherTV App — updated 2026-05-29 build.1780050000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -331,48 +331,12 @@
     touch-action: manipulation;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 0.35rem;
     align-self: stretch;
     box-sizing: border-box;
   }
   .channel-card:active { border-color: var(--accent); }
-
-  /* Phone portrait — horizontal card layout via pure CSS */
-  @media (max-width: 767px) and (orientation: portrait) {
-    .channel-card {
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
-      min-width: 120px;
-      max-width: 220px; /* wider to accommodate collection button text */
-      padding: 0.25rem 0.4rem;
-      gap: 0.3rem;
-      align-self: center;
-    }
-    .channel-name {
-      font-size: 0.68rem !important;
-      margin-bottom: 0 !important;
-      flex: 1; /* grow to fill available space */
-      min-width: 50px; /* never crush name to zero */
-    }
-    .channel-btns {
-      flex-direction: column !important;
-      gap: 0.15rem !important;
-      flex-shrink: 0;
-      flex-wrap: nowrap !important;
-    }
-    .ch-btn {
-      padding: 0.18rem 0.3rem !important;
-      font-size: 0.54rem !important;
-      min-height: 30px !important;
-      white-space: nowrap;
-    }
-    /* Scroll arrows are mouse-only controls — hide on touch phones */
-    .ch-list-arrow { display: none !important; }
-    /* Playlist scroll arrows also mouse-only on touch */
-    #playlist-panel .scroll-arrow { display: none !important; }
-  }
 
   .channel-name {
     font-family: 'Barlow Condensed', sans-serif;
