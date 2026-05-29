@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-29 build.1780060000 -->
+<!-- WeatherTV App — updated 2026-05-29 build.1780065000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -91,11 +91,11 @@
   /* Mobile — replicate desktop card layout (cards stretch wide to fit buttons,
      channel list scrolls horizontally via swipe). Only override what's needed. */
   @media (max-width: 767px) {
-    .channel-card { align-self: center; } /* don't stretch to full panel height */
+    .channel-card { align-self: flex-start; } /* pin to top of panel, not floating in centre */
+    .radar-ring { display: none !important; } /* too large for the compact mobile video area */
     .ch-btn { min-height: 30px !important; } /* comfortable tap targets */
     .ch-list-arrow { display: none !important; } /* swipe instead */
     #playlist-panel .scroll-arrow { display: none !important; }
-    #channel-hint { display: none !important; }
   }
 
   /* Mobile structural layout — !important needed because base CSS rules come later
@@ -798,13 +798,12 @@
     pointer-events: none;
     flex-shrink: 0;
   }
-  /* Hide panel-hint as soon as any panel becomes active */
+  /* Panel hint — visible when no group panel is open, hides when one opens */
+  /* channel-hint in video area hidden globally — panel-hint handles guidance on all screens */
+  #channel-hint { display: none !important; }
   #panels:has(.panel.active) #panel-hint { display: none; }
 
-  /* Hide the video-area channel-hint on phones — panel-hint handles it */
-  @media (max-width: 767px) {
-    #channel-hint { display: none !important; }
-  }  .about-btn {
+  .about-btn {
     margin-left: auto;
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 0.7rem;
