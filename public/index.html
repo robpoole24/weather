@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-28 build.1780015000 -->
+<!-- WeatherTV App — updated 2026-05-28 build.1780020000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -109,8 +109,8 @@
     #live-chat-panel { display: none !important; }
   }
 
-  /* Landscape phone */
-  @media (max-width: 900px) and (orientation: landscape) and (max-height: 500px) {
+  /* Landscape phone — any width, under 500px tall (phones only, tablets are taller) */
+  @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
 
     /* Video 50% height, control bar gets rest */
@@ -803,7 +803,28 @@
     }
   }
 
-  /* About button */
+  /* Panel hint — visible when no group panel is open, hides when one opens */
+  #panel-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: var(--muted);
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    pointer-events: none;
+    flex-shrink: 0;
+  }
+  /* Hide panel-hint as soon as any panel becomes active */
+  #panels:has(.panel.active) #panel-hint { display: none; }
+
+  /* Hide the video-area channel-hint on phones — panel-hint handles it */
+  @media (max-width: 767px) {
+    #channel-hint { display: none !important; }
+  }
   .about-btn {
     margin-left: auto;
     font-family: 'Barlow Condensed', sans-serif;
@@ -879,6 +900,9 @@
 
   <!-- Panels -->
   <div id="panels" role="region" aria-label="Channel list">
+
+    <!-- Hint shown in bar when no group is selected -->
+    <div id="panel-hint">↑ Select a group above to begin</div>
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
 
