@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-29 build.1780055000 -->
+<!-- WeatherTV App — updated 2026-05-29 build.1780060000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -98,16 +98,17 @@
     #channel-hint { display: none !important; }
   }
 
-  /* Portrait phone structural layout — width-only query so Samsung's orientation
-     detection bug doesn't prevent proper video/control bar sizing */
+  /* Mobile structural layout — !important needed because base CSS rules come later
+     in the stylesheet and would otherwise win the cascade */
   @media (max-width: 767px) {
-    body { height: 100dvh; }
-    #video-area { flex: 0 0 55dvh; max-height: 55dvh; }
-    #control-bar { flex: 1; min-height: 0; overflow: hidden; }
-    #main-nav { padding: 0.2rem 0.5rem; gap: 0.25rem; }
-    .nav-btn { padding: 0.2rem 0.45rem; font-size: 0.65rem; }
-    #status-bar { padding: 0.1rem 0.5rem; gap: 0.3rem; }
-    .status-item { font-size: 0.52rem; }
+    body { height: 100dvh !important; }
+    #video-area { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
+    #control-bar { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
+    /* Compact nav — shrink buttons to give the channel panel more vertical room */
+    #main-nav { padding: 0.15rem 0.4rem !important; gap: 0.2rem !important; }
+    .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
+    #status-bar { padding: 0.08rem 0.5rem !important; gap: 0.25rem !important; }
+    .status-item { font-size: 0.5rem !important; }
     #live-chat-btn { display: none !important; }
     #live-chat-panel { display: none !important; }
   }
