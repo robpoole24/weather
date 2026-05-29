@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-29 build.1780030000 -->
+<!-- WeatherTV App — updated 2026-05-29 build.1780035000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,10 +92,9 @@
   @media (max-width: 767px) {
     .channel-card {
       flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
+      align-items: flex-start; /* align tops so name + buttons start level */
       min-width: 120px;
-      max-width: 220px;
+      /* no max-width — cards grow to fit collection buttons naturally */
       padding: 0.25rem 0.4rem;
       gap: 0.3rem;
       align-self: center;
@@ -103,8 +102,12 @@
     .channel-name {
       font-size: 0.68rem !important;
       margin-bottom: 0 !important;
-      flex: 1;
-      min-width: 50px;
+      padding-top: 0.2rem; /* nudge name down to align with button tops */
+      flex: 0 0 75px; /* fixed name column — predictable, never crushed */
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
     .channel-btns {
       flex-direction: column !important;
@@ -117,6 +120,12 @@
       font-size: 0.54rem !important;
       min-height: 30px !important;
       white-space: nowrap;
+    }
+    /* Collection buttons (gold, no ch-btn class) — compact on mobile */
+    .channel-btns button:not(.ch-btn) {
+      font-size: 0.5rem !important;
+      padding: 0.12rem 0.28rem !important;
+      min-height: 26px !important;
     }
     .ch-list-arrow { display: none !important; }
     #playlist-panel .scroll-arrow { display: none !important; }
