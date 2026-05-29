@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-28 build.1779973327
+// WeatherTV Server — updated 2026-05-29 build.1780050000
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -1034,6 +1034,18 @@ async function fetchAllRecentVideos() {
       }
 
       const newItems = data.items || [];
+
+      // Free live detection — snippet.liveBroadcastContent is already in the response.
+      // If a channel is live, the active stream appears in recent results with value "live".
+      // This catches channels that went live before WebSub subscribed (e.g. newly added channels).
+      const liveItem = newItems.find(item => item.snippet && item.snippet.liveBroadcastContent === 'live');
+      if (liveItem) {
+        const videoId = liveItem.id && liveItem.id.videoId ? liveItem.id.videoId : null;
+        const liveEntry = { isLive: true, videoId, checkedAt: Date.now(), source: 'recent_fetch' };
+        cache.liveStatuses[ch.id] = liveEntry;
+        rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
+        console.log('[WeatherTV] Live stream detected for ' + ch.id + ' during recent fetch' + (videoId ? ' (video: ' + videoId + ')' : ''));
+      }
 
       if (newItems.length > 0) {
         // Got fresh results — update cache
