@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-28 build.1780020000 -->
+<!-- WeatherTV App — updated 2026-05-29 build.1780030000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -88,23 +88,49 @@
      Breakpoint: 768px = phone, 768px+ = tablet/desktop
      ═══════════════════════════════════════════ */
 
-  /* Portrait phone */
-  @media (max-width: 767px) and (orientation: portrait) {
-    body { height: 100dvh; } /* dvh accounts for mobile browser chrome correctly */
+  /* Phone card layout — width-only so Samsung Internet orientation bugs don't break it */
+  @media (max-width: 767px) {
+    .channel-card {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      min-width: 120px;
+      max-width: 220px;
+      padding: 0.25rem 0.4rem;
+      gap: 0.3rem;
+      align-self: center;
+    }
+    .channel-name {
+      font-size: 0.68rem !important;
+      margin-bottom: 0 !important;
+      flex: 1;
+      min-width: 50px;
+    }
+    .channel-btns {
+      flex-direction: column !important;
+      gap: 0.15rem !important;
+      flex-shrink: 0;
+      flex-wrap: nowrap !important;
+    }
+    .ch-btn {
+      padding: 0.18rem 0.3rem !important;
+      font-size: 0.54rem !important;
+      min-height: 30px !important;
+      white-space: nowrap;
+    }
+    .ch-list-arrow { display: none !important; }
+    #playlist-panel .scroll-arrow { display: none !important; }
+  }
 
-    /* Video takes top 55%, control bar gets 45% */
+  /* Portrait phone structural layout — video/control sizing */
+  @media (max-width: 767px) and (orientation: portrait) {
+    body { height: 100dvh; }
     #video-area { flex: 0 0 55dvh; max-height: 55dvh; }
     #control-bar { flex: 1; min-height: 0; overflow: hidden; }
-
-    /* Compact nav */
     #main-nav { padding: 0.25rem 0.5rem; gap: 0.3rem; }
     .nav-btn { padding: 0.25rem 0.55rem; font-size: 0.68rem; }
-
-    /* Status bar single line */
     #status-bar { padding: 0.15rem 0.5rem; gap: 0.3rem; }
     .status-item { font-size: 0.55rem; }
-
-    /* No live chat on phones */
     #live-chat-btn { display: none !important; }
     #live-chat-panel { display: none !important; }
   }
@@ -130,25 +156,41 @@
     .ch-list-arrow { display: none !important; }
     /* Playlist scroll arrows also mouse-only */
     #playlist-panel .scroll-arrow { display: none !important; }
-    /* Compact cards so names stay visible — justify-start keeps name at top */
+    /* Compact cards so names stay visible — use same horizontal layout as portrait */
     .channel-card {
-      justify-content: flex-start !important;
-      align-self: stretch;
+      flex-direction: row !important;
+      align-items: center;
+      justify-content: space-between;
+      min-width: 100px;
+      max-width: 190px;
+      padding: 0.2rem 0.35rem;
+      gap: 0.25rem;
+      align-self: center;
       overflow: hidden;
-      padding: 0.3rem 0.4rem;
-      min-width: 110px;
     }
     .channel-name {
-      font-size: 0.58rem !important;
-      margin-bottom: 0.1rem !important;
-      width: 100%;
-      text-align: left;
+      font-size: 0.6rem !important;
+      margin-bottom: 0 !important;
+      flex: 1;
+      min-width: 35px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .channel-btns {
+      flex-direction: column !important;
+      gap: 0.12rem !important;
+      flex-shrink: 0;
+      flex-wrap: nowrap !important;
     }
     .ch-btn {
-      min-height: 24px !important;
-      padding: 0.1rem 0.25rem !important;
-      font-size: 0.5rem !important;
+      min-height: 22px !important;
+      padding: 0.1rem 0.2rem !important;
+      font-size: 0.48rem !important;
+      white-space: nowrap;
     }
+    /* Shrink logo so it fits in the 50dvh video area */
+    #video-placeholder img { max-height: 65% !important; width: auto !important; }
 
     /* No live chat on phones */
     #live-chat-btn { display: none !important; }
@@ -824,8 +866,7 @@
   /* Hide the video-area channel-hint on phones — panel-hint handles it */
   @media (max-width: 767px) {
     #channel-hint { display: none !important; }
-  }
-  .about-btn {
+  }  .about-btn {
     margin-left: auto;
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 0.7rem;
