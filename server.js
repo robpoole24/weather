@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-29 build.1780050000
+// WeatherTV Server — updated 2026-05-29 build.1780070000
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -528,15 +528,82 @@ const cache = {
   liveStatuses: {},
   recentVideos: {},
   playlist: {},
+  channelActivity: {}, // { channelId: { lastVideoDate, lastLiveDate, nextFetchDue } }
   lastLiveCheck: null,
   lastRecentFetch: null,
   websubActive: false,
 };
 
+// ── Daily live-check quota tracker ──────────────────────────────────────────
+// Each WebSub-triggered checkLiveStatus() costs 100 units.
+// We cap these so the 6pm video fetch always has enough quota left.
+// Budget: 40 live checks (4,000 units) leaves ~6,000 for the video fetch.
+// Resets automatically at midnight by checking today's date.
+const quotaTracker = { date: '', liveChecks: 0 };
+const DAILY_LIVE_CHECK_LIMIT = 40; // 40 × 100 = 4,000 units/day cap
+
+function getLiveChecksToday() {
+  const today = new Date().toISOString().split('T')[0];
+  if (quotaTracker.date !== today) { quotaTracker.date = today; quotaTracker.liveChecks = 0; }
+  return quotaTracker.liveChecks;
+}
+
+function recordLiveCheck() {
+  const today = new Date().toISOString().split('T')[0];
+  if (quotaTracker.date !== today) { quotaTracker.date = today; quotaTracker.liveChecks = 0; }
+  quotaTracker.liveChecks++;
+}
+
+// ── Channel activity tracking ────────────────────────────────────────────────
+// Tracks per-channel last video upload date and last confirmed live date.
+// Used to assign channels to fetch tiers so quota is spent on active creators.
+
+async function updateChannelActivity(channelId, updates) {
+  const existing = cache.channelActivity[channelId] || {};
+  const updated = { ...existing, ...updates };
+  cache.channelActivity[channelId] = updated;
+  await rSet('wt:activity:' + channelId, updated, REDIS_TTL.channelActivity);
+}
+
+// Tier 1 (fetch daily): last video < 14 days OR hasLive + last live < 30 days
+// Tier 2 (fetch every 14 days): hasLive but not live in 30+ days
+// Tier 3 (fetch every 14 days, offset): no hasLive, last video 14+ days
+function getChannelTier(ch) {
+  const act = cache.channelActivity[ch.id] || {};
+  const now = Date.now();
+  const DAY = 86400000;
+  const lastVideoAge = act.lastVideoDate ? (now - act.lastVideoDate) / DAY : 999;
+  const lastLiveAge  = act.lastLiveDate  ? (now - act.lastLiveDate)  / DAY : 999;
+
+  if (lastVideoAge < 14) return 1;                  // recently posted
+  if (ch.hasLive && lastLiveAge < 30) return 1;     // recently live
+  if (ch.hasLive) return 2;                          // has live but inactive
+  return 3;                                          // no live, inactive
+}
+
+// Should a Tier 2/3 channel be fetched today?
+// Tier 2 (inactive live) fetches on days 1,3,5... of a 14-day rolling window
+// Tier 3 (inactive video) fetches on days 8,10,12... (7-day offset from Tier 2)
+// This staggers them so they never both hit on the same day.
+function shouldFetchTodayByTier(ch, tier) {
+  const act = cache.channelActivity[ch.id] || {};
+  if (act.nextFetchDue && Date.now() < act.nextFetchDue) return false;
+  return true; // due date passed or never set — fetch it
+}
+
+// Alternates fetch order daily so different channels get priority when quota runs out
+function getChannelFetchOrder(channels) {
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const reversed = dayOfYear % 2 === 1;
+  return reversed ? [...channels].reverse() : [...channels];
+}
+
 const REDIS_TTL = {
-  recentVideos: 25 * 60 * 60,  // 25 hours
-  liveStatus:   24 * 60 * 60,  // 24 hours — keep last known status
-  playlist:     49 * 60 * 60,  // 49 hours
+  recentVideos:         7 * 24 * 60 * 60,  // 7 days  (was 25h — survives quota gaps)
+  recentVideosInactive: 14 * 24 * 60 * 60, // 14 days for inactive-tier channels
+  liveStatus:           5 * 24 * 60 * 60,  // 5 days  (was 24h — keeps last known state)
+  playlist:             49 * 60 * 60,       // 49 hours (unchanged)
+  channelActivity:      60 * 24 * 60 * 60, // 60 days — long-term per-channel activity
 };
 
 async function rSet(key, value, ttl) {
@@ -600,7 +667,14 @@ async function restoreCacheFromRedis() {
       if (val) cache.playlist[key.replace('wt:playlist:', '')] = val;
     }
 
-    console.log('[Redis] Restored — ' + recentKeys.length + ' video caches, ' + liveKeys.length + ' live statuses');
+    // Channel activity (tier tracking)
+    const activityKeys = await rKeys('wt:activity:*');
+    for (const key of activityKeys) {
+      const val = await rGet(key);
+      if (val) cache.channelActivity[key.replace('wt:activity:', '')] = val;
+    }
+
+    console.log('[Redis] Restored — ' + recentKeys.length + ' video caches, ' + liveKeys.length + ' live statuses, ' + activityKeys.length + ' activity records');
   } catch(e) {
     console.error('[Redis] Restore error:', e.message);
   }
@@ -921,30 +995,60 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   const channelId = req.params.channelId;
   const body = req.body ? req.body.toString() : '';
 
-  // Step 1: Parse Atom feed for live indicators — free, no quota
-  const looksLive = body.includes('yt:liveBroadcastContent>live') ||
-                    body.includes('live_stream') ||
-                    body.includes('isLiveBroadcast');
-  const looksUpcoming = body.includes('yt:liveBroadcastContent>upcoming');
+  // Step 1: Parse Atom feed — free, no quota cost
+  // Extract video ID and live status directly from the feed XML
+  const videoIdMatch = body.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+  const feedVideoId = videoIdMatch ? videoIdMatch[1].trim() : null;
+  const feedIsLive     = body.includes('<yt:liveBroadcastContent>live</yt:liveBroadcastContent>');
+  const feedIsUpcoming = body.includes('<yt:liveBroadcastContent>upcoming</yt:liveBroadcastContent>');
 
-  // Step 2: Rate limit — skip API call if checked recently AND not looking live
-  const lastCheck = websubLastCheck[channelId] || 0;
-  const timeSinceCheck = Date.now() - lastCheck;
-  const recentlyChecked = timeSinceCheck < WEBSUB_RATE_LIMIT_MS;
-
-  if (recentlyChecked && !looksLive) {
-    // Just invalidate recent video cache — no quota spend
+  // Step 2: If feed explicitly says LIVE — trust it, mark immediately, no API call (0 units)
+  if (feedIsLive && feedVideoId) {
+    const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+    const wsEntry = { isLive: true, videoId: feedVideoId, checkedAt: Date.now(), source: 'websub_feed' };
+    cache.liveStatuses[channelId] = wsEntry;
+    cache.lastLiveCheck = Date.now();
+    rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
+    rSet('wt:lastLive', cache.lastLiveCheck);
+    updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+    websubLastCheck[channelId] = Date.now();
+    if (!wasLive) console.log('[WebSub] LIVE (feed confirmed, 0 units): ' + channelId + ' video: ' + feedVideoId);
     delete cache.recentVideos[channelId];
     rDel('wt:recent:' + channelId);
-    console.log('[WebSub] ' + channelId + ' posted (skipping live check — checked ' + Math.round(timeSinceCheck/60000) + 'm ago)');
     return;
   }
 
-  // Step 3: Do targeted API live check (100 units) — only when needed
-  if (!quotaExceeded) {
+  // Step 3: If feed says UPCOMING — note it, no API call needed
+  if (feedIsUpcoming) {
+    console.log('[WebSub] ' + channelId + ' has upcoming stream (0 units)');
+    delete cache.recentVideos[channelId];
+    rDel('wt:recent:' + channelId);
+    return;
+  }
+
+  // Step 4: Feed is ambiguous (regular video post, no live indicator)
+  // Invalidate recent video cache — content changed
+  delete cache.recentVideos[channelId];
+  rDel('wt:recent:' + channelId);
+
+  // Step 5: Rate limit — skip confirmation API call if we checked this channel recently
+  const lastCheck = websubLastCheck[channelId] || 0;
+  const timeSinceCheck = Date.now() - lastCheck;
+  const recentlyChecked = timeSinceCheck < WEBSUB_RATE_LIMIT_MS;
+  if (recentlyChecked) {
+    console.log('[WebSub] ' + channelId + ' posted content (checked ' + Math.round(timeSinceCheck/60000) + 'm ago — skipping confirmation)');
+    return;
+  }
+
+  // Step 6: Ambiguous + not recently checked — optionally confirm live status via API
+  // This catches edge cases where the feed doesn't include liveBroadcastContent
+  const liveChecksToday = getLiveChecksToday();
+  if (!quotaExceeded && liveChecksToday < DAILY_LIVE_CHECK_LIMIT) {
     const key = getApiKey();
     if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
       websubLastCheck[channelId] = Date.now();
+      recordLiveCheck();
+      console.log('[WebSub] Ambiguous — API confirmation check #' + getLiveChecksToday() + '/' + DAILY_LIVE_CHECK_LIMIT + ' for ' + channelId);
       const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
         '&channelId=' + channelId + '&part=id&eventType=live&type=video';
       ytFetch(url).then(data => {
@@ -952,29 +1056,20 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
         const isLive = !!(data.items && data.items.length > 0);
         const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
         const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
-
-        const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub' };
+        const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub_api' };
         cache.liveStatuses[channelId] = wsEntry;
-        cache.lastLiveCheck = Date.now(); // update global timestamp on every WebSub check
+        cache.lastLiveCheck = Date.now();
         rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
         rSet('wt:lastLive', cache.lastLiveCheck);
-
-        if (isLive && !wasLive) {
-          console.log('[WebSub] LIVE CONFIRMED: ' + channelId + ' just went live!');
-        } else if (!isLive && wasLive) {
-          console.log('[WebSub] OFFLINE: ' + channelId + ' stream ended');
-        } else {
-          console.log('[WebSub] ' + channelId + ' posted new content (not live)');
-        }
-      }).catch(e => {
-        console.error('[WebSub] Live check error for ' + channelId + ':', e.message);
-      });
+        if (isLive) updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+        if (isLive && !wasLive)  console.log('[WebSub] LIVE CONFIRMED (API): ' + channelId);
+        else if (!isLive && wasLive) console.log('[WebSub] OFFLINE: ' + channelId + ' stream ended');
+        else console.log('[WebSub] ' + channelId + ' posted content (not live)');
+      }).catch(e => console.error('[WebSub] Confirmation error for ' + channelId + ':', e.message));
     }
+  } else {
+    console.log('[WebSub] ' + channelId + ' posted — skipping confirmation (daily limit reached or quota exceeded)');
   }
-
-  // Invalidate recent video cache so next request fetches fresh content
-  delete cache.recentVideos[channelId];
-  rDel('wt:recent:' + channelId);
 });
 
 // Re-subscribe all channels every 8 days (before 9-day lease expires)
@@ -1004,23 +1099,66 @@ setTimeout(subscribeAllChannels, 10000);
 // All users served from cache — zero additional quota per request.
 // ════════════════════════════════════════════
 async function fetchAllRecentVideos() {
+  // Auto-clear quota flag if it is a new day
   if (quotaExceeded) {
-    console.log('[WeatherTV] Skipping recent video fetch — quota exceeded');
-    scheduleNextRecentFetch(); // still schedule next attempt
-    return;
+    const today = new Date().toISOString().split('T')[0];
+    if (quotaTracker.date && quotaTracker.date < today) {
+      console.log('[WeatherTV] New day -- clearing quota exceeded flag');
+      quotaExceeded = false;
+    } else {
+      console.log('[WeatherTV] Skipping recent video fetch -- quota exceeded');
+      scheduleNextRecentFetch();
+      return;
+    }
   }
 
   const key = getApiKey();
   if (!key || key === 'YOUR_YOUTUBE_API_KEY') return;
 
-  const channels = getAllChannels();
-  if (channels.length === 0) return;
+  const allChannels = getAllChannels();
+  if (allChannels.length === 0) return;
 
-  console.log('[WeatherTV] Fetching recent videos for ' + channels.length + ' channels...');
-  let fetched = 0;
-  let quotaHit = false;
+  // Assign tiers
+  const tier1 = [], tier2 = [], tier3 = [];
+  for (const ch of allChannels) {
+    const tier = getChannelTier(ch);
+    if (tier === 1) tier1.push(ch);
+    else if (tier === 2) tier2.push(ch);
+    else tier3.push(ch);
+  }
 
-  for (const ch of channels) {
+  // Stagger Tier 2 and Tier 3 using day of year -- 7-day natural offset between them
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const fetchTier2Today = dayOfYear % 2 === 0;
+  const fetchTier3Today = dayOfYear % 2 === 1;
+
+  const tier2Due = fetchTier2Today ? tier2.filter(ch => shouldFetchTodayByTier(ch, 2)) : [];
+  const tier3Due = fetchTier3Today ? tier3.filter(ch => shouldFetchTodayByTier(ch, 3)) : [];
+
+  // Extend TTL on inactive channels not being fetched today
+  const notFetchingToday = [
+    ...(fetchTier2Today ? [] : tier2),
+    ...(fetchTier3Today ? [] : tier3),
+    ...(fetchTier2Today ? tier2.filter(ch => !shouldFetchTodayByTier(ch, 2)) : []),
+    ...(fetchTier3Today ? tier3.filter(ch => !shouldFetchTodayByTier(ch, 3)) : []),
+  ];
+  for (const ch of notFetchingToday) {
+    if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items) {
+      await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideosInactive);
+    }
+  }
+
+  // Tier 1 first (priority), then due Tier 2 and 3 -- alternate A-Z / Z-A daily
+  const priorityChannels = getChannelFetchOrder([...tier1, ...tier2Due, ...tier3Due]);
+
+  console.log('[WeatherTV] Fetch -- Tier1: ' + tier1.length +
+    ', Tier2 today: ' + tier2Due.length + '/' + tier2.length +
+    ', Tier3 today: ' + tier3Due.length + '/' + tier3.length +
+    ' | Order: ' + (dayOfYear % 2 === 0 ? 'A to Z' : 'Z to A'));
+
+  let fetched = 0, quotaHit = false;
+
+  for (const ch of priorityChannels) {
     try {
       const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
         '&channelId=' + ch.id + '&part=snippet&order=date&type=video&maxResults=10';
@@ -1029,65 +1167,72 @@ async function fetchAllRecentVideos() {
       if (checkQuotaError(data)) {
         markQuotaExceeded();
         quotaHit = true;
-        console.warn('[WeatherTV] Quota hit during recent video fetch after ' + fetched + ' channels — preserving all previous caches');
+        console.warn('[WeatherTV] Quota hit after ' + fetched + ' channels -- preserving all existing caches');
         break;
       }
 
       const newItems = data.items || [];
 
-      // Free live detection — snippet.liveBroadcastContent is already in the response.
-      // If a channel is live, the active stream appears in recent results with value "live".
-      // This catches channels that went live before WebSub subscribed (e.g. newly added channels).
+      // Free live detection from snippet data
       const liveItem = newItems.find(item => item.snippet && item.snippet.liveBroadcastContent === 'live');
       if (liveItem) {
         const videoId = liveItem.id && liveItem.id.videoId ? liveItem.id.videoId : null;
         const liveEntry = { isLive: true, videoId, checkedAt: Date.now(), source: 'recent_fetch' };
         cache.liveStatuses[ch.id] = liveEntry;
         rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
-        console.log('[WeatherTV] Live stream detected for ' + ch.id + ' during recent fetch' + (videoId ? ' (video: ' + videoId + ')' : ''));
+        updateChannelActivity(ch.id, { lastLiveDate: Date.now() });
+        console.log('[WeatherTV] Live detected during fetch: ' + ch.id + (videoId ? ' (' + videoId + ')' : ''));
       }
+
+      // Update last video date for tier tracking
+      if (newItems.length > 0 && newItems[0].snippet && newItems[0].snippet.publishedAt) {
+        const lastVideoDate = new Date(newItems[0].snippet.publishedAt).getTime();
+        await updateChannelActivity(ch.id, { lastVideoDate });
+      }
+
+      const tier = getChannelTier(ch);
+      const ttl = tier === 1 ? REDIS_TTL.recentVideos : REDIS_TTL.recentVideosInactive;
 
       if (newItems.length > 0) {
-        // Got fresh results — update cache
         cache.recentVideos[ch.id] = { items: newItems, cachedAt: Date.now() };
-        await rSet('wt:recent:' + ch.id, { items: newItems, cachedAt: Date.now() }, REDIS_TTL.recentVideos);
+        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], ttl);
+        if (tier !== 1) await updateChannelActivity(ch.id, { nextFetchDue: Date.now() + 14 * 86400000 });
         fetched++;
-      } else if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items.length > 0) {
-        // Empty result but have previous good data — keep it, refresh TTL
+      } else if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items && cache.recentVideos[ch.id].items.length > 0) {
         cache.recentVideos[ch.id].cachedAt = Date.now();
-        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideos);
-        console.log('[WeatherTV] No new videos for ' + ch.id + ' — keeping previous cache');
+        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], ttl);
+        if (tier !== 1) await updateChannelActivity(ch.id, { nextFetchDue: Date.now() + 14 * 86400000 });
         fetched++;
       } else {
-        console.log('[WeatherTV] No videos found for ' + ch.id + ' — channel may have wrong ID');
+        console.log('[WeatherTV] No videos found for ' + ch.id + ' -- may have wrong channel ID');
       }
 
-      await new Promise(r => setTimeout(r, 200)); // be polite to the API
+      await new Promise(r => setTimeout(r, 200));
     } catch(e) {
-      console.error('[WeatherTV] Recent fetch error for ' + ch.id + ':', e.message);
+      console.error('[WeatherTV] Fetch error for ' + ch.id + ':', e.message);
     }
   }
 
   if (!quotaHit) {
-    // Only mark fetch as complete if we finished without hitting quota
-    // Partial fetches don't count — tomorrow's startup will detect the miss and retry
     cache.lastRecentFetch = Date.now();
     await rSet('wt:lastFetch', cache.lastRecentFetch);
-    console.log('[WeatherTV] Recent video fetch complete — ' + fetched + '/' + channels.length + ' channels cached');
+    console.log('[WeatherTV] Fetch complete -- ' + fetched + '/' + priorityChannels.length + ' channels updated');
   } else {
-    // Refresh TTL on all channels we didn't get to — keeps their previous data alive
-    const remaining = channels.slice(fetched);
-    for (const ch of remaining) {
-      if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items && cache.recentVideos[ch.id].items.length > 0) {
-        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideos);
+    // Preserve caches for channels we did not reach -- never let data expire due to quota cuts
+    const fetchedIds = new Set(priorityChannels.slice(0, fetched).map(c => c.id));
+    for (const ch of priorityChannels) {
+      if (!fetchedIds.has(ch.id)) {
+        const cached = cache.recentVideos[ch.id];
+        if (cached && cached.items && cached.items.length > 0) {
+          await rSet('wt:recent:' + ch.id, cached, REDIS_TTL.recentVideosInactive);
+        }
       }
     }
-    console.log('[WeatherTV] Partial fetch — ' + fetched + '/' + channels.length + ' updated, previous cache preserved for remaining ' + remaining.length + ' channels');
+    console.log('[WeatherTV] Partial fetch -- ' + fetched + '/' + priorityChannels.length + ' updated, remaining caches preserved');
   }
 
   scheduleNextRecentFetch();
 }
-
 function scheduleNextRecentFetch() {
   // Schedule for next fetch hour EST (default 6pm, configurable via admin)
   const fetchHour = getRecentFetchHour();
@@ -1258,7 +1403,29 @@ app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
   fetchAllRecentVideos(); // don't await — let it run in background
 });
 
-// Test outbound connectivity to Google
+// Manual live override — mark a channel live when you know the video ID
+// Use when a stream has been live for hours and WebSub didn't catch it
+app.post('/api/admin/mark-live', async (req, res) => {
+  const { channelId, videoId } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const entry = { isLive: true, videoId: videoId || null, checkedAt: Date.now(), source: 'manual' };
+  cache.liveStatuses[channelId] = entry;
+  await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+  await updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+  console.log('[Admin] Manually marked live: ' + channelId + (videoId ? ' video: ' + videoId : ''));
+  res.json({ ok: true, channelId, videoId, message: 'Channel marked live' });
+});
+
+// Manual clear-live — mark a channel offline
+app.post('/api/admin/mark-offline', async (req, res) => {
+  const { channelId } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const entry = { isLive: false, videoId: null, checkedAt: Date.now(), source: 'manual' };
+  cache.liveStatuses[channelId] = entry;
+  await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+  console.log('[Admin] Manually marked offline: ' + channelId);
+  res.json({ ok: true, channelId, message: 'Channel marked offline' });
+});
 app.get('/api/admin/test-connectivity', async (req, res) => {
   const key = getApiKey();
   try {
