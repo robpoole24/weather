@@ -1433,11 +1433,11 @@ function buildAppsPanel() {
   WEATHER_APPS.forEach(app => {
     const chip = document.createElement('div');
     chip.className = 'app-chip';
-    chip.style.cssText = 'flex-direction:column;align-items:flex-start;gap:0.4rem;min-width:130px;';
+    chip.style.cssText = 'flex-direction:column;align-items:center;gap:0.35rem;min-width:120px;max-width:160px;';
 
-    // App icon + name row
+    // Icon + name — centered
     const topRow = document.createElement('div');
-    topRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;';
+    topRow.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:0.3rem;';
 
     const iconWrap = document.createElement('div');
     iconWrap.style.cssText = 'width:36px;height:36px;flex-shrink:0;border-radius:8px;overflow:hidden;background:var(--surface2);';
@@ -1450,50 +1450,58 @@ function buildAppsPanel() {
 
     const name = document.createElement('div');
     name.className = 'app-chip-name';
+    name.style.cssText = 'text-align:center;';
     name.textContent = app.name;
     topRow.appendChild(name);
     chip.appendChild(topRow);
 
-    // iOS and Android buttons row
+    // Buttons row — iOS, Android, Chasers all inline
     const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:0.3rem;flex-wrap:wrap;';
+    btnRow.style.cssText = 'display:flex;gap:0.25rem;flex-wrap:wrap;justify-content:center;';
 
-    // iOS button
-    const iosBtn = makeStoreBtn(
-      app.ios, app.iosSoon, '🍎 iOS',
-      app.ios ? null : (app.iosSoon ? 'iOS coming soon' : null)
-    );
-    btnRow.appendChild(iosBtn);
+    btnRow.appendChild(makeStoreBtn(app.ios, app.iosSoon, '🍎 iOS', null));
+    btnRow.appendChild(makeStoreBtn(app.android, app.androidSoon, '🤖 Android', null));
 
-    // Android button
-    const androidBtn = makeStoreBtn(
-      app.android, app.androidSoon, '🤖 Android',
-      app.android ? null : (app.androidSoon ? 'Android coming soon' : null)
-    );
-    btnRow.appendChild(androidBtn);
-
-    chip.appendChild(btnRow);
-
-    // Collection button — if this app sponsors a chaser group
+    // Collection button — same size as store buttons
     if (app.collectionRef) {
       const colRef = findCollectionByRef(app.collectionRef);
       if (colRef) {
         const colBtn = document.createElement('button');
-        colBtn.className = 'ch-btn collection';
-        colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.62rem;display:inline-flex;align-items:center;gap:4px;padding:0.22rem 0.45rem;margin-top:0.1rem;';
+        colBtn.style.cssText = [
+          'font-family:"Barlow Condensed",sans-serif',
+          'font-size:0.65rem',
+          'font-weight:700',
+          'letter-spacing:0.06em',
+          'text-transform:uppercase',
+          'background:var(--gold)',
+          'color:#000',
+          'border:none',
+          'border-radius:4px',
+          'padding:0.28rem 0.55rem',
+          'cursor:pointer',
+          'display:inline-flex',
+          'align-items:center',
+          'gap:3px',
+          'white-space:nowrap',
+          'flex-shrink:0',
+          'touch-action:manipulation',
+        ].join(';');
         colBtn.onclick = () => showCollection(colRef.ch, colRef.col);
+
         const colImg = document.createElement('img');
         colImg.src = app.img;
         colImg.alt = '';
-        colImg.style.cssText = 'height:14px;width:auto;object-fit:contain;border-radius:2px;flex-shrink:0;';
+        colImg.style.cssText = 'height:11px;width:auto;object-fit:contain;border-radius:1px;flex-shrink:0;';
         colBtn.appendChild(colImg);
+
         const colLabel = document.createElement('span');
-        colLabel.textContent = colRef.col.label + ' ▸';
+        colLabel.textContent = 'Chasers ▸';
         colBtn.appendChild(colLabel);
-        chip.appendChild(colBtn);
+        btnRow.appendChild(colBtn);
       }
     }
 
+    chip.appendChild(btnRow);
     panel.appendChild(chip);
   });
 }
