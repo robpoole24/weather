@@ -472,6 +472,7 @@
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Android Link</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Android Soon</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Enabled</th>
+             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Chasers Collection</th>
           </tr>
         </thead>
         <tbody id="apps-table-body"></tbody>
@@ -1068,6 +1069,9 @@ function renderApps() {
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <label class="toggle"><input type="checkbox" ${app.enabled!==false?'checked':''} onchange="appData.apps[${i}].enabled=this.checked"><span class="toggle-slider"></span></label>
       </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        ${buildCollectionRefCell(i, app.collectionRef)}
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -1076,6 +1080,34 @@ function renderApps() {
 async function saveApps() {
   await fetch('/api/admin/apps', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(appData.apps) });
   showToast('Apps saved');
+}
+
+// Build a dropdown of all available collections for the app collectionRef field
+function buildCollectionRefCell(appIndex, currentRef) {
+  // Collect all collections across all channels
+  const options = [{ value: '', label: '— None —' }];
+  (appData.groups || []).forEach(group => {
+    (group.channels || []).forEach(ch => {
+      if (ch.collections && ch.collections.length > 0) {
+        ch.collections.forEach(col => {
+          const ref = ch.id + '::' + col.id;
+          options.push({ value: ref, label: col.label + ' (' + ch.name + ')' });
+        });
+      }
+    });
+  });
+
+  const selectId = 'col-ref-' + appIndex;
+  let html = '<select id="' + selectId + '" style="margin:0;font-size:0.75rem;min-width:160px;" onchange="appData.apps[' + appIndex + '].collectionRef=this.value||null;renderApps()">';
+  options.forEach(opt => {
+    const selected = (currentRef || '') === opt.value ? ' selected' : '';
+    html += '<option value="' + opt.value + '"' + selected + '>' + opt.label + '</option>';
+  });
+  html += '</select>';
+  if (currentRef) {
+    html += ' <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:0.1rem 0.4rem;" onclick="appData.apps[' + appIndex + '].collectionRef=null;renderApps()">✕</button>';
+  }
+  return html;
 }
 
 // ── Cache ──
