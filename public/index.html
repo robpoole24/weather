@@ -2006,13 +2006,18 @@ async function checkAllLiveStatuses() {
     }
 
     // Apply cached statuses to all channel buttons
+    // Secondary guard: only treat as live if confirmed within 12 hours
+    // (server auto-expires at 12h too, but this prevents edge cases)
+    const LIVE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
     let liveCount = 0;
     const liveChannels = [];
     const allChannels = GROUPS.flatMap(g => g.channels || []);
     allChannels.forEach(ch => {
       if (!ch.hasLive) return;
       const status = data.statuses && data.statuses[ch.id];
-      const isLive = status ? status.isLive : false;
+      const freshEnough = status && status.checkedAt &&
+                          (Date.now() - status.checkedAt) < LIVE_MAX_AGE_MS;
+      const isLive = status && status.isLive && freshEnough;
       // Store full status object including videoId, not just boolean
       liveStatuses[ch.id] = isLive ? (data.statuses[ch.id] || true) : false;
       updateLiveButton(ch.id, isLive);

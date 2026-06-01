@@ -1369,9 +1369,26 @@ app.get('/api/yt/live/:channelId', (req, res) => {
 
 // All live statuses at once — lets frontend get everything in one call
 app.get('/api/yt/live-all', (req, res) => {
+  const LIVE_STATUS_MAX_AGE = 12 * 60 * 60 * 1000; // 12 hours
+  const now = Date.now();
+
+  // Auto-expire stale live statuses — YouTube does not notify us when streams end.
+  // Any isLive:true status older than 12 hours is assumed ended.
+  // Active streams get checkedAt refreshed by WebSub notifications and the 6pm fetch.
+  Object.entries(cache.liveStatuses).forEach(([channelId, status]) => {
+    if (status.isLive && status.checkedAt && (now - status.checkedAt) > LIVE_STATUS_MAX_AGE) {
+      const hoursOld = Math.round((now - status.checkedAt) / 3600000);
+      console.log('[WeatherTV] Auto-expiring stale live status for ' + channelId + ' (' + hoursOld + 'h old)');
+      const expired = { isLive: false, videoId: null, checkedAt: now, source: 'auto_expired' };
+      cache.liveStatuses[channelId] = expired;
+      rSet('wt:live:' + channelId, expired, REDIS_TTL.liveStatus);
+    }
+  });
+
   res.json({
     statuses: cache.liveStatuses,
     lastChecked: cache.lastLiveCheck,
+    lastNotification: cache.lastNotificationReceived,
     quotaExceeded
   });
 });
