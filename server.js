@@ -575,12 +575,11 @@ function logFetchError(channelId, channelName, errorMsg) {
 }
 
 // ── Daily live-check quota tracker ──────────────────────────────────────────
-// Each WebSub-triggered checkLiveStatus() costs 100 units.
-// We cap these so the 6pm video fetch always has enough quota left.
-// Budget: 40 live checks (4,000 units) leaves ~6,000 for the video fetch.
-// Resets automatically at midnight by checking today's date.
-const quotaTracker = { date: '', liveChecks: 0 };
-const DAILY_LIVE_CHECK_LIMIT = 40; // 40 × 100 = 4,000 units/day cap
+// Each WebSub-triggered check now uses videos.list (1 unit) not search (100 units).
+// Cap raised to 500 checks/day = ~500 units max (vs old 40 × 100 = 4,000 units).
+// The 100-unit search fallback (no video ID) still counts against this limit.
+const quotaTracker = { date: "", liveChecks: 0 };
+const DAILY_LIVE_CHECK_LIMIT = 500;
 
 function getLiveChecksToday() {
   const today = new Date().toISOString().split('T')[0];
@@ -1108,36 +1107,62 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
     return;
   }
 
-  // Step 6: Ambiguous + not recently checked — optionally confirm live status via API
-  // This catches edge cases where the feed doesn't include liveBroadcastContent
+  // Step 6: Ambiguous — use videos.list?part=liveStreamingDetails for 1 unit (not 100)
+  // This checks if the specific video from the notification is an active live stream
   const liveChecksToday = getLiveChecksToday();
   if (!quotaExceeded && liveChecksToday < DAILY_LIVE_CHECK_LIMIT) {
     const key = getApiKey();
-    if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
+    if (key && key !== 'YOUR_YOUTUBE_API_KEY' && feedVideoId) {
       websubLastCheck[channelId] = Date.now();
       recordLiveCheck();
-      trackBurn(true, 100); // primary key, 100 units
-      console.log('[WebSub] Ambiguous — API confirmation check #' + getLiveChecksToday() + '/' + DAILY_LIVE_CHECK_LIMIT + ' for ' + channelId);
-      const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
-        '&channelId=' + channelId + '&part=id&eventType=live&type=video';
+      trackBurn(true, 1); // videos.list costs 1 unit, not 100
+      console.log('[WebSub] Live detail check (1 unit) for ' + channelId + ' video: ' + feedVideoId);
+      const url = 'https://www.googleapis.com/youtube/v3/videos?key=' + key +
+        '&id=' + feedVideoId + '&part=liveStreamingDetails&fields=items/liveStreamingDetails';
       ytFetch(url).then(data => {
         if (checkQuotaError(data)) { markQuotaExceeded(); return; }
-        const isLive = !!(data.items && data.items.length > 0);
-        const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
+        const details = data.items && data.items[0] && data.items[0].liveStreamingDetails;
+        // Active live stream: has actualStartTime but no actualEndTime
+        const isLive = !!(details && details.actualStartTime && !details.actualEndTime);
         const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
-        const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub_api' };
+        const wsEntry = { isLive, videoId: isLive ? feedVideoId : null, checkedAt: Date.now(), source: 'websub_details' };
         cache.liveStatuses[channelId] = wsEntry;
         cache.lastLiveCheck = Date.now();
         rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
         rSet('wt:lastLive', cache.lastLiveCheck);
         if (isLive) updateChannelActivity(channelId, { lastLiveDate: Date.now() });
-        if (isLive && !wasLive)  console.log('[WebSub] LIVE CONFIRMED (API): ' + channelId);
+        if (isLive && !wasLive)  console.log('[WebSub] LIVE CONFIRMED (1 unit): ' + channelId);
         else if (!isLive && wasLive) console.log('[WebSub] OFFLINE: ' + channelId + ' stream ended');
         else console.log('[WebSub] ' + channelId + ' posted content (not live)');
-      }).catch(e => console.error('[WebSub] Confirmation error for ' + channelId + ':', e.message));
+      }).catch(e => console.error('[WebSub] Detail check error for ' + channelId + ':', e.message));
+    } else if (!feedVideoId) {
+      // No video ID in notification — fall back to search (100 units) as last resort
+      const key = getApiKey();
+      if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
+        websubLastCheck[channelId] = Date.now();
+        recordLiveCheck();
+        trackBurn(true, 100);
+        console.log('[WebSub] No video ID — fallback search check for ' + channelId);
+        const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+          '&channelId=' + channelId + '&part=id&eventType=live&type=video';
+        ytFetch(url).then(data => {
+          if (checkQuotaError(data)) { markQuotaExceeded(); return; }
+          const isLive = !!(data.items && data.items.length > 0);
+          const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
+          const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+          const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub_search' };
+          cache.liveStatuses[channelId] = wsEntry;
+          cache.lastLiveCheck = Date.now();
+          rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
+          rSet('wt:lastLive', cache.lastLiveCheck);
+          if (isLive) updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+          if (isLive && !wasLive) console.log('[WebSub] LIVE CONFIRMED (search): ' + channelId);
+          else if (!isLive && wasLive) console.log('[WebSub] OFFLINE: ' + channelId);
+        }).catch(e => console.error('[WebSub] Search error for ' + channelId + ':', e.message));
+      }
     }
   } else {
-    console.log('[WebSub] ' + channelId + ' posted — skipping confirmation (daily limit reached or quota exceeded)');
+    console.log('[WebSub] ' + channelId + ' posted — skipping check (daily limit reached or quota exceeded)');
   }
 });
 
