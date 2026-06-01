@@ -1551,8 +1551,7 @@ app.get('/api/admin/redis-memory', async (req, res) => {
   if (!redis) return res.json({ available: false, message: 'Redis not configured' });
   try {
     const info = await redis.info('memory');
-    const lines = info.split('
-');
+    const lines = info.split('\r\n');
     const get = key => { const l = lines.find(x => x.startsWith(key + ':')); return l ? l.split(':')[1].trim() : null; };
     res.json({
       available: true,
