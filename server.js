@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-29 build.1780070000
+// WeatherTV Server — updated 2026-05-30 build.1780090000
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -494,6 +494,12 @@ function getApiKey() {
   return process.env.YOUTUBE_API_KEY || loadData().config.apiKey;
 }
 
+// Archive key (YOUTUBE_API_KEY_2) — used for recent video fetches and playlist access
+// Falls back to primary key if not configured
+function getArchiveApiKey() {
+  return process.env.YOUTUBE_API_KEY_2 || getApiKey();
+}
+
 function ytFetch(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
@@ -523,6 +529,9 @@ if (process.env.REDIS_URL) {
   console.warn('[Redis] No REDIS_URL — using in-memory cache only');
 }
 
+// ── Server start time ────────────────────────────────────────────────────────
+const SERVER_START_TIME = Date.now();
+
 // In-memory mirrors (fast reads, Redis for persistence)
 const cache = {
   liveStatuses: {},
@@ -530,9 +539,40 @@ const cache = {
   playlist: {},
   channelActivity: {}, // { channelId: { lastVideoDate, lastLiveDate, nextFetchDue } }
   lastLiveCheck: null,
+  lastNotificationReceived: null, // last WebSub push from YouTube (free, 0 units)
   lastRecentFetch: null,
   websubActive: false,
 };
+
+// ── Daily quota burn tracker ─────────────────────────────────────────────────
+// Tracks estimated total API units used per day, per key.
+// Resets automatically at midnight by checking today's date.
+const burnTracker = { date: '', primaryUnits: 0, archiveUnits: 0 };
+
+function trackBurn(isPrimary, units = 100) {
+  const today = new Date().toISOString().split('T')[0];
+  if (burnTracker.date !== today) {
+    burnTracker.date = today;
+    burnTracker.primaryUnits = 0;
+    burnTracker.archiveUnits = 0;
+  }
+  if (isPrimary) burnTracker.primaryUnits += units;
+  else burnTracker.archiveUnits += units;
+}
+
+// ── WebSub subscription lease tracker ───────────────────────────────────────
+// Tracks per-channel subscription status and lease expiry.
+const websubLeases = {}; // { channelId: { subscribedAt, expiresAt, status } }
+
+// ── Failed fetch error log ────────────────────────────────────────────────────
+// Circular buffer of last 50 fetch errors — visible in admin panel.
+const fetchErrorLog = [];
+const MAX_FETCH_ERRORS = 50;
+
+function logFetchError(channelId, channelName, errorMsg) {
+  fetchErrorLog.unshift({ channelId, channelName, error: errorMsg, timestamp: Date.now() });
+  if (fetchErrorLog.length > MAX_FETCH_ERRORS) fetchErrorLog.pop();
+}
 
 // ── Daily live-check quota tracker ──────────────────────────────────────────
 // Each WebSub-triggered checkLiveStatus() costs 100 units.
@@ -572,13 +612,24 @@ function getChannelTier(ch) {
   const act = cache.channelActivity[ch.id] || {};
   const now = Date.now();
   const DAY = 86400000;
-  const lastVideoAge = act.lastVideoDate ? (now - act.lastVideoDate) / DAY : 999;
-  const lastLiveAge  = act.lastLiveDate  ? (now - act.lastLiveDate)  / DAY : 999;
 
-  if (lastVideoAge < 14) return 1;                  // recently posted
-  if (ch.hasLive && lastLiveAge < 30) return 1;     // recently live
-  if (ch.hasLive) return 2;                          // has live but inactive
-  return 3;                                          // no live, inactive
+  const hasVideoHistory = !!act.lastVideoDate;
+  const hasLiveHistory  = !!act.lastLiveDate;
+
+  // Bootstrap case — no activity data ever recorded for this channel.
+  // Use hasLive as a proxy: live-capable channels are almost certainly active,
+  // non-live channels can wait for a 14-day check without losing much freshness.
+  if (!hasVideoHistory && !hasLiveHistory) {
+    return ch.hasLive ? 1 : 3;
+  }
+
+  const lastVideoAge = hasVideoHistory ? (now - act.lastVideoDate) / DAY : 999;
+  const lastLiveAge  = hasLiveHistory  ? (now - act.lastLiveDate)  / DAY : 999;
+
+  if (lastVideoAge < 14) return 1;              // recently posted video
+  if (ch.hasLive && lastLiveAge < 30) return 1; // recently confirmed live
+  if (ch.hasLive) return 2;                      // has live capability, but inactive
+  return 3;                                      // no live, inactive video poster
 }
 
 // Should a Tier 2/3 channel be fetched today?
@@ -643,6 +694,8 @@ async function restoreCacheFromRedis() {
     if (lastFetch) cache.lastRecentFetch = lastFetch;
     const lastLive = await rGet('wt:lastLive');
     if (lastLive) cache.lastLiveCheck = lastLive;
+    const lastNotification = await rGet('wt:lastNotification');
+    if (lastNotification) cache.lastNotificationReceived = lastNotification;
     const websubActive = await rGet('wt:websubActive');
     if (websubActive !== null) cache.websubActive = websubActive;
 
@@ -901,10 +954,21 @@ async function websubSubscribe(channelId) {
       }
     };
     const req = https.request(opts, res => {
+      const now = Date.now();
+      const status = res.statusCode >= 200 && res.statusCode < 300 ? 'active' : 'failed';
+      websubLeases[channelId] = {
+        subscribedAt: now,
+        expiresAt: now + WEBSUB_LEASE * 1000,
+        status,
+        statusCode: res.statusCode,
+      };
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       resolve(res.statusCode);
     });
-    req.on('error', reject);
+    req.on('error', e => {
+      websubLeases[channelId] = { subscribedAt: Date.now(), expiresAt: null, status: 'error', error: e.message };
+      reject(e);
+    });
     req.write(postData);
     req.end();
   });
@@ -995,6 +1059,10 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   const channelId = req.params.channelId;
   const body = req.body ? req.body.toString() : '';
 
+  // Track that YouTube pushed a notification to us (free, 0 units)
+  cache.lastNotificationReceived = Date.now();
+  rSet('wt:lastNotification', cache.lastNotificationReceived);
+
   // Step 1: Parse Atom feed — free, no quota cost
   // Extract video ID and live status directly from the feed XML
   const videoIdMatch = body.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
@@ -1048,6 +1116,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
     if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
       websubLastCheck[channelId] = Date.now();
       recordLiveCheck();
+      trackBurn(true, 100); // primary key, 100 units
       console.log('[WebSub] Ambiguous — API confirmation check #' + getLiveChecksToday() + '/' + DAILY_LIVE_CHECK_LIMIT + ' for ' + channelId);
       const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
         '&channelId=' + channelId + '&part=id&eventType=live&type=video';
@@ -1112,7 +1181,7 @@ async function fetchAllRecentVideos() {
     }
   }
 
-  const key = getApiKey();
+  const key = getArchiveApiKey();
   if (!key || key === 'YOUR_YOUTUBE_API_KEY') return;
 
   const allChannels = getAllChannels();
@@ -1171,6 +1240,8 @@ async function fetchAllRecentVideos() {
         break;
       }
 
+      trackBurn(false, 100); // archive key, 100 units per channel
+
       const newItems = data.items || [];
 
       // Free live detection from snippet data
@@ -1210,6 +1281,7 @@ async function fetchAllRecentVideos() {
       await new Promise(r => setTimeout(r, 200));
     } catch(e) {
       console.error('[WeatherTV] Fetch error for ' + ch.id + ':', e.message);
+      logFetchError(ch.id, ch.name, e.message);
     }
   }
 
@@ -1369,7 +1441,15 @@ app.get('/api/yt/playlist/:playlistId', async (req, res) => {
 
 // Quota status
 app.get('/api/yt/quota-status', (req, res) => {
-  res.json({ quotaExceeded, lastLiveCheck: cache.lastLiveCheck });
+  res.json({
+    quotaExceeded,
+    lastLiveCheck: cache.lastLiveCheck,
+    lastNotificationReceived: cache.lastNotificationReceived,
+    lastRecentFetch: cache.lastRecentFetch,
+    liveChecksToday: getLiveChecksToday(),
+    liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+    archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
+  });
 });
 
 // Manual trigger for live check — for diagnostics
@@ -1405,6 +1485,141 @@ app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
 
 // Manual live override — mark a channel live when you know the video ID
 // Use when a stream has been live for hours and WebSub didn't catch it
+
+// ── Diagnostic endpoints ──────────────────────────────────────────────────────
+
+// Server info — uptime, start time, Node version
+app.get('/api/admin/server-info', (req, res) => {
+  res.json({
+    startTime: SERVER_START_TIME,
+    uptimeMs: Date.now() - SERVER_START_TIME,
+    nodeVersion: process.version,
+    platform: process.platform,
+    memoryMB: Math.round(process.memoryUsage().rss / 1048576),
+  });
+});
+
+// Quota burn rate — units used today per key
+app.get('/api/admin/quota-burn', (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  res.json({
+    date: burnTracker.date || today,
+    primaryUnits: burnTracker.date === today ? burnTracker.primaryUnits : 0,
+    archiveUnits: burnTracker.date === today ? burnTracker.archiveUnits : 0,
+    primaryLimit: 10000,
+    archiveLimit: process.env.YOUTUBE_API_KEY_2 ? 10000 : 0,
+    liveChecksToday: getLiveChecksToday(),
+    liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+  });
+});
+
+// WebSub health — per-channel subscription status and lease expiry
+app.get('/api/admin/websub-health', (req, res) => {
+  const channels = getAllChannels().filter(ch => ch.hasLive);
+  const now = Date.now();
+  const leases = channels.map(ch => {
+    const lease = websubLeases[ch.id];
+    const hoursUntilExpiry = lease && lease.expiresAt ? (lease.expiresAt - now) / 3600000 : null;
+    return {
+      id: ch.id, name: ch.name,
+      status: lease ? lease.status : 'unknown',
+      subscribedAt: lease ? lease.subscribedAt : null,
+      expiresAt: lease ? lease.expiresAt : null,
+      hoursUntilExpiry: hoursUntilExpiry !== null ? Math.round(hoursUntilExpiry * 10) / 10 : null,
+      expiringSoon: hoursUntilExpiry !== null && hoursUntilExpiry < 24,
+      expired: hoursUntilExpiry !== null && hoursUntilExpiry < 0,
+    };
+  });
+  leases.sort((a, b) => (a.hoursUntilExpiry ?? 999) - (b.hoursUntilExpiry ?? 999));
+  res.json({
+    total: channels.length,
+    active: leases.filter(l => l.status === 'active').length,
+    failed: leases.filter(l => l.status === 'failed' || l.status === 'error').length,
+    unknown: leases.filter(l => l.status === 'unknown').length,
+    expiringSoon: leases.filter(l => l.expiringSoon && !l.expired).length,
+    leases,
+  });
+});
+
+// Failed fetch log
+app.get('/api/admin/fetch-errors', (req, res) => {
+  res.json({ errors: fetchErrorLog, total: fetchErrorLog.length });
+});
+
+// Redis memory usage
+app.get('/api/admin/redis-memory', async (req, res) => {
+  if (!redis) return res.json({ available: false, message: 'Redis not configured' });
+  try {
+    const info = await redis.info('memory');
+    const lines = info.split('
+');
+    const get = key => { const l = lines.find(x => x.startsWith(key + ':')); return l ? l.split(':')[1].trim() : null; };
+    res.json({
+      available: true,
+      usedMemoryHuman: get('used_memory_human'),
+      usedMemoryPeakHuman: get('used_memory_peak_human'),
+      usedMemoryBytes: parseInt(get('used_memory') || '0'),
+      maxMemoryBytes: parseInt(get('maxmemory') || '0'),
+      maxMemoryHuman: get('maxmemory_human'),
+      keyCount: await redis.dbsize(),
+    });
+  } catch(e) { res.json({ available: false, error: e.message }); }
+});
+
+// Channel ID validator
+app.post('/api/admin/validate-channel', async (req, res) => {
+  const { channelId } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return res.status(500).json({ error: 'No API key configured' });
+  try {
+    trackBurn(true, 1);
+    const url = 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
+      '&id=' + channelId + '&part=snippet&fields=items/snippet/title,items/snippet/thumbnails,items/snippet/customUrl';
+    const data = await ytFetch(url);
+    if (checkQuotaError(data)) { markQuotaExceeded(); return res.status(429).json({ error: 'quota_exceeded' }); }
+    if (!data.items || data.items.length === 0) return res.json({ valid: false, error: 'Channel not found — check the channel ID' });
+    const s = data.items[0].snippet;
+    res.json({ valid: true, name: s.title, customUrl: s.customUrl || null,
+      thumbnail: s.thumbnails ? (s.thumbnails.default || s.thumbnails.medium || {}).url : null });
+  } catch(e) { res.json({ valid: false, error: e.message }); }
+});
+
+// Live stream lookup — check if a channel is currently live and optionally mark it
+app.post('/api/admin/lookup-live', async (req, res) => {
+  const { channelId, markLive } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return res.status(500).json({ error: 'No API key configured' });
+  if (quotaExceeded) return res.status(429).json({ error: 'quota_exceeded' });
+  try {
+    trackBurn(true, 100);
+    recordLiveCheck();
+    const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+      '&channelId=' + channelId + '&part=id,snippet&eventType=live&type=video&maxResults=1';
+    const data = await ytFetch(url);
+    if (checkQuotaError(data)) { markQuotaExceeded(); return res.status(429).json({ error: 'quota_exceeded' }); }
+    const isLive = !!(data.items && data.items.length > 0);
+    const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
+    const title = isLive && data.items[0].snippet ? data.items[0].snippet.title : null;
+    if (markLive && isLive && videoId) {
+      const entry = { isLive: true, videoId, checkedAt: Date.now(), source: 'admin_lookup' };
+      cache.liveStatuses[channelId] = entry;
+      await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+      await updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+      cache.lastLiveCheck = Date.now();
+      rSet('wt:lastLive', cache.lastLiveCheck);
+    } else if (!isLive) {
+      const entry = { isLive: false, videoId: null, checkedAt: Date.now(), source: 'admin_lookup' };
+      cache.liveStatuses[channelId] = entry;
+      await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+      cache.lastLiveCheck = Date.now();
+      rSet('wt:lastLive', cache.lastLiveCheck);
+    }
+    res.json({ isLive, videoId, title, channelId, marked: !!(markLive && isLive) });
+  } catch(e) { res.json({ isLive: false, error: e.message }); }
+});
+
 app.post('/api/admin/mark-live', async (req, res) => {
   const { channelId, videoId } = req.body || {};
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
@@ -1426,15 +1641,80 @@ app.post('/api/admin/mark-offline', async (req, res) => {
   console.log('[Admin] Manually marked offline: ' + channelId);
   res.json({ ok: true, channelId, message: 'Channel marked offline' });
 });
+
+// Channel health report — full per-channel diagnostic for admin panel
+app.get('/api/admin/channel-health', (req, res) => {
+  const channels = getAllChannels();
+  const now = Date.now();
+
+  const report = channels.map(ch => {
+    const act = cache.channelActivity[ch.id] || {};
+    const live = cache.liveStatuses[ch.id] || {};
+    const recent = cache.recentVideos[ch.id] || {};
+    const tier = getChannelTier(ch);
+    const onSkip = tier !== 1 && act.nextFetchDue && now < act.nextFetchDue;
+
+    return {
+      id: ch.id,
+      name: ch.name,
+      group: ch.group || '',
+      hasLive: !!ch.hasLive,
+      tier,
+      lastLiveDate: act.lastLiveDate || null,
+      lastVideoDate: act.lastVideoDate || null,
+      lastFetchDate: recent.cachedAt || null,
+      lastLiveCheck: live.checkedAt || null,
+      liveCheckSource: live.source || null,
+      nextFetchDue: act.nextFetchDue || null,
+      isCurrentlyLive: !!live.isLive,
+      onLiveSkip: tier === 2 && onSkip,
+      onVideoSkip: tier === 3 && onSkip,
+      hasRecentCache: !!(recent.items && recent.items.length > 0),
+    };
+  });
+
+  report.sort((a, b) => a.name.localeCompare(b.name));
+  res.json({
+    channels: report,
+    generatedAt: now,
+    summary: {
+      total: report.length,
+      tier1: report.filter(c => c.tier === 1).length,
+      tier2: report.filter(c => c.tier === 2).length,
+      tier3: report.filter(c => c.tier === 3).length,
+      live: report.filter(c => c.isCurrentlyLive).length,
+      noCache: report.filter(c => !c.hasRecentCache).length,
+      liveChecksToday: getLiveChecksToday(),
+      liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+      quotaExceeded,
+      lastNotification: cache.lastNotificationReceived,
+      lastLiveCheck: cache.lastLiveCheck,
+      lastVideoFetch: cache.lastRecentFetch,
+      archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
+    }
+  });
+});
 app.get('/api/admin/test-connectivity', async (req, res) => {
-  const key = getApiKey();
-  try {
-    const url = 'https://www.googleapis.com/youtube/v3/channels?key=' + key + '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
-    const data = await ytFetch(url);
-    res.json({ ok: true, response: data });
-  } catch(e) {
-    res.json({ ok: false, error: e.message });
-  }
+  const testUrl = key => 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
+    '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
+  const primaryKey = getApiKey();
+  const archiveKey = process.env.YOUTUBE_API_KEY_2;
+  const testKey = async (key, label) => {
+    if (!key || key === 'YOUR_YOUTUBE_API_KEY') return { ok: false, label, error: 'Not configured' };
+    try {
+      const data = await ytFetch(testUrl(key));
+      if (checkQuotaError(data)) return { ok: false, label, error: 'Quota exceeded' };
+      const title = data.items && data.items[0] && data.items[0].snippet && data.items[0].snippet.title;
+      return { ok: true, label, channel: title || 'Connected' };
+    } catch(e) { return { ok: false, label, error: e.message }; }
+  };
+  const [primary, archive] = await Promise.all([
+    testKey(primaryKey, 'Primary (Live)'),
+    archiveKey
+      ? testKey(archiveKey, 'Archive (Videos)')
+      : Promise.resolve({ ok: null, label: 'Archive (Videos)', error: 'YOUTUBE_API_KEY_2 not set — using primary key as fallback' }),
+  ]);
+  res.json({ primary, archive });
 });
 
 // Cache management — admin only
@@ -1477,10 +1757,17 @@ app.get('/api/admin/cache/status', (req, res) => {
 
   res.json({
     playlist: { entries: playlistCached, ttlHours: 48 },
-    recentVideos: { entries: recentCached, ttlHours: 24, lastFetch },
-    liveStatuses: { entries: liveCached, lastChecked: lastLiveCheck },
+    recentVideos: { entries: recentCached, ttlHours: 168, lastFetch },
+    liveStatuses: {
+      entries: liveCached,
+      lastChecked: lastLiveCheck,
+      lastNotification: cache.lastNotificationReceived,
+    },
     websubActive: cache.websubActive,
-    quotaExceeded
+    quotaExceeded,
+    liveChecksToday: getLiveChecksToday(),
+    liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+    archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
   });
 });
 

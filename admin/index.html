@@ -168,6 +168,8 @@
       </div>
 
       <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+      <button class="btn btn-ghost" onclick="testConnectivity()" style="margin-left:0.5rem">Test API Keys</button>
+      <div id="connectivity-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;display:none;"></div>
       <div style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;">Note: Interval changes take effect after the next scheduled run or server restart.</div>
     </div>
   </div>
@@ -216,9 +218,29 @@
 
   <!-- Cache -->
   <div class="section">
-    <div class="section-header"><div class="section-title">⚡ Cache Management</div></div>
+    <div class="section-header"><div class="section-title">⚡ Cache & Diagnostics</div></div>
     <div class="section-body">
       <p style="font-size:0.85rem;color:var(--muted);margin-bottom:1.25rem;line-height:1.6">Content is cached server-side to conserve YouTube API quota.</p>
+
+      <!-- Precise timestamps -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1rem;margin-bottom:1.25rem;font-family:'Barlow Condensed',sans-serif;">
+        <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">System Timestamps</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:0.35rem 1.25rem;font-size:0.8rem;">
+          <span style="color:var(--muted)">Last Notification:</span><span id="ts-notification" style="color:var(--text)">—</span>
+          <span style="color:var(--muted)">Last Live Check:</span><span id="ts-live" style="color:var(--text)">—</span>
+          <span style="color:var(--muted)">Last Video Fetch:</span><span id="ts-fetch" style="color:var(--text)">—</span>
+          <span style="color:var(--muted)">Live Checks Today:</span><span id="ts-quota" style="color:var(--text)">—</span>
+          <span style="color:var(--muted)">Archive Key:</span><span id="ts-archivekey" style="color:var(--text)">—</span>
+          <span style="color:var(--muted)">Quota Status:</span><span id="ts-quotastatus" style="color:var(--text)">—</span>
+        </div>
+      </div>
+
+      <!-- Channel health report button -->
+      <div style="margin-bottom:1.25rem;">
+        <button class="btn btn-primary" onclick="openHealthReport()" style="margin-right:0.5rem">📊 Channel Health Report</button>
+        <span style="font-size:0.8rem;color:var(--muted)">Per-channel fetch status, tier assignments, cache health</span>
+      </div>
+
       <div class="cache-row">
         <div class="cache-row-info">
           <div class="cache-row-title">Weather Playlist</div>
@@ -251,7 +273,176 @@
     </div>
   </div>
 
-  <!-- Apps -->
+  <!-- Channel Health Report Modal -->
+  <div id="health-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;overflow:auto;padding:2rem;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;max-width:1100px;margin:0 auto;padding:1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <div>
+          <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:1.1rem;letter-spacing:0.06em;text-transform:uppercase">Channel Health Report</div>
+          <div id="health-generated" style="font-size:0.75rem;color:var(--muted)">Loading...</div>
+        </div>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="btn btn-primary btn-sm" onclick="exportHealthCSV()">⬇ Export CSV</button>
+          <button class="btn btn-ghost btn-sm" onclick="closeHealthReport()">✕ Close</button>
+        </div>
+      </div>
+
+      <!-- Summary pills -->
+      <div id="health-summary" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;"></div>
+
+      <!-- Sort controls -->
+      <div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.5rem">Click column headers to sort</div>
+
+      <div style="overflow-x:auto;">
+        <table id="health-table" style="width:100%;border-collapse:collapse;font-size:0.8rem;white-space:nowrap;">
+          <thead>
+            <tr style="background:var(--surface2);">
+              <th onclick="sortHealth('name')" style="padding:0.5rem 0.75rem;text-align:left;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Channel ↕</th>
+              <th onclick="sortHealth('group')" style="padding:0.5rem 0.75rem;text-align:left;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Group ↕</th>
+              <th onclick="sortHealth('tier')" style="padding:0.5rem 0.75rem;text-align:center;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Tier ↕</th>
+              <th onclick="sortHealth('isCurrentlyLive')" style="padding:0.5rem 0.75rem;text-align:center;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Live ↕</th>
+              <th onclick="sortHealth('lastLiveDate')" style="padding:0.5rem 0.75rem;text-align:left;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Last Confirmed Live ↕</th>
+              <th onclick="sortHealth('lastLiveCheck')" style="padding:0.5rem 0.75rem;text-align:left;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Last Live Check ↕</th>
+              <th onclick="sortHealth('lastFetchDate')" style="padding:0.5rem 0.75rem;text-align:left;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Last Video Fetch ↕</th>
+              <th onclick="sortHealth('nextFetchDue')" style="padding:0.5rem 0.75rem;text-align:left;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Next Fetch Due ↕</th>
+              <th onclick="sortHealth('hasRecentCache')" style="padding:0.5rem 0.75rem;text-align:center;cursor:pointer;user-select:none;border-bottom:1px solid var(--border)">Has Cache ↕</th>
+              <th style="padding:0.5rem 0.75rem;text-align:center;border-bottom:1px solid var(--border)">Skip</th>
+            </tr>
+          </thead>
+          <tbody id="health-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  
+  <!-- System Health -->
+  <div class="section">
+    <div class="section-header"><div class="section-title">🖥 System Health</div></div>
+    <div class="section-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+
+        <!-- Server info -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1rem;">
+          <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Server</div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 1rem;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;">
+            <span style="color:var(--muted)">Uptime:</span><span id="si-uptime">—</span>
+            <span style="color:var(--muted)">Started:</span><span id="si-start">—</span>
+            <span style="color:var(--muted)">Memory:</span><span id="si-mem">—</span>
+            <span style="color:var(--muted)">Node:</span><span id="si-node">—</span>
+          </div>
+        </div>
+
+        <!-- Redis info -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1rem;">
+          <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Redis Cache</div>
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 1rem;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;">
+            <span style="color:var(--muted)">Used:</span><span id="redis-used">—</span>
+            <span style="color:var(--muted)">Peak:</span><span id="redis-peak">—</span>
+            <span style="color:var(--muted)">Keys:</span><span id="redis-keys">—</span>
+            <span style="color:var(--muted)">Limit:</span><span id="redis-limit">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quota burn -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1rem;">
+        <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">API Quota Usage Today</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+          <div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);margin-bottom:0.35rem">Primary Key (Live Checks)</div>
+            <div id="burn-primary-bar" style="background:var(--border);border-radius:4px;height:8px;margin-bottom:0.3rem"><div id="burn-primary-fill" style="background:var(--accent);height:100%;border-radius:4px;width:0%"></div></div>
+            <div id="burn-primary-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 10,000 units</div>
+          </div>
+          <div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);margin-bottom:0.35rem">Archive Key (Video Fetches)</div>
+            <div id="burn-archive-bar" style="background:var(--border);border-radius:4px;height:8px;margin-bottom:0.3rem"><div id="burn-archive-fill" style="background:var(--gold);height:100%;border-radius:4px;width:0%"></div></div>
+            <div id="burn-archive-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 10,000 units</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WebSub Health -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">📡 Notification Subscriptions</div>
+      <button class="btn btn-ghost btn-sm" onclick="renewWebSub()">Renew All</button>
+    </div>
+    <div class="section-body">
+      <div id="websub-summary" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
+      <div style="overflow-x:auto;">
+        <table id="websub-table" style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+          <thead>
+            <tr style="background:var(--surface2);">
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Channel</th>
+              <th style="padding:0.4rem 0.75rem;text-align:center;border-bottom:1px solid var(--border)">Status</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Subscribed</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Expires</th>
+              <th style="padding:0.4rem 0.75rem;text-align:right;border-bottom:1px solid var(--border)">Hrs Remaining</th>
+            </tr>
+          </thead>
+          <tbody id="websub-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Failed Fetch Log -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">⚠ Recent Fetch Errors</div>
+      <button class="btn btn-ghost btn-sm" onclick="exportErrorCSV()">⬇ Export CSV</button>
+    </div>
+    <div class="section-body">
+      <div id="fetch-error-count" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
+      <div style="overflow-x:auto;">
+        <table id="error-table" style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+          <thead>
+            <tr style="background:var(--surface2);">
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Time</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Channel</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Error</th>
+            </tr>
+          </thead>
+          <tbody id="error-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channel Tools -->
+  <div class="section">
+    <div class="section-header"><div class="section-title">🔧 Channel Tools</div></div>
+    <div class="section-body">
+
+      <!-- Channel ID Validator -->
+      <div style="margin-bottom:1.5rem;">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">Channel ID Validator</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Verify a channel ID resolves to a real YouTube channel before adding it. Costs 1 quota unit.</div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input id="validate-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
+          <button class="btn btn-primary btn-sm" onclick="validateChannel()">Validate</button>
+        </div>
+        <div id="validate-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
+      </div>
+
+      <!-- Live Stream Lookup -->
+      <div>
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">Live Stream Lookup</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Check if a channel is currently live and mark it. Useful when a stream has been live for hours and was missed by notifications. Costs 100 quota units.</div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input id="lookup-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
+          <button class="btn btn-primary btn-sm" onclick="lookupLive(false)">Check Only</button>
+          <button class="btn btn-ghost btn-sm" onclick="lookupLive(true)">Check &amp; Mark Live</button>
+        </div>
+        <div id="lookup-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
+      </div>
+    </div>
+  </div>
+
+<!-- Apps -->
   <div class="section">
     <div class="section-header"><div class="section-title">📱 Weather Apps</div></div>
     <div class="section-body">
@@ -907,6 +1098,354 @@ async function loadCacheStatus() {
   } catch(e) {}
 }
 
+function fmtTs(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString('en-US', {
+    month:'2-digit', day:'2-digit', year:'numeric',
+    hour:'2-digit', minute:'2-digit', second:'2-digit',
+    timeZoneName:'short'
+  });
+}
+
+async function loadCacheStatus() {
+  try {
+    const res = await fetch('/api/admin/cache/status');
+    const data = await res.json();
+    const liveEl = document.getElementById('cache-status-display');
+    const liveSub = document.getElementById('live-cache-sub');
+    const websubBtn = document.getElementById('websub-btn');
+
+    // Precise timestamps panel
+    document.getElementById('ts-notification').textContent = fmtTs(data.liveStatuses.lastNotification);
+    document.getElementById('ts-live').textContent = fmtTs(data.liveStatuses.lastChecked);
+    document.getElementById('ts-fetch').textContent = fmtTs(data.recentVideos.lastFetch);
+    document.getElementById('ts-quota').textContent = (data.liveChecksToday || 0) + ' / ' + (data.liveCheckLimit || 40) + ' checks used today';
+    document.getElementById('ts-archivekey').textContent = data.archiveKeyConfigured ? '✓ Configured (dual-key mode)' : '✗ Not set — using primary key for all fetches';
+    document.getElementById('ts-archivekey').style.color = data.archiveKeyConfigured ? 'var(--green)' : 'var(--muted)';
+
+    if (data.quotaExceeded) {
+      document.getElementById('ts-quotastatus').textContent = '⚠ Exceeded — resets at midnight Pacific';
+      document.getElementById('ts-quotastatus').style.color = 'var(--red)';
+    } else {
+      document.getElementById('ts-quotastatus').textContent = 'OK';
+      document.getElementById('ts-quotastatus').style.color = 'var(--green)';
+    }
+
+    if (data.websubActive) {
+      liveSub.textContent = 'Push notifications active — YouTube notifies us instantly';
+      liveEl.textContent = data.liveStatuses.entries + ' channels monitored';
+      liveEl.style.color = 'var(--green)';
+      websubBtn.style.display = 'inline-block';
+    } else {
+      liveSub.textContent = 'Polling every 15 min (WebSub activates on Railway deployment)';
+      liveEl.textContent = data.liveStatuses.lastChecked ? Math.round((Date.now() - data.liveStatuses.lastChecked) / 60000) + 'm ago' : 'Awaiting first check...';
+    }
+    if (data.quotaExceeded) { liveEl.textContent = '⚠ Quota exceeded'; liveEl.style.color = 'var(--red)'; }
+
+    const recentEl = document.getElementById('recent-cache-status');
+    if (data.recentVideos.lastFetch) {
+      const hrs = Math.round((Date.now() - data.recentVideos.lastFetch) / 3600000 * 10) / 10;
+      recentEl.textContent = data.recentVideos.entries + ' channels cached (' + hrs + 'h ago)';
+    } else { recentEl.textContent = 'Awaiting first fetch...'; }
+  } catch(e) {}
+}
+
+// ── Channel Health Report ──────────────────────────────────────────────────
+let healthData = [];
+let healthSortCol = 'name';
+let healthSortAsc = true;
+
+async function openHealthReport() {
+  document.getElementById('health-modal').style.display = 'block';
+  document.body.style.overflow = 'hidden';
+  await refreshHealthReport();
+}
+
+function closeHealthReport() {
+  document.getElementById('health-modal').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+async function refreshHealthReport() {
+  document.getElementById('health-tbody').innerHTML = '<tr><td colspan="10" style="padding:1rem;text-align:center;color:var(--muted)">Loading...</td></tr>';
+  try {
+    const res = await fetch('/api/admin/channel-health');
+    const data = await res.json();
+    healthData = data.channels;
+
+    document.getElementById('health-generated').textContent = 'Generated: ' + fmtTs(data.generatedAt);
+
+    const s = data.summary;
+    document.getElementById('health-summary').innerHTML = [
+      pill(s.total + ' Total', 'var(--muted)'),
+      pill(s.tier1 + ' Active (Daily)', 'var(--green)'),
+      pill(s.tier2 + ' Live-Skip (14d)', 'var(--gold)'),
+      pill(s.tier3 + ' Video-Skip (14d)', 'var(--accent)'),
+      pill(s.live + ' Currently Live', s.live > 0 ? 'var(--red)' : 'var(--muted)'),
+      pill(s.noCache + ' No Cache', s.noCache > 0 ? 'var(--red)' : 'var(--green)'),
+      pill(s.liveChecksToday + '/' + s.liveCheckLimit + ' Live Checks Today', 'var(--muted)'),
+    ].join('');
+
+    renderHealthTable();
+  } catch(e) {
+    document.getElementById('health-tbody').innerHTML = '<tr><td colspan="10" style="padding:1rem;color:var(--red)">Failed to load report</td></tr>';
+  }
+}
+
+function pill(text, color) {
+  return '<span style="display:inline-block;padding:0.2rem 0.6rem;border-radius:12px;font-family:\'Barlow Condensed\',sans-serif;font-size:0.72rem;font-weight:700;letter-spacing:0.06em;background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44">' + text + '</span>';
+}
+
+function sortHealth(col) {
+  if (healthSortCol === col) { healthSortAsc = !healthSortAsc; }
+  else { healthSortCol = col; healthSortAsc = true; }
+  renderHealthTable();
+}
+
+function renderHealthTable() {
+  const sorted = [...healthData].sort((a, b) => {
+    let av = a[healthSortCol], bv = b[healthSortCol];
+    if (av === null || av === undefined) av = healthSortAsc ? Infinity : -Infinity;
+    if (bv === null || bv === undefined) bv = healthSortAsc ? Infinity : -Infinity;
+    if (typeof av === 'string') return healthSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return healthSortAsc ? av - bv : bv - av;
+  });
+
+  const tbody = document.getElementById('health-tbody');
+  tbody.innerHTML = sorted.map(ch => {
+    const tierLabel = ch.tier === 1 ? '<span style="color:var(--green)">Tier 1</span>' : ch.tier === 2 ? '<span style="color:var(--gold)">Tier 2</span>' : '<span style="color:var(--accent)">Tier 3</span>';
+    const liveLabel = ch.isCurrentlyLive ? '<span style="color:var(--red);font-weight:700">● LIVE</span>' : ch.hasLive ? '<span style="color:var(--muted)">—</span>' : '<span style="color:var(--border)">N/A</span>';
+    const cacheLabel = ch.hasRecentCache ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--red)">✗</span>';
+    const skipLabel = ch.onLiveSkip ? '<span style="color:var(--gold)">Live</span>' : ch.onVideoSkip ? '<span style="color:var(--accent)">Video</span>' : '<span style="color:var(--muted)">—</span>';
+    return '<tr style="border-bottom:1px solid var(--border)">' +
+      '<td style="padding:0.4rem 0.75rem">' + ch.name + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;color:var(--muted)">' + ch.group + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;text-align:center">' + tierLabel + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;text-align:center">' + liveLabel + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;color:var(--muted)">' + fmtTs(ch.lastLiveDate) + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;color:var(--muted)">' + fmtTs(ch.lastLiveCheck) + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;color:var(--muted)">' + fmtTs(ch.lastFetchDate) + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;color:var(--muted)">' + fmtTs(ch.nextFetchDue) + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;text-align:center">' + cacheLabel + '</td>' +
+      '<td style="padding:0.4rem 0.75rem;text-align:center">' + skipLabel + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+function exportHealthCSV() {
+  const headers = ['Channel','Group','Tier','Has Live','Currently Live','Last Confirmed Live','Last Live Check','Last Video Fetch','Next Fetch Due','Has Cache','On Skip'];
+  const rows = healthData.map(ch => [
+    ch.name, ch.group, ch.tier, ch.hasLive ? 'Yes' : 'No',
+    ch.isCurrentlyLive ? 'Yes' : 'No',
+    ch.lastLiveDate ? new Date(ch.lastLiveDate).toLocaleString() : '',
+    ch.lastLiveCheck ? new Date(ch.lastLiveCheck).toLocaleString() : '',
+    ch.lastFetchDate ? new Date(ch.lastFetchDate).toLocaleString() : '',
+    ch.nextFetchDue ? new Date(ch.nextFetchDue).toLocaleString() : '',
+    ch.hasRecentCache ? 'Yes' : 'No',
+    ch.onLiveSkip ? 'Live Skip' : ch.onVideoSkip ? 'Video Skip' : 'No'
+  ]);
+
+  const csv = [headers, ...rows].map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'weathertv-channel-health-' + new Date().toISOString().split('T')[0] + '.csv';
+  a.click();
+}
+
+
+// ── System health loaders ─────────────────────────────────────────────────────
+async function loadSystemHealth() {
+  try {
+    const [serverRes, redisRes, burnRes] = await Promise.all([
+      fetch('/api/admin/server-info'),
+      fetch('/api/admin/redis-memory'),
+      fetch('/api/admin/quota-burn'),
+    ]);
+    const server = await serverRes.json();
+    const redis = await redisRes.json();
+    const burn = await burnRes.json();
+
+    // Server
+    const uptimeH = Math.floor(server.uptimeMs / 3600000);
+    const uptimeM = Math.floor((server.uptimeMs % 3600000) / 60000);
+    document.getElementById('si-uptime').textContent = uptimeH + 'h ' + uptimeM + 'm';
+    document.getElementById('si-start').textContent = fmtTs(server.startTime);
+    document.getElementById('si-mem').textContent = server.memoryMB + ' MB';
+    document.getElementById('si-node').textContent = server.nodeVersion;
+
+    // Redis
+    if (redis.available) {
+      document.getElementById('redis-used').textContent = redis.usedMemoryHuman || '—';
+      document.getElementById('redis-peak').textContent = redis.usedMemoryPeakHuman || '—';
+      document.getElementById('redis-keys').textContent = redis.keyCount + ' keys';
+      document.getElementById('redis-limit').textContent = redis.maxMemoryHuman || 'No limit set';
+    } else {
+      document.getElementById('redis-used').textContent = redis.message || redis.error || 'Unavailable';
+    }
+
+    // Quota burn bars
+    const pct = n => Math.min(100, Math.round((n / 10000) * 100));
+    const color = n => n > 8000 ? 'var(--red)' : n > 6000 ? 'var(--gold)' : 'var(--accent)';
+
+    document.getElementById('burn-primary-fill').style.width = pct(burn.primaryUnits) + '%';
+    document.getElementById('burn-primary-fill').style.background = color(burn.primaryUnits);
+    document.getElementById('burn-primary-text').textContent = burn.primaryUnits.toLocaleString() + ' / 10,000 units (' + pct(burn.primaryUnits) + '%)';
+
+    if (burn.archiveLimit > 0) {
+      document.getElementById('burn-archive-fill').style.width = pct(burn.archiveUnits) + '%';
+      document.getElementById('burn-archive-fill').style.background = color(burn.archiveUnits);
+      document.getElementById('burn-archive-text').textContent = burn.archiveUnits.toLocaleString() + ' / 10,000 units (' + pct(burn.archiveUnits) + '%)';
+    } else {
+      document.getElementById('burn-archive-text').textContent = 'Archive key not configured';
+      document.getElementById('burn-archive-text').style.color = 'var(--muted)';
+    }
+  } catch(e) {}
+}
+
+async function loadWebSubHealth() {
+  try {
+    const res = await fetch('/api/admin/websub-health');
+    const data = await res.json();
+    const summary = document.getElementById('websub-summary');
+    summary.innerHTML =
+      '<span style="color:var(--green)">' + data.active + ' active</span> · ' +
+      (data.failed > 0 ? '<span style="color:var(--red)">' + data.failed + ' failed</span> · ' : '') +
+      (data.unknown > 0 ? '<span style="color:var(--muted)">' + data.unknown + ' unknown</span> · ' : '') +
+      (data.expiringSoon > 0 ? '<span style="color:var(--gold)">' + data.expiringSoon + ' expiring within 24h</span> · ' : '') +
+      data.total + ' total channels monitored';
+
+    document.getElementById('websub-tbody').innerHTML = data.leases.map(l => {
+      const statusColor = l.status === 'active' ? 'var(--green)' : l.status === 'unknown' ? 'var(--muted)' : 'var(--red)';
+      const hrsColor = l.expired ? 'var(--red)' : l.expiringSoon ? 'var(--gold)' : 'var(--text)';
+      const hrs = l.hoursUntilExpiry !== null ? (l.expired ? 'EXPIRED' : l.hoursUntilExpiry + 'h') : '—';
+      return '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="padding:0.35rem 0.75rem">' + l.name + '</td>' +
+        '<td style="padding:0.35rem 0.75rem;text-align:center;color:' + statusColor + ';font-weight:600">' + l.status.toUpperCase() + '</td>' +
+        '<td style="padding:0.35rem 0.75rem;color:var(--muted)">' + fmtTs(l.subscribedAt) + '</td>' +
+        '<td style="padding:0.35rem 0.75rem;color:var(--muted)">' + fmtTs(l.expiresAt) + '</td>' +
+        '<td style="padding:0.35rem 0.75rem;text-align:right;color:' + hrsColor + ';font-weight:' + (l.expiringSoon ? '700' : '400') + '">' + hrs + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch(e) {}
+}
+
+async function loadFetchErrors() {
+  try {
+    const res = await fetch('/api/admin/fetch-errors');
+    const data = await res.json();
+    window._fetchErrors = data.errors; // store for export
+    const countEl = document.getElementById('fetch-error-count');
+    if (data.total === 0) {
+      countEl.textContent = '✓ No fetch errors recorded since last server start';
+      countEl.style.color = 'var(--green)';
+      document.getElementById('error-tbody').innerHTML = '<tr><td colspan="3" style="padding:1rem;text-align:center;color:var(--muted)">No errors</td></tr>';
+      return;
+    }
+    countEl.textContent = data.total + ' error(s) recorded since last server start';
+    countEl.style.color = 'var(--red)';
+    document.getElementById('error-tbody').innerHTML = data.errors.map(e =>
+      '<tr style="border-bottom:1px solid var(--border)">' +
+      '<td style="padding:0.35rem 0.75rem;color:var(--muted);white-space:nowrap">' + fmtTs(e.timestamp) + '</td>' +
+      '<td style="padding:0.35rem 0.75rem;white-space:nowrap">' + e.channelName + '</td>' +
+      '<td style="padding:0.35rem 0.75rem;color:var(--red)">' + e.error + '</td>' +
+      '</tr>'
+    ).join('');
+  } catch(e) {}
+}
+
+function exportErrorCSV() {
+  const errors = window._fetchErrors || [];
+  if (errors.length === 0) { showToast('No errors to export'); return; }
+  const headers = ['Timestamp', 'Channel Name', 'Channel ID', 'Error'];
+  const rows = errors.map(e => [
+    new Date(e.timestamp).toLocaleString(),
+    e.channelName,
+    e.channelId,
+    e.error
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'weathertv-fetch-errors-' + new Date().toISOString().split('T')[0] + '.csv';
+  a.click();
+}
+
+// Channel validator
+async function validateChannel() {
+  const channelId = document.getElementById('validate-input').value.trim();
+  const resultEl = document.getElementById('validate-result');
+  if (!channelId) return;
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Checking...</span>';
+  try {
+    const res = await fetch('/api/admin/validate-channel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId })
+    });
+    const data = await res.json();
+    if (data.valid) {
+      resultEl.innerHTML =
+        '<span style="color:var(--green)">✓ Valid channel</span> — ' + data.name +
+        (data.customUrl ? ' (' + data.customUrl + ')' : '') +
+        (data.thumbnail ? ' <img src="' + data.thumbnail + '" style="height:20px;vertical-align:middle;border-radius:50%;margin-left:0.5rem">' : '');
+    } else {
+      resultEl.innerHTML = '<span style="color:var(--red)">✗ ' + (data.error || 'Invalid channel ID') + '</span>';
+    }
+  } catch(e) {
+    resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>';
+  }
+}
+
+// Live stream lookup
+async function lookupLive(markLive) {
+  const channelId = document.getElementById('lookup-input').value.trim();
+  const resultEl = document.getElementById('lookup-result');
+  if (!channelId) return;
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Checking live status (100 units)...</span>';
+  try {
+    const res = await fetch('/api/admin/lookup-live', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId, markLive })
+    });
+    const data = await res.json();
+    if (data.error === 'quota_exceeded') {
+      resultEl.innerHTML = '<span style="color:var(--red)">⚠ Quota exceeded — try again tomorrow</span>';
+      return;
+    }
+    if (data.isLive) {
+      resultEl.innerHTML = '<span style="color:var(--red)">● LIVE</span> — ' +
+        (data.title || 'Untitled stream') +
+        (data.videoId ? ' · <a href="https://youtu.be/' + data.videoId + '" target="_blank" style="color:var(--accent)">Watch</a>' : '') +
+        (data.marked ? ' · <span style="color:var(--green)">✓ Marked live in WeatherTV</span>' : '');
+    } else {
+      resultEl.innerHTML = '<span style="color:var(--muted)">Not currently live</span> · Status updated in cache';
+    }
+  } catch(e) {
+    resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>';
+  }
+}
+
+async function testConnectivity() {
+  const resultEl = document.getElementById('connectivity-result');
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Testing both API keys...</span>';
+  try {
+    const res = await fetch('/api/admin/test-connectivity');
+    const data = await res.json();
+    const fmt = r => {
+      if (r.ok === true)   return '<span style="color:var(--green)">✓ ' + r.label + ' — Connected</span>';
+      if (r.ok === null)   return '<span style="color:var(--muted)">⚠ ' + r.label + ' — ' + r.error + '</span>';
+      return '<span style="color:var(--red)">✗ ' + r.label + ' — ' + r.error + '</span>';
+    };
+    resultEl.innerHTML = fmt(data.primary) + '<br>' + fmt(data.archive);
+  } catch(e) {
+    resultEl.innerHTML = '<span style="color:var(--red)">✗ Could not reach server</span>';
+  }
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = '✓ ' + msg;
@@ -916,6 +1455,12 @@ function showToast(msg) {
 
 loadData();
 setInterval(loadCacheStatus, 30000);
+loadSystemHealth();
+loadWebSubHealth();
+loadFetchErrors();
+setInterval(loadSystemHealth, 60000);
+setInterval(loadWebSubHealth, 120000);
+setInterval(loadFetchErrors, 60000);
 </script>
 </body>
 </html>
