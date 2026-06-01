@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-29 build.1780065000 -->
+<!-- WeatherTV App — updated 2026-05-31 build.1780085000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -109,8 +109,6 @@
     .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
     #status-bar { padding: 0.08rem 0.5rem !important; gap: 0.25rem !important; }
     .status-item { font-size: 0.5rem !important; }
-    #live-chat-btn { display: none !important; }
-    #live-chat-panel { display: none !important; }
   }
 
   /* Landscape phone — any width, under 500px tall (phones only, tablets are taller) */
@@ -137,9 +135,6 @@
     /* Shrink logo so it fits in the 50dvh video area */
     #video-placeholder img { max-height: 65% !important; width: auto !important; }
 
-    /* No live chat on phones */
-    #live-chat-btn { display: none !important; }
-    #live-chat-panel { display: none !important; }
   }
 
   /* Tablet (768px+) — full experience, no restrictions */
@@ -717,72 +712,6 @@
   }
   #chat-close-btn:hover { color: var(--text); border-color: var(--text); }
 
-  /* Mobile chat — YouTube-app style: video above, chat below (portrait)
-     or side-by-side (landscape). Control bar hidden. Back button to return. */
-  @media (max-width: 767px) {
-    body.mobile-chat-open #control-bar { display: none !important; }
-    body.mobile-chat-open #video-area {
-      flex: 1 !important;
-      max-height: none !important;
-    }
-    body.mobile-chat-open #video-area-inner {
-      flex-direction: column !important;
-      height: 100% !important;
-    }
-    body.mobile-chat-open #video-wrapper { flex: 0 0 42% !important; }
-    body.mobile-chat-open #live-chat-panel.visible {
-      position: relative !important;
-      inset: auto !important;
-      z-index: auto !important;
-      width: 100% !important;
-      max-width: none !important;
-      min-width: unset !important;
-      flex: 1 !important;
-      border-left: none;
-      border-top: 1px solid var(--border);
-    }
-    body.mobile-chat-open #chat-close-btn {
-      position: relative !important;
-      top: auto !important; right: auto !important;
-      width: 100%;
-      padding: 0.9rem 1.25rem;
-      min-height: 52px;
-      border-radius: 0;
-      border: none;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface2);
-      color: var(--text);
-      font-size: 0; /* hide original text */
-      flex-shrink: 0;
-      touch-action: manipulation;
-    }
-    body.mobile-chat-open #chat-close-btn::before {
-      content: '← Back to WeatherTV';
-      font-size: 0.85rem;
-      font-family: 'Barlow Condensed', sans-serif;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-  }
-
-  /* Landscape mobile chat — side by side (already desktop layout, just hide control bar) */
-  @media (orientation: landscape) and (max-height: 500px) {
-    body.mobile-chat-open #control-bar { display: none !important; }
-    body.mobile-chat-open #video-area { flex: 1 !important; max-height: none !important; }
-    body.mobile-chat-open #video-area-inner { height: 100% !important; }
-    body.mobile-chat-open #video-wrapper { flex: 6 !important; }
-    body.mobile-chat-open #live-chat-panel.visible {
-      position: relative !important;
-      inset: auto !important;
-      z-index: auto !important;
-      flex: 4 !important;
-      width: auto !important;
-      max-width: none !important;
-      min-width: unset !important;
-    }
-  }
-
   /* Panel hint — visible when no group panel is open, hides when one opens */
   #panel-hint {
     display: flex;
@@ -926,9 +855,11 @@
     <span class="status-item status-divider">|</span>
     <span class="status-item" id="live-count-status">0 Channels Currently Live</span>
     <span class="status-item status-divider">|</span>
-    <span class="status-item" id="live-update-status">Last Checked — Live: —</span>
+    <span class="status-item" id="live-update-status">Live: —</span>
     <span class="status-item status-divider">|</span>
-    <span class="status-item" id="video-update-status">Recent Videos: —</span>
+    <span class="status-item" id="notification-status">Notifications: —</span>
+    <span class="status-item status-divider">|</span>
+    <span class="status-item" id="video-update-status">Videos: —</span>
     <span class="status-item status-divider">|</span>
     <span class="status-item" id="time-display"></span>
     <button type="button" class="about-btn" onclick="showAbout()">About</button>
@@ -1709,12 +1640,9 @@ let currentLiveCh = null;
 
 function showChatButton(ch) {
   currentLiveCh = ch;
-  // Remove any existing chat button
   const existing = document.getElementById('chat-toggle-btn');
   if (existing) existing.remove();
 
-  // Find the recent overlay or current panel header area to put the button
-  // We'll add it to the status bar area for visibility
   const statusBar = document.getElementById('status-bar');
   const chatBtn = document.createElement('button');
   chatBtn.id = 'chat-toggle-btn';
@@ -1722,51 +1650,106 @@ function showChatButton(ch) {
   chatBtn.style.cssText = 'margin-left:0;border-color:var(--red);color:var(--red);';
   chatBtn.innerHTML = '💬 Live Chat';
   chatBtn.onclick = () => toggleLiveChat(ch);
-  // Insert before the About button
   const aboutBtn = statusBar.querySelector('.about-btn');
   statusBar.insertBefore(chatBtn, aboutBtn);
 }
 
 async function toggleLiveChat(ch) {
+  // Close mobile overlay if already open
+  const mobileOverlay = document.getElementById('mobile-chat-overlay');
+  if (mobileOverlay && mobileOverlay.style.display !== 'none') {
+    closeMobileChatOverlay();
+    return;
+  }
+  // Close desktop panel if already open
   const chatPanel = document.getElementById('live-chat-panel');
-  if (chatPanel.classList.contains('visible')) {
+  if (chatPanel && chatPanel.classList.contains('visible')) {
     closeLiveChat();
     return;
   }
-  // Fetch the live video ID to get the chat URL
+  // Fetch current live video ID for this channel
   try {
     const res = await fetch('/api/yt/live/' + ch.id);
     const data = await res.json();
     if (data.items && data.items.length > 0 && data.items[0].id && data.items[0].id !== 'live') {
-      const videoId = data.items[0].id;
-      openLiveChat(videoId);
+      openLiveChat(data.items[0].id, ch.name);
     } else {
-      // Fallback — try to get video ID from the live stream embed
-      openLiveChatFallback(ch.id);
+      showToast('Chat unavailable — could not find active stream ID');
     }
   } catch(e) {
-    openLiveChatFallback(ch.id);
+    showToast('Chat unavailable — try again in a moment');
   }
 }
 
-function openLiveChat(videoId) {
+function openLiveChat(videoId, channelName) {
+  const isMobile = Math.min(window.innerWidth, window.innerHeight) < 600 ||
+                   window.innerWidth < 900;
+  if (isMobile) {
+    openMobileChatOverlay(videoId, channelName);
+    return;
+  }
+  // Desktop: sidebar chat panel
   const chatFrame = document.getElementById('chat-frame');
   const domain = window.location.hostname;
   chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain;
   document.getElementById('live-chat-panel').classList.add('visible');
-  if (window.innerWidth < 768) document.body.classList.add('mobile-chat-open');
 }
 
-function openLiveChatFallback(channelId) {
-  // If we can't get video ID, link to channel page live tab
-  window.open('https://www.youtube.com/channel/' + channelId + '/live', '_blank', 'noopener');
+// ── Mobile chat overlay — pure JS, no CSS media queries ──────────────────────
+function openMobileChatOverlay(videoId, channelName) {
+  const overlay  = document.getElementById('mobile-chat-overlay');
+  const videoFrame = document.getElementById('mobile-chat-video-frame');
+  const chatFrame  = document.getElementById('mobile-chat-chat-frame');
+  const titleEl    = document.getElementById('mobile-chat-title');
+
+  videoFrame.src = 'https://www.youtube.com/embed/' + videoId + '?autoplay=1&rel=0';
+  chatFrame.src  = 'https://www.youtube.com/live_chat?v=' + videoId +
+                   '&embed_domain=' + window.location.hostname;
+  if (titleEl) titleEl.textContent = channelName || 'Live Chat';
+
+  setMobileChatLayout();
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
 }
+
+function setMobileChatLayout() {
+  const content   = document.getElementById('mobile-chat-content');
+  const videoArea = document.getElementById('mobile-chat-video-area');
+  if (!content) return;
+  const isLandscape = window.innerWidth > window.innerHeight;
+  if (isLandscape) {
+    content.style.flexDirection   = 'row';
+    videoArea.style.flex          = '0 0 55%';
+    videoArea.style.height        = '100%';
+  } else {
+    content.style.flexDirection   = 'column';
+    videoArea.style.flex          = '0 0 35%';
+    videoArea.style.height        = '';
+  }
+}
+
+function closeMobileChatOverlay() {
+  const overlay = document.getElementById('mobile-chat-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'none';
+  document.getElementById('mobile-chat-video-frame').src = '';
+  document.getElementById('mobile-chat-chat-frame').src  = '';
+  document.body.style.overflow = '';
+}
+
+// Update layout when device is rotated
+window.addEventListener('resize', () => {
+  const overlay = document.getElementById('mobile-chat-overlay');
+  if (overlay && overlay.style.display !== 'none') setMobileChatLayout();
+});
 
 function closeLiveChat() {
   document.body.classList.remove('mobile-chat-open');
-  document.getElementById('live-chat-panel').classList.remove('visible');
-  document.getElementById('chat-frame').src = '';
-  // Remove chat button from status bar
+  closeMobileChatOverlay();
+  const panel = document.getElementById('live-chat-panel');
+  if (panel) panel.classList.remove('visible');
+  const chatFrame = document.getElementById('chat-frame');
+  if (chatFrame) chatFrame.src = '';
   const btn = document.getElementById('chat-toggle-btn');
   if (btn) btn.remove();
   currentLiveCh = null;
@@ -1933,7 +1916,7 @@ async function showRecent(ch, group) {
     });
   } catch (e) {
     const container = document.getElementById('videos-' + ch.id);
-    if (container) container.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Could not load videos.</span>';
+    if (container) container.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Videos are syncing — check back in a few minutes or <a href="#" onclick="showRecent(' + JSON.stringify(ch) + ',\'' + group + '\');return false;" style="color:var(--accent)">retry now</a>.</span>';
   }
 }
 
@@ -2143,8 +2126,11 @@ async function updateCacheStatus() {
 
     console.log('[WeatherTV] Cache status:', { liveTime, videoTime, data });
 
-    liveEl.textContent = 'Last Checked — Live: ' + formatPreciseTime(liveTime);
-    videoEl.textContent = 'Recent Videos: ' + formatPreciseTime(videoTime);
+    liveEl.textContent = 'Live: ' + formatPreciseTime(liveTime);
+    const notifEl = document.getElementById('notification-status');
+    const notifTime = data.liveStatuses && data.liveStatuses.lastNotification;
+    if (notifEl) notifEl.textContent = 'Notifications: ' + formatPreciseTime(notifTime);
+    videoEl.textContent = 'Videos: ' + formatPreciseTime(videoTime);
 
   } catch(e) {
     console.error('[WeatherTV] Cache status error:', e);
@@ -2216,5 +2202,21 @@ document.addEventListener('keydown', e => {
 // ═══════════════════════════════════════════
 init();
 </script>
+<!-- Mobile live chat overlay — pure JS layout, no CSS media queries needed -->
+<div id="mobile-chat-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:var(--bg);flex-direction:column;overflow:hidden;">
+  <div id="mobile-chat-header" style="background:var(--surface2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0.5rem 0.75rem;flex-shrink:0;gap:0.75rem;min-height:48px;">
+    <button onclick="closeMobileChatOverlay()" style="background:none;border:1px solid var(--border);color:var(--text);padding:0.35rem 0.75rem;border-radius:4px;font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;white-space:nowrap;flex-shrink:0;touch-action:manipulation;">← Back</button>
+    <span id="mobile-chat-title" style="font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"></span>
+  </div>
+  <div id="mobile-chat-content" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;">
+    <div id="mobile-chat-video-area" style="flex:0 0 35%;min-height:0;background:#000;">
+      <iframe id="mobile-chat-video-frame" style="width:100%;height:100%;border:none;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen" allowfullscreen></iframe>
+    </div>
+    <div id="mobile-chat-chat-area" style="flex:1;min-height:0;">
+      <iframe id="mobile-chat-chat-frame" style="width:100%;height:100%;border:none;"></iframe>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
