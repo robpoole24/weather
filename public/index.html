@@ -1433,14 +1433,14 @@ function buildAppsPanel() {
   WEATHER_APPS.forEach(app => {
     const chip = document.createElement('div');
     chip.className = 'app-chip';
-    chip.style.cssText = 'flex-direction:column;align-items:center;gap:0.35rem;min-width:120px;max-width:160px;';
+    chip.style.cssText = 'flex-direction:column;align-items:flex-start;gap:0.35rem;min-width:130px;';
 
-    // Icon + name — centered
+    // Icon + name — horizontal row (same as before)
     const topRow = document.createElement('div');
-    topRow.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:0.3rem;';
+    topRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;';
 
     const iconWrap = document.createElement('div');
-    iconWrap.style.cssText = 'width:36px;height:36px;flex-shrink:0;border-radius:8px;overflow:hidden;background:var(--surface2);';
+    iconWrap.style.cssText = 'width:32px;height:32px;flex-shrink:0;border-radius:7px;overflow:hidden;background:var(--surface2);';
     const img = document.createElement('img');
     img.src = app.img;
     img.alt = app.name;
@@ -1450,19 +1450,18 @@ function buildAppsPanel() {
 
     const name = document.createElement('div');
     name.className = 'app-chip-name';
-    name.style.cssText = 'text-align:center;';
     name.textContent = app.name;
     topRow.appendChild(name);
     chip.appendChild(topRow);
 
-    // Buttons row — iOS, Android, Chasers all inline
+    // All buttons in one row: iOS | Android | Chasers
     const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:0.25rem;flex-wrap:wrap;justify-content:center;';
+    btnRow.style.cssText = 'display:flex;gap:0.25rem;flex-wrap:wrap;align-items:center;';
 
     btnRow.appendChild(makeStoreBtn(app.ios, app.iosSoon, '🍎 iOS', null));
     btnRow.appendChild(makeStoreBtn(app.android, app.androidSoon, '🤖 Android', null));
 
-    // Collection button — same size as store buttons
+    // Chasers pill — same height as store buttons
     if (app.collectionRef) {
       const colRef = findCollectionByRef(app.collectionRef);
       if (colRef) {
@@ -1477,7 +1476,7 @@ function buildAppsPanel() {
           'color:#000',
           'border:none',
           'border-radius:4px',
-          'padding:0.28rem 0.55rem',
+          'padding:0.28rem 0.5rem',
           'cursor:pointer',
           'display:inline-flex',
           'align-items:center',
@@ -1487,13 +1486,11 @@ function buildAppsPanel() {
           'touch-action:manipulation',
         ].join(';');
         colBtn.onclick = () => showCollection(colRef.ch, colRef.col);
-
         const colImg = document.createElement('img');
         colImg.src = app.img;
         colImg.alt = '';
-        colImg.style.cssText = 'height:11px;width:auto;object-fit:contain;border-radius:1px;flex-shrink:0;';
+        colImg.style.cssText = 'height:10px;width:auto;object-fit:contain;flex-shrink:0;';
         colBtn.appendChild(colImg);
-
         const colLabel = document.createElement('span');
         colLabel.textContent = 'Chasers ▸';
         colBtn.appendChild(colLabel);
@@ -1515,11 +1512,17 @@ function findCollectionByRef(ref) {
   for (const group of GROUPS) {
     if (!group.channels) continue;
     const ch = group.channels.find(c => c.id === channelId);
-    if (ch && ch.collections) {
+    if (ch) {
+      if (!ch.collections || ch.collections.length === 0) {
+        console.warn('[WeatherTV] findCollectionByRef: channel found but has no collections:', channelId);
+        return null;
+      }
       const col = ch.collections.find(c => c.id === collectionId);
       if (col) return { ch, col };
+      console.warn('[WeatherTV] findCollectionByRef: collection not found:', collectionId, 'available:', ch.collections.map(c=>c.id));
     }
   }
+  console.warn('[WeatherTV] findCollectionByRef: channel not found:', channelId);
   return null;
 }
 
