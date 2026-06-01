@@ -417,9 +417,24 @@
     <div class="section-header"><div class="section-title">🔧 Channel Tools</div></div>
     <div class="section-body">
 
+      <!-- Mark Live Manually (zero quota cost) -->
+      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Mark Channel Live Manually</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Zero quota cost — directly sets a channel's live status. Use when you know a stream is live but notifications missed it. Get the video ID from the YouTube URL: <code style="font-size:0.75rem;color:var(--accent)">youtube.com/watch?v=<strong>VIDEO_ID</strong></code></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;">
+          <input id="marklive-channel-input" type="text" placeholder="Channel ID (UCxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
+          <input id="marklive-video-input" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="manualMarkLive()">✓ Mark Live (0 units)</button>
+          <button class="btn btn-ghost btn-sm" onclick="manualMarkOffline()">✗ Mark Offline (0 units)</button>
+        </div>
+        <div id="marklive-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
+      </div>
+
       <!-- Channel ID Validator -->
-      <div style="margin-bottom:1.5rem;">
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">Channel ID Validator</div>
+      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Channel ID Validator</div>
         <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Verify a channel ID resolves to a real YouTube channel before adding it. Costs 1 quota unit.</div>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
           <input id="validate-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
@@ -428,14 +443,14 @@
         <div id="validate-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
       </div>
 
-      <!-- Live Stream Lookup -->
+      <!-- Live Stream Lookup (costs 100 units) -->
       <div>
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">Live Stream Lookup</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Check if a channel is currently live and mark it. Useful when a stream has been live for hours and was missed by notifications. Costs 100 quota units.</div>
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Live Stream Lookup</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Check if a channel is currently live via the YouTube API. <strong style="color:var(--gold)">Costs 100 quota units.</strong> Only use when you don't know the video ID. Disabled when quota is exceeded.</div>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
           <input id="lookup-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
-          <button class="btn btn-primary btn-sm" onclick="lookupLive(false)">Check Only</button>
-          <button class="btn btn-ghost btn-sm" onclick="lookupLive(true)">Check &amp; Mark Live</button>
+          <button id="lookup-check-btn" class="btn btn-primary btn-sm" onclick="lookupLive(false)">Check Only</button>
+          <button id="lookup-mark-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(true)">Check &amp; Mark Live</button>
         </div>
         <div id="lookup-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
       </div>
@@ -1398,11 +1413,61 @@ async function validateChannel() {
   }
 }
 
-// Live stream lookup
+// Manual mark live — zero quota cost
+async function manualMarkLive() {
+  const channelId = document.getElementById('marklive-channel-input').value.trim();
+  const videoId = document.getElementById('marklive-video-input').value.trim();
+  const resultEl = document.getElementById('marklive-result');
+  if (!channelId) { resultEl.style.display='block'; resultEl.innerHTML='<span style="color:var(--red)">Channel ID required</span>'; return; }
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Marking live...</span>';
+  try {
+    const res = await fetch('/api/admin/mark-live', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId, videoId: videoId || null })
+    });
+    const data = await res.json();
+    resultEl.innerHTML = data.ok
+      ? '<span style="color:var(--red)">● Marked LIVE</span> — ' + channelId + (videoId ? ' · video: ' + videoId : ' · no video ID set')
+      : '<span style="color:var(--red)">✗ Failed: ' + (data.error || 'unknown error') + '</span>';
+  } catch(e) { resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>'; }
+}
+
+async function manualMarkOffline() {
+  const channelId = document.getElementById('marklive-channel-input').value.trim();
+  const resultEl = document.getElementById('marklive-result');
+  if (!channelId) { resultEl.style.display='block'; resultEl.innerHTML='<span style="color:var(--red)">Channel ID required</span>'; return; }
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Marking offline...</span>';
+  try {
+    const res = await fetch('/api/admin/mark-offline', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId })
+    });
+    const data = await res.json();
+    resultEl.innerHTML = data.ok
+      ? '<span style="color:var(--green)">✓ Marked offline</span> — ' + channelId
+      : '<span style="color:var(--red)">✗ Failed: ' + (data.error || 'unknown error') + '</span>';
+  } catch(e) { resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>'; }
+}
+
+// Live stream lookup — disable when quota exceeded
 async function lookupLive(markLive) {
   const channelId = document.getElementById('lookup-input').value.trim();
   const resultEl = document.getElementById('lookup-result');
   if (!channelId) return;
+
+  // Check quota status first — don't let users waste a click
+  try {
+    const quotaRes = await fetch('/api/yt/quota-status');
+    const quotaData = await quotaRes.json();
+    if (quotaData.quotaExceeded) {
+      resultEl.style.display = 'block';
+      resultEl.innerHTML = '<span style="color:var(--red)">⚠ Quota exceeded — use Mark Live Manually instead (zero cost)</span>';
+      return;
+    }
+  } catch(e) {}
+
   resultEl.style.display = 'block';
   resultEl.innerHTML = '<span style="color:var(--muted)">Checking live status (100 units)...</span>';
   try {

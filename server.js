@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-05-30 build.1780090000
+// WeatherTV Server — updated 2026-05-31 build.1780105000
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -1376,21 +1376,31 @@ app.get('/api/yt/live-all', (req, res) => {
   });
 });
 
-// Recent videos — cached per channel for 1 hour
+// Recent videos — serve from cache whenever possible; only fetch when cache is empty and quota is available
 app.get('/api/yt/recent/:channelId', async (req, res) => {
   const channelId = req.params.channelId;
-
-  // Serve from cache if fresh
   const cached = cache.recentVideos[channelId];
-  if (cached && (Date.now() - cached.cachedAt) < CACHE_TTL.recentVideos) {
-    return res.json({ items: cached.items, _cached: true });
+
+  // Rule: old data is always better than no data.
+  // Serve cached data immediately if we have it, regardless of age or quota status.
+  if (cached && cached.items && cached.items.length > 0) {
+    const cacheAge = Date.now() - cached.cachedAt;
+    const stale = cacheAge > CACHE_TTL.recentVideos;
+    // If cache is fresh or quota is exceeded, just serve it — no API call needed
+    if (!stale || quotaExceeded) {
+      return res.json({ items: cached.items, _cached: true, _stale: stale });
+    }
+    // Cache is stale but quota is available — fall through to fetch fresh data below
+    // We'll still serve stale if the fresh fetch fails
   }
 
+  // No usable cache or stale cache with quota available — try fetching fresh
   if (quotaExceeded) {
+    // Empty cache, quota exceeded — nothing we can do
     return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
   }
 
-  const key = getApiKey();
+  const key = getArchiveApiKey();
   if (!key) return res.status(500).json({ error: 'No API key configured' });
 
   try {
@@ -1398,6 +1408,10 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
     const data = await ytFetch(url);
     if (checkQuotaError(data)) {
       markQuotaExceeded();
+      // Serve stale cache if available rather than returning an error
+      if (cached && cached.items && cached.items.length > 0) {
+        return res.json({ items: cached.items, _cached: true, _stale: true });
+      }
       return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
     }
     const newItems = data.items || [];
@@ -1406,13 +1420,16 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
       cache.recentVideos[channelId] = entry;
       await rSet('wt:recent:' + channelId, entry, REDIS_TTL.recentVideos);
       res.json(data);
-    } else if (cache.recentVideos[channelId] && cache.recentVideos[channelId].items.length > 0) {
-      res.json({ items: cache.recentVideos[channelId].items, _cached: true, _preserved: true });
+    } else if (cached && cached.items && cached.items.length > 0) {
+      res.json({ items: cached.items, _cached: true, _preserved: true });
     } else {
-      cache.recentVideos[channelId] = { items: [], cachedAt: Date.now() };
-      res.json(data);
+      res.json({ items: [] });
     }
   } catch(e) {
+    // Serve stale cache on any error rather than failing completely
+    if (cached && cached.items && cached.items.length > 0) {
+      return res.json({ items: cached.items, _cached: true, _stale: true });
+    }
     res.status(500).json({ error: e.message });
   }
 });

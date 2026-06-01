@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-31 build.1780090000 -->
+<!-- WeatherTV App — updated 2026-05-31 build.1780105000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -94,7 +94,6 @@
     .channel-card { align-self: flex-start; } /* pin to top of panel, not floating in centre */
     .radar-ring { display: none !important; } /* too large for the compact mobile video area */
     .ch-btn { min-height: 30px !important; } /* comfortable tap targets */
-    .ch-list-arrow { display: none !important; } /* swipe instead */
     #playlist-panel .scroll-arrow { display: none !important; }
   }
 
@@ -129,7 +128,6 @@
     .status-item { font-size: 0.52rem; }
 
     /* Scroll arrows are mouse-only controls — hide on touch phones */
-    .ch-list-arrow { display: none !important; }
     /* Playlist scroll arrows also mouse-only */
     #playlist-panel .scroll-arrow { display: none !important; }
     /* Shrink logo so it fits in the 50dvh video area */
@@ -1153,9 +1151,9 @@ function showPanel(name, e) {
     loadPlaylist();
   }
 
-  // Add channel list arrows when a group panel is shown
+  // Add channel list arrows when a group panel or live-now panel is shown
   const isGroup = GROUPS.some(g => g.id === name);
-  if (isGroup) {
+  if (isGroup || name === 'live-now') {
     setTimeout(() => addChannelListArrows(name), 50);
   }
 }
@@ -1916,7 +1914,7 @@ async function showRecent(ch, group) {
     });
   } catch (e) {
     const container = document.getElementById('videos-' + ch.id);
-    if (container) container.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Videos are syncing — check back in a few minutes or <a href="#" onclick="showRecent(' + JSON.stringify(ch) + ',\'' + group + '\');return false;" style="color:var(--accent)">retry now</a>.</span>';
+    if (container) container.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No recent videos available yet — check back after the next scheduled sync.</span>';
   }
 }
 
@@ -1998,9 +1996,13 @@ async function checkAllLiveStatuses() {
     const data = await res.json();
 
     if (data.quotaExceeded) {
-      statusEl.textContent = 'YouTube quota reached — live checks resume at midnight Pacific';
+      // Quota exceeded — but still apply whatever cached statuses the server has
+      // Do NOT bail early — live badges must persist across page refreshes
+      if (statusEl) statusEl.textContent = 'Live checks paused — quota reached, resumes at midnight Pacific';
+      // Reschedule less frequently since quota is gone for today
+      window._quotaExceededPoll = true;
       setTimeout(checkAllLiveStatuses, 60 * 60 * 1000);
-      return;
+      // Fall through to apply cached statuses below
     }
 
     // Apply cached statuses to all channel buttons
@@ -2042,15 +2044,17 @@ async function checkAllLiveStatuses() {
     }
 
     // Hide old api-status element
-    if (statusEl) statusEl.style.display = 'none';
+    if (statusEl && !data.quotaExceeded) statusEl.style.display = 'none';
 
   } catch(e) {
-    statusEl.textContent = 'Could not reach server';
+    if (statusEl) statusEl.textContent = 'Could not reach server';
   }
 
-  // Poll the server cache every 30 seconds — costs zero API quota
-  // The server handles the actual YouTube calls on its own schedule
-  setTimeout(checkAllLiveStatuses, 30 * 1000);
+  // Poll every 30s normally — quota exceeded path above already scheduled hourly
+  if (!window._quotaExceededPoll) {
+    setTimeout(checkAllLiveStatuses, 30 * 1000);
+  }
+  window._quotaExceededPoll = false;
 }
 
 async function checkIfLive(channelId) {
