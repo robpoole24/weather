@@ -1281,7 +1281,10 @@ function buildChannelLists() {
           const sponsorMap = {
             'weatherfront': 'images/weatherfront.webp',
             'weather wise': 'images/weather-wise.webp',
-            'weatherwise': 'images/weather-wise.webp',
+            'weatherwise':  'images/weather-wise.webp',
+            'accuweather':  'images/accuweather.webp',
+            'radar omega':  'images/radar-omega.webp',
+            'radaromega':   'images/radar-omega.webp',
           };
           const labelLower = col.label.toLowerCase();
           let sponsorImg = null;
@@ -1459,8 +1462,46 @@ function buildAppsPanel() {
     btnRow.appendChild(androidBtn);
 
     chip.appendChild(btnRow);
+
+    // Collection button — if this app sponsors a chaser group
+    if (app.collectionRef) {
+      const colRef = findCollectionByRef(app.collectionRef);
+      if (colRef) {
+        const colBtn = document.createElement('button');
+        colBtn.className = 'ch-btn collection';
+        colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.62rem;display:inline-flex;align-items:center;gap:4px;padding:0.22rem 0.45rem;margin-top:0.1rem;';
+        colBtn.onclick = () => showCollection(colRef.ch, colRef.col);
+        const colImg = document.createElement('img');
+        colImg.src = app.img;
+        colImg.alt = '';
+        colImg.style.cssText = 'height:14px;width:auto;object-fit:contain;border-radius:2px;flex-shrink:0;';
+        colBtn.appendChild(colImg);
+        const colLabel = document.createElement('span');
+        colLabel.textContent = colRef.col.label + ' ▸';
+        colBtn.appendChild(colLabel);
+        chip.appendChild(colBtn);
+      }
+    }
+
     panel.appendChild(chip);
   });
+}
+
+// Find parent channel and collection by collectionRef string (format: channelId::collectionId)
+function findCollectionByRef(ref) {
+  if (!ref) return null;
+  const parts = ref.split('::');
+  if (parts.length !== 2) return null;
+  const [channelId, collectionId] = parts;
+  for (const group of GROUPS) {
+    if (!group.channels) continue;
+    const ch = group.channels.find(c => c.id === channelId);
+    if (ch && ch.collections) {
+      const col = ch.collections.find(c => c.id === collectionId);
+      if (col) return { ch, col };
+    }
+  }
+  return null;
 }
 
 function makeStoreBtn(link, comingSoon, label, tooltip) {

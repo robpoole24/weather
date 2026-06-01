@@ -71,8 +71,10 @@
     padding:0.5rem 0.75rem; border-radius:4px;
     border:1px solid rgba(0,180,216,0.1);
     margin-bottom:0.4rem; background:var(--bg);
+    transition: background 0.1s, border-color 0.1s;
   }
   .channel-row:hover { border-color:var(--border); }
+  .channel-row.drag-over-row { background:rgba(0,180,216,0.08); border-color:var(--accent); border-top:2px solid var(--accent); }
   .ch-name { flex:1; font-size:0.875rem; }
   .ch-id { font-size:0.7rem; color:var(--muted); font-family:monospace; flex:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .order-btns { display:flex; flex-direction:column; gap:2px; flex-shrink:0; }
@@ -699,15 +701,41 @@ function renderChannelRow(groupId, ch) {
         return col ? col.label : id;
       }).join(', ');
 
+  row.setAttribute('draggable', 'true');
+  row.setAttribute('data-channel-id', ch.id);
+  row.setAttribute('data-group-id', groupId);
+
+  row.addEventListener('dragstart', e => {
+    e.dataTransfer.setData('text/plain', ch.id + '|' + groupId);
+    e.dataTransfer.effectAllowed = 'move';
+    row.style.opacity = '0.4';
+  });
+  row.addEventListener('dragend', () => { row.style.opacity = ''; document.querySelectorAll('.drag-over-row').forEach(r => r.classList.remove('drag-over-row')); });
+  row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; row.classList.add('drag-over-row'); });
+  row.addEventListener('dragleave', () => row.classList.remove('drag-over-row'));
+  row.addEventListener('drop', e => {
+    e.preventDefault();
+    row.classList.remove('drag-over-row');
+    const [srcId, srcGroup] = e.dataTransfer.getData('text/plain').split('|');
+    if (srcId === ch.id || srcGroup !== groupId) return;
+    const group = (appData.groups || []).find(g => g.id === groupId);
+    if (!group || !group.channels) return;
+    const fromIdx = group.channels.findIndex(c => c.id === srcId);
+    const toIdx = group.channels.findIndex(c => c.id === ch.id);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = group.channels.splice(fromIdx, 1);
+    group.channels.splice(toIdx, 0, moved);
+    renderChannelList(groupId);
+    saveConfig();
+    showToast('Channel moved — saving...');
+  });
+
   const colCount = currentIds.length;
   const isHidden = ch.hiddenInGroup ? ' 👁' : '';
   const colLabel = colCount === 0 ? 'No Collections' : colCount + ' Collection' + (colCount > 1 ? 's' : '') + isHidden;
 
   row.innerHTML =
-    '<div class="order-btns">' +
-      '<button class="order-btn" onclick="reorderChannel(\'' + groupId + '\',\'' + ch.id + '\',\'up\')">▲</button>' +
-      '<button class="order-btn" onclick="reorderChannel(\'' + groupId + '\',\'' + ch.id + '\',\'down\')">▼</button>' +
-    '</div>' +
+    '<div class="order-btns" title="Drag to reorder" style="cursor:grab;font-size:1rem;color:var(--muted);padding:0 4px;user-select:none;">⠿</div>' +
     '<div class="ch-name">' + ch.name + '</div>' +
     '<div class="ch-id" title="' + ch.id + '">' + ch.id + '</div>' +
     '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;"' +
