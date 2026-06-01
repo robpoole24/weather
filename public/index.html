@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-05-31 build.1780085000 -->
+<!-- WeatherTV App — updated 2026-05-31 build.1780090000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1947,14 +1947,16 @@ function buildLiveNowPanel(liveChannels) {
   const panel = document.getElementById('live-now-panel');
   if (!panel) return;
   panel.innerHTML = '';
-  // Don't set display here — showPanel handles visibility
 
-  // No back button — use nav buttons to switch away from Live Now
+  // Create the same scrollable list structure as regular channel panels
+  const list = document.createElement('div');
+  list.id = 'live-now-list';
+  list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.5rem;box-sizing:border-box;height:100%;';
+  panel.appendChild(list);
 
   liveChannels.forEach(ch => {
     const card = document.createElement('div');
     card.className = 'channel-card';
-
     card.setAttribute('aria-label', ch.name + ' channel');
 
     const nameEl = document.createElement('div');
@@ -1975,8 +1977,15 @@ function buildLiveNowPanel(liveChannels) {
     btns.appendChild(liveBtn);
 
     card.appendChild(btns);
-    panel.appendChild(card);
+    list.appendChild(card);
   });
+
+  // Add scroll arrows — same as regular channel panels
+  const { leftBtn, rightBtn } = createScrollArrows(list);
+  leftBtn.classList.add('ch-list-arrow');
+  rightBtn.classList.add('ch-list-arrow');
+  panel.insertBefore(leftBtn, list);
+  panel.appendChild(rightBtn);
 }
 
 async function checkAllLiveStatuses() {
