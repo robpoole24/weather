@@ -8,374 +8,300 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap');
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
+  * { margin:0; padding:0; box-sizing:border-box; }
   :root {
-    --bg: #0a0e14;
-    --surface: #111820;
-    --surface2: #1a2433;
-    --accent: #00b4d8;
-    --gold: #f4a261;
-    --red: #e63946;
-    --green: #2ec44a;
-    --text: #e8f4fd;
-    --muted: #7a9bb5;
-    --border: rgba(0,180,216,0.2);
+    --bg:#0a0e14; --surface:#111820; --surface2:#1a2433;
+    --accent:#00b4d8; --gold:#f4a261; --red:#e63946;
+    --green:#2ec44a; --text:#e8f4fd; --muted:#7a9bb5;
+    --border:rgba(0,180,216,0.2);
   }
+  html,body { width:100%; height:100%; background:var(--bg); color:var(--text); font-family:'Barlow',sans-serif; overflow:hidden; }
 
-  html, body {
-    width: 100%; height: 100%;
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Barlow', sans-serif;
-    overflow: hidden;
-  }
-
-  /* ── TOOLBAR ── */
   #radar-toolbar {
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    z-index: 1000;
-    background: rgba(10,14,20,0.92);
-    backdrop-filter: blur(6px);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.75rem;
-    flex-wrap: wrap;
-    min-height: 44px;
+    position:absolute; top:0; left:0; right:0; z-index:1000;
+    background:rgba(10,14,20,0.93); backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:0.4rem;
+    padding:0.35rem 0.65rem; flex-wrap:wrap; min-height:44px;
   }
-
   .radar-label {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 700;
-    font-size: 0.85rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--green);
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    font-family:'Barlow Condensed',sans-serif; font-weight:700;
+    font-size:0.85rem; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--green); white-space:nowrap; display:flex; align-items:center; gap:0.4rem;
   }
+  .sweep-icon {
+    display:inline-block; width:12px; height:12px; border-radius:50%;
+    border:2px solid var(--green); position:relative; flex-shrink:0;
+  }
+  .sweep-icon::before {
+    content:''; position:absolute; top:50%; left:50%;
+    width:0; height:0;
+    border-left:5px solid var(--green);
+    border-top:2px solid transparent; border-bottom:2px solid transparent;
+    transform:translate(-1px,-50%) rotate(0deg); transform-origin:left center;
+    animation:sweep 2s linear infinite;
+  }
+  @keyframes sweep { to { transform:translate(-1px,-50%) rotate(360deg); } }
 
-  .radar-sweep-icon {
-    display: inline-block;
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    border: 2px solid var(--green);
-    position: relative;
-    flex-shrink: 0;
-  }
-  .radar-sweep-icon::before {
-    content: '';
-    position: absolute;
-    top: 50%; left: 50%;
-    width: 0; height: 0;
-    border-left: 5px solid var(--green);
-    border-top: 2px solid transparent;
-    border-bottom: 2px solid transparent;
-    transform: translate(-1px, -50%) rotate(0deg);
-    transform-origin: left center;
-    animation: sweep 2s linear infinite;
-  }
-  @keyframes sweep {
-    to { transform: translate(-1px, -50%) rotate(360deg); }
-  }
-
-  /* Search */
-  #zip-form {
-    display: flex;
-    gap: 0.3rem;
-    align-items: center;
-  }
-
+  #zip-form { display:flex; gap:0.3rem; align-items:center; }
   #zip-input {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: 'Barlow', sans-serif;
-    font-size: 0.82rem;
-    padding: 0.3rem 0.6rem;
-    border-radius: 4px;
-    width: 160px;
-    outline: none;
+    background:var(--surface2); border:1px solid var(--border);
+    color:var(--text); font-family:'Barlow',sans-serif; font-size:0.82rem;
+    padding:0.28rem 0.55rem; border-radius:4px; width:150px; outline:none;
   }
-  #zip-input::placeholder { color: var(--muted); }
-  #zip-input:focus { border-color: var(--accent); }
+  #zip-input::placeholder { color:var(--muted); }
+  #zip-input:focus { border-color:var(--accent); }
 
   .tb-btn {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-weight: 700;
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 0.3rem 0.7rem;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--surface2);
-    color: var(--text);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.15s, border-color 0.15s;
+    font-family:'Barlow Condensed',sans-serif; font-weight:700;
+    font-size:0.73rem; letter-spacing:0.08em; text-transform:uppercase;
+    padding:0.28rem 0.6rem; border-radius:4px;
+    border:1px solid var(--border); background:var(--surface2);
+    color:var(--text); cursor:pointer; white-space:nowrap;
+    transition:background 0.15s, border-color 0.15s;
   }
-  .tb-btn:hover { background: var(--surface); border-color: var(--accent); color: var(--accent); }
-  .tb-btn.active { background: var(--accent); border-color: var(--accent); color: #000; }
-  .tb-btn.warn-active { background: rgba(230,57,70,0.2); border-color: var(--red); color: var(--red); }
+  .tb-btn:hover { background:var(--surface); border-color:var(--accent); color:var(--accent); }
+  .tb-btn.on { background:var(--accent); border-color:var(--accent); color:#000; }
+  .tb-btn.warn-on { background:rgba(230,57,70,0.2); border-color:var(--red); color:var(--red); }
+  .tb-btn.view-on { background:var(--surface); border-color:var(--accent); color:var(--accent); }
 
-  .tb-divider {
-    width: 1px; height: 20px;
-    background: var(--border);
-    flex-shrink: 0;
-  }
+  #location-btn { border-color:var(--green); color:var(--green); }
+  #location-btn:hover { background:rgba(46,196,74,0.12); }
 
-  #location-btn {
-    border-color: var(--green);
-    color: var(--green);
+  .tb-div { width:1px; height:20px; background:var(--border); flex-shrink:0; }
+
+  /* animation controls */
+  #anim-controls {
+    display:flex; align-items:center; gap:0.35rem;
   }
-  #location-btn:hover { background: rgba(46,196,74,0.15); }
+  #anim-progress {
+    font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
+    color:var(--muted); letter-spacing:0.05em; min-width:70px;
+  }
 
   #alerts-status {
-    font-size: 0.72rem;
-    color: var(--muted);
-    font-family: 'Barlow Condensed', sans-serif;
-    letter-spacing: 0.05em;
-    margin-left: auto;
+    font-size:0.72rem; color:var(--muted);
+    font-family:'Barlow Condensed',sans-serif; letter-spacing:0.05em;
+    margin-left:auto; white-space:nowrap;
   }
 
-  /* ── MAP ── */
-  #map {
-    position: absolute;
-    top: 44px; left: 0; right: 0; bottom: 0;
-  }
+  #map { position:absolute; top:44px; left:0; right:0; bottom:0; }
 
-  /* ── ALERT POPUP ── */
-  .alert-popup {
-    font-family: 'Barlow', sans-serif;
-    font-size: 0.82rem;
-    max-width: 260px;
-    line-height: 1.5;
-  }
-  .alert-popup strong {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 1rem;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-  .alert-popup .alert-event { color: #e63946; font-weight: 700; }
-  .alert-popup .alert-expires { color: #7a9bb5; font-size: 0.75rem; margin-top: 4px; }
-
-  /* ── LEGEND ── */
+  /* Legend */
   #radar-legend {
-    position: absolute;
-    bottom: 12px; left: 12px;
-    z-index: 1000;
-    background: rgba(10,14,20,0.88);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.72rem;
-    letter-spacing: 0.05em;
-    color: var(--muted);
+    position:absolute; bottom:12px; left:12px; z-index:1000;
+    background:rgba(10,14,20,0.88); border:1px solid var(--border);
+    border-radius:6px; padding:0.45rem 0.65rem;
+    font-family:'Barlow Condensed',sans-serif; font-size:0.7rem;
+    letter-spacing:0.04em; color:var(--muted);
   }
-  .legend-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.2rem; }
-  .legend-swatch { width: 16px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .leg-row { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.18rem; }
+  .leg-sw { width:16px; height:9px; border-radius:2px; flex-shrink:0; }
 
-  /* ── LOADING OVERLAY ── */
+  /* Loading */
   #radar-loading {
-    position: absolute;
-    top: 44px; left: 0; right: 0; bottom: 0;
-    background: var(--bg);
-    z-index: 500;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 1rem;
-    transition: opacity 0.5s;
+    position:absolute; top:44px; left:0; right:0; bottom:0;
+    background:var(--bg); z-index:500;
+    display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:1rem; transition:opacity 0.5s;
   }
-  .loading-spinner {
-    width: 36px; height: 36px;
-    border: 3px solid var(--border);
-    border-top-color: var(--green);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .loading-text {
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.85rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
+  .spin { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--green); border-radius:50%; animation:spin 0.8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .load-txt { font-family:'Barlow Condensed',sans-serif; font-size:0.82rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
 
-  /* Leaflet dark theme overrides */
-  .leaflet-tile-pane { filter: brightness(0.85) saturate(0.7); }
-  .leaflet-popup-content-wrapper {
-    background: #111820;
-    color: #e8f4fd;
-    border: 1px solid rgba(0,180,216,0.3);
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-  }
-  .leaflet-popup-tip { background: #111820; }
-  .leaflet-control-zoom a {
-    background: #111820 !important;
-    color: #e8f4fd !important;
-    border-color: rgba(0,180,216,0.3) !important;
-  }
-  .leaflet-control-zoom a:hover { background: #1a2433 !important; color: #00b4d8 !important; }
-  .leaflet-control-attribution { background: rgba(10,14,20,0.7) !important; color: #7a9bb5 !important; }
-  .leaflet-control-attribution a { color: #00b4d8 !important; }
+  /* Leaflet overrides */
+  .leaflet-tile-pane { filter:brightness(0.82) saturate(0.65); }
+  .leaflet-popup-content-wrapper { background:#111820; color:#e8f4fd; border:1px solid rgba(0,180,216,0.3); border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5); }
+  .leaflet-popup-tip { background:#111820; }
+  .leaflet-control-zoom a { background:#111820 !important; color:#e8f4fd !important; border-color:rgba(0,180,216,0.3) !important; }
+  .leaflet-control-zoom a:hover { background:#1a2433 !important; color:#00b4d8 !important; }
+  .leaflet-control-attribution { background:rgba(10,14,20,0.7) !important; color:#7a9bb5 !important; font-size:9px !important; }
+  .leaflet-control-attribution a { color:#00b4d8 !important; }
+  .alert-popup { font-family:'Barlow',sans-serif; font-size:0.8rem; max-width:240px; line-height:1.5; }
+  .alert-popup .ev { font-family:'Barlow Condensed',sans-serif; font-size:1rem; letter-spacing:0.05em; text-transform:uppercase; font-weight:700; }
+  .alert-popup .exp { color:#7a9bb5; font-size:0.72rem; margin-top:4px; }
 </style>
 </head>
 <body>
 
-<!-- Toolbar -->
 <div id="radar-toolbar">
-  <div class="radar-label">
-    <span class="radar-sweep-icon"></span>
-    Live Radar
-  </div>
-
-  <div class="tb-divider"></div>
+  <div class="radar-label"><span class="sweep-icon"></span>Live Radar</div>
+  <div class="tb-div"></div>
 
   <form id="zip-form" onsubmit="searchLocation(event)">
-    <input id="zip-input" type="text" placeholder="Zip code or city..." autocomplete="off" aria-label="Search by zip or city"/>
+    <input id="zip-input" type="text" placeholder="Zip or city..." autocomplete="off" aria-label="Search location"/>
     <button type="submit" class="tb-btn">Go</button>
   </form>
+  <button class="tb-btn" id="location-btn" onclick="goToMyLocation()">📍 My Location</button>
 
-  <button class="tb-btn" id="location-btn" onclick="goToMyLocation()" title="Go to my location">📍 My Location</button>
+  <div class="tb-div"></div>
 
-  <div class="tb-divider"></div>
+  <button class="tb-btn on"  id="btn-radar"  onclick="toggleRadar()">🌧 Radar</button>
+  <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
 
-  <button class="tb-btn active" id="toggle-radar-btn" onclick="toggleRadarLayer()" title="Toggle radar overlay">🌧 Radar</button>
-  <button class="tb-btn warn-active" id="toggle-alerts-btn" onclick="toggleAlertsLayer()" title="Toggle NWS watches & warnings">⚠️ Watches/Warnings</button>
+  <div class="tb-div"></div>
 
-  <div class="tb-divider"></div>
+  <div id="anim-controls">
+    <button class="tb-btn" id="btn-play" onclick="togglePlay()">▶ Play</button>
+    <button class="tb-btn" onclick="stepFrame(-1)">◀</button>
+    <button class="tb-btn" onclick="stepFrame(1)">▶</button>
+    <span id="anim-progress">— / —</span>
+  </div>
 
-  <button class="tb-btn" onclick="setView('local')" id="view-local">Local</button>
-  <button class="tb-btn" onclick="setView('regional')" id="view-regional">Regional</button>
-  <button class="tb-btn" onclick="setView('national')" id="view-national">National</button>
+  <div class="tb-div"></div>
+
+  <button class="tb-btn" id="v-local"    onclick="setView('local')">Local</button>
+  <button class="tb-btn" id="v-regional" onclick="setView('regional')">Regional</button>
+  <button class="tb-btn view-on" id="v-national" onclick="setView('national')">National</button>
 
   <span id="alerts-status"></span>
 </div>
 
-<!-- Map -->
 <div id="map"></div>
 
-<!-- Legend -->
 <div id="radar-legend">
-  <div class="legend-row"><div class="legend-swatch" style="background:#ff0000"></div>Tornado Warning</div>
-  <div class="legend-row"><div class="legend-swatch" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
-  <div class="legend-row"><div class="legend-swatch" style="background:#ffff00"></div>Tornado Watch</div>
-  <div class="legend-row"><div class="legend-swatch" style="background:#db8d00"></div>Severe T-Storm Watch</div>
-  <div class="legend-row"><div class="legend-swatch" style="background:#00ff00"></div>Flash Flood Warning</div>
-  <div class="legend-row"><div class="legend-swatch" style="background:#2ec44a;opacity:0.5"></div>Other Advisory</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ffff00;border:1px solid #888"></div>Tornado Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#db8d00"></div>Severe T-Storm Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#00ff00"></div>Flash Flood Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#2ec44a;opacity:0.6"></div>Other Advisory</div>
 </div>
 
-<!-- Loading overlay -->
-<div id="radar-loading">
-  <div class="loading-spinner"></div>
-  <div class="loading-text">Loading radar...</div>
-</div>
+<div id="radar-loading"><div class="spin"></div><div class="load-txt">Loading radar...</div></div>
 
 <script>
-// ── CONFIG ──────────────────────────────────────────────
-const DEFAULT_LAT = 39.5;
-const DEFAULT_LNG = -98.35;
-const DEFAULT_ZOOM = 5; // national view
-const LOCAL_ZOOM   = 8;
-const REGIONAL_ZOOM = 6;
-const ALERTS_REFRESH_MS = 120000; // 2 min
-
-// Alert color map by NWS event type
-const ALERT_COLORS = {
-  'Tornado Warning':            { fill: '#ff0000', opacity: 0.35 },
-  'Severe Thunderstorm Warning':{ fill: '#ff8c00', opacity: 0.3  },
-  'Tornado Watch':              { fill: '#ffff00', opacity: 0.2  },
-  'Severe Thunderstorm Watch':  { fill: '#db8d00', opacity: 0.2  },
-  'Flash Flood Warning':        { fill: '#00ff00', opacity: 0.3  },
-  'Flash Flood Watch':          { fill: '#00aa00', opacity: 0.2  },
-  'Special Weather Statement':  { fill: '#00b4d8', opacity: 0.15 },
+// ── NWS ALERT COLORS (exact event strings from api.weather.gov) ─────────────
+const ALERT_STYLE = {
+  'Tornado Warning':                    { color:'#ff0000', fill:'#ff0000', fillOpacity:0.4, weight:2 },
+  'Tornado Watch':                      { color:'#ffff00', fill:'#ffff00', fillOpacity:0.2, weight:1.5 },
+  'Severe Thunderstorm Warning':        { color:'#ff8c00', fill:'#ff8c00', fillOpacity:0.35, weight:2 },
+  'Severe Thunderstorm Watch':          { color:'#db8d00', fill:'#db8d00', fillOpacity:0.2, weight:1.5 },
+  'Flash Flood Warning':                { color:'#00ff00', fill:'#00ff00', fillOpacity:0.35, weight:2 },
+  'Flash Flood Watch':                  { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.2, weight:1.5 },
+  'Flash Flood Emergency':              { color:'#00ff00', fill:'#00ff00', fillOpacity:0.5, weight:2.5 },
+  'Flood Warning':                      { color:'#00ff00', fill:'#00ff00', fillOpacity:0.25, weight:1.5 },
+  'Flood Watch':                        { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.15, weight:1 },
+  'Extreme Wind Warning':               { color:'#ff4500', fill:'#ff4500', fillOpacity:0.35, weight:2 },
+  'Dust Storm Warning':                 { color:'#ffe4b5', fill:'#ffe4b5', fillOpacity:0.3, weight:1.5 },
+  'Winter Storm Warning':               { color:'#9370db', fill:'#9370db', fillOpacity:0.25, weight:1.5 },
+  'Blizzard Warning':                   { color:'#ff69b4', fill:'#ff69b4', fillOpacity:0.3, weight:2 },
+  'Ice Storm Warning':                  { color:'#8b008b', fill:'#8b008b', fillOpacity:0.25, weight:1.5 },
+  'Special Weather Statement':          { color:'#00b4d8', fill:'#00b4d8', fillOpacity:0.12, weight:1 },
+  'Special Marine Warning':             { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2, weight:1 },
 };
-const DEFAULT_ALERT_COLOR = { fill: '#2ec44a', opacity: 0.15 };
+const DEFAULT_STYLE = { color:'#2ec44a', fill:'#2ec44a', fillOpacity:0.12, weight:1 };
 
-// ── MAP INIT ────────────────────────────────────────────
-const map = L.map('map', {
-  center: [DEFAULT_LAT, DEFAULT_LNG],
-  zoom: DEFAULT_ZOOM,
-  zoomControl: true,
-});
+// ── ANIMATION FRAME TIMESTAMPS (Iowa Mesonet, last 50 min, 5-min steps) ─────
+const FRAMES = [
+  '900913-m50m','900913-m45m','900913-m40m','900913-m35m','900913-m30m',
+  '900913-m25m','900913-m20m','900913-m15m','900913-m10m','900913-m05m',
+  '900913'
+];
+const FRAME_LABELS = [
+  '-50m','-45m','-40m','-35m','-30m','-25m','-20m','-15m','-10m','-5m','Now'
+];
 
-// Base tile layer — dark CartoDB
+// ── MAP INIT ─────────────────────────────────────────────────────────────────
+const map = L.map('map', { center:[39.5,-98.35], zoom:5 });
+
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
-  subdomains: 'abcd',
-  maxZoom: 19,
+  attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
+  subdomains:'abcd', maxZoom:19
 }).addTo(map);
 
-// NWS Ridge radar tile layer
-let radarLayer = L.tileLayer(
-  'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png',
-  { opacity: 0.7, attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/">Iowa Mesonet</a>' }
-).addTo(map);
+// Pre-create all radar frame layers (not added to map yet)
+const radarFrameLayers = FRAMES.map(ts =>
+  L.tileLayer(
+    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${ts}/{z}/{x}/{y}.png`,
+    { opacity:0.72, attribution:'Radar: <a href="https://mesonet.agron.iastate.edu/">IEM/NEXRAD</a>', tileSize:256 }
+  )
+);
 
+let currentFrame = FRAMES.length - 1; // start at "Now"
 let radarVisible = true;
 let alertsVisible = true;
 let alertsLayer = L.layerGroup().addTo(map);
-let alertsInterval = null;
+let isPlaying = false;
+let playTimer = null;
 let userLat = null, userLng = null;
 
-// Hide loading once map tiles load
-map.once('load', hideLoading);
-setTimeout(hideLoading, 3000); // fallback
+// Show current (last) frame
+radarFrameLayers[currentFrame].addTo(map);
+updateFrameLabel();
 
-function hideLoading() {
+// ── HIDE LOADING ─────────────────────────────────────────────────────────────
+setTimeout(() => {
   const el = document.getElementById('radar-loading');
-  if (el) { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }
-}
+  if (el) { el.style.opacity='0'; setTimeout(()=>el.remove(),500); }
+}, 2500);
 
-// ── RADAR TOGGLE ────────────────────────────────────────
-function toggleRadarLayer() {
+// ── RADAR TOGGLE ─────────────────────────────────────────────────────────────
+function toggleRadar() {
   radarVisible = !radarVisible;
-  const btn = document.getElementById('toggle-radar-btn');
-  if (radarVisible) {
-    map.addLayer(radarLayer);
-    btn.classList.add('active');
-    btn.classList.remove('warn-active');
+  const btn = document.getElementById('btn-radar');
+  btn.className = 'tb-btn' + (radarVisible ? ' on' : '');
+  if (radarVisible) radarFrameLayers[currentFrame].addTo(map);
+  else radarFrameLayers.forEach(l => { try { map.removeLayer(l); } catch(e){} });
+}
+
+// ── ANIMATION ────────────────────────────────────────────────────────────────
+function showFrame(idx) {
+  if (!radarVisible) return;
+  radarFrameLayers.forEach(l => { try { map.removeLayer(l); } catch(e){} });
+  radarFrameLayers[idx].addTo(map);
+  currentFrame = idx;
+  updateFrameLabel();
+}
+
+function updateFrameLabel() {
+  document.getElementById('anim-progress').textContent =
+    FRAME_LABELS[currentFrame] + ' (' + (currentFrame+1) + '/' + FRAMES.length + ')';
+}
+
+function stepFrame(dir) {
+  let next = currentFrame + dir;
+  if (next < 0) next = FRAMES.length - 1;
+  if (next >= FRAMES.length) next = 0;
+  showFrame(next);
+}
+
+function togglePlay() {
+  isPlaying = !isPlaying;
+  const btn = document.getElementById('btn-play');
+  if (isPlaying) {
+    btn.textContent = '⏸ Pause';
+    btn.classList.add('on');
+    playTimer = setInterval(() => {
+      let next = currentFrame + 1;
+      if (next >= FRAMES.length) next = 0;
+      showFrame(next);
+    }, 600);
   } else {
-    map.removeLayer(radarLayer);
-    btn.classList.remove('active');
+    btn.textContent = '▶ Play';
+    btn.classList.remove('on');
+    clearInterval(playTimer);
   }
 }
 
-function toggleAlertsLayer() {
+// ── ALERTS ───────────────────────────────────────────────────────────────────
+function toggleAlerts() {
   alertsVisible = !alertsVisible;
-  const btn = document.getElementById('toggle-alerts-btn');
-  if (alertsVisible) {
-    map.addLayer(alertsLayer);
-    btn.classList.add('warn-active');
-    loadAlerts();
-  } else {
-    map.removeLayer(alertsLayer);
-    btn.classList.remove('warn-active');
-  }
+  const btn = document.getElementById('btn-alerts');
+  btn.className = 'tb-btn' + (alertsVisible ? ' warn-on' : '');
+  if (alertsVisible) { map.addLayer(alertsLayer); loadAlerts(); }
+  else map.removeLayer(alertsLayer);
 }
 
-// ── NWS ALERTS ──────────────────────────────────────────
 async function loadAlerts() {
   if (!alertsVisible) return;
   const status = document.getElementById('alerts-status');
   status.textContent = 'Updating alerts...';
   try {
-    const res = await fetch('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land', {
-      headers: { 'Accept': 'application/geo+json' }
-    });
+    const res = await fetch(
+      'https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land',
+      { headers:{ 'Accept':'application/geo+json' } }
+    );
     const data = await res.json();
     alertsLayer.clearLayers();
 
@@ -384,63 +310,57 @@ async function loadAlerts() {
       if (!feature.geometry) return;
       const props = feature.properties;
       const event = props.event || 'Advisory';
-      const color = ALERT_COLORS[event] || DEFAULT_ALERT_COLOR;
+      const s = ALERT_STYLE[event] || DEFAULT_STYLE;
 
       const layer = L.geoJSON(feature.geometry, {
-        style: {
-          color: color.fill,
-          fillColor: color.fill,
-          fillOpacity: color.opacity,
-          weight: 1.5,
-          opacity: 0.8,
-        }
+        style: { color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 }
       });
 
-      const expires = props.expires ? new Date(props.expires).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown';
-      const area = props.areaDesc || '';
+      const expires = props.expires
+        ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+        : 'Unknown';
       layer.bindPopup(`
         <div class="alert-popup">
-          <div class="alert-event">${event}</div>
-          <strong>${props.headline || event}</strong>
-          <div style="margin-top:6px;font-size:0.78rem;color:#7a9bb5">${area}</div>
-          <div class="alert-expires">Expires: ${expires}</div>
+          <div class="ev" style="color:${s.color}">${event}</div>
+          <div style="margin-top:4px">${props.headline || event}</div>
+          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${props.areaDesc||''}</div>
+          <div class="exp">Expires: ${expires}</div>
         </div>
       `);
-
       alertsLayer.addLayer(layer);
       count++;
     });
 
-    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    status.textContent = count > 0 ? `${count} active alert${count !== 1 ? 's' : ''} · Updated ${now}` : `No active alerts · ${now}`;
-  } catch (e) {
+    const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    status.textContent = count > 0
+      ? `${count} active alert${count!==1?'s':''} · ${now}`
+      : `No active alerts · ${now}`;
+  } catch(e) {
     status.textContent = 'Alerts unavailable';
   }
 }
 
-// Auto-refresh alerts
+// Auto-refresh alerts every 2 minutes
 loadAlerts();
-alertsInterval = setInterval(loadAlerts, ALERTS_REFRESH_MS);
+setInterval(loadAlerts, 120000);
 
-// ── GEOLOCATION ──────────────────────────────────────────
+// ── GEOLOCATION ──────────────────────────────────────────────────────────────
 function goToMyLocation() {
   if (!navigator.geolocation) return;
   document.getElementById('alerts-status').textContent = 'Finding location...';
   navigator.geolocation.getCurrentPosition(
     pos => {
-      userLat = pos.coords.latitude;
-      userLng = pos.coords.longitude;
-      map.setView([userLat, userLng], LOCAL_ZOOM);
+      userLat = pos.coords.latitude; userLng = pos.coords.longitude;
+      map.setView([userLat, userLng], 8);
       document.getElementById('alerts-status').textContent = '';
+      updateViewButtons('local');
     },
-    () => {
-      document.getElementById('alerts-status').textContent = 'Location unavailable';
-    },
-    { timeout: 8000 }
+    () => { document.getElementById('alerts-status').textContent = 'Location unavailable'; },
+    { timeout:8000 }
   );
 }
 
-// ── ZIP / CITY SEARCH ────────────────────────────────────
+// ── LOCATION SEARCH ──────────────────────────────────────────────────────────
 async function searchLocation(e) {
   e.preventDefault();
   const q = document.getElementById('zip-input').value.trim();
@@ -449,49 +369,49 @@ async function searchLocation(e) {
   try {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=json&limit=1`,
-      { headers: { 'Accept-Language': 'en' } }
+      { headers:{'Accept-Language':'en'} }
     );
     const data = await res.json();
     if (data && data.length > 0) {
-      const lat = parseFloat(data[0].lat);
-      const lng = parseFloat(data[0].lon);
-      map.setView([lat, lng], LOCAL_ZOOM);
+      userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
+      map.setView([userLat, userLng], 8);
       document.getElementById('alerts-status').textContent = data[0].display_name.split(',').slice(0,2).join(',');
       document.getElementById('zip-input').value = '';
+      updateViewButtons('local');
     } else {
-      document.getElementById('alerts-status').textContent = 'Location not found';
+      document.getElementById('alerts-status').textContent = 'Not found';
     }
   } catch {
     document.getElementById('alerts-status').textContent = 'Search unavailable';
   }
 }
 
-// ── VIEW PRESETS ─────────────────────────────────────────
-let currentViewCenter = [DEFAULT_LAT, DEFAULT_LNG];
-
+// ── VIEW PRESETS ─────────────────────────────────────────────────────────────
 function setView(mode) {
-  ['local','regional','national'].forEach(v => {
-    document.getElementById('view-' + v).classList.remove('active');
-  });
-  document.getElementById('view-' + mode).classList.add('active');
-
-  const center = (userLat && userLng) ? [userLat, userLng] : currentViewCenter;
-  if (mode === 'local')    map.setView(center, LOCAL_ZOOM);
-  if (mode === 'regional') map.setView(center, REGIONAL_ZOOM);
-  if (mode === 'national') map.setView([DEFAULT_LAT, DEFAULT_LNG], DEFAULT_ZOOM);
+  updateViewButtons(mode);
+  const center = (userLat && userLng) ? [userLat, userLng] : [39.5, -98.35];
+  if (mode === 'local')    map.setView(center, 8);
+  if (mode === 'regional') map.setView(center, 6);
+  if (mode === 'national') map.setView([39.5,-98.35], 5);
 }
 
-// ── AUTO GEOLOCATION ON LOAD ─────────────────────────────
+function updateViewButtons(active) {
+  ['local','regional','national'].forEach(v => {
+    const btn = document.getElementById('v-' + v);
+    btn.className = 'tb-btn' + (v === active ? ' view-on' : '');
+  });
+}
+
+// ── AUTO GEOLOCATE ON LOAD ───────────────────────────────────────────────────
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     pos => {
-      userLat = pos.coords.latitude;
-      userLng = pos.coords.longitude;
-      currentViewCenter = [userLat, userLng];
-      map.setView([userLat, userLng], LOCAL_ZOOM);
+      userLat = pos.coords.latitude; userLng = pos.coords.longitude;
+      map.setView([userLat, userLng], 8);
+      updateViewButtons('local');
     },
-    () => { /* stay at national view */ },
-    { timeout: 6000 }
+    () => {},
+    { timeout:6000 }
   );
 }
 </script>
