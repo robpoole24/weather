@@ -711,10 +711,33 @@ async function loadMCD() {
       count++;
     });
 
-    // If NWS alerts API returned nothing, show a status message explaining MCDs are occasional
+    // If NWS alerts API returned nothing, show informational popup at map center
     const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     if (count === 0) {
       document.getElementById('alerts-status').textContent = `No active discussions · ${now}`;
+      // Show an informational popup at the current map center
+      L.popup({ maxWidth:300, className:'mcd-info-popup' })
+        .setLatLng(map.getCenter())
+        .setContent(`
+          <div class="alert-popup">
+            <div class="ev" style="color:#f4a261">No Active Mesoscale Discussions</div>
+            <div style="margin-top:8px;font-size:0.82rem;line-height:1.7;color:#c8dde8">
+              The Storm Prediction Center (SPC) issues Mesoscale Discussions when
+              meteorologists identify a developing weather concern that may warrant
+              a watch or warning in the near future.
+            </div>
+            <div style="margin-top:8px;font-size:0.82rem;line-height:1.7;color:#c8dde8">
+              They are typically issued 1–3 hours before a watch, during active
+              severe weather setups, or when forecasters want to highlight a
+              rapidly evolving atmospheric pattern.
+            </div>
+            <div style="margin-top:8px;font-size:0.75rem;color:#7a9bb5">
+              Discussions are not issued every day — their absence means
+              conditions do not currently warrant forecaster concern.
+            </div>
+          </div>
+        `)
+        .openOn(map);
     } else {
       document.getElementById('alerts-status').textContent = `${count} discussion${count!==1?'s':''} · ${now}`;
     }
