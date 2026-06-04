@@ -72,8 +72,13 @@
     display:flex; align-items:center; gap:0.35rem;
   }
   #anim-progress {
-    font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
-    color:var(--muted); letter-spacing:0.04em; min-width:90px;
+    font-family:'Barlow Condensed',sans-serif;
+    font-size:1rem;
+    font-weight:700;
+    color:#ffffff;
+    letter-spacing:0.06em;
+    min-width:80px;
+    text-shadow: 0 0 8px rgba(46,196,74,0.5);
   }
   #preload-status {
     font-family:'Barlow Condensed',sans-serif; font-size:0.68rem;
@@ -286,22 +291,20 @@ const ALERT_STYLE = {
 const DEFAULT_STYLE = { color:'#2ec44a', fill:'#2ec44a', fillOpacity:0.12, weight:1 };
 
 // ── RADAR FRAME CONFIG ───────────────────────────────────────────────────────
-// Build frames with actual local timestamps displayed to user
+// Iowa Mesonet tile cache reliably goes back ~55 minutes in 5-min steps
 function buildFrameList() {
   const frames = [];
   const now = new Date();
-  // 2 hours back in 5-min steps (24 past frames + current)
-  for (let i = 120; i >= 5; i -= 5) {
+  for (let i = 55; i >= 5; i -= 5) {
     const frameTime = new Date(now.getTime() - i * 60000);
     const label = frameTime.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
     frames.push({ ts: `900913-m${String(i).padStart(2,'0')}m`, label });
   }
-  // Current frame
   const nowLabel = now.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-  frames.push({ ts: '900913', label: nowLabel + ' (Now)' });
+  frames.push({ ts: '900913', label: nowLabel });
   return frames;
 }
-const FRAMES = buildFrameList();
+const FRAMES = buildFrameList(); // 12 frames, ~55 min
 
 // ── MAP INIT ─────────────────────────────────────────────────────────────────
 const map = L.map('map', { center:[39.5,-98.35], zoom:5 });
@@ -373,8 +376,7 @@ function showFrame(idx) {
 
 function updateFrameLabel() {
   const f = FRAMES[currentFrame];
-  document.getElementById('anim-progress').textContent =
-    f.label + ' (' + (currentFrame + 1) + '/' + FRAMES.length + ')';
+  document.getElementById('anim-progress').textContent = f.label;
 }
 
 function stepFrame(dir) {
@@ -452,19 +454,38 @@ async function loadAlerts() {
       const event = props.event || 'Advisory';
       const s = ALERT_STYLE[event] || DEFAULT_STYLE;
       const layer = L.geoJSON(feature.geometry, {
-        style:{ color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 }
+        style:{ color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 },
+        onEachFeature: (feat, lyr) => {
+          // Desktop hover highlight
+          lyr.on('mouseover', function(e) {
+            this.setStyle({ fillOpacity: Math.min(s.fillOpacity + 0.2, 0.7), weight: s.weight + 1 });
+            this.openPopup(e.latlng);
+          });
+          lyr.on('mouseout', function() {
+            this.setStyle({ fillOpacity: s.fillOpacity, weight: s.weight });
+          });
+        }
       });
       const expires = props.expires
         ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
         : 'Unknown';
+      const fullText = [props.description, props.instruction]
+        .filter(Boolean).join('\n\n').replace(/\*/g,'').trim();
       layer.bindPopup(`
         <div class="alert-popup">
           <div class="ev" style="color:${s.color}">${event}</div>
-          <div style="margin-top:4px">${props.headline || event}</div>
+          <div style="margin-top:4px;font-weight:600">${props.headline || event}</div>
           <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${props.areaDesc||''}</div>
           <div class="exp">Expires: ${expires}</div>
+          ${fullText ? `
+          <div style="margin-top:8px;max-height:160px;overflow-y:auto;
+            border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
+            font-size:0.75rem;line-height:1.6;color:#c8dde8;
+            scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;">
+            ${fullText.replace(/\n/g,'<br>')}
+          </div>` : ''}
         </div>
-      `);
+      `, { maxWidth: 300, maxHeight: 350 });
       alertsLayer.addLayer(layer);
       count++;
 
