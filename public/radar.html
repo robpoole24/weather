@@ -110,6 +110,75 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   .load-txt { font-family:'Barlow Condensed',sans-serif; font-size:0.82rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
 
+  /* ── WARNING BANNER ── */
+  #warning-banner {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    z-index: 1001;
+    border-top: 2px solid var(--banner-color, #ff0000);
+    background: color-mix(in srgb, var(--banner-color, #ff0000) 15%, #0a0e14);
+    animation: bannerPulse 2s ease-in-out infinite;
+  }
+  @keyframes bannerPulse {
+    0%, 100% { border-top-color: var(--banner-color, #ff0000); }
+    50% { border-top-color: color-mix(in srgb, var(--banner-color, #ff0000) 60%, white); }
+  }
+  #warning-banner-inner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    min-height: 38px;
+    overflow: hidden;
+  }
+  #warning-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    animation: iconPulse 1s ease-in-out infinite;
+  }
+  @keyframes iconPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  #warning-scroll-wrap {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+  #warning-scroll-text {
+    display: inline-block;
+    white-space: nowrap;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: white;
+    text-transform: uppercase;
+    animation: scrollText 30s linear infinite;
+    padding-left: 100%;
+  }
+  @keyframes scrollText {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-200%); }
+  }
+  #warning-close {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid rgba(255,255,255,0.3);
+    color: white;
+    font-size: 0.75rem;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+  #warning-close:hover { opacity: 1; }
+
+  /* Shrink map to make room for banner */
+  #map.banner-visible { bottom: 38px; }
+
   .leaflet-tile-pane { filter:brightness(0.82) saturate(0.65); }
   .leaflet-popup-content-wrapper { background:#111820; color:#e8f4fd; border:1px solid rgba(0,180,216,0.3); border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5); }
   .leaflet-popup-tip { background:#111820; }
@@ -157,6 +226,17 @@
 
 <div id="map"></div>
 
+<!-- Active warning banner — shown when user location is inside an alert zone -->
+<div id="warning-banner" style="display:none;">
+  <div id="warning-banner-inner">
+    <span id="warning-icon">⚠️</span>
+    <div id="warning-scroll-wrap">
+      <div id="warning-scroll-text"></div>
+    </div>
+    <button id="warning-close" onclick="dismissBanner()" title="Dismiss">✕</button>
+  </div>
+</div>
+
 <div id="radar-legend">
   <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
@@ -171,37 +251,57 @@
 <script>
 // ── ALERT STYLES ─────────────────────────────────────────────────────────────
 const ALERT_STYLE = {
-  'Tornado Warning':             { color:'#ff0000', fill:'#ff0000', fillOpacity:0.4,  weight:2   },
-  'Tornado Watch':               { color:'#ffff00', fill:'#ffff00', fillOpacity:0.2,  weight:1.5 },
-  'Severe Thunderstorm Warning': { color:'#ff8c00', fill:'#ff8c00', fillOpacity:0.35, weight:2   },
-  'Severe Thunderstorm Watch':   { color:'#db8d00', fill:'#db8d00', fillOpacity:0.2,  weight:1.5 },
-  'Flash Flood Warning':         { color:'#00ff00', fill:'#00ff00', fillOpacity:0.35, weight:2   },
-  'Flash Flood Watch':           { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.2,  weight:1.5 },
-  'Flash Flood Emergency':       { color:'#00ff00', fill:'#00ff00', fillOpacity:0.5,  weight:2.5 },
-  'Flood Warning':               { color:'#00ff00', fill:'#00ff00', fillOpacity:0.25, weight:1.5 },
-  'Flood Watch':                 { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.15, weight:1   },
-  'Extreme Wind Warning':        { color:'#ff4500', fill:'#ff4500', fillOpacity:0.35, weight:2   },
-  'Winter Storm Warning':        { color:'#9370db', fill:'#9370db', fillOpacity:0.25, weight:1.5 },
-  'Blizzard Warning':            { color:'#ff69b4', fill:'#ff69b4', fillOpacity:0.3,  weight:2   },
-  'Ice Storm Warning':           { color:'#8b008b', fill:'#8b008b', fillOpacity:0.25, weight:1.5 },
-  'Special Weather Statement':   { color:'#00b4d8', fill:'#00b4d8', fillOpacity:0.12, weight:1   },
-  'Special Marine Warning':      { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2,  weight:1   },
+  'Tornado Warning':                    { color:'#ff0000', fill:'#ff0000', fillOpacity:0.4,  weight:2   },
+  'Tornado Watch':                      { color:'#ffff00', fill:'#ffff00', fillOpacity:0.2,  weight:1.5 },
+  'Severe Thunderstorm Warning':        { color:'#ff8c00', fill:'#ff8c00', fillOpacity:0.35, weight:2   },
+  'Severe Thunderstorm Watch':          { color:'#db8d00', fill:'#db8d00', fillOpacity:0.2,  weight:1.5 },
+  'Flash Flood Warning':                { color:'#00ff00', fill:'#00ff00', fillOpacity:0.35, weight:2   },
+  'Flash Flood Watch':                  { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.2,  weight:1.5 },
+  'Flash Flood Emergency':              { color:'#00ff00', fill:'#00ff00', fillOpacity:0.5,  weight:2.5 },
+  'Flood Warning':                      { color:'#00ff00', fill:'#00ff00', fillOpacity:0.25, weight:1.5 },
+  'Flood Watch':                        { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.15, weight:1   },
+  'Flood Advisory':                     { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.12, weight:1   },
+  'Extreme Wind Warning':               { color:'#ff4500', fill:'#ff4500', fillOpacity:0.35, weight:2   },
+  'Winter Storm Warning':               { color:'#9370db', fill:'#9370db', fillOpacity:0.25, weight:1.5 },
+  'Winter Storm Watch':                 { color:'#4169e1', fill:'#4169e1', fillOpacity:0.2,  weight:1.5 },
+  'Winter Weather Advisory':            { color:'#7b68ee', fill:'#7b68ee', fillOpacity:0.15, weight:1   },
+  'Blizzard Warning':                   { color:'#ff69b4', fill:'#ff69b4', fillOpacity:0.3,  weight:2   },
+  'Ice Storm Warning':                  { color:'#8b008b', fill:'#8b008b', fillOpacity:0.25, weight:1.5 },
+  'Freezing Rain Advisory':             { color:'#da70d6', fill:'#da70d6', fillOpacity:0.15, weight:1   },
+  'Wind Advisory':                      { color:'#d2b48c', fill:'#d2b48c', fillOpacity:0.15, weight:1   },
+  'High Wind Warning':                  { color:'#daa520', fill:'#daa520', fillOpacity:0.2,  weight:1.5 },
+  'High Wind Watch':                    { color:'#b8860b', fill:'#b8860b', fillOpacity:0.15, weight:1   },
+  'Dense Fog Advisory':                 { color:'#708090', fill:'#708090', fillOpacity:0.2,  weight:1   },
+  'Heat Advisory':                      { color:'#ff7f50', fill:'#ff7f50', fillOpacity:0.15, weight:1   },
+  'Excessive Heat Warning':             { color:'#c71585', fill:'#c71585', fillOpacity:0.25, weight:1.5 },
+  'Excessive Heat Watch':               { color:'#800000', fill:'#800000', fillOpacity:0.2,  weight:1   },
+  'Fire Weather Watch':                 { color:'#ffd700', fill:'#ffd700', fillOpacity:0.2,  weight:1   },
+  'Red Flag Warning':                   { color:'#ff1493', fill:'#ff1493', fillOpacity:0.25, weight:1.5 },
+  'Dust Storm Warning':                 { color:'#ffe4b5', fill:'#ffe4b5', fillOpacity:0.3,  weight:1.5 },
+  'Dust Advisory':                      { color:'#d2b48c', fill:'#d2b48c', fillOpacity:0.15, weight:1   },
+  'Special Marine Warning':             { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2,  weight:1   },
+  'Special Weather Statement':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.1,  weight:1   },
+  'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
 const DEFAULT_STYLE = { color:'#2ec44a', fill:'#2ec44a', fillOpacity:0.12, weight:1 };
 
 // ── RADAR FRAME CONFIG ───────────────────────────────────────────────────────
-// Iowa Mesonet timestamps going back 2 hours in 5-min steps = 24 frames
-// Format: 900913-mXXm for past frames, 900913 for current
+// Build frames with actual local timestamps displayed to user
 function buildFrameList() {
   const frames = [];
+  const now = new Date();
   // 2 hours back in 5-min steps (24 past frames + current)
   for (let i = 120; i >= 5; i -= 5) {
-    frames.push({ ts: `900913-m${String(i).padStart(2,'0')}m`, label: `-${i}m` });
+    const frameTime = new Date(now.getTime() - i * 60000);
+    const label = frameTime.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    frames.push({ ts: `900913-m${String(i).padStart(2,'0')}m`, label });
   }
-  frames.push({ ts: '900913', label: 'Now' });
+  // Current frame
+  const nowLabel = now.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+  frames.push({ ts: '900913', label: nowLabel + ' (Now)' });
   return frames;
 }
-const FRAMES = buildFrameList(); // 25 frames total, ~2 hours
+const FRAMES = buildFrameList();
 
 // ── MAP INIT ─────────────────────────────────────────────────────────────────
 const map = L.map('map', { center:[39.5,-98.35], zoom:5 });
@@ -343,7 +443,9 @@ async function loadAlerts() {
     );
     const data = await res.json();
     alertsLayer.clearLayers();
+    activeBannerAlerts = [];
     let count = 0;
+
     (data.features || []).forEach(feature => {
       if (!feature.geometry) return;
       const props = feature.properties;
@@ -365,7 +467,29 @@ async function loadAlerts() {
       `);
       alertsLayer.addLayer(layer);
       count++;
+
+      // Check if user is inside this alert polygon
+      if (userLat && userLng && !bannerDismissed) {
+        if (pointInPolygon(userLat, userLng, feature.geometry)) {
+          activeBannerAlerts.push({
+            event,
+            headline: props.headline || '',
+            areaDesc: props.areaDesc || '',
+            description: props.description || '',
+            instruction: props.instruction || '',
+          });
+        }
+      }
     });
+
+    // Show or hide banner based on whether user is in a zone
+    if (activeBannerAlerts.length > 0 && !bannerDismissed) {
+      showBanner(activeBannerAlerts);
+    } else if (activeBannerAlerts.length === 0) {
+      bannerDismissed = false; // reset dismiss if alerts cleared
+      hideBanner();
+    }
+
     const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     status.textContent = count > 0
       ? `${count} active alert${count!==1?'s':''} · ${now}`
@@ -373,6 +497,106 @@ async function loadAlerts() {
   } catch(e) {
     status.textContent = 'Alerts unavailable';
   }
+}
+
+// ── WARNING BANNER ───────────────────────────────────────────────────────────
+// Priority order — highest danger shown first
+const ALERT_PRIORITY = [
+  'Tornado Warning','Flash Flood Emergency','Extreme Wind Warning',
+  'Severe Thunderstorm Warning','Flash Flood Warning','Flood Warning',
+  'Tornado Watch','Severe Thunderstorm Watch','Flash Flood Watch',
+  'Flood Watch','Winter Storm Warning','Blizzard Warning','Ice Storm Warning',
+  'High Wind Warning','Red Flag Warning','Excessive Heat Warning',
+  'Special Weather Statement','Special Marine Warning',
+];
+
+let bannerDismissed = false;
+let activeBannerAlerts = [];
+
+function dismissBanner() {
+  bannerDismissed = true;
+  document.getElementById('warning-banner').style.display = 'none';
+  document.getElementById('map').classList.remove('banner-visible');
+}
+
+function showBanner(alerts) {
+  if (bannerDismissed || !alerts.length) return;
+  const banner = document.getElementById('warning-banner');
+  const scrollText = document.getElementById('warning-scroll-text');
+  const icon = document.getElementById('warning-icon');
+
+  // Sort by priority
+  alerts.sort((a, b) => {
+    const ai = ALERT_PRIORITY.indexOf(a.event);
+    const bi = ALERT_PRIORITY.indexOf(b.event);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  const top = alerts[0];
+  const s = ALERT_STYLE[top.event] || DEFAULT_STYLE;
+
+  // Set banner color
+  banner.style.setProperty('--banner-color', s.color);
+
+  // Set icon based on event type
+  if (top.event.includes('Tornado')) icon.textContent = '🌪️';
+  else if (top.event.includes('Thunder')) icon.textContent = '⛈️';
+  else if (top.event.includes('Flood')) icon.textContent = '🌊';
+  else if (top.event.includes('Wind')) icon.textContent = '💨';
+  else if (top.event.includes('Winter') || top.event.includes('Blizzard') || top.event.includes('Ice')) icon.textContent = '❄️';
+  else if (top.event.includes('Heat')) icon.textContent = '🌡️';
+  else if (top.event.includes('Fire')) icon.textContent = '🔥';
+  else icon.textContent = '⚠️';
+
+  // Build scroll text — all active alerts separated by bullets
+  const parts = alerts.map(a => {
+    // Pull NWS short description — use headline, fall back to event name
+    const headline = a.headline || a.event;
+    const area = a.areaDesc ? ` · ${a.areaDesc.split(';')[0].trim()}` : '';
+    return `${a.event.toUpperCase()}${area} — ${headline}`;
+  });
+  // Duplicate text so scroll feels continuous
+  const fullText = parts.join('   ●   ') + '   ●   ' + parts.join('   ●   ');
+  scrollText.textContent = fullText;
+
+  // Adjust scroll speed based on text length
+  const duration = Math.max(20, parts.join('').length * 0.12);
+  scrollText.style.animationDuration = duration + 's';
+
+  banner.style.display = 'block';
+  document.getElementById('map').classList.add('banner-visible');
+  map.invalidateSize();
+}
+
+function hideBanner() {
+  document.getElementById('warning-banner').style.display = 'none';
+  document.getElementById('map').classList.remove('banner-visible');
+  map.invalidateSize();
+}
+
+// Point-in-polygon check using ray casting
+function pointInPolygon(lat, lng, geometry) {
+  if (!geometry) return false;
+  try {
+    const coords = geometry.type === 'Polygon'
+      ? [geometry.coordinates]
+      : geometry.coordinates; // MultiPolygon
+
+    for (const poly of coords) {
+      const ring = Array.isArray(poly[0][0]) ? poly[0] : poly;
+      let inside = false;
+      const x = lng, y = lat;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1];
+        const xj = ring[j][0], yj = ring[j][1];
+        const intersect = ((yi > y) !== (yj > y)) &&
+          (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      if (inside) return true;
+    }
+  } catch(e) {}
+  return false;
 }
 
 loadAlerts();
@@ -395,6 +619,8 @@ function goToMyLocation() {
 }
 
 // ── LOCATION SEARCH ──────────────────────────────────────────────────────────
+let searchMarker = null;
+
 async function searchLocation(e) {
   e.preventDefault();
   const q = document.getElementById('zip-input').value.trim();
@@ -408,9 +634,30 @@ async function searchLocation(e) {
     const data = await res.json();
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
-      map.setView([userLat, userLng], 8);
-      document.getElementById('alerts-status').textContent =
-        data[0].display_name.split(',').slice(0,2).join(',');
+      const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
+
+      // Remove previous search marker
+      if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+
+      // Add pin marker
+      searchMarker = L.marker([userLat, userLng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="
+            width:14px; height:14px; border-radius:50%;
+            background:#f4a261; border:2px solid #fff;
+            box-shadow:0 0 8px rgba(244,162,97,0.8);
+            margin-top:-7px; margin-left:-7px;
+          "></div>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+        })
+      }).addTo(map);
+      searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
+
+      // Zoom to zoom level 10 for city/zip — tight enough to see local area
+      map.setView([userLat, userLng], 10);
+      document.getElementById('alerts-status').textContent = placeName;
       document.getElementById('zip-input').value = '';
       updateViewButtons('local');
     } else {
@@ -443,6 +690,8 @@ if (navigator.geolocation) {
       userLat = pos.coords.latitude; userLng = pos.coords.longitude;
       map.setView([userLat, userLng], 8);
       updateViewButtons('local');
+      // Re-check alerts now that we have location
+      loadAlerts();
     },
     () => {},
     { timeout:6000 }
