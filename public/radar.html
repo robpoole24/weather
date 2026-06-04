@@ -342,11 +342,14 @@ const frameLayers = FRAMES.map((f, idx) => {
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
     {
-      opacity: idx === FRAMES.length - 1 ? 0.72 : 0, // only show last (current) frame
+      opacity: idx === FRAMES.length - 1 ? 0.72 : 0,
       attribution: idx === 0 ? 'Radar: <a href="https://mesonet.agron.iastate.edu/">IEM/NEXRAD</a>' : '',
       tileSize: 256,
       zIndex: 200 + idx,
       crossOrigin: true,
+      keepBuffer: 4,
+      updateWhenIdle: false,
+      updateWhenZooming: false,
     }
   );
   return layer;
@@ -528,14 +531,14 @@ window.stepFrame = function(dir) {
 };
 
 // ── SPC CONVECTIVE OUTLOOK ────────────────────────────────────────────────────
-// SPC category colors matching official NWS palette
+// SPC category colors matching official NWS palette — higher opacity for dark map
 const SPC_COLORS = {
-  'HIGH':     { fill:'#ff0000', opacity:0.35, label:'High Risk' },
-  'MDT':      { fill:'#ff6600', opacity:0.3,  label:'Moderate Risk' },
-  'ENH':      { fill:'#ffaa00', opacity:0.25, label:'Enhanced Risk' },
-  'SLGT':     { fill:'#ffff00', opacity:0.2,  label:'Slight Risk' },
-  'MRGL':     { fill:'#99ff99', opacity:0.18, label:'Marginal Risk' },
-  'TSTM':     { fill:'#c8c8c8', opacity:0.12, label:'General Thunder' },
+  'HIGH':     { fill:'#ff0000', opacity:0.45, border:'#cc0000', label:'High Risk' },
+  'MDT':      { fill:'#ff6600', opacity:0.40, border:'#cc5200', label:'Moderate Risk' },
+  'ENH':      { fill:'#ffaa00', opacity:0.38, border:'#cc8800', label:'Enhanced Risk' },
+  'SLGT':     { fill:'#ffff00', opacity:0.32, border:'#cccc00', label:'Slight Risk' },
+  'MRGL':     { fill:'#66ff66', opacity:0.28, border:'#44cc44', label:'Marginal Risk' },
+  'TSTM':     { fill:'#c8c8c8', opacity:0.18, border:'#999999', label:'General Thunder' },
 };
 
 let spcVisible = false;
@@ -553,46 +556,59 @@ async function loadSPC() {
   if (!spcVisible) return;
   document.getElementById('alerts-status').textContent = 'Loading SPC outlook...';
   try {
+    // Use NOAA MapServer GeoJSON query for Day 1 Categorical (layer 1)
     const res = await fetch(
-      'https://www.spc.noaa.gov/products/outlook/day1otlk_cat.lyr.geojson',
+      'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer/1/query?where=1%3D1&outFields=*&f=geojson',
       { headers:{ 'Accept':'application/json' } }
     );
     const data = await res.json();
     spcLayer.clearLayers();
 
-    (data.features || []).forEach(feature => {
+    // Sort so lower risk renders first (higher risk on top)
+    const priorityOrder = ['TSTM','MRGL','SLGT','ENH','MDT','HIGH'];
+    const features = (data.features || []).sort((a,b) => {
+      const aLabel = (a.properties?.LABEL || a.properties?.DN || '').toString().toUpperCase();
+      const bLabel = (b.properties?.LABEL || b.properties?.DN || '').toString().toUpperCase();
+      const ai = priorityOrder.findIndex(k => aLabel.includes(k));
+      const bi = priorityOrder.findIndex(k => bLabel.includes(k));
+      return ai - bi;
+    });
+
+    features.forEach(feature => {
       if (!feature.geometry) return;
-      const dn = (feature.properties?.DN || feature.properties?.LABEL || '').toString().toUpperCase().trim();
-      // Try matching by DN value or label
-      let style = null;
+      const props = feature.properties || {};
+      const dn = (props.LABEL || props.DN || props.LABEL2 || '').toString().toUpperCase().trim();
+
+      let style = SPC_COLORS['TSTM'];
       for (const [key, val] of Object.entries(SPC_COLORS)) {
         if (dn.includes(key)) { style = val; break; }
       }
-      if (!style) style = SPC_COLORS['TSTM'];
 
       const layer = L.geoJSON(feature.geometry, {
         style:{
-          color: style.fill, fillColor: style.fill,
-          fillOpacity: style.opacity, weight: 1.5, opacity: 0.8,
-          dashArray: '4 4'
+          color: style.border,
+          fillColor: style.fill,
+          fillOpacity: style.opacity,
+          weight: 2,
+          opacity: 1,
+          dashArray: '6 4'
         }
       });
 
-      const label = feature.properties?.LABEL2 || feature.properties?.LABEL || style.label;
       layer.bindPopup(`
         <div class="alert-popup">
           <div class="ev" style="color:${style.fill}">SPC Day 1 Outlook</div>
           <div style="margin-top:4px;font-weight:600">${style.label}</div>
-          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${label}</div>
-          <div class="exp">Storm Prediction Center · Norman, OK</div>
+          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">Storm Prediction Center · Norman, OK</div>
+          <div class="exp">Tap/click any area for details</div>
         </div>
       `);
       layer.on('mouseover', function(e) {
-        this.setStyle({ fillOpacity: Math.min(style.opacity + 0.15, 0.6) });
+        this.setStyle({ fillOpacity: Math.min(style.opacity + 0.15, 0.65), weight:2.5 });
         this.openPopup(e.latlng);
       });
       layer.on('mouseout', function() {
-        this.setStyle({ fillOpacity: style.opacity });
+        this.setStyle({ fillOpacity: style.opacity, weight:2 });
       });
       spcLayer.addLayer(layer);
     });
@@ -600,6 +616,7 @@ async function loadSPC() {
     const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     document.getElementById('alerts-status').textContent = `SPC outlook loaded · ${now}`;
   } catch(e) {
+    console.error('[SPC]', e);
     document.getElementById('alerts-status').textContent = 'SPC data unavailable';
   }
 }
@@ -619,63 +636,77 @@ async function loadMCD() {
   if (!mcdVisible) return;
   document.getElementById('alerts-status').textContent = 'Loading discussions...';
   try {
-    // SPC mesoscale discussions GeoJSON
+    // NWS active MCD via api.weather.gov alerts — filter for SPC products
+    // SPC MCDs appear as NWS alerts with specific event types
+    // Also try the SPC RSS feed for current MCD list
     const res = await fetch(
-      'https://www.spc.noaa.gov/products/md/md.geojson',
-      { headers:{ 'Accept':'application/json' } }
+      'https://api.weather.gov/alerts/active?status=actual&message_type=alert&source=SPC',
+      { headers:{ 'Accept':'application/geo+json' } }
     );
     const data = await res.json();
     mcdLayer.clearLayers();
     let count = 0;
 
-    (data.features || []).forEach(feature => {
+    // Filter for mesoscale discussions specifically
+    const mcdFeatures = (data.features || []).filter(f => {
+      const event = (f.properties?.event || '').toLowerCase();
+      const sender = (f.properties?.senderName || '').toLowerCase();
+      return sender.includes('storm prediction') ||
+             event.includes('mesoscale') ||
+             event.includes('severe potential') ||
+             (f.properties?.id || '').includes('SPC');
+    });
+
+    mcdFeatures.forEach(feature => {
       if (!feature.geometry) return;
       const props = feature.properties || {};
-
       const layer = L.geoJSON(feature.geometry, {
         style:{
           color:'#f4a261', fillColor:'#f4a261',
-          fillOpacity:0.12, weight:2, opacity:0.9,
-          dashArray:'6 3'
+          fillOpacity:0.15, weight:2.5, opacity:1,
+          dashArray:'8 4'
         }
       });
 
-      const num     = props.md || props.number || '';
-      const text    = props.text || props.body || '';
-      const issued  = props.issue || props.time || '';
-      const issuedFmt = issued
-        ? new Date(issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+      const expires = props.expires
+        ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
         : '';
+      const text = (props.description || props.instruction || '').replace(/\*/g,'').trim();
 
       layer.bindPopup(`
         <div class="alert-popup">
-          <div class="ev" style="color:#f4a261">Mesoscale Discussion${num ? ' #' + num : ''}</div>
-          ${issuedFmt ? `<div class="exp">Issued: ${issuedFmt}</div>` : ''}
+          <div class="ev" style="color:#f4a261">Mesoscale Discussion</div>
+          <div style="margin-top:4px;font-weight:600">${props.headline || props.event || 'SPC Mesoscale Discussion'}</div>
+          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${props.areaDesc || ''}</div>
+          ${expires ? `<div class="exp">Valid until: ${expires}</div>` : ''}
           ${text ? `
           <div style="margin-top:8px;max-height:200px;overflow-y:auto;
             border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
             font-size:0.74rem;line-height:1.65;color:#c8dde8;
-            white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;">
-${text.replace(/\n\n+/g,'\n').trim()}
-          </div>` : '<div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">No text available</div>'}
+            white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;">${text.replace(/\n\n+/g,'\n').trim()}</div>` : ''}
         </div>
       `, { maxWidth:300 });
 
       layer.on('mouseover', function(e) {
-        this.setStyle({ fillOpacity:0.25, weight:2.5 });
+        this.setStyle({ fillOpacity:0.28, weight:3 });
         this.openPopup(e.latlng);
       });
       layer.on('mouseout', function() {
-        this.setStyle({ fillOpacity:0.12, weight:2 });
+        this.setStyle({ fillOpacity:0.15, weight:2.5 });
       });
       mcdLayer.addLayer(layer);
       count++;
     });
 
+    // If NWS alerts API returned nothing, show a status message explaining MCDs are occasional
     const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    document.getElementById('alerts-status').textContent =
-      count > 0 ? `${count} discussion${count!==1?'s':''} · ${now}` : `No active discussions · ${now}`;
+    if (count === 0) {
+      document.getElementById('alerts-status').textContent = `No active discussions · ${now}`;
+    } else {
+      document.getElementById('alerts-status').textContent = `${count} discussion${count!==1?'s':''} · ${now}`;
+    }
   } catch(e) {
+    console.error('[MCD]', e);
     document.getElementById('alerts-status').textContent = 'Discussions unavailable';
   }
 }
