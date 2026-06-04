@@ -64,21 +64,21 @@
   .tb-btn.on { background:var(--accent); border-color:var(--accent); color:#000; }
   .tb-btn.warn-on { background:rgba(230,57,70,0.2); border-color:var(--red); color:var(--red); }
   .tb-btn.view-on { background:var(--surface); border-color:var(--accent); color:var(--accent); }
-
   #location-btn { border-color:var(--green); color:var(--green); }
   #location-btn:hover { background:rgba(46,196,74,0.12); }
-
   .tb-div { width:1px; height:20px; background:var(--border); flex-shrink:0; }
 
-  /* animation controls */
-  #anim-controls {
+  #anim-bar {
     display:flex; align-items:center; gap:0.35rem;
   }
   #anim-progress {
     font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
-    color:var(--muted); letter-spacing:0.05em; min-width:70px;
+    color:var(--muted); letter-spacing:0.04em; min-width:90px;
   }
-
+  #preload-status {
+    font-family:'Barlow Condensed',sans-serif; font-size:0.68rem;
+    color:var(--muted); letter-spacing:0.04em;
+  }
   #alerts-status {
     font-size:0.72rem; color:var(--muted);
     font-family:'Barlow Condensed',sans-serif; letter-spacing:0.05em;
@@ -87,7 +87,9 @@
 
   #map { position:absolute; top:44px; left:0; right:0; bottom:0; }
 
-  /* Legend */
+  /* The radar layers sit inside the map pane — we control opacity via Leaflet */
+  .radar-frame-layer { transition: opacity 0.2s ease; }
+
   #radar-legend {
     position:absolute; bottom:12px; left:12px; z-index:1000;
     background:rgba(10,14,20,0.88); border:1px solid var(--border);
@@ -98,7 +100,6 @@
   .leg-row { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.18rem; }
   .leg-sw { width:16px; height:9px; border-radius:2px; flex-shrink:0; }
 
-  /* Loading */
   #radar-loading {
     position:absolute; top:44px; left:0; right:0; bottom:0;
     background:var(--bg); z-index:500;
@@ -109,7 +110,6 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   .load-txt { font-family:'Barlow Condensed',sans-serif; font-size:0.82rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
 
-  /* Leaflet overrides */
   .leaflet-tile-pane { filter:brightness(0.82) saturate(0.65); }
   .leaflet-popup-content-wrapper { background:#111820; color:#e8f4fd; border:1px solid rgba(0,180,216,0.3); border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5); }
   .leaflet-popup-tip { background:#111820; }
@@ -135,21 +135,19 @@
   <button class="tb-btn" id="location-btn" onclick="goToMyLocation()">📍 My Location</button>
 
   <div class="tb-div"></div>
-
-  <button class="tb-btn on"  id="btn-radar"  onclick="toggleRadar()">🌧 Radar</button>
+  <button class="tb-btn on"      id="btn-radar"  onclick="toggleRadar()">🌧 Radar</button>
   <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
-
   <div class="tb-div"></div>
 
-  <div id="anim-controls">
+  <div id="anim-bar">
     <button class="tb-btn" id="btn-play" onclick="togglePlay()">▶ Play</button>
-    <button class="tb-btn" onclick="stepFrame(-1)">◀</button>
-    <button class="tb-btn" onclick="stepFrame(1)">▶</button>
-    <span id="anim-progress">— / —</span>
+    <button class="tb-btn" onclick="stepFrame(-1)" title="Previous frame">◀</button>
+    <button class="tb-btn" onclick="stepFrame(1)"  title="Next frame">▶</button>
+    <span id="anim-progress">Loading...</span>
+    <span id="preload-status"></span>
   </div>
 
   <div class="tb-div"></div>
-
   <button class="tb-btn" id="v-local"    onclick="setView('local')">Local</button>
   <button class="tb-btn" id="v-regional" onclick="setView('regional')">Regional</button>
   <button class="tb-btn view-on" id="v-national" onclick="setView('national')">National</button>
@@ -171,36 +169,39 @@
 <div id="radar-loading"><div class="spin"></div><div class="load-txt">Loading radar...</div></div>
 
 <script>
-// ── NWS ALERT COLORS (exact event strings from api.weather.gov) ─────────────
+// ── ALERT STYLES ─────────────────────────────────────────────────────────────
 const ALERT_STYLE = {
-  'Tornado Warning':                    { color:'#ff0000', fill:'#ff0000', fillOpacity:0.4, weight:2 },
-  'Tornado Watch':                      { color:'#ffff00', fill:'#ffff00', fillOpacity:0.2, weight:1.5 },
-  'Severe Thunderstorm Warning':        { color:'#ff8c00', fill:'#ff8c00', fillOpacity:0.35, weight:2 },
-  'Severe Thunderstorm Watch':          { color:'#db8d00', fill:'#db8d00', fillOpacity:0.2, weight:1.5 },
-  'Flash Flood Warning':                { color:'#00ff00', fill:'#00ff00', fillOpacity:0.35, weight:2 },
-  'Flash Flood Watch':                  { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.2, weight:1.5 },
-  'Flash Flood Emergency':              { color:'#00ff00', fill:'#00ff00', fillOpacity:0.5, weight:2.5 },
-  'Flood Warning':                      { color:'#00ff00', fill:'#00ff00', fillOpacity:0.25, weight:1.5 },
-  'Flood Watch':                        { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.15, weight:1 },
-  'Extreme Wind Warning':               { color:'#ff4500', fill:'#ff4500', fillOpacity:0.35, weight:2 },
-  'Dust Storm Warning':                 { color:'#ffe4b5', fill:'#ffe4b5', fillOpacity:0.3, weight:1.5 },
-  'Winter Storm Warning':               { color:'#9370db', fill:'#9370db', fillOpacity:0.25, weight:1.5 },
-  'Blizzard Warning':                   { color:'#ff69b4', fill:'#ff69b4', fillOpacity:0.3, weight:2 },
-  'Ice Storm Warning':                  { color:'#8b008b', fill:'#8b008b', fillOpacity:0.25, weight:1.5 },
-  'Special Weather Statement':          { color:'#00b4d8', fill:'#00b4d8', fillOpacity:0.12, weight:1 },
-  'Special Marine Warning':             { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2, weight:1 },
+  'Tornado Warning':             { color:'#ff0000', fill:'#ff0000', fillOpacity:0.4,  weight:2   },
+  'Tornado Watch':               { color:'#ffff00', fill:'#ffff00', fillOpacity:0.2,  weight:1.5 },
+  'Severe Thunderstorm Warning': { color:'#ff8c00', fill:'#ff8c00', fillOpacity:0.35, weight:2   },
+  'Severe Thunderstorm Watch':   { color:'#db8d00', fill:'#db8d00', fillOpacity:0.2,  weight:1.5 },
+  'Flash Flood Warning':         { color:'#00ff00', fill:'#00ff00', fillOpacity:0.35, weight:2   },
+  'Flash Flood Watch':           { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.2,  weight:1.5 },
+  'Flash Flood Emergency':       { color:'#00ff00', fill:'#00ff00', fillOpacity:0.5,  weight:2.5 },
+  'Flood Warning':               { color:'#00ff00', fill:'#00ff00', fillOpacity:0.25, weight:1.5 },
+  'Flood Watch':                 { color:'#2e8b57', fill:'#2e8b57', fillOpacity:0.15, weight:1   },
+  'Extreme Wind Warning':        { color:'#ff4500', fill:'#ff4500', fillOpacity:0.35, weight:2   },
+  'Winter Storm Warning':        { color:'#9370db', fill:'#9370db', fillOpacity:0.25, weight:1.5 },
+  'Blizzard Warning':            { color:'#ff69b4', fill:'#ff69b4', fillOpacity:0.3,  weight:2   },
+  'Ice Storm Warning':           { color:'#8b008b', fill:'#8b008b', fillOpacity:0.25, weight:1.5 },
+  'Special Weather Statement':   { color:'#00b4d8', fill:'#00b4d8', fillOpacity:0.12, weight:1   },
+  'Special Marine Warning':      { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2,  weight:1   },
 };
 const DEFAULT_STYLE = { color:'#2ec44a', fill:'#2ec44a', fillOpacity:0.12, weight:1 };
 
-// ── ANIMATION FRAME TIMESTAMPS (Iowa Mesonet, last 50 min, 5-min steps) ─────
-const FRAMES = [
-  '900913-m50m','900913-m45m','900913-m40m','900913-m35m','900913-m30m',
-  '900913-m25m','900913-m20m','900913-m15m','900913-m10m','900913-m05m',
-  '900913'
-];
-const FRAME_LABELS = [
-  '-50m','-45m','-40m','-35m','-30m','-25m','-20m','-15m','-10m','-5m','Now'
-];
+// ── RADAR FRAME CONFIG ───────────────────────────────────────────────────────
+// Iowa Mesonet timestamps going back 2 hours in 5-min steps = 24 frames
+// Format: 900913-mXXm for past frames, 900913 for current
+function buildFrameList() {
+  const frames = [];
+  // 2 hours back in 5-min steps (24 past frames + current)
+  for (let i = 120; i >= 5; i -= 5) {
+    frames.push({ ts: `900913-m${String(i).padStart(2,'0')}m`, label: `-${i}m` });
+  }
+  frames.push({ ts: '900913', label: 'Now' });
+  return frames;
+}
+const FRAMES = buildFrameList(); // 25 frames total, ~2 hours
 
 // ── MAP INIT ─────────────────────────────────────────────────────────────────
 const map = L.map('map', { center:[39.5,-98.35], zoom:5 });
@@ -210,53 +211,70 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   subdomains:'abcd', maxZoom:19
 }).addTo(map);
 
-// Pre-create all radar frame layers (not added to map yet)
-const radarFrameLayers = FRAMES.map(ts =>
-  L.tileLayer(
-    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${ts}/{z}/{x}/{y}.png`,
-    { opacity:0.72, attribution:'Radar: <a href="https://mesonet.agron.iastate.edu/">IEM/NEXRAD</a>', tileSize:256 }
-  )
-);
+// ── SMOOTH ANIMATION ENGINE ──────────────────────────────────────────────────
+// Key technique: all frame layers exist on the map simultaneously,
+// but all are opacity:0 except the active one. This keeps tiles loaded
+// in the browser cache so switching is instant with no flash.
 
-let currentFrame = FRAMES.length - 1; // start at "Now"
+const frameLayers = FRAMES.map((f, idx) => {
+  const layer = L.tileLayer(
+    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
+    {
+      opacity: idx === FRAMES.length - 1 ? 0.72 : 0, // only show last (current) frame
+      attribution: idx === 0 ? 'Radar: <a href="https://mesonet.agron.iastate.edu/">IEM/NEXRAD</a>' : '',
+      tileSize: 256,
+      zIndex: 200 + idx,
+      crossOrigin: true,
+    }
+  );
+  return layer;
+});
+
+// Add ALL layers to map (they're invisible until activated)
+frameLayers.forEach(l => l.addTo(map));
+
+let currentFrame = FRAMES.length - 1;
 let radarVisible = true;
-let alertsVisible = true;
-let alertsLayer = L.layerGroup().addTo(map);
 let isPlaying = false;
 let playTimer = null;
+let preloadCount = 0;
 let userLat = null, userLng = null;
+let alertsVisible = true;
+let alertsLayer = L.layerGroup().addTo(map);
 
-// Show current (last) frame
-radarFrameLayers[currentFrame].addTo(map);
+// Track tile load progress for preload indicator
+frameLayers.forEach((layer, idx) => {
+  layer.on('load', () => {
+    preloadCount++;
+    const pct = Math.round((preloadCount / FRAMES.length) * 100);
+    const el = document.getElementById('preload-status');
+    if (el && pct < 100) el.textContent = `Loading ${pct}%`;
+    else if (el) el.textContent = '';
+  });
+});
+
 updateFrameLabel();
 
-// ── HIDE LOADING ─────────────────────────────────────────────────────────────
+// Hide loading overlay
 setTimeout(() => {
   const el = document.getElementById('radar-loading');
   if (el) { el.style.opacity='0'; setTimeout(()=>el.remove(),500); }
-}, 2500);
+}, 2000);
 
-// ── RADAR TOGGLE ─────────────────────────────────────────────────────────────
-function toggleRadar() {
-  radarVisible = !radarVisible;
-  const btn = document.getElementById('btn-radar');
-  btn.className = 'tb-btn' + (radarVisible ? ' on' : '');
-  if (radarVisible) radarFrameLayers[currentFrame].addTo(map);
-  else radarFrameLayers.forEach(l => { try { map.removeLayer(l); } catch(e){} });
-}
-
-// ── ANIMATION ────────────────────────────────────────────────────────────────
+// ── FRAME SWITCHING (smooth — just swap opacity) ──────────────────────────────
 function showFrame(idx) {
   if (!radarVisible) return;
-  radarFrameLayers.forEach(l => { try { map.removeLayer(l); } catch(e){} });
-  radarFrameLayers[idx].addTo(map);
+  // Fade out current, fade in new
+  frameLayers[currentFrame].setOpacity(0);
+  frameLayers[idx].setOpacity(0.72);
   currentFrame = idx;
   updateFrameLabel();
 }
 
 function updateFrameLabel() {
+  const f = FRAMES[currentFrame];
   document.getElementById('anim-progress').textContent =
-    FRAME_LABELS[currentFrame] + ' (' + (currentFrame+1) + '/' + FRAMES.length + ')';
+    f.label + ' (' + (currentFrame + 1) + '/' + FRAMES.length + ')';
 }
 
 function stepFrame(dir) {
@@ -272,23 +290,44 @@ function togglePlay() {
   if (isPlaying) {
     btn.textContent = '⏸ Pause';
     btn.classList.add('on');
-    playTimer = setInterval(() => {
+    // Pause briefly on the last (current) frame before looping
+    function advance() {
       let next = currentFrame + 1;
-      if (next >= FRAMES.length) next = 0;
+      if (next >= FRAMES.length) {
+        next = 0;
+        // Pause 1.5s on "Now" before restarting loop
+        showFrame(FRAMES.length - 1);
+        playTimer = setTimeout(() => {
+          if (isPlaying) { showFrame(0); playTimer = setTimeout(advance, 450); }
+        }, 1500);
+        return;
+      }
       showFrame(next);
-    }, 600);
+      playTimer = setTimeout(advance, 450); // 450ms per frame
+    }
+    advance();
   } else {
     btn.textContent = '▶ Play';
     btn.classList.remove('on');
-    clearInterval(playTimer);
+    clearTimeout(playTimer);
+  }
+}
+
+// ── RADAR TOGGLE ─────────────────────────────────────────────────────────────
+function toggleRadar() {
+  radarVisible = !radarVisible;
+  document.getElementById('btn-radar').className = 'tb-btn' + (radarVisible ? ' on' : '');
+  if (radarVisible) {
+    frameLayers[currentFrame].setOpacity(0.72);
+  } else {
+    frameLayers.forEach(l => l.setOpacity(0));
   }
 }
 
 // ── ALERTS ───────────────────────────────────────────────────────────────────
 function toggleAlerts() {
   alertsVisible = !alertsVisible;
-  const btn = document.getElementById('btn-alerts');
-  btn.className = 'tb-btn' + (alertsVisible ? ' warn-on' : '');
+  document.getElementById('btn-alerts').className = 'tb-btn' + (alertsVisible ? ' warn-on' : '');
   if (alertsVisible) { map.addLayer(alertsLayer); loadAlerts(); }
   else map.removeLayer(alertsLayer);
 }
@@ -304,18 +343,15 @@ async function loadAlerts() {
     );
     const data = await res.json();
     alertsLayer.clearLayers();
-
     let count = 0;
     (data.features || []).forEach(feature => {
       if (!feature.geometry) return;
       const props = feature.properties;
       const event = props.event || 'Advisory';
       const s = ALERT_STYLE[event] || DEFAULT_STYLE;
-
       const layer = L.geoJSON(feature.geometry, {
-        style: { color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 }
+        style:{ color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 }
       });
-
       const expires = props.expires
         ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
         : 'Unknown';
@@ -330,7 +366,6 @@ async function loadAlerts() {
       alertsLayer.addLayer(layer);
       count++;
     });
-
     const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     status.textContent = count > 0
       ? `${count} active alert${count!==1?'s':''} · ${now}`
@@ -340,7 +375,6 @@ async function loadAlerts() {
   }
 }
 
-// Auto-refresh alerts every 2 minutes
 loadAlerts();
 setInterval(loadAlerts, 120000);
 
@@ -375,7 +409,8 @@ async function searchLocation(e) {
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
       map.setView([userLat, userLng], 8);
-      document.getElementById('alerts-status').textContent = data[0].display_name.split(',').slice(0,2).join(',');
+      document.getElementById('alerts-status').textContent =
+        data[0].display_name.split(',').slice(0,2).join(',');
       document.getElementById('zip-input').value = '';
       updateViewButtons('local');
     } else {
@@ -397,8 +432,7 @@ function setView(mode) {
 
 function updateViewButtons(active) {
   ['local','regional','national'].forEach(v => {
-    const btn = document.getElementById('v-' + v);
-    btn.className = 'tb-btn' + (v === active ? ' view-on' : '');
+    document.getElementById('v-' + v).className = 'tb-btn' + (v === active ? ' view-on' : '');
   });
 }
 
