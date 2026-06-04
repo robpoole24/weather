@@ -211,6 +211,15 @@
   <div class="tb-div"></div>
   <button class="tb-btn on"      id="btn-radar"  onclick="toggleRadar()">🌧 Radar</button>
   <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
+  <button class="tb-btn"         id="btn-spc"    onclick="toggleSPC()" title="SPC Day 1 Convective Outlook">🗺 SPC Outlook</button>
+  <button class="tb-btn"         id="btn-mcd"    onclick="toggleMCD()" title="Mesoscale Discussions">💬 Discussions</button>
+  <div class="tb-div"></div>
+
+  <!-- Radar mode: Past vs Forecast -->
+  <div id="mode-bar" style="display:flex;align-items:center;gap:0.3rem;">
+    <button class="tb-btn view-on" id="btn-mode-past"     onclick="setRadarMode('past')">Past</button>
+    <button class="tb-btn"         id="btn-mode-forecast" onclick="setRadarMode('forecast')">Forecast</button>
+  </div>
   <div class="tb-div"></div>
 
   <div id="anim-bar">
@@ -243,12 +252,22 @@
 </div>
 
 <div id="radar-legend">
+  <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">NWS Alerts</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ffff00;border:1px solid #888"></div>Tornado Watch</div>
   <div class="leg-row"><div class="leg-sw" style="background:#db8d00"></div>Severe T-Storm Watch</div>
   <div class="leg-row"><div class="leg-sw" style="background:#00ff00"></div>Flash Flood Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#2ec44a;opacity:0.6"></div>Other Advisory</div>
+  <div id="spc-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--gold);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">SPC Outlook</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>High Risk</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ff6600"></div>Moderate Risk</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ffaa00"></div>Enhanced Risk</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ffff00;border:1px solid #888"></div>Slight Risk</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#99ff99"></div>Marginal Risk</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#c8c8c8;opacity:0.5"></div>General Thunder</div>
+  </div>
 </div>
 
 <div id="radar-loading"><div class="spin"></div><div class="load-txt">Loading radar...</div></div>
@@ -344,6 +363,32 @@ let preloadCount = 0;
 let userLat = null, userLng = null;
 let alertsVisible = true;
 let alertsLayer = L.layerGroup().addTo(map);
+let radarMode = 'past'; // 'past' or 'forecast'
+
+// ── HRRR FORECAST FRAMES ─────────────────────────────────────────────────────
+// Iowa Mesonet serves HRRR simulated reflectivity tiles
+// Using init time 0 = IEM auto-selects latest run
+// Forecast steps: 0, 15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720 minutes
+const FORECAST_STEPS = [0, 15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720];
+const forecastFrames = FORECAST_STEPS.map((mins, idx) => {
+  const label = mins === 0 ? 'Now'
+    : mins < 60 ? `+${mins}m`
+    : `+${Math.round(mins/60)}h${mins%60 ? (mins%60)+'m' : ''}`;
+  const layer = L.tileLayer(
+    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
+    {
+      opacity: 0,
+      tileSize: 256,
+      zIndex: 300 + idx,
+      crossOrigin: true,
+    }
+  );
+  return { layer, label, mins };
+});
+
+// Add forecast layers to map (invisible until forecast mode activated)
+forecastFrames.forEach(f => f.layer.addTo(map));
+let currentForecastFrame = 0;
 
 // Track tile load progress for preload indicator
 frameLayers.forEach((layer, idx) => {
@@ -392,20 +437,26 @@ function togglePlay() {
   if (isPlaying) {
     btn.textContent = '⏸ Pause';
     btn.classList.add('on');
-    // Pause briefly on the last (current) frame before looping
     function advance() {
-      let next = currentFrame + 1;
-      if (next >= FRAMES.length) {
-        next = 0;
-        // Pause 1.5s on "Now" before restarting loop
-        showFrame(FRAMES.length - 1);
-        playTimer = setTimeout(() => {
-          if (isPlaying) { showFrame(0); playTimer = setTimeout(advance, 450); }
-        }, 1500);
-        return;
+      if (radarMode === 'past') {
+        let next = currentFrame + 1;
+        if (next >= FRAMES.length) {
+          showFrame(FRAMES.length - 1);
+          playTimer = setTimeout(() => {
+            if (isPlaying) { showFrame(0); playTimer = setTimeout(advance, 450); }
+          }, 1500);
+          return;
+        }
+        showFrame(next);
+      } else {
+        forecastFrames[currentForecastFrame].layer.setOpacity(0);
+        let next = currentForecastFrame + 1;
+        if (next >= forecastFrames.length) next = 0;
+        currentForecastFrame = next;
+        if (radarVisible) forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+        updateForecastLabel();
       }
-      showFrame(next);
-      playTimer = setTimeout(advance, 450); // 450ms per frame
+      playTimer = setTimeout(advance, radarMode === 'forecast' ? 700 : 450);
     }
     advance();
   } else {
@@ -420,11 +471,216 @@ function toggleRadar() {
   radarVisible = !radarVisible;
   document.getElementById('btn-radar').className = 'tb-btn' + (radarVisible ? ' on' : '');
   if (radarVisible) {
-    frameLayers[currentFrame].setOpacity(0.72);
+    if (radarMode === 'past') frameLayers[currentFrame].setOpacity(0.72);
+    else forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
   } else {
     frameLayers.forEach(l => l.setOpacity(0));
+    forecastFrames.forEach(f => f.layer.setOpacity(0));
   }
 }
+
+// ── RADAR MODE: PAST vs FORECAST ─────────────────────────────────────────────
+function setRadarMode(mode) {
+  radarMode = mode;
+  clearTimeout(playTimer);
+  isPlaying = false;
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-play').classList.remove('on');
+
+  document.getElementById('btn-mode-past').className     = 'tb-btn' + (mode === 'past'     ? ' view-on' : '');
+  document.getElementById('btn-mode-forecast').className = 'tb-btn' + (mode === 'forecast' ? ' view-on' : '');
+
+  // Hide all layers first
+  frameLayers.forEach(l => l.setOpacity(0));
+  forecastFrames.forEach(f => f.layer.setOpacity(0));
+
+  if (!radarVisible) return;
+
+  if (mode === 'past') {
+    frameLayers[currentFrame].setOpacity(0.72);
+    updateFrameLabel();
+  } else {
+    forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+    updateForecastLabel();
+  }
+}
+
+function updateForecastLabel() {
+  const f = forecastFrames[currentForecastFrame];
+  document.getElementById('anim-progress').textContent = f.label;
+}
+
+// Override stepFrame and togglePlay for forecast mode
+const _origStepFrame = stepFrame;
+window.stepFrame = function(dir) {
+  if (radarMode === 'past') {
+    _origStepFrame(dir);
+  } else {
+    forecastFrames[currentForecastFrame].layer.setOpacity(0);
+    let next = currentForecastFrame + dir;
+    if (next < 0) next = forecastFrames.length - 1;
+    if (next >= forecastFrames.length) next = 0;
+    currentForecastFrame = next;
+    if (radarVisible) forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+    updateForecastLabel();
+  }
+};
+
+// ── SPC CONVECTIVE OUTLOOK ────────────────────────────────────────────────────
+// SPC category colors matching official NWS palette
+const SPC_COLORS = {
+  'HIGH':     { fill:'#ff0000', opacity:0.35, label:'High Risk' },
+  'MDT':      { fill:'#ff6600', opacity:0.3,  label:'Moderate Risk' },
+  'ENH':      { fill:'#ffaa00', opacity:0.25, label:'Enhanced Risk' },
+  'SLGT':     { fill:'#ffff00', opacity:0.2,  label:'Slight Risk' },
+  'MRGL':     { fill:'#99ff99', opacity:0.18, label:'Marginal Risk' },
+  'TSTM':     { fill:'#c8c8c8', opacity:0.12, label:'General Thunder' },
+};
+
+let spcVisible = false;
+let spcLayer = L.layerGroup();
+
+function toggleSPC() {
+  spcVisible = !spcVisible;
+  document.getElementById('btn-spc').className = 'tb-btn' + (spcVisible ? ' on' : '');
+  document.getElementById('spc-legend').style.display = spcVisible ? 'block' : 'none';
+  if (spcVisible) { map.addLayer(spcLayer); loadSPC(); }
+  else map.removeLayer(spcLayer);
+}
+
+async function loadSPC() {
+  if (!spcVisible) return;
+  document.getElementById('alerts-status').textContent = 'Loading SPC outlook...';
+  try {
+    const res = await fetch(
+      'https://www.spc.noaa.gov/products/outlook/day1otlk_cat.lyr.geojson',
+      { headers:{ 'Accept':'application/json' } }
+    );
+    const data = await res.json();
+    spcLayer.clearLayers();
+
+    (data.features || []).forEach(feature => {
+      if (!feature.geometry) return;
+      const dn = (feature.properties?.DN || feature.properties?.LABEL || '').toString().toUpperCase().trim();
+      // Try matching by DN value or label
+      let style = null;
+      for (const [key, val] of Object.entries(SPC_COLORS)) {
+        if (dn.includes(key)) { style = val; break; }
+      }
+      if (!style) style = SPC_COLORS['TSTM'];
+
+      const layer = L.geoJSON(feature.geometry, {
+        style:{
+          color: style.fill, fillColor: style.fill,
+          fillOpacity: style.opacity, weight: 1.5, opacity: 0.8,
+          dashArray: '4 4'
+        }
+      });
+
+      const label = feature.properties?.LABEL2 || feature.properties?.LABEL || style.label;
+      layer.bindPopup(`
+        <div class="alert-popup">
+          <div class="ev" style="color:${style.fill}">SPC Day 1 Outlook</div>
+          <div style="margin-top:4px;font-weight:600">${style.label}</div>
+          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${label}</div>
+          <div class="exp">Storm Prediction Center · Norman, OK</div>
+        </div>
+      `);
+      layer.on('mouseover', function(e) {
+        this.setStyle({ fillOpacity: Math.min(style.opacity + 0.15, 0.6) });
+        this.openPopup(e.latlng);
+      });
+      layer.on('mouseout', function() {
+        this.setStyle({ fillOpacity: style.opacity });
+      });
+      spcLayer.addLayer(layer);
+    });
+
+    const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    document.getElementById('alerts-status').textContent = `SPC outlook loaded · ${now}`;
+  } catch(e) {
+    document.getElementById('alerts-status').textContent = 'SPC data unavailable';
+  }
+}
+
+// ── MESOSCALE DISCUSSIONS ─────────────────────────────────────────────────────
+let mcdVisible = false;
+let mcdLayer = L.layerGroup();
+
+function toggleMCD() {
+  mcdVisible = !mcdVisible;
+  document.getElementById('btn-mcd').className = 'tb-btn' + (mcdVisible ? ' on' : '');
+  if (mcdVisible) { map.addLayer(mcdLayer); loadMCD(); }
+  else map.removeLayer(mcdLayer);
+}
+
+async function loadMCD() {
+  if (!mcdVisible) return;
+  document.getElementById('alerts-status').textContent = 'Loading discussions...';
+  try {
+    // SPC mesoscale discussions GeoJSON
+    const res = await fetch(
+      'https://www.spc.noaa.gov/products/md/md.geojson',
+      { headers:{ 'Accept':'application/json' } }
+    );
+    const data = await res.json();
+    mcdLayer.clearLayers();
+    let count = 0;
+
+    (data.features || []).forEach(feature => {
+      if (!feature.geometry) return;
+      const props = feature.properties || {};
+
+      const layer = L.geoJSON(feature.geometry, {
+        style:{
+          color:'#f4a261', fillColor:'#f4a261',
+          fillOpacity:0.12, weight:2, opacity:0.9,
+          dashArray:'6 3'
+        }
+      });
+
+      const num     = props.md || props.number || '';
+      const text    = props.text || props.body || '';
+      const issued  = props.issue || props.time || '';
+      const issuedFmt = issued
+        ? new Date(issued).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+        : '';
+
+      layer.bindPopup(`
+        <div class="alert-popup">
+          <div class="ev" style="color:#f4a261">Mesoscale Discussion${num ? ' #' + num : ''}</div>
+          ${issuedFmt ? `<div class="exp">Issued: ${issuedFmt}</div>` : ''}
+          ${text ? `
+          <div style="margin-top:8px;max-height:200px;overflow-y:auto;
+            border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
+            font-size:0.74rem;line-height:1.65;color:#c8dde8;
+            white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;">
+${text.replace(/\n\n+/g,'\n').trim()}
+          </div>` : '<div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">No text available</div>'}
+        </div>
+      `, { maxWidth:300 });
+
+      layer.on('mouseover', function(e) {
+        this.setStyle({ fillOpacity:0.25, weight:2.5 });
+        this.openPopup(e.latlng);
+      });
+      layer.on('mouseout', function() {
+        this.setStyle({ fillOpacity:0.12, weight:2 });
+      });
+      mcdLayer.addLayer(layer);
+      count++;
+    });
+
+    const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    document.getElementById('alerts-status').textContent =
+      count > 0 ? `${count} discussion${count!==1?'s':''} · ${now}` : `No active discussions · ${now}`;
+  } catch(e) {
+    document.getElementById('alerts-status').textContent = 'Discussions unavailable';
+  }
+}
+
+// Refresh SPC and MCD every 10 minutes
+setInterval(() => { if (spcVisible) loadSPC(); if (mcdVisible) loadMCD(); }, 600000);
 
 // ── ALERTS ───────────────────────────────────────────────────────────────────
 function toggleAlerts() {
