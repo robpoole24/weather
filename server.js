@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const radar = require('./radar');
 
 // Load .env file if present
 const envPath = path.join(__dirname, '.env');
@@ -1835,8 +1836,18 @@ app.get('*', (req, res) => {
 });
 
 // Listen on 0.0.0.0 so Railway can reach the server
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`WeatherTV server running on port ${PORT}`);
   console.log(`App: http://localhost:${PORT}`);
   console.log(`Admin: http://localhost:${PORT}/admin`);
+
+  // Mount radar notification routes
+  radar.routes(app);
+
+  // Init radar module with Redis client once server is up
+  if (redis) {
+    radar.init(redis);
+  } else {
+    console.warn('[Radar] Redis not available — push notifications disabled');
+  }
 });

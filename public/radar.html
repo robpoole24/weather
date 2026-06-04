@@ -704,6 +704,34 @@ function updateViewButtons(active) {
   });
 }
 
+// ── FCM TOKEN REGISTRATION ───────────────────────────────────────────────────
+// The Android app injects the FCM token into the WebView via a JS interface.
+// We listen for it and register it with our server along with the user's location.
+let fcmToken = null;
+
+// Called by the Android WebView bridge when FCM token is available
+window.onFcmToken = function(token) {
+  fcmToken = token;
+  if (userLat && userLng) registerFcmToken();
+};
+
+async function registerFcmToken() {
+  if (!fcmToken || !userLat || !userLng) return;
+  try {
+    const res = await fetch('/api/radar/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: fcmToken, lat: userLat, lng: userLng }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      console.log('[Radar] Registered for alerts in zone:', data.label);
+    }
+  } catch(e) {
+    console.warn('[Radar] FCM registration failed:', e.message);
+  }
+}
+
 // ── AUTO GEOLOCATE ON LOAD ───────────────────────────────────────────────────
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
@@ -711,8 +739,8 @@ if (navigator.geolocation) {
       userLat = pos.coords.latitude; userLng = pos.coords.longitude;
       map.setView([userLat, userLng], 8);
       updateViewButtons('local');
-      // Re-check alerts now that we have location
       loadAlerts();
+      registerFcmToken(); // register now that we have location
     },
     () => {},
     { timeout:6000 }
