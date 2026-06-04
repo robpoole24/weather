@@ -370,7 +370,6 @@ let currentFrame = FRAMES.length - 1;
 let radarVisible = true;
 let isPlaying = false;
 let playTimer = null;
-let preloadCount = 0;
 let userLat = null, userLng = null;
 let alertsVisible = true;
 let alertsLayer = L.layerGroup().addTo(map);
@@ -402,16 +401,51 @@ const forecastFrames = FORECAST_STEPS.map((mins, idx) => {
 forecastFrames.forEach(f => f.layer.addTo(map));
 let currentForecastFrame = 0;
 
-// Track tile load progress for preload indicator
+// ── AGGRESSIVE TILE PRELOADING ───────────────────────────────────────────────
+// Cycle through all past frames at 0.001 opacity briefly to force browser
+// to fetch and cache all tiles. Once cached, switching is instant with no lag.
+let preloadCount = 0;
+let tilesLoaded = 0;
+const totalTiles = FRAMES.length;
+
+function preloadAllFrames() {
+  // Show each non-current frame at near-zero opacity for 80ms to trigger fetch
+  let idx = 0;
+  function showNext() {
+    if (idx >= FRAMES.length) return;
+    if (idx !== currentFrame) {
+      frameLayers[idx].setOpacity(0.001);
+      setTimeout(() => {
+        if (idx !== currentFrame) frameLayers[idx].setOpacity(0);
+        idx++;
+        setTimeout(showNext, 80);
+      }, 100);
+    } else {
+      idx++;
+      setTimeout(showNext, 10);
+    }
+  }
+  // Start preloading after map settles
+  setTimeout(showNext, 1500);
+}
+
+// Track tile load progress
 frameLayers.forEach((layer, idx) => {
   layer.on('load', () => {
     preloadCount++;
     const pct = Math.round((preloadCount / FRAMES.length) * 100);
     const el = document.getElementById('preload-status');
-    if (el && pct < 100) el.textContent = `Loading ${pct}%`;
+    if (el && pct < 100) el.textContent = `Caching ${pct}%`;
     else if (el) el.textContent = '';
   });
 });
+
+// Re-preload tiles when user zooms (new zoom level = new tiles needed)
+map.on('zoomend', () => {
+  setTimeout(preloadAllFrames, 500);
+});
+
+preloadAllFrames();
 
 updateFrameLabel();
 
