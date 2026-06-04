@@ -2008,7 +2008,7 @@ function loadRadarPanel() {
   }
 }
 
-
+async function loadPlaylist() {
   // Update the View on YouTube link with the real playlist ID
   const ytLink = document.getElementById('playlist-yt-link');
   if (ytLink && PLAYLIST_ID && PLAYLIST_ID !== 'YOUR_PLAYLIST_ID') {
