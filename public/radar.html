@@ -218,7 +218,7 @@
   <!-- Radar mode: Past vs Forecast -->
   <div id="mode-bar" style="display:flex;align-items:center;gap:0.3rem;">
     <button class="tb-btn view-on" id="btn-mode-past"     onclick="setRadarMode('past')">Past</button>
-    <button class="tb-btn"         id="btn-mode-forecast" onclick="setRadarMode('forecast')">Forecast</button>
+    <button class="tb-btn"         id="btn-mode-forecast" onclick="setRadarMode('forecast')">Future</button>
   </div>
   <div class="tb-div"></div>
 
@@ -368,12 +368,13 @@ let radarMode = 'past'; // 'past' or 'forecast'
 // ── HRRR FORECAST FRAMES ─────────────────────────────────────────────────────
 // Iowa Mesonet serves HRRR simulated reflectivity tiles
 // Using init time 0 = IEM auto-selects latest run
-// Forecast steps: 0, 15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720 minutes
-const FORECAST_STEPS = [0, 15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720];
+// Strict 15-minute increments from Now to +3 hours = 13 frames
+const FORECAST_STEPS = [];
+for (let m = 0; m <= 180; m += 15) FORECAST_STEPS.push(m);
+
 const forecastFrames = FORECAST_STEPS.map((mins, idx) => {
-  const label = mins === 0 ? 'Now'
-    : mins < 60 ? `+${mins}m`
-    : `+${Math.round(mins/60)}h${mins%60 ? (mins%60)+'m' : ''}`;
+  const frameTime = new Date(Date.now() + mins * 60000);
+  const label = frameTime.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
     {
