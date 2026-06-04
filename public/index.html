@@ -859,18 +859,6 @@
     <div class="panel" id="live-now-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
     </div>
 
-    <!-- LIVE RADAR -->
-    <div class="panel" id="radar-panel" style="display:none;width:100%;height:100%;position:relative;overflow:hidden;">
-      <iframe
-        id="radar-iframe"
-        src="https://radar.weather.gov/station/KMKX/standard"
-        style="width:100%;height:100%;border:none;display:block;"
-        title="NWS Live Radar"
-        loading="lazy"
-        allow="geolocation"
-      ></iframe>
-    </div>
-
     <!-- WEATHERSTAR -->
     <div class="panel" id="weatherstar-panel">
     </div>
@@ -1989,23 +1977,26 @@ function nearestStation(lat, lng) {
 
 let radarLoaded = false;
 function loadRadarPanel() {
-  if (radarLoaded) return;
-  radarLoaded = true;
-  const iframe = document.getElementById('radar-iframe');
-  if (!iframe) return;
+  // Default to Milwaukee — will update if geolocation succeeds
+  let station = 'KMKX';
 
-  if (navigator.geolocation) {
+  function launchRadar(stationId) {
+    loadIframe('https://radar.weather.gov/station/' + stationId + '/standard', 'Live Radar', false);
+  }
+
+  if (!radarLoaded && navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       pos => {
-        const station = nearestStation(pos.coords.latitude, pos.coords.longitude);
-        iframe.src = 'https://radar.weather.gov/station/' + station + '/standard';
+        station = nearestStation(pos.coords.latitude, pos.coords.longitude);
+        launchRadar(station);
       },
-      () => {
-        // Geolocation denied or failed — keep default (KMKX Milwaukee)
-      },
+      () => launchRadar(station),
       { timeout: 5000 }
     );
+  } else {
+    launchRadar(station);
   }
+  radarLoaded = true;
 }
 
 async function loadPlaylist() {
