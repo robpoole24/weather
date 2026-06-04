@@ -211,9 +211,17 @@
   <div class="tb-div"></div>
   <button class="tb-btn on"      id="btn-radar"  onclick="toggleRadar()">🌧 Radar</button>
   <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
-  <button class="tb-btn"         id="btn-spc"    onclick="toggleSPC()" title="SPC Day 1 Convective Outlook">🗺 SPC Outlook</button>
-  <button class="tb-btn"         id="btn-mcd"    onclick="toggleMCD()" title="Mesoscale Discussions">💬 Discussions</button>
+  <button class="tb-btn"         id="btn-spc"    onclick="toggleSPC()" title="SPC Convective Outlook">🗺 SPC Outlook</button>
+  <button class="tb-btn"         id="btn-mcd"    onclick="toggleMCD()" title="SPC Mesoscale Discussions">💬 Mesoscale Discussions</button>
   <div class="tb-div"></div>
+
+  <!-- SPC Day selector — shown when SPC is active -->
+  <div id="spc-day-bar" style="display:none;align-items:center;gap:0.3rem;">
+    <button class="tb-btn view-on" id="spc-d1" onclick="setSPCDay(1)">Day 1</button>
+    <button class="tb-btn"         id="spc-d2" onclick="setSPCDay(2)">Day 2</button>
+    <button class="tb-btn"         id="spc-d3" onclick="setSPCDay(3)">Day 3</button>
+  </div>
+  <div id="spc-day-divider" class="tb-div" style="display:none;"></div>
 
   <!-- Radar mode: Past vs Forecast -->
   <div id="mode-bar" style="display:flex;align-items:center;gap:0.3rem;">
@@ -531,65 +539,70 @@ window.stepFrame = function(dir) {
 };
 
 // ── SPC CONVECTIVE OUTLOOK ────────────────────────────────────────────────────
-// SPC category colors matching official NWS palette — higher opacity for dark map
-const SPC_COLORS = {
-  'HIGH':     { fill:'#ff0000', opacity:0.45, border:'#cc0000', label:'High Risk' },
-  'MDT':      { fill:'#ff6600', opacity:0.40, border:'#cc5200', label:'Moderate Risk' },
-  'ENH':      { fill:'#ffaa00', opacity:0.38, border:'#cc8800', label:'Enhanced Risk' },
-  'SLGT':     { fill:'#ffff00', opacity:0.32, border:'#cccc00', label:'Slight Risk' },
-  'MRGL':     { fill:'#66ff66', opacity:0.28, border:'#44cc44', label:'Marginal Risk' },
-  'TSTM':     { fill:'#c8c8c8', opacity:0.18, border:'#999999', label:'General Thunder' },
+// dn field is numeric: 2=TSTM, 3=MRGL, 4=SLGT, 5=ENH, 6=MDT, 8=HIGH
+const SPC_DN = {
+  2: { fill:'#c8c8c8', opacity:0.22, border:'#888888', label:'General Thunder' },
+  3: { fill:'#66cc44', opacity:0.38, border:'#449922', label:'Marginal Risk' },
+  4: { fill:'#ffff00', opacity:0.42, border:'#cccc00', label:'Slight Risk' },
+  5: { fill:'#ffaa00', opacity:0.46, border:'#cc8800', label:'Enhanced Risk' },
+  6: { fill:'#ff6600', opacity:0.50, border:'#cc4400', label:'Moderate Risk' },
+  8: { fill:'#ff0000', opacity:0.55, border:'#cc0000', label:'High Risk' },
 };
+// Day -> NOAA MapServer layer ID
+const SPC_LAYER_IDS = { 1: 1, 2: 9, 3: 17 };
 
 let spcVisible = false;
+let spcDay = 1;
 let spcLayer = L.layerGroup();
 
 function toggleSPC() {
   spcVisible = !spcVisible;
   document.getElementById('btn-spc').className = 'tb-btn' + (spcVisible ? ' on' : '');
   document.getElementById('spc-legend').style.display = spcVisible ? 'block' : 'none';
+  document.getElementById('spc-day-bar').style.display = spcVisible ? 'flex' : 'none';
+  document.getElementById('spc-day-divider').style.display = spcVisible ? 'block' : 'none';
   if (spcVisible) { map.addLayer(spcLayer); loadSPC(); }
   else map.removeLayer(spcLayer);
 }
 
+function setSPCDay(day) {
+  spcDay = day;
+  [1,2,3].forEach(d => {
+    document.getElementById('spc-d' + d).className = 'tb-btn' + (d === day ? ' view-on' : '');
+  });
+  spcLayer.clearLayers();
+  loadSPC();
+}
+
 async function loadSPC() {
   if (!spcVisible) return;
-  document.getElementById('alerts-status').textContent = 'Loading SPC outlook...';
+  const layerId = SPC_LAYER_IDS[spcDay];
+  document.getElementById('alerts-status').textContent = `Loading SPC Day ${spcDay} outlook...`;
   try {
-    // Use NOAA MapServer GeoJSON query for Day 1 Categorical (layer 1)
     const res = await fetch(
-      'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer/1/query?where=1%3D1&outFields=*&f=geojson',
+      `https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer/${layerId}/query?where=1%3D1&outFields=*&f=geojson`,
       { headers:{ 'Accept':'application/json' } }
     );
     const data = await res.json();
     spcLayer.clearLayers();
 
-    // Sort so lower risk renders first (higher risk on top)
-    const priorityOrder = ['TSTM','MRGL','SLGT','ENH','MDT','HIGH'];
-    const features = (data.features || []).sort((a,b) => {
-      const aLabel = (a.properties?.LABEL || a.properties?.DN || '').toString().toUpperCase();
-      const bLabel = (b.properties?.LABEL || b.properties?.DN || '').toString().toUpperCase();
-      const ai = priorityOrder.findIndex(k => aLabel.includes(k));
-      const bi = priorityOrder.findIndex(k => bLabel.includes(k));
-      return ai - bi;
-    });
+    // Sort lower risk first so higher risk renders on top
+    const features = (data.features || []).sort((a,b) =>
+      (Number(a.properties?.dn) || 0) - (Number(b.properties?.dn) || 0)
+    );
 
     features.forEach(feature => {
       if (!feature.geometry) return;
       const props = feature.properties || {};
-      const dn = (props.LABEL || props.DN || props.LABEL2 || '').toString().toUpperCase().trim();
-
-      let style = SPC_COLORS['TSTM'];
-      for (const [key, val] of Object.entries(SPC_COLORS)) {
-        if (dn.includes(key)) { style = val; break; }
-      }
+      const dn = Number(props.dn) || Number(props.DN) || 0;
+      const style = SPC_DN[dn] || SPC_DN[2];
 
       const layer = L.geoJSON(feature.geometry, {
         style:{
           color: style.border,
           fillColor: style.fill,
           fillOpacity: style.opacity,
-          weight: 2,
+          weight: 2.5,
           opacity: 1,
           dashArray: '6 4'
         }
@@ -597,24 +610,24 @@ async function loadSPC() {
 
       layer.bindPopup(`
         <div class="alert-popup">
-          <div class="ev" style="color:${style.fill}">SPC Day 1 Outlook</div>
+          <div class="ev" style="color:${style.fill}">SPC Day ${spcDay} Outlook</div>
           <div style="margin-top:4px;font-weight:600">${style.label}</div>
           <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">Storm Prediction Center · Norman, OK</div>
-          <div class="exp">Tap/click any area for details</div>
+          <div class="exp">Valid: ${props.valid || props.VALID || 'See SPC for details'}</div>
         </div>
       `);
       layer.on('mouseover', function(e) {
-        this.setStyle({ fillOpacity: Math.min(style.opacity + 0.15, 0.65), weight:2.5 });
+        this.setStyle({ fillOpacity: Math.min(style.opacity + 0.18, 0.72), weight:3 });
         this.openPopup(e.latlng);
       });
       layer.on('mouseout', function() {
-        this.setStyle({ fillOpacity: style.opacity, weight:2 });
+        this.setStyle({ fillOpacity: style.opacity, weight:2.5 });
       });
       spcLayer.addLayer(layer);
     });
 
     const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    document.getElementById('alerts-status').textContent = `SPC outlook loaded · ${now}`;
+    document.getElementById('alerts-status').textContent = `SPC Day ${spcDay} loaded · ${now}`;
   } catch(e) {
     console.error('[SPC]', e);
     document.getElementById('alerts-status').textContent = 'SPC data unavailable';
