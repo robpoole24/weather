@@ -726,7 +726,12 @@ function renderChannelRow(groupId, ch) {
     if (fromIdx === -1 || toIdx === -1) return;
     const [moved] = group.channels.splice(fromIdx, 1);
     group.channels.splice(toIdx, 0, moved);
-    renderChannelList(groupId);
+    // Re-render the channel list for this group
+    const list = document.getElementById('ch-list-' + groupId);
+    if (list) {
+      list.innerHTML = '';
+      group.channels.forEach(c => list.appendChild(renderChannelRow(groupId, c)));
+    }
     saveConfig();
     showToast('Channel moved — saving...');
   });
