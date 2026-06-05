@@ -108,6 +108,22 @@
     .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
     #status-bar { padding: 0.08rem 0.5rem !important; gap: 0.25rem !important; }
     .status-item { font-size: 0.5rem !important; }
+
+    /* Radar expanded mode — takes almost full screen on mobile */
+    body.radar-expanded #video-area {
+      flex: 0 0 92dvh !important;
+      max-height: 92dvh !important;
+    }
+    body.radar-expanded #control-bar {
+      flex: 0 0 0 !important;
+      min-height: 0 !important;
+      overflow: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    body.radar-expanded #status-bar {
+      display: none !important;
+    }
   }
 
   /* Landscape phone — any width, under 500px tall (phones only, tablets are taller) */
@@ -1186,6 +1202,11 @@ function showPanel(name, e) {
   const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
   if (btn) btn.classList.add('active');
 
+  // Collapse radar expanded mode when switching away from radar
+  if (name !== 'radar') {
+    document.body.classList.remove('radar-expanded');
+  }
+
   // Hide ALL panels including live-now-panel (reset inline styles too)
   document.querySelectorAll('.panel').forEach(p => {
     p.classList.remove('active');
@@ -1882,8 +1903,18 @@ let playlistLoaded = false;
 
 let radarLoaded = false;
 function loadRadarPanel() {
+  // Expand to full screen on mobile
+  if (window.innerWidth <= 767) {
+    document.body.classList.add('radar-expanded');
+  }
   loadIframe('/radar.html', 'Live Radar', false);
 }
+
+// Collapse radar expanded mode when switching away
+const _origShowPanel = showPanel;
+window._radarPanelCleanup = function() {
+  document.body.classList.remove('radar-expanded');
+};
 
 async function loadPlaylist() {
   // Update the View on YouTube link with the real playlist ID
