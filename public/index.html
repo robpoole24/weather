@@ -126,7 +126,41 @@
     }
   }
 
-  /* Landscape phone — any width, under 500px tall (phones only, tablets are taller) */
+  /* ── TV / XBOX EDGE ─────────────────────────────────────────────────────────
+     Large screen + coarse pointer (game controller, remote) = TV browser.
+     Boost font sizes, card sizes, and hit targets for 10-foot viewing distance.
+  ── */
+  @media (min-width: 1080px) and (pointer: coarse) {
+    .channel-card {
+      min-width: 220px !important;
+      padding: 0.85rem 1rem !important;
+      border-radius: 8px !important;
+      border-width: 2px !important;
+    }
+    .channel-name {
+      font-size: 1.15rem !important;
+    }
+    .channel-meta, .live-badge, .ch-badge {
+      font-size: 0.85rem !important;
+    }
+    .nav-btn {
+      font-size: 0.85rem !important;
+      padding: 0.5rem 1rem !important;
+      border-width: 2px !important;
+    }
+    #main-nav {
+      padding: 0.5rem 1rem !important;
+      gap: 0.5rem !important;
+    }
+    .channel-list {
+      gap: 0.75rem !important;
+    }
+    #status-bar {
+      font-size: 0.75rem !important;
+      padding: 0.2rem 1rem !important;
+    }
+    .status-item { font-size: 0.72rem !important; }
+  }
   @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
 
