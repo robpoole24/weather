@@ -38,6 +38,7 @@
     }
     #radar-toolbar::-webkit-scrollbar { display:none; }
     .radar-label { font-size:0.75rem; }
+    #radar-minimize-hint { display:inline !important; }
     .tb-btn { font-size:0.65rem; padding:0.22rem 0.45rem; white-space:nowrap; flex-shrink:0; }
     #zip-input { width:110px; font-size:0.75rem; }
     #anim-progress { font-size:0.85rem; min-width:60px; flex-shrink:0; }
@@ -224,7 +225,10 @@
 <body>
 
 <div id="radar-toolbar">
-  <div class="radar-label"><span class="sweep-icon"></span>Live Radar</div>
+  <div class="radar-label" id="radar-minimize-btn" onclick="minimizeRadar()" title="Back to Weather TV" style="cursor:pointer;">
+    <span class="sweep-icon"></span>Live Radar
+    <span id="radar-minimize-hint" style="display:none;font-size:0.65rem;color:var(--muted);margin-left:0.3rem;font-weight:400;letter-spacing:0.04em;">✕ minimize</span>
+  </div>
   <div class="tb-div"></div>
 
   <form id="zip-form" onsubmit="searchLocation(event)">
@@ -1085,6 +1089,22 @@ function updateViewButtons(active) {
   ['local','regional','national'].forEach(v => {
     document.getElementById('v-' + v).className = 'tb-btn' + (v === active ? ' view-on' : '');
   });
+}
+
+// ── MINIMIZE RADAR (mobile back button) ──────────────────────────────────────
+function minimizeRadar() {
+  // Only act as a minimize button on mobile
+  if (window.innerWidth > 767) return;
+  try {
+    // Call showPanel in the parent WeatherTV app to switch away from radar
+    // This also removes the radar-expanded class via the showPanel cleanup
+    if (window.parent && window.parent !== window) {
+      window.parent.showPanel('storm-chasers');
+    }
+  } catch(e) {
+    // Fallback: post a message to the parent
+    window.parent.postMessage({ action: 'minimizeRadar' }, '*');
+  }
 }
 
 // ── FCM TOKEN REGISTRATION ───────────────────────────────────────────────────

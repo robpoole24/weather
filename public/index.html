@@ -1897,9 +1897,12 @@ function playVideo(videoId, title) {
 
 let playlistLoaded = false;
 
-// ═══════════════════════════════════════════
-// LIVE RADAR PANEL
-// ═══════════════════════════════════════════
+// Listen for minimize message from radar iframe
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.action === 'minimizeRadar') {
+    showPanel('storm-chasers');
+  }
+});
 
 let radarLoaded = false;
 function loadRadarPanel() {
