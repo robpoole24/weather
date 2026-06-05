@@ -126,40 +126,59 @@
     }
   }
 
-  /* ── TV / XBOX EDGE ─────────────────────────────────────────────────────────
-     Large screen + coarse pointer (game controller, remote) = TV browser.
+  /* ── TV / XBOX / SMART TV ────────────────────────────────────────────────────
+     Applied via JS UA detection — body.tv-mode
      Boost font sizes, card sizes, and hit targets for 10-foot viewing distance.
   ── */
-  @media (min-width: 1080px) and (pointer: coarse) {
-    .channel-card {
-      min-width: 220px !important;
-      padding: 0.85rem 1rem !important;
-      border-radius: 8px !important;
-      border-width: 2px !important;
-    }
-    .channel-name {
-      font-size: 1.15rem !important;
-    }
-    .channel-meta, .live-badge, .ch-badge {
-      font-size: 0.85rem !important;
-    }
-    .nav-btn {
-      font-size: 0.85rem !important;
-      padding: 0.5rem 1rem !important;
-      border-width: 2px !important;
-    }
-    #main-nav {
-      padding: 0.5rem 1rem !important;
-      gap: 0.5rem !important;
-    }
-    .channel-list {
-      gap: 0.75rem !important;
-    }
-    #status-bar {
-      font-size: 0.75rem !important;
-      padding: 0.2rem 1rem !important;
-    }
-    .status-item { font-size: 0.72rem !important; }
+  body.tv-mode .channel-card {
+    min-width: 220px !important;
+    padding: 0.85rem 1rem !important;
+    border-radius: 8px !important;
+    border-width: 2px !important;
+  }
+  body.tv-mode .channel-name {
+    font-size: 1.15rem !important;
+  }
+  body.tv-mode .channel-meta,
+  body.tv-mode .live-badge,
+  body.tv-mode .ch-badge {
+    font-size: 0.85rem !important;
+  }
+  body.tv-mode .nav-btn {
+    font-size: 0.85rem !important;
+    padding: 0.5rem 1rem !important;
+    border-width: 2px !important;
+  }
+  body.tv-mode #main-nav {
+    padding: 0.5rem 1rem !important;
+    gap: 0.5rem !important;
+  }
+  body.tv-mode .channel-list {
+    gap: 0.75rem !important;
+    padding: 0.5rem 1rem !important;
+  }
+  body.tv-mode #status-bar {
+    font-size: 0.75rem !important;
+    padding: 0.2rem 1rem !important;
+  }
+  body.tv-mode .status-item { font-size: 0.72rem !important; }
+
+  /* TV layout: give channel bar more room, video less */
+  body.tv-mode #video-area {
+    flex: 2 !important;
+    min-height: 0 !important;
+  }
+  body.tv-mode #control-bar {
+    flex: 3 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+  /* Once a video is playing, expand video area */
+  body.tv-mode.video-playing #video-area {
+    flex: 4 !important;
+  }
+  body.tv-mode.video-playing #control-bar {
+    flex: 1 !important;
   }
   @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
@@ -1713,6 +1732,9 @@ function loadIframe(src, label, isLive) {
   placeholder.style.display = 'none';
   areaInner.style.display = 'flex';
 
+  // TV mode: expand video area when playing
+  document.body.classList.add('video-playing');
+
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
   if (isWeatherStar) {
@@ -1767,6 +1789,8 @@ function clearVideo() {
   placeholder.style.display = 'flex';
   areaInner.style.display = 'none';
   wrapper.style.background = '#000000';
+  // TV mode: collapse video area when not playing
+  document.body.classList.remove('video-playing');
   // Replace iframe to fully stop any playing video
   const frame = document.getElementById('video-frame');
   if (frame) {
@@ -2282,8 +2306,24 @@ function detectOS() {
   if (/iphone|ipad|ipod/.test(ua)) return 'ios';
   if (/android/.test(ua)) return 'android';
   if (/tizen/.test(ua)) return 'tizen';
+  if (/xbox/.test(ua)) return 'xbox';
   return 'other';
 }
+
+// Detect TV/console browsers and apply tv-mode class for larger UI
+(function detectTVMode() {
+  const ua = navigator.userAgent.toLowerCase();
+  const isTV =
+    /xbox/.test(ua) ||        // Xbox Edge
+    /tizen/.test(ua) ||       // Samsung Smart TV
+    /web0s/.test(ua) ||       // LG webOS
+    /netcast/.test(ua) ||     // LG older
+    /viera/.test(ua) ||       // Panasonic
+    /smart-tv/.test(ua) ||    // Generic smart TV
+    /googletv/.test(ua) ||    // Google TV
+    /crkey/.test(ua);         // Chromecast
+  if (isTV) document.body.classList.add('tv-mode');
+})();
 
 // Chat overlay works at all sizes — no resize close needed
 
