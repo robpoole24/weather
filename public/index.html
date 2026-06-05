@@ -1097,6 +1097,17 @@
       <a href="/privacy.html" target="_blank" style="font-size:0.78rem;color:var(--muted);text-decoration:none;letter-spacing:0.05em;font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;">Privacy Policy</a>
     </div>
 
+    <div style="text-align:center;margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border)">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Viewing on a TV or large screen?</div>
+      <button type="button" id="tv-mode-btn" onclick="toggleTVMode()" style="
+        font-family:'Barlow Condensed',sans-serif;font-weight:700;
+        font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;
+        padding:0.4rem 1.25rem;background:transparent;
+        border:1px solid var(--muted);color:var(--muted);border-radius:4px;cursor:pointer;
+        transition:all 0.2s;
+      ">📺 Enable TV Mode</button>
+    </div>
+
     <div style="text-align:center;margin-top:1rem">
       <button type="button" onclick="hideAbout()" style="
         font-family:'Barlow Condensed',sans-serif;font-weight:700;
@@ -2323,7 +2334,25 @@ function detectOS() {
     /googletv/.test(ua) ||    // Google TV
     /crkey/.test(ua);         // Chromecast
   if (isTV) document.body.classList.add('tv-mode');
+  // Also apply saved manual preference
+  if (localStorage.getItem('wtv-tv-mode') === '1') document.body.classList.add('tv-mode');
+  if (localStorage.getItem('wtv-tv-mode') === '0') document.body.classList.remove('tv-mode');
 })();
+
+function toggleTVMode() {
+  const isTV = document.body.classList.toggle('tv-mode');
+  localStorage.setItem('wtv-tv-mode', isTV ? '1' : '0');
+  updateTVModeBtn();
+}
+
+function updateTVModeBtn() {
+  const btn = document.getElementById('tv-mode-btn');
+  if (!btn) return;
+  const isTV = document.body.classList.contains('tv-mode');
+  btn.textContent = isTV ? '📺 TV Mode: ON' : '📺 Enable TV Mode';
+  btn.style.borderColor = isTV ? 'var(--accent)' : 'var(--muted)';
+  btn.style.color = isTV ? 'var(--accent)' : 'var(--muted)';
+}
 
 // Chat overlay works at all sizes — no resize close needed
 
@@ -2435,6 +2464,7 @@ function createScrollArrows(scrollEl) {
 function showAbout() {
   const overlay = document.getElementById('about-overlay');
   overlay.style.display = 'flex';
+  updateTVModeBtn();
 }
 
 function hideAbout() {
