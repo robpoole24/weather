@@ -973,6 +973,7 @@
     <span class="status-item" id="video-update-status">Videos: —</span>
     <span class="status-item status-divider">|</span>
     <span class="status-item" id="time-display"></span>
+    <button type="button" id="tv-mode-btn" class="about-btn" onclick="toggleTVMode()" title="Toggle TV Mode for large screens" style="margin-left:0">📺</button>
     <button type="button" class="about-btn" onclick="showAbout()">About</button>
   </div>
 
@@ -996,9 +997,13 @@
     border-radius:10px;
     max-width:520px;
     width:90%;
+    max-height:85vh;
+    overflow-y:auto;
     padding:2rem;
     position:relative;
     box-shadow:0 8px 40px rgba(0,0,0,0.6);
+    scrollbar-width:thin;
+    scrollbar-color:var(--border) transparent;
   ">
     <button type="button" onclick="hideAbout()" style="
       position:absolute;top:1rem;right:1rem;
@@ -1095,17 +1100,6 @@
 
     <div style="text-align:center;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)">
       <a href="/privacy.html" target="_blank" style="font-size:0.78rem;color:var(--muted);text-decoration:none;letter-spacing:0.05em;font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;">Privacy Policy</a>
-    </div>
-
-    <div style="text-align:center;margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--border)">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Viewing on a TV or large screen?</div>
-      <button type="button" id="tv-mode-btn" onclick="toggleTVMode()" style="
-        font-family:'Barlow Condensed',sans-serif;font-weight:700;
-        font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;
-        padding:0.4rem 1.25rem;background:transparent;
-        border:1px solid var(--muted);color:var(--muted);border-radius:4px;cursor:pointer;
-        transition:all 0.2s;
-      ">📺 Enable TV Mode</button>
     </div>
 
     <div style="text-align:center;margin-top:1rem">
@@ -1743,8 +1737,10 @@ function loadIframe(src, label, isLive) {
   placeholder.style.display = 'none';
   areaInner.style.display = 'flex';
 
-  // TV mode: expand video area when playing
-  document.body.classList.add('video-playing');
+  // TV mode: expand video area when playing (skip in TV mode — layout stays fixed)
+  if (!document.body.classList.contains('tv-mode')) {
+    document.body.classList.add('video-playing');
+  }
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
@@ -2325,18 +2321,19 @@ function detectOS() {
 (function detectTVMode() {
   const ua = navigator.userAgent.toLowerCase();
   const isTV =
-    /xbox/.test(ua) ||        // Xbox Edge
-    /tizen/.test(ua) ||       // Samsung Smart TV
-    /web0s/.test(ua) ||       // LG webOS
-    /netcast/.test(ua) ||     // LG older
-    /viera/.test(ua) ||       // Panasonic
-    /smart-tv/.test(ua) ||    // Generic smart TV
-    /googletv/.test(ua) ||    // Google TV
-    /crkey/.test(ua);         // Chromecast
+    /xbox/.test(ua) ||
+    /tizen/.test(ua) ||
+    /web0s/.test(ua) ||
+    /netcast/.test(ua) ||
+    /viera/.test(ua) ||
+    /smart-tv/.test(ua) ||
+    /googletv/.test(ua) ||
+    /crkey/.test(ua);
   if (isTV) document.body.classList.add('tv-mode');
-  // Also apply saved manual preference
   if (localStorage.getItem('wtv-tv-mode') === '1') document.body.classList.add('tv-mode');
   if (localStorage.getItem('wtv-tv-mode') === '0') document.body.classList.remove('tv-mode');
+  // Sync button state after DOM is ready
+  document.addEventListener('DOMContentLoaded', updateTVModeBtn);
 })();
 
 function toggleTVMode() {
@@ -2349,9 +2346,10 @@ function updateTVModeBtn() {
   const btn = document.getElementById('tv-mode-btn');
   if (!btn) return;
   const isTV = document.body.classList.contains('tv-mode');
-  btn.textContent = isTV ? '📺 TV Mode: ON' : '📺 Enable TV Mode';
-  btn.style.borderColor = isTV ? 'var(--accent)' : 'var(--muted)';
+  btn.textContent = isTV ? '📺 ✓' : '📺';
+  btn.style.borderColor = isTV ? 'var(--accent)' : 'var(--border)';
   btn.style.color = isTV ? 'var(--accent)' : 'var(--muted)';
+  btn.title = isTV ? 'TV Mode ON — click to disable' : 'Enable TV Mode for large screens';
 }
 
 // Chat overlay works at all sizes — no resize close needed
@@ -2464,7 +2462,6 @@ function createScrollArrows(scrollEl) {
 function showAbout() {
   const overlay = document.getElementById('about-overlay');
   overlay.style.display = 'flex';
-  updateTVModeBtn();
 }
 
 function hideAbout() {
