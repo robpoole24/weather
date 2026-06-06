@@ -924,32 +924,6 @@
 
 </div>
 
-<!-- Zoom tip banner for non-standard browsers (Xbox, smart TVs) -->
-<div id="zoom-tip-banner" style="
-  display:none;
-  position:fixed;
-  top:0;left:0;right:0;
-  z-index:2000;
-  background:rgba(10,14,20,0.96);
-  border-bottom:2px solid var(--accent);
-  padding:0.6rem 1rem;
-  align-items:center;
-  gap:1rem;
-  font-family:'Barlow Condensed',sans-serif;
-  font-size:0.9rem;
-  letter-spacing:0.05em;
-  color:var(--text);
-">
-  <span style="color:var(--accent);font-size:1.1rem;">📺</span>
-  <span>For the best experience on this browser, try zooming out to <strong style="color:var(--accent)">67%</strong> — press <strong style="color:var(--accent)">Ctrl + −</strong> a few times until the channel bar looks right.</span>
-  <button onclick="document.getElementById('zoom-tip-banner').style.display='none';localStorage.setItem('wtv-zoom-tip-dismissed','1')" style="
-    margin-left:auto;background:transparent;border:1px solid var(--border);
-    color:var(--muted);font-family:'Barlow Condensed',sans-serif;
-    font-size:0.8rem;padding:0.2rem 0.6rem;border-radius:3px;cursor:pointer;
-    flex-shrink:0;letter-spacing:0.05em;
-  ">✕ Got it</button>
-</div>
-
 <!-- ═══════════════════════════════════════════
      ABOUT MODAL
 ════════════════════════════════════════════ -->
@@ -1068,6 +1042,13 @@
         </div>
       </div>
     </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">📺 Viewing on Xbox or a Smart TV?</div>
+        <div style="font-size:0.82rem;color:var(--muted);line-height:1.6;">
+          Weather TV works in Xbox Edge and most smart TV browsers. For the best experience, zoom your browser out to around <strong style="color:var(--text)">67%</strong> — press <strong style="color:var(--text)">Ctrl + −</strong> a few times until the channel bar and cards look right.
+        </div>
+      </div>
 
     <div style="text-align:center;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)">
       <a href="/privacy.html" target="_blank" style="font-size:0.78rem;color:var(--muted);text-decoration:none;letter-spacing:0.05em;font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;">Privacy Policy</a>
@@ -2284,39 +2265,6 @@ function detectOS() {
   return 'other';
 }
 
-// Detect non-standard browsers (Xbox, smart TVs, etc.) and show zoom tip
-(function detectNonStandardBrowser() {
-  if (localStorage.getItem('wtv-zoom-tip-dismissed') === '1') return;
-
-  const ua = navigator.userAgent.toLowerCase();
-  const knownTV =
-    /xbox/.test(ua) ||
-    /tizen/.test(ua) ||
-    /web0s/.test(ua) ||
-    /netcast/.test(ua) ||
-    /viera/.test(ua) ||
-    /smart-tv/.test(ua) ||
-    /googletv/.test(ua) ||
-    /crkey/.test(ua);
-
-  const suspiciousViewport =
-    window.screen.width >= 1280 &&
-    window.innerWidth < 900 &&
-    !('ontouchstart' in window);
-
-  if (!knownTV && !suspiciousViewport) return;
-
-  function showZoomTip() {
-    const banner = document.getElementById('zoom-tip-banner');
-    if (banner) {
-      banner.style.display = 'flex';
-    } else {
-      // DOM not ready yet, try again shortly
-      setTimeout(showZoomTip, 100);
-    }
-  }
-  showZoomTip();
-})();
 
 // Chat overlay works at all sizes — no resize close needed
 
