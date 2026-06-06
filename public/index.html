@@ -127,8 +127,9 @@
   }
 
   /* ── TV / XBOX / SMART TV ────────────────────────────────────────────────────
-     Applied via JS UA detection — body.tv-mode
-     Boost font sizes, card sizes, and hit targets for 10-foot viewing distance.
+     body.tv-mode = TV mode active
+     body.tv-mode = browsing: channel bar large, video small
+     body.tv-mode.tv-playing = playing: video large, channel bar small
   ── */
   body.tv-mode .channel-card {
     min-width: 220px !important;
@@ -163,9 +164,9 @@
   }
   body.tv-mode .status-item { font-size: 0.72rem !important; }
 
-  /* TV layout: give channel bar more room, video less */
+  /* TV browsing mode — channel bar gets most of the space */
   body.tv-mode #video-area {
-    flex: 2 !important;
+    flex: 1 !important;
     min-height: 0 !important;
   }
   body.tv-mode #control-bar {
@@ -173,12 +174,16 @@
     min-height: 0 !important;
     overflow: hidden !important;
   }
-  /* Once a video is playing, expand video area */
-  body.tv-mode.video-playing #video-area {
+
+  /* TV playing mode — video gets most of the space */
+  body.tv-mode.tv-playing #video-area {
     flex: 4 !important;
+    min-height: 0 !important;
   }
-  body.tv-mode.video-playing #control-bar {
+  body.tv-mode.tv-playing #control-bar {
     flex: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
   }
   @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
@@ -1265,6 +1270,12 @@ function showPanel(name, e) {
     document.body.classList.remove('radar-expanded');
   }
 
+  // In TV mode, switching to a channel group = browsing mode
+  const isGroup = GROUPS.some(g => g.id === name);
+  if (isGroup && document.body.classList.contains('tv-mode')) {
+    document.body.classList.remove('tv-playing');
+  }
+
   // Hide ALL panels including live-now-panel (reset inline styles too)
   document.querySelectorAll('.panel').forEach(p => {
     p.classList.remove('active');
@@ -1737,8 +1748,10 @@ function loadIframe(src, label, isLive) {
   placeholder.style.display = 'none';
   areaInner.style.display = 'flex';
 
-  // TV mode: expand video area when playing (skip in TV mode — layout stays fixed)
-  if (!document.body.classList.contains('tv-mode')) {
+  // TV mode: switch to playing layout
+  if (document.body.classList.contains('tv-mode')) {
+    document.body.classList.add('tv-playing');
+  } else {
     document.body.classList.add('video-playing');
   }
 
@@ -1796,7 +1809,8 @@ function clearVideo() {
   placeholder.style.display = 'flex';
   areaInner.style.display = 'none';
   wrapper.style.background = '#000000';
-  // TV mode: collapse video area when not playing
+  // TV mode: return to browsing layout
+  document.body.classList.remove('tv-playing');
   document.body.classList.remove('video-playing');
   // Replace iframe to fully stop any playing video
   const frame = document.getElementById('video-frame');
