@@ -916,7 +916,8 @@
     <button type="button" id="radar-btn" class="nav-btn" onclick="showPanel('radar', event)" aria-label="Live radar and weather alerts">
       <span class="radar-icon" aria-hidden="true"></span>LIVE RADAR
     </button>
-    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto" aria-label="WeatherStar 4000 plus weather display">📺 WeatherStar 4000+</button>
+    <div style="flex:1;min-width:0.5rem;flex-shrink:1;"></div>
+    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" aria-label="WeatherStar 4000 plus weather display">📺 WeatherStar 4000+</button>
     <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
     <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
   </nav>
@@ -1222,6 +1223,11 @@ function buildNavButtons() {
     btn.onclick = (e) => showPanel(group.id, e);
     nav.insertBefore(btn, liveNowBtn);
   });
+
+  // In TV mode scroll to start so group buttons are visible
+  if (document.body.classList.contains('tv-mode')) {
+    setTimeout(() => nav.scrollLeft = 0, 50);
+  }
 }
 
 // Build channel panels dynamically from loaded groups
@@ -2354,6 +2360,11 @@ function toggleTVMode() {
   const isTV = document.body.classList.toggle('tv-mode');
   localStorage.setItem('wtv-tv-mode', isTV ? '1' : '0');
   updateTVModeBtn();
+  // Scroll nav to start so group buttons are visible
+  if (isTV) {
+    const nav = document.getElementById('main-nav');
+    if (nav) nav.scrollLeft = 0;
+  }
 }
 
 function updateTVModeBtn() {
