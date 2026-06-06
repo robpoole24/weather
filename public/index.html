@@ -125,66 +125,6 @@
       display: none !important;
     }
   }
-
-  /* ── TV / XBOX / SMART TV ────────────────────────────────────────────────────
-     body.tv-mode = TV mode active
-     body.tv-mode = browsing: channel bar large, video small
-     body.tv-mode.tv-playing = playing: video large, channel bar small
-  ── */
-  body.tv-mode .channel-card {
-    min-width: 220px !important;
-    padding: 0.85rem 1rem !important;
-    border-radius: 8px !important;
-    border-width: 2px !important;
-  }
-  body.tv-mode .channel-name {
-    font-size: 1.15rem !important;
-  }
-  body.tv-mode .channel-meta,
-  body.tv-mode .live-badge,
-  body.tv-mode .ch-badge {
-    font-size: 0.85rem !important;
-  }
-  body.tv-mode .nav-btn {
-    font-size: 0.85rem !important;
-    padding: 0.5rem 1rem !important;
-    border-width: 2px !important;
-  }
-  body.tv-mode #main-nav {
-    padding: 0.5rem 1rem !important;
-    gap: 0.5rem !important;
-  }
-  body.tv-mode .channel-list {
-    gap: 0.75rem !important;
-    padding: 0.5rem 1rem !important;
-  }
-  body.tv-mode #status-bar {
-    font-size: 0.75rem !important;
-    padding: 0.2rem 1rem !important;
-  }
-  body.tv-mode .status-item { font-size: 0.72rem !important; }
-
-  /* TV browsing mode — channel bar gets most of the space */
-  body.tv-mode #video-area {
-    flex: 1 !important;
-    min-height: 0 !important;
-  }
-  body.tv-mode #control-bar {
-    flex: 3 !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-  }
-
-  /* TV playing mode — video gets most of the space */
-  body.tv-mode.tv-playing #video-area {
-    flex: 4 !important;
-    min-height: 0 !important;
-  }
-  body.tv-mode.tv-playing #control-bar {
-    flex: 1 !important;
-    min-height: 0 !important;
-    overflow: hidden !important;
-  }
   @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
 
@@ -917,7 +857,7 @@
       <span class="radar-icon" aria-hidden="true"></span>LIVE RADAR
     </button>
     <div style="flex:1;min-width:0.5rem;flex-shrink:1;"></div>
-    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" aria-label="WeatherStar 4000 plus weather display">📺 WeatherStar 4000+</button>
+    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto" aria-label="WeatherStar 4000 plus weather display">📺 WeatherStar 4000+</button>
     <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
     <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
   </nav>
@@ -979,10 +919,35 @@
     <span class="status-item" id="video-update-status">Videos: —</span>
     <span class="status-item status-divider">|</span>
     <span class="status-item" id="time-display"></span>
-    <button type="button" id="tv-mode-btn" class="about-btn" onclick="toggleTVMode()" title="Toggle TV Mode for large screens" style="margin-left:0">📺</button>
     <button type="button" class="about-btn" onclick="showAbout()">About</button>
   </div>
 
+</div>
+
+<!-- Zoom tip banner for non-standard browsers (Xbox, smart TVs) -->
+<div id="zoom-tip-banner" style="
+  display:none;
+  position:fixed;
+  top:0;left:0;right:0;
+  z-index:2000;
+  background:rgba(10,14,20,0.96);
+  border-bottom:2px solid var(--accent);
+  padding:0.6rem 1rem;
+  align-items:center;
+  gap:1rem;
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:0.9rem;
+  letter-spacing:0.05em;
+  color:var(--text);
+">
+  <span style="color:var(--accent);font-size:1.1rem;">📺</span>
+  <span>For the best experience on this browser, try zooming out to <strong style="color:var(--accent)">67%</strong> — press <strong style="color:var(--accent)">Ctrl + −</strong> a few times until the channel bar looks right.</span>
+  <button onclick="document.getElementById('zoom-tip-banner').style.display='none';localStorage.setItem('wtv-zoom-tip-dismissed','1')" style="
+    margin-left:auto;background:transparent;border:1px solid var(--border);
+    color:var(--muted);font-family:'Barlow Condensed',sans-serif;
+    font-size:0.8rem;padding:0.2rem 0.6rem;border-radius:3px;cursor:pointer;
+    flex-shrink:0;letter-spacing:0.05em;
+  ">✕ Got it</button>
 </div>
 
 <!-- ═══════════════════════════════════════════
@@ -1223,11 +1188,6 @@ function buildNavButtons() {
     btn.onclick = (e) => showPanel(group.id, e);
     nav.insertBefore(btn, liveNowBtn);
   });
-
-  // In TV mode scroll to start so group buttons are visible
-  if (document.body.classList.contains('tv-mode')) {
-    setTimeout(() => nav.scrollLeft = 0, 50);
-  }
 }
 
 // Build channel panels dynamically from loaded groups
@@ -1276,11 +1236,6 @@ function showPanel(name, e) {
     document.body.classList.remove('radar-expanded');
   }
 
-  // In TV mode, switching to a channel group = browsing mode
-  const isGroup = GROUPS.some(g => g.id === name);
-  if (isGroup && document.body.classList.contains('tv-mode')) {
-    document.body.classList.remove('tv-playing');
-  }
 
   // Hide ALL panels including live-now-panel (reset inline styles too)
   document.querySelectorAll('.panel').forEach(p => {
@@ -1754,12 +1709,6 @@ function loadIframe(src, label, isLive) {
   placeholder.style.display = 'none';
   areaInner.style.display = 'flex';
 
-  // TV mode: switch to playing layout
-  if (document.body.classList.contains('tv-mode')) {
-    document.body.classList.add('tv-playing');
-  } else {
-    document.body.classList.add('video-playing');
-  }
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com');
 
@@ -1815,8 +1764,6 @@ function clearVideo() {
   placeholder.style.display = 'flex';
   areaInner.style.display = 'none';
   wrapper.style.background = '#000000';
-  // TV mode: return to browsing layout
-  document.body.classList.remove('tv-playing');
   document.body.classList.remove('video-playing');
   // Replace iframe to fully stop any playing video
   const frame = document.getElementById('video-frame');
@@ -2337,10 +2284,11 @@ function detectOS() {
   return 'other';
 }
 
-// Detect TV/console browsers and apply tv-mode class for larger UI
-(function detectTVMode() {
+// Detect non-standard browsers (Xbox, smart TVs, etc.) and show zoom tip
+(function detectNonStandardBrowser() {
+  if (localStorage.getItem('wtv-zoom-tip-dismissed') === '1') return;
   const ua = navigator.userAgent.toLowerCase();
-  const isTV =
+  const isNonStandard =
     /xbox/.test(ua) ||
     /tizen/.test(ua) ||
     /web0s/.test(ua) ||
@@ -2349,33 +2297,12 @@ function detectOS() {
     /smart-tv/.test(ua) ||
     /googletv/.test(ua) ||
     /crkey/.test(ua);
-  if (isTV) document.body.classList.add('tv-mode');
-  if (localStorage.getItem('wtv-tv-mode') === '1') document.body.classList.add('tv-mode');
-  if (localStorage.getItem('wtv-tv-mode') === '0') document.body.classList.remove('tv-mode');
-  // Sync button state after DOM is ready
-  document.addEventListener('DOMContentLoaded', updateTVModeBtn);
+  if (!isNonStandard) return;
+  document.addEventListener('DOMContentLoaded', () => {
+    const banner = document.getElementById('zoom-tip-banner');
+    if (banner) banner.style.display = 'flex';
+  });
 })();
-
-function toggleTVMode() {
-  const isTV = document.body.classList.toggle('tv-mode');
-  localStorage.setItem('wtv-tv-mode', isTV ? '1' : '0');
-  updateTVModeBtn();
-  // Scroll nav to start so group buttons are visible
-  if (isTV) {
-    const nav = document.getElementById('main-nav');
-    if (nav) nav.scrollLeft = 0;
-  }
-}
-
-function updateTVModeBtn() {
-  const btn = document.getElementById('tv-mode-btn');
-  if (!btn) return;
-  const isTV = document.body.classList.contains('tv-mode');
-  btn.textContent = isTV ? '📺 ✓' : '📺';
-  btn.style.borderColor = isTV ? 'var(--accent)' : 'var(--border)';
-  btn.style.color = isTV ? 'var(--accent)' : 'var(--muted)';
-  btn.title = isTV ? 'TV Mode ON — click to disable' : 'Enable TV Mode for large screens';
-}
 
 // Chat overlay works at all sizes — no resize close needed
 
