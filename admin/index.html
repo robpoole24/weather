@@ -467,6 +467,7 @@
         <thead>
           <tr>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">App</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Web Link</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">iOS Link</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">iOS Soon</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Android Link</th>
@@ -1053,6 +1054,9 @@ function renderApps() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08);white-space:nowrap"><strong>${app.name}</strong></td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <input type="text" value="${app.web||''}" placeholder="https://..." style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].web=this.value||null" />
+      </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <input type="text" value="${app.ios||''}" placeholder="${app.iosSoon ? 'Coming soon' : 'No iOS link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value||null" />
       </td>

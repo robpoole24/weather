@@ -1082,12 +1082,12 @@ let CHANNELS = {}; // { groupId: channels[] } for quick lookup
 // WEATHER_APPS is loaded from the server at init — see loadGroupsFromServer()
 // Fallback defaults used if server load fails
 const WEATHER_APPS_DEFAULT = [
-  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/us/app/weatherfront-radar-models/id6739154126',           iosSoon: false, android: null,                                                                                       androidSoon: true  },
-  { name: 'Weather Wise',        img: 'images/weather-wise.webp',    ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise', androidSoon: false },
-  { name: 'Radar Omega',         img: 'images/radar-omega.webp',     ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',         iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping', androidSoon: false },
-  { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',             iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.windyty.android',                  androidSoon: false },
-  { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',                  androidSoon: false },
-  { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                              iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',              androidSoon: false, collectionRef: 'UCuYqi3hOfz6-3Hdp6tEJjAg::col-1780335893616' },
+  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    web: 'https://www.weatherfront.app',           ios: 'https://apps.apple.com/us/app/weatherfront-radar-models/id6739154126',           iosSoon: false, android: null,                                                                                       androidSoon: true  },
+  { name: 'Weather Wise',        img: 'images/weather-wise.webp',    web: 'https://www.weatherwiseapp.com',         ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise', androidSoon: false },
+  { name: 'Radar Omega',         img: 'images/radar-omega.webp',     web: 'https://www.radaromega.com',             ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',         iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping', androidSoon: false },
+  { name: 'Windy',               img: 'images/windy.webp',           web: 'https://www.windy.com',                  ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',             iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.windyty.android',                  androidSoon: false },
+  { name: 'The Weather Channel', img: 'images/weather-channel.webp', web: 'https://weather.com',                    ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',                  androidSoon: false },
+  { name: 'AccuWeather',         img: 'images/accuweather.webp',     web: 'https://www.accuweather.com',            ios: 'https://apps.apple.com/app/accuweather/id300048137',                              iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',              androidSoon: false, collectionRef: 'UCuYqi3hOfz6-3Hdp6tEJjAg::col-1780335893616' },
 ];
 
 // ═══════════════════════════════════════════
@@ -1542,8 +1542,18 @@ function buildAppsPanel() {
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex;gap:0.25rem;flex-wrap:wrap;align-items:center;';
 
-    btnRow.appendChild(makeStoreBtn(app.ios, app.iosSoon, '🍎 iOS', null));
-    btnRow.appendChild(makeStoreBtn(app.android, app.androidSoon, '🤖 Android', null));
+    const isTizen = detectOS() === 'tizen';
+    if (!isTizen) {
+      btnRow.appendChild(makeStoreBtn(app.ios, app.iosSoon, '🍎 iOS', null));
+      btnRow.appendChild(makeStoreBtn(app.android, app.androidSoon, '🤖 Android', null));
+    } else if (app.web) {
+      // On Samsung TV — show a web link button instead of store buttons
+      const webBtn = document.createElement('button');
+      webBtn.textContent = '🌐 Website';
+      webBtn.style.cssText = 'font-family:"Barlow Condensed",sans-serif;font-size:0.65rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;background:var(--accent);color:#000;border:none;border-radius:4px;padding:0.28rem 0.5rem;cursor:pointer;white-space:nowrap;flex-shrink:0;';
+      webBtn.onclick = () => window.open(app.web, '_blank');
+      btnRow.appendChild(webBtn);
+    }
 
     // Chasers pill — same height as store buttons
     if (app.collectionRef) {
