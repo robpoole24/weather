@@ -2287,8 +2287,9 @@ function detectOS() {
 // Detect non-standard browsers (Xbox, smart TVs, etc.) and show zoom tip
 (function detectNonStandardBrowser() {
   if (localStorage.getItem('wtv-zoom-tip-dismissed') === '1') return;
+
   const ua = navigator.userAgent.toLowerCase();
-  const isNonStandard =
+  const knownTV =
     /xbox/.test(ua) ||
     /tizen/.test(ua) ||
     /web0s/.test(ua) ||
@@ -2297,11 +2298,24 @@ function detectOS() {
     /smart-tv/.test(ua) ||
     /googletv/.test(ua) ||
     /crkey/.test(ua);
-  if (!isNonStandard) return;
-  document.addEventListener('DOMContentLoaded', () => {
+
+  const suspiciousViewport =
+    window.screen.width >= 1280 &&
+    window.innerWidth < 900 &&
+    !('ontouchstart' in window);
+
+  if (!knownTV && !suspiciousViewport) return;
+
+  function showZoomTip() {
     const banner = document.getElementById('zoom-tip-banner');
-    if (banner) banner.style.display = 'flex';
-  });
+    if (banner) {
+      banner.style.display = 'flex';
+    } else {
+      // DOM not ready yet, try again shortly
+      setTimeout(showZoomTip, 100);
+    }
+  }
+  showZoomTip();
 })();
 
 // Chat overlay works at all sizes — no resize close needed
