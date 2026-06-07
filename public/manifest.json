@@ -1,4 +1,5 @@
 {
+  "id": "com.altruisticapps.weathertv",
   "name": "Weather TV",
   "short_name": "Weather TV",
   "description": "100+ live storm chasers and weather forecasters. One free app. No sign-up.",
@@ -8,28 +9,50 @@
   "theme_color": "#0a0e14",
   "orientation": "any",
   "lang": "en-US",
+  "dir": "ltr",
   "scope": "/",
+  "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "play",
+      "url": "https://play.google.com/store/apps/details?id=com.altruisticapps.weathertv",
+      "id": "com.altruisticapps.weathertv"
+    }
+  ],
   "icons": [
     {
       "src": "/images/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "/images/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "screenshots": [
     {
-      "src": "/images/screenshot-wide.jpg",
+      "src": "https://www.watchweathertv.com/images/screenshot-wide.jpg",
       "sizes": "1920x1080",
       "type": "image/jpeg",
       "form_factor": "wide",
       "label": "Weather TV — Channel browse view"
+    },
+    {
+      "src": "https://www.watchweathertv.com/images/screenshot-narrow.jpg",
+      "sizes": "390x844",
+      "type": "image/jpeg",
+      "form_factor": "narrow",
+      "label": "Weather TV — Mobile view"
     }
   ],
   "categories": ["weather", "entertainment", "news"],
