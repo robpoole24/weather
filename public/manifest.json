@@ -1,0 +1,53 @@
+{
+  "name": "Weather TV",
+  "short_name": "Weather TV",
+  "description": "100+ live storm chasers and weather forecasters. One free app. No sign-up.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e14",
+  "theme_color": "#0a0e14",
+  "orientation": "any",
+  "lang": "en-US",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/images/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/images/screenshot-wide.jpg",
+      "sizes": "1920x1080",
+      "type": "image/jpeg",
+      "form_factor": "wide",
+      "label": "Weather TV — Channel browse view"
+    }
+  ],
+  "categories": ["weather", "entertainment", "news"],
+  "shortcuts": [
+    {
+      "name": "Storm Chasers",
+      "url": "/?panel=storm-chasers",
+      "description": "Browse live storm chasing channels"
+    },
+    {
+      "name": "Live Radar",
+      "url": "/?panel=radar",
+      "description": "Open the live NWS radar map"
+    },
+    {
+      "name": "Live Now",
+      "url": "/?panel=live-now",
+      "description": "See all channels currently live"
+    }
+  ]
+}
