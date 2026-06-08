@@ -507,10 +507,11 @@ const FRAMES = buildFrameList(); // 12 frames, ~55 min
 const map = L.map('map', {
   center:[39.5,-98.35], zoom:4,
   minZoom:2, maxZoom:19,
-  // Wide bounds: covers continental US, Canada, Caribbean, Mexico, Alaska, Hawaii
   maxBounds:[[-5,-175],[85,-50]],
-  maxBoundsViscosity:0.85
+  maxBoundsViscosity:0.85,
+  zoomControl:false
 });
+L.control.zoom({ position:'bottomright' }).addTo(map);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
