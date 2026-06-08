@@ -429,12 +429,14 @@
 
 <div id="radar-legend">
   <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">NWS Alerts</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ffff00;border:1px solid #888"></div>Tornado Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#db8d00"></div>Severe T-Storm Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#00ff00"></div>Flash Flood Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#2ec44a;opacity:0.6"></div>Other Advisory</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(255,0,0,0.4);border:2px solid #ff0000"></div>Tornado Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(255,140,0,0.35);border:2px solid #ff8c00"></div>Severe T-Storm Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(255,255,0,0.2);border:2px solid #ffff00"></div>Tornado Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(219,141,0,0.2);border:2px solid #db8d00"></div>Severe T-Storm Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(0,255,0,0.35);border:2px solid #00ff00"></div>Flash Flood Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(0,255,0,0.25);border:2px solid #00ff00"></div>Flood Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(147,112,219,0.25);border:2px solid #9370db"></div>Winter Storm Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:rgba(160,160,160,0.12);border:1px solid #a0a0a0"></div>Advisory / Statement</div>
   <div id="spc-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--gold);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">SPC Outlook</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>High Risk</div>
@@ -502,7 +504,13 @@ function buildFrameList() {
 const FRAMES = buildFrameList(); // 12 frames, ~55 min
 
 // ── MAP INIT ─────────────────────────────────────────────────────────────────
-const map = L.map('map', { center:[39.5,-98.35], zoom:5 });
+const map = L.map('map', {
+  center:[39.5,-98.35], zoom:4,
+  minZoom:2, maxZoom:19,
+  // Wide bounds: covers continental US, Canada, Caribbean, Mexico, Alaska, Hawaii
+  maxBounds:[[-5,-175],[85,-50]],
+  maxBoundsViscosity:0.85
+});
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
@@ -843,9 +851,10 @@ let mcdLayer = L.layerGroup();
 
 function toggleMCD() {
   mcdVisible = !mcdVisible;
-  document.getElementById('btn-mcd').className = 'tb-btn' + (mcdVisible ? ' on' : '');
+  const _btn = document.getElementById('btn-mcd');
+  if (_btn) _btn.className = 'tb-btn' + (mcdVisible ? ' on' : '');
   if (mcdVisible) { map.addLayer(mcdLayer); loadMCD(); }
-  else map.removeLayer(mcdLayer);
+  else { map.closePopup(); mcdLayer.clearLayers(); map.removeLayer(mcdLayer); }
 }
 
 async function loadMCD() {
@@ -1155,10 +1164,10 @@ const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 
 let goesLayer = null;
 function ensureGoes() {
-  if (!goesLayer) goesLayer = L.tileLayer(
-    'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes-east-conus-ch13/{z}/{x}/{y}.png',
-    { opacity:0.9, zIndex:90, tileSize:256, crossOrigin:true,
-      attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
+  if (!goesLayer) goesLayer = L.tileLayer.wms(
+    'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
+    { layers:'conus_ch13', format:'image/png', transparent:true,
+      opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
   return goesLayer;
 }
 
@@ -1218,7 +1227,152 @@ function setPaint(member){
     case 'cc':      showCC(); break;
   }
   setStatus(paintStatusText(member));
+  // Show product color legend for single-site products; hide for others
+  if (['velocity','srv','echotops','cc'].includes(member)) showProductLegend(member);
+  else hideProductLegend();
 }
+
+// ══ PRODUCT LEGEND ════════════════════════════════════════════════════════════
+// Shows a color scale overlay when a single-site product is active.
+const PRODUCT_LEGENDS = {
+  velocity: [
+    { color:'#fe0000', label:'120+ kt away' },
+    { color:'#ff9900', label:'50–120 kt away' },
+    { color:'#ffff00', label:'10–50 kt away' },
+    { color:'#888888', label:'Near zero / range folded' },
+    { color:'#00ccff', label:'10–50 kt toward' },
+    { color:'#0000ff', label:'50–120 kt toward' },
+    { color:'#cc00ff', label:'120+ kt toward' },
+  ],
+  srv: [
+    { color:'#fe0000', label:'Strong rotation (away)' },
+    { color:'#ff9900', label:'Moderate (away)' },
+    { color:'#ffff00', label:'Weak (away)' },
+    { color:'#888888', label:'Near zero' },
+    { color:'#00ccff', label:'Weak (toward)' },
+    { color:'#0000ff', label:'Moderate (toward)' },
+    { color:'#cc00ff', label:'Strong rotation (toward)' },
+  ],
+  echotops: [
+    { color:'#3333ff', label:'< 10,000 ft' },
+    { color:'#00ccff', label:'10–20k ft' },
+    { color:'#00ff00', label:'20–30k ft' },
+    { color:'#ffff00', label:'30–40k ft' },
+    { color:'#ff8800', label:'40–50k ft' },
+    { color:'#ff0000', label:'50–60k ft' },
+    { color:'#ff00ff', label:'> 60,000 ft' },
+  ],
+  cc: [
+    { color:'#283c64', label:'< 0.70 — debris / clutter' },
+    { color:'#3c5aa0', label:'0.70–0.80 — possible debris' },
+    { color:'#3caad2', label:'0.80–0.90 — mixed phase' },
+    { color:'#46c878', label:'0.90–0.95 — melting layer' },
+    { color:'#dcbe50', label:'0.95–0.97 — near-uniform' },
+    { color:'#e68c32', label:'0.97–1.00 — uniform precip' },
+  ],
+};
+
+function showProductLegend(product) {
+  let el = document.getElementById('product-legend');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'product-legend';
+    el.style.cssText = 'position:absolute;bottom:28px;left:12px;z-index:800;background:rgba(10,14,20,0.9);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.6rem;backdrop-filter:blur(6px);max-width:200px;';
+    document.getElementById('map').appendChild(el);
+  }
+  const entries = PRODUCT_LEGENDS[product];
+  if (!entries) { hideProductLegend(); return; }
+  const names = { velocity:'Base Velocity', srv:'Storm-Rel. Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient' };
+  el.innerHTML = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.66rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">${names[product]||product}</div>`
+    + entries.map(e => `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><div style="width:14px;height:8px;border-radius:2px;flex-shrink:0;background:${e.color}"></div><span style="font-size:0.62rem;color:var(--text)">${e.label}</span></div>`).join('');
+  el.style.display = 'block';
+}
+function hideProductLegend() {
+  const el = document.getElementById('product-legend');
+  if (el) el.style.display = 'none';
+}
+
+// ══ SITE PICKER: FULL CONUS LIST ══════════════════════════════════════════════
+// Override resolveRadarSites to populate ALL CONUS sites, not just nearest 4.
+// IEM's radar.py with operation=available returns up to ~20 nearest sites;
+// for a full list we use the NWS station catalog.
+const FALLBACK_SITES = [
+  {id:'ABR',display:'KABR — Aberdeen, SD'},{id:'ABX',display:'KABX — Albuquerque, NM'},
+  {id:'AHG',display:'KAHG — Anchorage, AK'},{id:'AIH',display:'KAIH — Bethel, AK'},
+  {id:'AKC',display:'KAKC — King Salmon, AK'},{id:'AKQ',display:'KAKQ — Norfolk/Richmond, VA'},
+  {id:'AMA',display:'KAMA — Amarillo, TX'},{id:'AMX',display:'KAMX — Miami, FL'},
+  {id:'APD',display:'KAPD — Fairbanks, AK'},{id:'APX',display:'KAPX — Gaylord, MI'},
+  {id:'ARX',display:'KARX — La Crosse, WI'},{id:'ATX',display:'KATX — Seattle, WA'},
+  {id:'BBX',display:'KBBX — Beale AFB, CA'},{id:'BGM',display:'KBGM — Binghamton, NY'},
+  {id:'BHX',display:'KBHX — Eureka, CA'},{id:'BIS',display:'KBIS — Bismarck, ND'},
+  {id:'BMX',display:'KBMX — Birmingham, AL'},{id:'BOX',display:'KBOX — Boston, MA'},
+  {id:'BRO',display:'KBRO — Brownsville, TX'},{id:'BUF',display:'KBUF — Buffalo, NY'},
+  {id:'BYX',display:'KBYX — Key West, FL'},{id:'CAE',display:'KCAE — Columbia, SC'},
+  {id:'CBW',display:'KCBW — Caribou, ME'},{id:'CBX',display:'KCBX — Boise, ID'},
+  {id:'CCX',display:'KCCX — State College, PA'},{id:'CLE',display:'KCLE — Cleveland, OH'},
+  {id:'CLX',display:'KCLX — Charleston, SC'},{id:'CRP',display:'KCRP — Corpus Christi, TX'},
+  {id:'CXX',display:'KCXX — Burlington, VT'},{id:'CYS',display:'KCYS — Cheyenne, WY'},
+  {id:'DAX',display:'KDAX — Sacramento, CA'},{id:'DDC',display:'KDDC — Dodge City, KS'},
+  {id:'DFX',display:'KDFX — Laughlin AFB, TX'},{id:'DIX',display:'KDIX — Philadelphia, PA'},
+  {id:'DLH',display:'KDLH — Duluth, MN'},{id:'DMX',display:'KDMX — Des Moines, IA'},
+  {id:'DOX',display:'KDOX — Dover AFB, DE'},{id:'DTX',display:'KDTX — Detroit, MI'},
+  {id:'DVN',display:'KDVN — Davenport, IA'},{id:'DYX',display:'KDYX — Dyess AFB, TX'},
+  {id:'EAX',display:'KEAX — Kansas City, MO'},{id:'EMX',display:'KEMX — Tucson, AZ'},
+  {id:'ENX',display:'KENX — Albany, NY'},{id:'EOX',display:'KEOX — Fort Rucker, AL'},
+  {id:'EPZ',display:'KEPZ — El Paso, TX'},{id:'ESX',display:'KESX — Las Vegas, NV'},
+  {id:'EVX',display:'KEVX — Eglin AFB, FL'},{id:'EWX',display:'KEWX — Austin/San Antonio, TX'},
+  {id:'EYX',display:'KEYX — Edwards AFB, CA'},{id:'FCX',display:'KFCX — Roanoke, VA'},
+  {id:'FDR',display:'KFDR — Frederick, OK'},{id:'FDX',display:'KFDX — Cannon AFB, NM'},
+  {id:'FFC',display:'KFFC — Atlanta, GA'},{id:'FSD',display:'KFSD — Sioux Falls, SD'},
+  {id:'FSX',display:'KFSX — Flagstaff, AZ'},{id:'FTG',display:'KFTG — Denver, CO'},
+  {id:'FWS',display:'KFWS — Dallas/Fort Worth, TX'},{id:'GGW',display:'KGGW — Glasgow, MT'},
+  {id:'GJX',display:'KGJX — Grand Junction, CO'},{id:'GLD',display:'KGLD — Goodland, KS'},
+  {id:'GRB',display:'KGRB — Green Bay, WI'},{id:'GRK',display:'KGRK — Fort Hood, TX'},
+  {id:'GRR',display:'KGRR — Grand Rapids, MI'},{id:'GSP',display:'KGSP — Greenville/Spartanburg, SC'},
+  {id:'GUA',display:'PGUA — Guam'},{id:'GWX',display:'KGWX — Columbus AFB, MS'},
+  {id:'GYX',display:'KGYX — Portland, ME'},{id:'HDX',display:'KHDX — Holloman AFB, NM'},
+  {id:'HGX',display:'KHGX — Houston, TX'},{id:'HKI',display:'PHKI — South Kauai, HI'},
+  {id:'HKM',display:'PHKM — Kohala, HI'},{id:'HMO',display:'PHMO — Molokai, HI'},
+  {id:'HNX',display:'KHNX — San Joaquin Valley, CA'},{id:'HPX',display:'KHPX — Fort Campbell, KY'},
+  {id:'HTX',display:'KHTX — Huntsville, AL'},{id:'HWA',display:'PHWA — South Hawaii, HI'},
+  {id:'ICT',display:'KICT — Wichita, KS'},{id:'ICX',display:'KICX — Cedar City, UT'},
+  {id:'ILN',display:'KILN — Cincinnati, OH'},{id:'ILX',display:'KILX — Lincoln, IL'},
+  {id:'IND',display:'KIND — Indianapolis, IN'},{id:'INX',display:'KINX — Tulsa, OK'},
+  {id:'IWA',display:'KIWA — Phoenix, AZ'},{id:'IWX',display:'KIWX — N. Indiana'},{id:'JAX',display:'KJAX — Jacksonville, FL'},
+  {id:'JGX',display:'KJGX — Robins AFB, GA'},{id:'JKL',display:'KJKL — Jackson, KY'},
+  {id:'JUA',display:'TJUA — San Juan, PR'},{id:'LBB',display:'KLBB — Lubbock, TX'},
+  {id:'LCH',display:'KLCH — Lake Charles, LA'},{id:'LIX',display:'KLIX — New Orleans, LA'},
+  {id:'LNX',display:'KLNX — North Platte, NE'},{id:'LOT',display:'KLOT — Chicago, IL'},
+  {id:'LRX',display:'KLRX — Elko, NV'},{id:'LSX',display:'KLSX — St. Louis, MO'},
+  {id:'LTX',display:'KLTX — Wilmington, NC'},{id:'LVX',display:'KLVX — Louisville, KY'},
+  {id:'LWX',display:'KLWX — Baltimore/Washington, DC'},{id:'LZK',display:'KLZK — Little Rock, AR'},
+  {id:'MAF',display:'KMAF — Midland/Odessa, TX'},{id:'MAX',display:'KMAX — Medford, OR'},
+  {id:'MBX',display:'KMBX — Minot AFB, ND'},{id:'MHX',display:'KMHX — Newport/Morehead City, NC'},
+  {id:'MKX',display:'KMKX — Milwaukee/Sullivan, WI'},{id:'MLB',display:'KMLB — Melbourne, FL'},
+  {id:'MOB',display:'KMOB — Mobile, AL'},{id:'MPX',display:'KMPX — Minneapolis, MN'},
+  {id:'MQT',display:'KMQT — Marquette, MI'},{id:'MRX',display:'KMRX — Knoxville, TN'},
+  {id:'MSX',display:'KMSX — Missoula, MT'},{id:'MTX',display:'KMTX — Salt Lake City, UT'},
+  {id:'MUX',display:'KMUX — San Francisco, CA'},{id:'MVX',display:'KMVX — Fargo, ND'},
+  {id:'MXX',display:'KMXX — Maxwell AFB, AL'},{id:'NKX',display:'KNKX — San Diego, CA'},
+  {id:'NQA',display:'KNQA — Memphis, TN'},{id:'OAX',display:'KOAX — Omaha, NE'},
+  {id:'OHX',display:'KOHX — Nashville, TN'},{id:'OKX',display:'KOKX — New York City, NY'},
+  {id:'OTX',display:'KOTX — Spokane, WA'},{id:'PAH',display:'KPAH — Paducah, KY'},
+  {id:'PBZ',display:'KPBZ — Pittsburgh, PA'},{id:'PDT',display:'KPDT — Pendleton, OR'},
+  {id:'POE',display:'KPOE — Fort Polk, LA'},{id:'PUX',display:'KPUX — Pueblo, CO'},
+  {id:'RAX',display:'KRAX — Raleigh/Durham, NC'},{id:'RGX',display:'KRGX — Reno, NV'},
+  {id:'RIW',display:'KRIW — Riverton, WY'},{id:'RLX',display:'KRLX — Charleston, WV'},
+  {id:'RTX',display:'KRTX — Portland, OR'},{id:'SFX',display:'KSFX — Pocatello, ID'},
+  {id:'SGF',display:'KSGF — Springfield, MO'},{id:'SHV',display:'KSHV — Shreveport, LA'},
+  {id:'SJT',display:'KSJT — San Angelo, TX'},{id:'SOX',display:'KSOX — Santa Ana Mts, CA'},
+  {id:'SRX',display:'KSRX — Fort Smith, AR'},{id:'TBW',display:'KTBW — Tampa Bay, FL'},
+  {id:'TFX',display:'KTFX — Great Falls, MT'},{id:'TLH',display:'KTLH — Tallahassee, FL'},
+  {id:'TLX',display:'KTLX — Oklahoma City, OK'},{id:'TWX',display:'KTWX — Topeka, KS'},
+  {id:'TYX',display:'KTYX — Montague/Watertown, NY'},{id:'UDX',display:'KUDX — Rapid City, SD'},
+  {id:'UEX',display:'KUEX — Hastings, NE'},{id:'VAX',display:'KVAX — Moody AFB, GA'},
+  {id:'VBX',display:'KVBX — Vandenberg AFB, CA'},{id:'VNX',display:'KVNX — Vance AFB, OK'},
+  {id:'VTX',display:'KVTX — Los Angeles, CA'},{id:'VWX',display:'KVWX — Evansville, IN'},
+  {id:'YUX',display:'KYUX — Yuma, AZ'},
+];
 
 async function resolveRadarSites(lat,lng){
   const sel = document.getElementById('site-select');
@@ -1230,13 +1384,12 @@ async function resolveRadarSites(lat,lng){
     const list = (data.radars||[]).filter(r => r.id && r.id.length<=4 && r.id!=='USCOMP');
     if (!list.length) throw new Error('none');
     availableSites = list.map(r => ({ id:r.id, display:`K${r.id} — ${r.name||r.id}`.replace('KK','K') }));
+    // Merge in full CONUS list (deduplicated), nearby sites first
+    const nearbyIds = new Set(availableSites.map(s=>s.id));
+    const merged = [...availableSites, ...FALLBACK_SITES.filter(s=>!nearbyIds.has(s.id))];
+    availableSites = merged;
   } catch(e){
-    availableSites = [
-      { id:'MKX', display:'KMKX — Milwaukee/Sullivan, WI' },
-      { id:'GRB', display:'KGRB — Green Bay, WI' },
-      { id:'ARX', display:'KARX — La Crosse, WI' },
-      { id:'LOT', display:'KLOT — Chicago, IL' },
-    ];
+    availableSites = FALLBACK_SITES;
   }
   currentSite = availableSites[0].id;
   sel.innerHTML = availableSites.map(s => `<option value="${s.id}">${s.display}</option>`).join('');
@@ -1265,14 +1418,29 @@ function addStrike(lat,lng){
 }
 function ageLightning(){ const now=Date.now(); ltgMarkers=ltgMarkers.filter(o=>{ if(now-o.ts>LTG_LIFETIME){ltgLayer.removeLayer(o.marker); return false;} return true; }); }
 setInterval(ageLightning, 15000);
+let _ltgRetry = 0;
+const LTG_ENDPOINTS = ['wss://ws.blitzortung.org/', 'wss://ws1.blitzortung.org/', 'wss://ws8.blitzortung.org/'];
 function startLightning(){
   if (!ltgLayer) ltgLayer=L.layerGroup().addTo(map);
+  _ltgConnect(0);
+}
+function _ltgConnect(endpointIdx){
+  const url = LTG_ENDPOINTS[endpointIdx % LTG_ENDPOINTS.length];
   try {
-    ltgSocket=new WebSocket('wss://ws.blitzortung.org/');
-    ltgSocket.onopen=()=>{ ltgSocket.send(JSON.stringify({a:111})); };
+    ltgSocket=new WebSocket(url);
+    ltgSocket.onopen=()=>{ _ltgRetry=0; ltgSocket.send(JSON.stringify({a:111})); };
     ltgSocket.onmessage=(evt)=>{ try{ const d=JSON.parse(evt.data); if(typeof d.lat==='number'&&typeof d.lon==='number') addStrike(d.lat,d.lon); }catch(e){} };
-    ltgSocket.onerror=()=>{};
-  } catch(e){}
+    ltgSocket.onerror=()=>{ ltgSocket.close(); };
+    ltgSocket.onclose=()=>{
+      if (!ltgLayer) return; // was stopped intentionally
+      _ltgRetry++;
+      const delay = Math.min(30000, 2000 * Math.pow(1.5, Math.min(_ltgRetry, 8)));
+      setTimeout(()=>{ if (ltgLayer) _ltgConnect(endpointIdx+1); }, delay);
+    };
+  } catch(e){
+    const delay = Math.min(30000, 2000 * Math.pow(1.5, Math.min(_ltgRetry, 8)));
+    setTimeout(()=>{ if (ltgLayer) _ltgConnect(endpointIdx+1); }, delay);
+  }
 }
 function stopLightning(){
   if (ltgSocket){ try{ltgSocket.close();}catch(e){} ltgSocket=null; }
@@ -1315,7 +1483,7 @@ async function updateFeelsLike(lat,lng){
 
 const MODELS = {
   hrrr: { label:'HRRR (live)', note:'High-Resolution Rapid Refresh · 15-min steps to +3h.', kind:'iem' },
-  rrfs: { label:'RRFS — Rufus (Soon)', note:'Rapid Refresh Forecast System — coming soon. This next-generation model becomes operational Aug 31, 2026; we are finalizing our renderer. Use HRRR for forecasts in the meantime.', kind:'sidecar' },
+  rrfs: { label:'RRFS (Soon)', note:'Rapid Refresh Forecast System — coming soon. Becomes operational Aug 31, 2026; we are finalizing our renderer. Use HRRR for forecasts in the meantime.', kind:'sidecar' },
 };
 let currentModel='hrrr';
 function buildForecastFrames(model){
@@ -1505,7 +1673,7 @@ function setView(mode) {
   const center = (userLat && userLng) ? [userLat, userLng] : [39.5, -98.35];
   if (mode === 'local')    map.setView(center, 8);
   if (mode === 'regional') map.setView(center, 6);
-  if (mode === 'national') map.setView([39.5,-98.35], 5);
+  if (mode === 'national') map.setView([40,-98.35], 4);
 }
 
 function updateViewButtons(active) {
