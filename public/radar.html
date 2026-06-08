@@ -1151,7 +1151,7 @@ function pointInPolygon(lat, lng, geometry) {
 // LAYER PANEL MODULE (restructured)
 // ══════════════════════════════════════════════════════════════════════════
 
-const WXTILES_BASE = 'https://REPLACE-WITH-YOUR-WXTILES-RAILWAY-URL';
+const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 
 let goesLayer = null;
 function ensureGoes() {
@@ -1315,7 +1315,7 @@ async function updateFeelsLike(lat,lng){
 
 const MODELS = {
   hrrr: { label:'HRRR (live)', note:'High-Resolution Rapid Refresh · 15-min steps to +3h.', kind:'iem' },
-  rrfs: { label:'RRFS — Rufus (experimental)', note:'Rapid Refresh Forecast System via our renderer. Pre-operational; output may be delayed or missing until Aug 31 2026.', kind:'sidecar' },
+  rrfs: { label:'RRFS — Rufus (Soon)', note:'Rapid Refresh Forecast System — coming soon. This next-generation model becomes operational Aug 31, 2026; we are finalizing our renderer. Use HRRR for forecasts in the meantime.', kind:'sidecar' },
 };
 let currentModel='hrrr';
 function buildForecastFrames(model){
