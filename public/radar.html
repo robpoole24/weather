@@ -315,6 +315,32 @@
     #feelslike-pill { top:46px; right:8px; padding:0.3rem 0.5rem; }
     #feelslike-pill .fl-val { font-size:0.95rem; }
   }
+
+  /* ══ BETA BANNER ══ */
+  #beta-banner {
+    position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
+    z-index:900; display:flex; align-items:center; gap:0.55rem;
+    background:rgba(10,14,20,0.92); border:1px solid rgba(244,162,97,0.35);
+    border-radius:8px; padding:0.4rem 0.65rem;
+    backdrop-filter:blur(8px); white-space:nowrap;
+    font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
+    letter-spacing:0.04em; max-width:calc(100vw - 40px);
+    box-shadow:0 2px 10px rgba(0,0,0,0.4);
+  }
+  #beta-banner .beta-tag {
+    background:rgba(244,162,97,0.18); border:1px solid rgba(244,162,97,0.45);
+    border-radius:4px; padding:0.08rem 0.38rem; font-weight:700;
+    font-size:0.64rem; letter-spacing:0.1em; color:var(--gold); flex-shrink:0;
+  }
+  #beta-banner .beta-text { color:var(--muted); }
+  #beta-banner .beta-close {
+    background:none; border:none; color:var(--muted); cursor:pointer;
+    font-size:0.85rem; padding:0; flex-shrink:0; line-height:1; margin-left:0.2rem;
+  }
+  #beta-banner .beta-close:hover { color:var(--text); }
+  @media (max-width:600px) {
+    #beta-banner { font-size:0.68rem; bottom:58px; padding:0.35rem 0.55rem; }
+  }
 </style>
 </head>
 <body>
@@ -370,6 +396,13 @@
 </div>
 
 <div id="map"></div>
+
+<!-- ══ BETA BANNER ══ -->
+<div id="beta-banner">
+  <span class="beta-tag">BETA</span>
+  <span class="beta-text">Live Radar is actively being built — thanks for your patience while we add new features.</span>
+  <button class="beta-close" onclick="dismissBeta()" aria-label="Dismiss">✕</button>
+</div>
 
 <!-- ══ LAYER PANEL (left) ══ -->
 <button id="layers-fab" onclick="toggleLayerPanel()" aria-label="Layers"><span style="font-size:0.95rem;">☰</span> Layers</button>
@@ -1178,10 +1211,14 @@ const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 
 let goesLayer = null;
 function ensureGoes() {
-  if (!goesLayer) goesLayer = L.tileLayer.wms(
-    'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
-    { layers:'conus_ch13', format:'image/png', transparent:true,
-      opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
+  if (!goesLayer) {
+    goesLayer = L.tileLayer.wms(
+      'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
+      { layers:'conus_ch13', format:'image/png', transparent:true,
+        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
+    // Refresh GOES every 10 minutes so imagery doesn't feel frozen
+    setInterval(() => { if (goesLayer && map.hasLayer(goesLayer)) goesLayer.redraw(); }, 10 * 60 * 1000);
+  }
   return goesLayer;
 }
 
@@ -1416,7 +1453,10 @@ async function resolveRadarSites(lat,lng, autoActivate=false){
     const url = `https://mesonet.agron.iastate.edu/json/radar.py?operation=available`
       + (lat&&lng ? `&lat=${lat}&lon=${lng}` : '') + `&start=${encodeURIComponent(now)}`;
     const data = await (await fetch(url)).json();
-    const list = (data.radars||[]).filter(r => r.id && r.id.length<=4 && r.id!=='USCOMP');
+    const fallbackIds = new Set(FALLBACK_SITES.map(s => s.id));
+    const list = (data.radars||[]).filter(r =>
+      r.id && r.id.length<=4 && r.id!=='USCOMP' && fallbackIds.has(r.id)
+    );
     if (!list.length) throw new Error('none');
     availableSites = list.map(r => ({ id:r.id, display:`K${r.id} — ${r.name||r.id}`.replace('KK','K') }));
     const nearbyIds = new Set(availableSites.map(s=>s.id));
@@ -1505,8 +1545,9 @@ async function startLSR(){
     (data.features||[]).forEach(f=>{
       if(!f.geometry||f.geometry.type!=='Point') return;
       const [lng,lat]=f.geometry.coordinates; const p=f.properties||{};
-      const mk=L.circleMarker([lat,lng],{radius:5,color:'#ffd166',fillColor:'#ffd166',fillOpacity:0.85,weight:1.5});
-      mk.bindPopup(`<div class="alert-popup"><div class="ev" style="color:#ffd166">${p.typetext||'Storm Report'}</div><div style="margin-top:4px;font-weight:600">${p.magnitude||''} ${p.unit||''}</div><div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${p.city||''}, ${p.st||''}</div><div class="exp">${p.valid?new Date(p.valid).toLocaleString():''}</div></div>`);
+      const mk=L.circleMarker([lat,lng],{radius:8,color:'#ffd166',fillColor:'#ffd166',fillOpacity:0.9,weight:1.5,interactive:true});
+      mk.bindPopup(`<div class="alert-popup"><div class="ev" style="color:#ffd166">${p.typetext||'Storm Report'}</div><div style="margin-top:4px;font-weight:600">${p.magnitude||''} ${p.unit||''}</div><div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${p.city||''}, ${p.st||''}</div><div class="exp">${p.valid?new Date(p.valid).toLocaleString():''}</div>${p.remark?`<div style="margin-top:6px;font-size:0.72rem;color:#c8ddf0">${p.remark}</div>`:''}</div>`,{maxWidth:280});
+      mk.on('click',function(){this.openPopup();});
       lsrLayer.addLayer(mk);
     });
   } catch(e){ console.warn('[LSR]',e); }
@@ -1640,6 +1681,19 @@ function resetLayers(){
   sel.value=currentModel;
   document.getElementById('model-note').textContent=MODELS[currentModel].note;
 })();
+// ── BETA BANNER ──────────────────────────────────────────────────────────────
+function dismissBeta() {
+  const el = document.getElementById('beta-banner');
+  if (el) { el.style.transition='opacity 0.3s'; el.style.opacity='0'; setTimeout(()=>el.remove(),300); }
+  try { sessionStorage.setItem('wtv-beta-dismissed','1'); } catch(e) {}
+}
+(function(){
+  try { if (sessionStorage.getItem('wtv-beta-dismissed')) {
+    const el = document.getElementById('beta-banner');
+    if (el) el.remove();
+  }} catch(e){}
+})();
+
 renderPanel();
 resolveRadarSites(userLat, userLng);
 OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });

@@ -2,7 +2,7 @@
 // Minimal SW — just enough to satisfy PWA requirements
 // Weather TV is a live content platform so we don't cache aggressively
 
-const CACHE_NAME = 'weathertv-v1';
+const CACHE_NAME = 'weathertv-v2';
 const STATIC_ASSETS = ['/'];
 
 self.addEventListener('install', e => {
@@ -21,11 +21,28 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Network first — always fetch fresh content for a live platform
+// Network first — ONLY for same-origin requests.
+// DO NOT intercept cross-origin tile requests (IEM, NOAA, Cloudflare tiles,
+// api.weather.gov, etc.) — those should go straight to the network.
+// Intercepting tile CDNs adds overhead and causes "Failed to convert value
+// to 'Response'" errors whenever a tile 404s or 503s.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+
+  const url = new URL(e.request.url);
+
+  // Only handle same-origin requests
+  if (url.origin !== self.location.origin) return;
+
+  // Skip the radar page itself — it needs fresh data always
+  if (url.pathname === '/radar.html') return;
+
   e.respondWith(
-    fetch(e.request).catch(() => caches.match(e.request))
+    fetch(e.request).catch(() =>
+      caches.match(e.request).then(cached =>
+        cached || new Response('', { status: 503, statusText: 'Offline' })
+      )
+    )
   );
 });
 
