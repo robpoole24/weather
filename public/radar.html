@@ -1281,13 +1281,56 @@ function ensureGoes() {
 }
 
 const SS_PRODUCTS = { velocity:{code:'N0U'}, srv:{code:'N0S'}, echotops:{code:'NET'} };
-let ssLayer=null, currentSite=null, availableSites=[];
-function clearSS(){ if (ssLayer){ map.removeLayer(ssLayer); ssLayer=null; } }
-function showSS(key){
-  clearSS(); const p=SS_PRODUCTS[key]; if (!p||!currentSite) return;
-  ssLayer = L.tileLayer(
-    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/ridge::${currentSite}-${p.code}-0/{z}/{x}/{y}.png`,
-    { opacity:0.8, zIndex:250, tileSize:256, crossOrigin:true, attribution:`Radar: IEM RIDGE ${currentSite}` }).addTo(map);
+// ── SINGLE-SITE ANIMATED PRODUCTS ────────────────────────────────────────────
+// IEM RIDGE archives ~6 past scans per product, indexed 0 (newest) → N (oldest).
+// We load all frames and cycle oldest→newest so the couplet animates.
+const SS_ANIM_FRAMES = 6;   // number of archived frames to load
+const SS_ANIM_SPEED  = 500; // ms per frame
+
+let ssLayers     = [];      // array of tile layers, index 0 = newest
+let ssAnimFrame  = 0;       // currently displayed frame index
+let ssAnimTimer  = null;
+let currentSite  = null;
+let availableSites = [];
+
+function clearSS() {
+  if (ssAnimTimer) { clearInterval(ssAnimTimer); ssAnimTimer = null; }
+  ssLayers.forEach(l => map.removeLayer(l));
+  ssLayers = [];
+  ssAnimFrame = 0;
+}
+
+function showSS(key) {
+  clearSS();
+  const p = SS_PRODUCTS[key];
+  if (!p || !currentSite) return;
+
+  // Build frames: index 0=newest … N-1=oldest
+  for (let i = 0; i < SS_ANIM_FRAMES; i++) {
+    const layer = L.tileLayer(
+      `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/ridge::${currentSite}-${p.code}-${i}/{z}/{x}/{y}.png`,
+      {
+        opacity: 0,           // all hidden initially
+        zIndex: 250,
+        tileSize: 256,
+        crossOrigin: true,
+        attribution: i === 0 ? `Radar: IEM RIDGE ${currentSite}` : '',
+      }
+    ).addTo(map);
+    ssLayers.push(layer);
+  }
+
+  // Start playing oldest→newest (frames N-1 down to 0)
+  let playIdx = SS_ANIM_FRAMES - 1; // start at oldest frame
+  const showFrame = (idx) => {
+    ssLayers.forEach((l, i) => l.setOpacity(i === idx ? 0.8 : 0));
+    ssAnimFrame = idx;
+  };
+  showFrame(playIdx);
+  ssAnimTimer = setInterval(() => {
+    playIdx = playIdx <= 0 ? SS_ANIM_FRAMES - 1 : playIdx - 1;
+    showFrame(playIdx);
+  }, SS_ANIM_SPEED);
 }
 
 let ccLayer=null;
