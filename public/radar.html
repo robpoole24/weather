@@ -129,7 +129,7 @@
     letter-spacing:0.04em; color:var(--muted);
   }
   .leg-row { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.18rem; }
-  .leg-sw { width:16px; height:9px; border-radius:2px; flex-shrink:0; }
+  .leg-sw { width:16px; height:12px; border-radius:2px; flex-shrink:0; }
 
   #radar-loading {
     position:absolute; top:44px; left:0; right:0; bottom:0;
@@ -393,8 +393,14 @@
     <div class="lp-section-label">Radar Options</div>
     <div id="lp-radaropts"></div>
     <div id="site-picker" style="display:none;">
-      <label>Nearest radar site</label>
+      <div id="site-message" style="font-size:0.68rem;color:var(--muted);margin-bottom:0.45rem;line-height:1.4;">
+        Tap a station below or allow location for auto-detection.
+      </div>
+      <label>📡 Radar station</label>
       <select id="site-select" class="lp-select" onchange="onSiteChange(this.value)"></select>
+      <div id="site-auto-badge" style="display:none;font-size:0.62rem;color:var(--accent);margin-top:0.3rem;">
+        ✓ Auto-detected from your location
+      </div>
     </div>
   </div>
 
@@ -428,23 +434,29 @@
 </div>
 
 <div id="radar-legend">
-  <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">NWS Alerts</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(255,0,0,0.4);border:2px solid #ff0000"></div>Tornado Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(255,140,0,0.35);border:2px solid #ff8c00"></div>Severe T-Storm Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(255,255,0,0.2);border:2px solid #ffff00"></div>Tornado Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(219,141,0,0.2);border:2px solid #db8d00"></div>Severe T-Storm Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(0,255,0,0.35);border:2px solid #00ff00"></div>Flash Flood Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(0,255,0,0.25);border:2px solid #00ff00"></div>Flood Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(147,112,219,0.25);border:2px solid #9370db"></div>Winter Storm Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:rgba(160,160,160,0.12);border:1px solid #a0a0a0"></div>Advisory / Statement</div>
+  <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.4rem">NWS Alerts</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff4500"></div>Extreme Wind Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Tornado Watch</span></div>
+  <div class="leg-row"><div class="leg-sw" style="background:#db8d00"></div>Severe T-Storm Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#00ff00"></div>Flash Flood Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#2e8b57"></div>Flash Flood Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#9370db"></div>Winter Storm Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#4169e1"></div>Winter Storm Watch</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff69b4"></div>Blizzard Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#daa520"></div>High Wind Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#c71585"></div>Excessive Heat Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#ff1493"></div>Red Flag Warning</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#888888"></div>Advisory / Statement</div>
   <div id="spc-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--gold);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">SPC Outlook</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>High Risk</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ff6600"></div>Moderate Risk</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ffaa00"></div>Enhanced Risk</div>
-    <div class="leg-row"><div class="leg-sw" style="background:#ffff00;border:1px solid #888"></div>Slight Risk</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Slight Risk</span></div>
     <div class="leg-row"><div class="leg-sw" style="background:#99ff99"></div>Marginal Risk</div>
-    <div class="leg-row"><div class="leg-sw" style="background:#c8c8c8;opacity:0.5"></div>General Thunder</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#c8c8c8"></div>General Thunder</div>
   </div>
 </div>
 
@@ -485,7 +497,7 @@ const ALERT_STYLE = {
   'Special Weather Statement':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.1,  weight:1   },
   'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
-const DEFAULT_STYLE = { color:'#2ec44a', fill:'#2ec44a', fillOpacity:0.12, weight:1 };
+const DEFAULT_STYLE = { color:'#888888', fill:'#888888', fillOpacity:0.12, weight:1 };
 
 // ── RADAR FRAME CONFIG ───────────────────────────────────────────────────────
 // Iowa Mesonet tile cache reliably goes back ~55 minutes in 5-min steps
@@ -507,11 +519,10 @@ const FRAMES = buildFrameList(); // 12 frames, ~55 min
 const map = L.map('map', {
   center:[39.5,-98.35], zoom:4,
   minZoom:2, maxZoom:19,
+  // Wide bounds: covers continental US, Canada, Caribbean, Mexico, Alaska, Hawaii
   maxBounds:[[-5,-175],[85,-50]],
-  maxBoundsViscosity:0.85,
-  zoomControl:false
+  maxBoundsViscosity:0.85
 });
-L.control.zoom({ position:'bottomright' }).addTo(map);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
@@ -1229,8 +1240,29 @@ function setPaint(member){
   }
   setStatus(paintStatusText(member));
   // Show product color legend for single-site products; hide for others
-  if (['velocity','srv','echotops','cc'].includes(member)) showProductLegend(member);
-  else hideProductLegend();
+  if (['velocity','srv','echotops','cc'].includes(member)) {
+    showProductLegend(member);
+    // Auto-resolve nearest site from current location if we have it
+    const msg = document.getElementById('site-message');
+    const names = { velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient' };
+    if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Showing your nearest station — change below if needed.`;
+    if (typeof userLat==='number' && typeof userLng==='number') {
+      resolveRadarSites(userLat, userLng, true);
+    } else {
+      // Try geolocation on demand
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(pos => {
+          resolveRadarSites(pos.coords.latitude, pos.coords.longitude, true);
+        }, () => {
+          if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Select a station below.`;
+        }, { timeout:6000 });
+      }
+    }
+  } else {
+    hideProductLegend();
+    const msg = document.getElementById('site-message');
+    if (msg) msg.textContent = 'Tap a station below or allow location for auto-detection.';
+  }
 }
 
 // ══ PRODUCT LEGEND ════════════════════════════════════════════════════════════
@@ -1375,7 +1407,7 @@ const FALLBACK_SITES = [
   {id:'YUX',display:'KYUX — Yuma, AZ'},
 ];
 
-async function resolveRadarSites(lat,lng){
+async function resolveRadarSites(lat,lng, autoActivate=false){
   const sel = document.getElementById('site-select');
   try {
     const now = new Date().toISOString().slice(0,16)+'Z';
@@ -1385,16 +1417,22 @@ async function resolveRadarSites(lat,lng){
     const list = (data.radars||[]).filter(r => r.id && r.id.length<=4 && r.id!=='USCOMP');
     if (!list.length) throw new Error('none');
     availableSites = list.map(r => ({ id:r.id, display:`K${r.id} — ${r.name||r.id}`.replace('KK','K') }));
-    // Merge in full CONUS list (deduplicated), nearby sites first
     const nearbyIds = new Set(availableSites.map(s=>s.id));
     const merged = [...availableSites, ...FALLBACK_SITES.filter(s=>!nearbyIds.has(s.id))];
     availableSites = merged;
+    const badge = document.getElementById('site-auto-badge');
+    if (badge && autoActivate) badge.style.display = 'block';
   } catch(e){
     availableSites = FALLBACK_SITES;
+    const badge = document.getElementById('site-auto-badge');
+    if (badge) badge.style.display = 'none';
   }
   currentSite = availableSites[0].id;
   sel.innerHTML = availableSites.map(s => `<option value="${s.id}">${s.display}</option>`).join('');
   sel.value = currentSite;
+  // If auto-activating (user just selected a single-site product), load it immediately
+  if (autoActivate && activePaint in SS_PRODUCTS) showSS(activePaint);
+  else if (autoActivate && activePaint==='cc') showCC();
 }
 function onSiteChange(id){
   currentSite = id;
