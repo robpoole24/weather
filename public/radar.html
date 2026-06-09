@@ -380,6 +380,10 @@
   @media (max-width:600px) {
     #beta-banner { font-size:0.68rem; bottom:58px; padding:0.35rem 0.55rem; }
   }
+  /* Live Radar button — only acts as a back button on mobile */
+  @media (min-width: 768px) {
+    #radar-minimize-btn { cursor: default !important; }
+  }
 </style>
 </head>
 <body>
@@ -446,13 +450,6 @@
   </div>
 </div>
 
-<!-- ══ BETA BANNER ══ -->
-<div id="beta-banner">
-  <span class="beta-tag">BETA</span>
-  <span class="beta-text">Live Radar is actively being built — thanks for your patience while we add new features.</span>
-  <button class="beta-close" onclick="dismissBeta()" aria-label="Dismiss">✕</button>
-</div>
-
 <!-- ══ LAYER PANEL (left) ══ -->
 <button id="layers-fab" onclick="toggleLayerPanel()" aria-label="Layers"><span style="font-size:0.95rem;">☰</span> Layers</button>
 <div id="feelslike-pill"><span class="fl-label">Feels like</span><span class="fl-val" id="fl-val">—</span></div>
@@ -510,6 +507,15 @@
     <label class="lp-select-label">Forecast model</label>
     <select id="model-select" class="lp-select" onchange="onModelChange(this.value)"></select>
     <div id="model-note" style="font-size:0.64rem;color:var(--muted);margin-top:0.4rem;line-height:1.5;"></div>
+  </div>
+
+  <div style="padding:0.75rem 0.6rem 0.5rem;border-top:1px solid var(--border);">
+    <a href="https://www.altruisticapps.com/weathertv/radar-guide" target="_blank" rel="noopener"
+       style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);
+              text-decoration:none;display:flex;align-items:center;gap:0.4rem;
+              letter-spacing:0.05em;text-transform:uppercase;">
+      📖 What to Know about Live Radar →
+    </a>
   </div>
 </div>
 
@@ -626,11 +632,18 @@ zoomIndicator.style.cssText = [
   'border-radius:4px', 'padding:2px 6px',
   'font-family:\'Barlow Condensed\',sans-serif', 'font-size:0.65rem',
   'color:var(--muted)', 'letter-spacing:0.05em', 'pointer-events:none',
-  'text-align:center', 'min-width:32px',
+  'text-align:center', 'min-width:88px',
 ].join(';');
 document.getElementById('map').appendChild(zoomIndicator);
 const updateZoomIndicator = () => {
-  zoomIndicator.textContent = `Z${map.getZoom()}`;
+  const z = map.getZoom();
+  const label =
+    z <= 4  ? 'National'     :
+    z <= 6  ? 'Regional'     :
+    z <= 8  ? 'State'        :
+    z <= 10 ? 'County'       :
+    z <= 12 ? 'City'         : 'Neighborhood';
+  zoomIndicator.textContent = label;
 };
 map.on('zoomend', updateZoomIndicator);
 updateZoomIndicator();
@@ -2048,10 +2061,8 @@ const BASEMAP_ITEMS=[
   {id:'apptemp',ico:'🌡',name:'Apparent Temperature',sub:'Wind chill / heat index'},
 ];
 const RADAR_ITEMS=[
-  {id:'velocity',ico:'🔄',name:'Base Velocity',sub:'Rotation couplet'},
-  {id:'srv',ico:'🌀',name:'Storm-Relative Velocity',sub:'Motion subtracted'},
-  {id:'echotops',ico:'⛰',name:'Echo Tops',sub:'Storm height'},
-  {id:'cc',ico:'🧪',name:'Correlation Coefficient',sub:'Debris signature (dual-pol)'},
+  // Velocity, SRV, Echo Tops, and CC are pulled pending better animation
+  // infrastructure and memory resources. Back end of year.
 ];
 const ALERT_ITEMS=[
   {id:'alerts',ico:'⚠️',name:'NWS Alerts',sub:'Warnings & watches',def:true},
@@ -2061,7 +2072,6 @@ const CHASER_ITEMS=[
   {id:'spc',ico:'🗺',name:'SPC Outlooks',sub:'Day 1 / 2 / 3',def:false},
   {id:'mcd',ico:'💬',name:'Mesoscale Discussions',sub:'Active MCDs',def:false},
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
-  {id:'lightning',ico:'⚡',name:'Lightning Strikes',sub:'Live · flash + cluster buzz',def:false},
 ];
 const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS);
 
