@@ -386,7 +386,8 @@
 
 <div id="radar-toolbar">
   <div class="radar-label" id="radar-minimize-btn" onclick="minimizeRadar()" title="Back to Weather TV" style="cursor:pointer;">
-    ← WeatherTV
+    <span class="sweep-icon"></span>Live Radar
+    <span id="radar-minimize-hint" style="display:none;font-size:0.65rem;color:var(--muted);margin-left:0.3rem;font-weight:400;letter-spacing:0.04em;">✕</span>
   </div>
   <div class="tb-div"></div>
 
@@ -2143,19 +2144,54 @@ setInterval(loadAlerts, 120000);
 
 // ── GEOLOCATION ──────────────────────────────────────────────────────────────
 function goToMyLocation() {
-  if (!navigator.geolocation) return;
-  document.getElementById('alerts-status').textContent = 'Finding location...';
+  setStatus('Finding your location…');
+  document.getElementById('location-btn').textContent = '📍 Locating…';
+
+  const onSuccess = (lat, lng, source) => {
+    userLat = lat; userLng = lng;
+    map.flyTo([lat, lng], 8);
+    updateViewButtons('local');
+    if (typeof updateFeelsLike === 'function') updateFeelsLike(lat, lng);
+    if (typeof resolveRadarSites === 'function') resolveRadarSites(lat, lng);
+    setStatus(source === 'gps' ? 'Located via GPS' : `Located by IP — ${source}`);
+    document.getElementById('location-btn').textContent = '📍 My Location';
+  };
+
+  const onFail = (msg) => {
+    setStatus(msg);
+    document.getElementById('location-btn').textContent = '📍 My Location';
+  };
+
+  // IP geolocation fallback — city-level accuracy, no permission needed
+  const tryIPGeo = async () => {
+    try {
+      setStatus('GPS unavailable — locating by IP…');
+      const r = await fetch('https://ipapi.co/json/');
+      const d = await r.json();
+      if (d.latitude && d.longitude) {
+        const place = [d.city, d.region_code].filter(Boolean).join(', ');
+        onSuccess(d.latitude, d.longitude, place || 'IP address');
+      } else {
+        onFail('Could not determine location');
+      }
+    } catch(e) {
+      onFail('Location unavailable');
+    }
+  };
+
+  if (!navigator.geolocation) {
+    tryIPGeo();
+    return;
+  }
+
   navigator.geolocation.getCurrentPosition(
-    pos => {
-      userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-      map.setView([userLat, userLng], 8);
-      document.getElementById('alerts-status').textContent = '';
-      updateViewButtons('local');
-      if (typeof updateFeelsLike === 'function') updateFeelsLike(userLat, userLng);
-      if (typeof resolveRadarSites === 'function') resolveRadarSites(userLat, userLng);
+    pos => onSuccess(pos.coords.latitude, pos.coords.longitude, 'gps'),
+    err => {
+      // PERMISSION_DENIED (1) = blocked; fall back to IP silently
+      // POSITION_UNAVAILABLE (2) or TIMEOUT (3) = also fall back
+      tryIPGeo();
     },
-    () => { document.getElementById('alerts-status').textContent = 'Location unavailable'; },
-    { timeout:8000 }
+    { timeout: 6000, maximumAge: 300000 }
   );
 }
 
