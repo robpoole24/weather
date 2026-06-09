@@ -122,7 +122,7 @@
   .radar-frame-layer { transition: opacity 0.2s ease; }
 
   #radar-legend {
-    position:absolute; bottom:12px; left:12px; z-index:1000;
+    position:absolute; bottom:60px; right:12px; left:auto; z-index:1000;
     background:rgba(10,14,20,0.88); border:1px solid var(--border);
     border-radius:6px; padding:0.45rem 0.65rem;
     font-family:'Barlow Condensed',sans-serif; font-size:0.7rem;
@@ -1309,11 +1309,29 @@ function showSS(key) {
   // disk at zoom 6 fills half a state. Require zoom 7+ and prompt the user.
   const MIN_SS_ZOOM = 7;
   if (map.getZoom() < MIN_SS_ZOOM) {
-    setStatus(`Zoom in closer to view ${key === 'srv' ? 'Storm-Relative Velocity' : key === 'echotops' ? 'Echo Tops' : 'Base Velocity'} — single-site radar needs zoom level 7 or higher`);
+    const names = {velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops'};
+    setStatus(`Zoom in to view ${names[key]||key}`);
+    // Show a dismissable overlay hint on the map
+    let hint = document.getElementById('zoom-hint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'zoom-hint';
+      hint.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:900;background:rgba(10,14,20,0.92);border:1px solid var(--accent);border-radius:8px;padding:0.8rem 1.2rem;font-family:\'Barlow Condensed\',sans-serif;font-size:0.9rem;color:var(--text);text-align:center;pointer-events:none;backdrop-filter:blur(6px);';
+      document.getElementById('map').appendChild(hint);
+    }
+    hint.innerHTML = `🔍 Zoom in to view ${names[key]||key}<br><span style="font-size:0.72rem;color:var(--muted)">Single-site radar products need zoom level 7 or higher</span>`;
+    hint.style.display = 'block';
     // Re-check when user zooms in
-    map.once('zoomend', () => { if (activePaint === key) showSS(key); });
+    map.once('zoomend', () => {
+      const h = document.getElementById('zoom-hint');
+      if (h) h.style.display = 'none';
+      if (activePaint === key) showSS(key);
+    });
     return;
   }
+  // Hide zoom hint if visible
+  const hint = document.getElementById('zoom-hint');
+  if (hint) hint.style.display = 'none';
 
   // Build frames: index 0=newest … N-1=oldest
   for (let i = 0; i < SS_ANIM_FRAMES; i++) {
@@ -1347,6 +1365,13 @@ let ccLayer=null;
 function clearCC(){ if (ccLayer){ map.removeLayer(ccLayer); ccLayer=null; } }
 function showCC(){
   clearCC(); if (!currentSite) return;
+  // CC at very low zoom shows the full 460km radar disk as scattered dots.
+  // Require zoom 6+ for a useful view.
+  if (map.getZoom() < 6) {
+    setStatus('Zoom in to view Correlation Coefficient');
+    map.once('zoomend', () => { if (activePaint === 'cc') showCC(); });
+    return;
+  }
   ccLayer = L.tileLayer(`${WXTILES_BASE}/tiles/cc/${currentSite}/{z}/{x}/{y}.png`,
     { opacity:0.82, zIndex:255, tileSize:256, crossOrigin:true, attribution:'CC: NEXRAD L2 / Py-ART' }).addTo(map);
 }
@@ -1740,7 +1765,7 @@ function showProductLegend(product) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'product-legend';
-    el.style.cssText = 'position:absolute;bottom:28px;left:12px;z-index:800;background:rgba(10,14,20,0.9);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.6rem;backdrop-filter:blur(6px);max-width:200px;';
+    el.style.cssText = 'position:absolute;bottom:28px;left:295px;z-index:800;background:rgba(10,14,20,0.9);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.6rem;backdrop-filter:blur(6px);max-width:200px;';
     document.getElementById('map').appendChild(el);
   }
   const entries = PRODUCT_LEGENDS[product];
