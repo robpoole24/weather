@@ -4,6 +4,8 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const radar = require('./radar');
+const http = require('http');
+const { WebSocketServer, WebSocket } = require('ws');
 
 // Load .env file if present
 const envPath = path.join(__dirname, '.env');
@@ -1835,8 +1837,99 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ── HTTP server + Lightning WebSocket proxy ────────────────────────────────
+// Blitzortung's policy requires third-party apps to proxy data through their
+// own server rather than having browsers connect to Blitzortung directly.
+// We maintain ONE upstream Blitzortung connection and fan strike data out to
+// all connected WeatherTV browsers simultaneously.
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/lightning' });
+
+let blitzSocket = null;
+let blitzPending = false;
+let blitzClients = new Set();
+let blitzEndpointIdx = 0;
+let blitzRetryTimer = null;
+
+const BLITZ_ENDPOINTS = [
+  'wss://ws.blitzortung.org/',
+  'wss://ws1.blitzortung.org/',
+  'wss://ws8.blitzortung.org/',
+];
+
+function connectBlitz() {
+  if (blitzSocket || blitzPending) return;
+  if (blitzClients.size === 0) return;
+  blitzPending = true;
+  const url = BLITZ_ENDPOINTS[blitzEndpointIdx % BLITZ_ENDPOINTS.length];
+  console.log(`[Lightning] Connecting to ${url} (${blitzClients.size} clients waiting)`);
+  try {
+    const ws = new WebSocket(url);
+    ws.on('open', () => {
+      blitzPending = false;
+      blitzSocket = ws;
+      blitzEndpointIdx = 0;
+      ws.send(JSON.stringify({ a: 111 }));
+      console.log('[Lightning] Connected to Blitzortung');
+    });
+    ws.on('message', (data) => {
+      const msg = data.toString();
+      blitzClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          try { client.send(msg); } catch(e) {}
+        }
+      });
+    });
+    ws.on('error', (err) => {
+      blitzPending = false;
+      blitzSocket = null;
+      console.warn('[Lightning] Blitzortung error:', err.message);
+      scheduleBlitzReconnect();
+    });
+    ws.on('close', () => {
+      blitzPending = false;
+      blitzSocket = null;
+      if (blitzClients.size > 0) {
+        console.log('[Lightning] Blitzortung disconnected — reconnecting');
+        scheduleBlitzReconnect();
+      }
+    });
+  } catch(e) {
+    blitzPending = false;
+    scheduleBlitzReconnect();
+  }
+}
+
+function scheduleBlitzReconnect() {
+  if (blitzRetryTimer) return;
+  blitzEndpointIdx++;
+  const delay = Math.min(30000, 3000 * Math.pow(1.5, Math.min(blitzEndpointIdx, 8)));
+  blitzRetryTimer = setTimeout(() => { blitzRetryTimer = null; connectBlitz(); }, delay);
+}
+
+function disconnectBlitz() {
+  if (blitzRetryTimer) { clearTimeout(blitzRetryTimer); blitzRetryTimer = null; }
+  if (blitzSocket) { try { blitzSocket.close(); } catch(e) {} blitzSocket = null; }
+  blitzPending = false;
+}
+
+wss.on('connection', (clientWs) => {
+  blitzClients.add(clientWs);
+  console.log(`[Lightning] Browser connected (${blitzClients.size} total)`);
+  connectBlitz();
+  clientWs.on('close', () => {
+    blitzClients.delete(clientWs);
+    console.log(`[Lightning] Browser disconnected (${blitzClients.size} remaining)`);
+    if (blitzClients.size === 0) {
+      console.log('[Lightning] No clients — closing Blitzortung connection');
+      disconnectBlitz();
+    }
+  });
+  clientWs.on('error', () => blitzClients.delete(clientWs));
+});
+
 // Listen on 0.0.0.0 so Railway can reach the server
-app.listen(PORT, '0.0.0.0', async () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`WeatherTV server running on port ${PORT}`);
   console.log(`App: http://localhost:${PORT}`);
   console.log(`Admin: http://localhost:${PORT}/admin`);

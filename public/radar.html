@@ -521,8 +521,10 @@ const map = L.map('map', {
   minZoom:2, maxZoom:19,
   // Wide bounds: covers continental US, Canada, Caribbean, Mexico, Alaska, Hawaii
   maxBounds:[[-5,-175],[85,-50]],
-  maxBoundsViscosity:0.85
+  maxBoundsViscosity:0.85,
+  zoomControl:false
 });
+L.control.zoom({ position:'bottomright' }).addTo(map);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
@@ -1458,27 +1460,34 @@ function addStrike(lat,lng){
 function ageLightning(){ const now=Date.now(); ltgMarkers=ltgMarkers.filter(o=>{ if(now-o.ts>LTG_LIFETIME){ltgLayer.removeLayer(o.marker); return false;} return true; }); }
 setInterval(ageLightning, 15000);
 let _ltgRetry = 0;
-const LTG_ENDPOINTS = ['wss://ws.blitzortung.org/', 'wss://ws1.blitzortung.org/', 'wss://ws8.blitzortung.org/'];
 function startLightning(){
   if (!ltgLayer) ltgLayer=L.layerGroup().addTo(map);
-  _ltgConnect(0);
+  // Connect to our own server's WebSocket proxy (which connects to Blitzortung server-side).
+  // Blitzortung's policy requires third-party apps to proxy through their own server
+  // rather than connecting browsers directly to Blitzortung.
+  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/lightning';
+  _ltgConnect(wsUrl, 0);
 }
-function _ltgConnect(endpointIdx){
-  const url = LTG_ENDPOINTS[endpointIdx % LTG_ENDPOINTS.length];
+function _ltgConnect(url, attempt){
   try {
-    ltgSocket=new WebSocket(url);
-    ltgSocket.onopen=()=>{ _ltgRetry=0; ltgSocket.send(JSON.stringify({a:111})); };
-    ltgSocket.onmessage=(evt)=>{ try{ const d=JSON.parse(evt.data); if(typeof d.lat==='number'&&typeof d.lon==='number') addStrike(d.lat,d.lon); }catch(e){} };
-    ltgSocket.onerror=()=>{ ltgSocket.close(); };
-    ltgSocket.onclose=()=>{
-      if (!ltgLayer) return; // was stopped intentionally
-      _ltgRetry++;
-      const delay = Math.min(30000, 2000 * Math.pow(1.5, Math.min(_ltgRetry, 8)));
-      setTimeout(()=>{ if (ltgLayer) _ltgConnect(endpointIdx+1); }, delay);
+    ltgSocket = new WebSocket(url);
+    ltgSocket.onopen = () => { _ltgRetry = 0; };
+    ltgSocket.onmessage = (evt) => {
+      try {
+        const d = JSON.parse(evt.data);
+        if (typeof d.lat === 'number' && typeof d.lon === 'number') addStrike(d.lat, d.lon);
+      } catch(e) {}
     };
-  } catch(e){
-    const delay = Math.min(30000, 2000 * Math.pow(1.5, Math.min(_ltgRetry, 8)));
-    setTimeout(()=>{ if (ltgLayer) _ltgConnect(endpointIdx+1); }, delay);
+    ltgSocket.onerror = () => { ltgSocket.close(); };
+    ltgSocket.onclose = () => {
+      if (!ltgLayer) return; // intentionally stopped
+      _ltgRetry++;
+      const delay = Math.min(30000, 3000 * Math.pow(1.5, Math.min(_ltgRetry, 8)));
+      setTimeout(() => { if (ltgLayer) _ltgConnect(url, _ltgRetry); }, delay);
+    };
+  } catch(e) {
+    const delay = Math.min(30000, 3000 * Math.pow(1.5, Math.min(attempt, 8)));
+    setTimeout(() => { if (ltgLayer) _ltgConnect(url, attempt + 1); }, delay);
   }
 }
 function stopLightning(){
@@ -1570,7 +1579,7 @@ const CHASER_ITEMS=[
   {id:'spc',ico:'🗺',name:'SPC Outlooks',sub:'Day 1 / 2 / 3',def:false},
   {id:'mcd',ico:'💬',name:'Mesoscale Discussions',sub:'Active MCDs',def:false},
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
-  {id:'lightning',ico:'⚡',name:'Lightning Strikes',sub:'Live · flash + cluster buzz',def:true},
+  {id:'lightning',ico:'⚡',name:'Lightning Strikes',sub:'Live · flash + cluster buzz',def:false},
 ];
 const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS);
 
