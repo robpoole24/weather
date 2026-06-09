@@ -1305,6 +1305,16 @@ function showSS(key) {
   const p = SS_PRODUCTS[key];
   if (!p || !currentSite) return;
 
+  // Single-site products are meaningless at low zoom — a 460km-diameter radar
+  // disk at zoom 6 fills half a state. Require zoom 7+ and prompt the user.
+  const MIN_SS_ZOOM = 7;
+  if (map.getZoom() < MIN_SS_ZOOM) {
+    setStatus(`Zoom in closer to view ${key === 'srv' ? 'Storm-Relative Velocity' : key === 'echotops' ? 'Echo Tops' : 'Base Velocity'} — single-site radar needs zoom level 7 or higher`);
+    // Re-check when user zooms in
+    map.once('zoomend', () => { if (activePaint === key) showSS(key); });
+    return;
+  }
+
   // Build frames: index 0=newest … N-1=oldest
   for (let i = 0; i < SS_ANIM_FRAMES; i++) {
     const layer = L.tileLayer(
