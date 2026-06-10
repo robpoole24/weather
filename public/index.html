@@ -1997,7 +1997,7 @@ async function launchWeatherStar() {
     await ws4kpGeocode();
     buildWSPanel();
   }
-  if (wsIsLaunched) ws4kpLaunch();
+  if (!wsIsLaunched) ws4kpLaunch();  // auto-launch first time; Save ▶ handles explicit reloads
 }
 
 function showWSPanel() { launchWeatherStar(); }
