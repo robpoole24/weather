@@ -1862,12 +1862,11 @@ app.use('/data', express.static(path.join(__dirname, 'public', 'weatherstar', 'd
 app.use('/scripts', express.static(path.join(__dirname, 'public', 'weatherstar', 'scripts')));
 
 // ── WS4KP icon fallback ───────────────────────────────────────────────────────
-// Weather condition GIFs (icons/current-conditions/, icons/regional-maps/, etc.)
-// are large binary assets not easily pushed via GitHub web UI. If they're missing
-// locally, redirect to Matt's server so they load transparently in <img> tags.
-app.get('/weatherstar/images/*', (req, res, next) => {
-  // Only redirect if express.static didn't serve it (i.e. we reached this route)
-  res.redirect(302, `https://weatherstar.netbymatt.com${req.path}`);
+// Weather condition GIFs are large binary assets; if missing locally, redirect to
+// Matt's server. Strip the /weatherstar/ path prefix — Matt serves at /images/...
+app.get('/weatherstar/images/*', (req, res) => {
+  const imagePath = req.path.replace(/^\/weatherstar/, '');
+  res.redirect(302, `https://weatherstar.netbymatt.com${imagePath}`);
 });
 
 // ── Serve index for all other routes ──

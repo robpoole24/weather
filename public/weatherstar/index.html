@@ -5,6 +5,40 @@
     var cw=document.querySelector('.content-wrapper');
     if(cw)cw.style.display='none';
   }
+
+  // ── Auto-scale WS4KP to fill the iframe in kiosk mode ──
+  // WS4KP renders at fixed pixel sizes (640×480 standard, 854×480 wide).
+  // Without scaling, kiosk mode just centers the fixed-size content.
+  // This injects a CSS scale transform so it fills the WeatherTV player area.
+  function applyKioskScale() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('kiosk') !== 'true') return;
+    var isWide = params.get('wide') === 'true' || params.get('viewMode') === 'wide';
+    var contentW = isWide ? 854 : 640;
+    var contentH = 480;
+
+    var styleEl = document.createElement('style');
+    styleEl.id = 'wtv-scale';
+    document.head.appendChild(styleEl);
+
+    function setScale() {
+      var vw = window.innerWidth  || document.documentElement.clientWidth;
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      var scale = Math.min(vw / contentW, vh / contentH);
+      styleEl.textContent =
+        '#divTwc{max-width:unset!important;width:100vw!important;height:100vh!important;overflow:hidden!important}' +
+        '#divTwcMain{transform:scale(' + scale + ') translateZ(0)!important;transform-origin:center center!important}';
+    }
+    setScale();
+    window.addEventListener('resize', setScale);
+  }
+
+  // Run after DOM is ready so WS4KP's own kiosk class has been applied
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyKioskScale);
+  } else {
+    applyKioskScale();
+  }
   window.addEventListener('message',function(e){
     var d=e.data;
     if(!d||d.wtv!==true)return;
