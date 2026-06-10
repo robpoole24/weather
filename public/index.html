@@ -1818,19 +1818,17 @@ function buildWSPanel() {
         <option value="wide"     ${s.viewMode==='wide'    ?'selected':''}>📐 16:9</option>
       </select>
 
-      <!-- Scan lines (WS4000 only — WS3000 doesn't support it) -->
-      ${ver === '4000' ? `
+      <!-- Scan lines -->
       <button id="ws-scanlines-btn" onclick="wsToggleScanLines()" title="Scan lines"
         style="${smBtn}${s.scanLines ? accentOn : accentOff}">
         📺
-      </button>` : ''}
+      </button>
 
-      ${ver === '4000' ? `
       <!-- Music — sends postMessage to our hosted WS4KP instance -->
       <button id="ws-music-btn" onclick="wsToggleMusic()" title="Background music"
         style="${smBtn}${s.music ? accentOn : accentOff}">
         🎵
-      </button>` : ''}
+      </button>
 
     </div>
 
