@@ -1664,239 +1664,372 @@ function makeStoreBtn(link, comingSoon, label, tooltip) {
 // the remote: toggle displays, change view mode, hit Launch.
 // ═══════════════════════════════════════════
 
-const WS4KP_BASE = 'https://weatherstar.netbymatt.com/';
+// ═══════════════════════════════════════════
+// WEATHERSTAR 4000+ AND 3000+ INTEGRATION
+// Matt Walsh's explicitly-encouraged embed via permalink URL parameters
+// ═══════════════════════════════════════════
 
-const WS4KP_DISPLAYS = [
-  { key:'current-weather',     label:'🌡 Current',       def:true  },
-  { key:'latest-observations', label:'📊 Observations',  def:true  },
-  { key:'local-forecast',      label:'📅 Local Forecast',def:true  },
-  { key:'extended-forecast',   label:'📆 Extended',      def:true  },
-  { key:'radar',               label:'🌀 Radar',         def:true  },
-  { key:'hourly',              label:'⏱ Hourly',         def:false },
-  { key:'hourly-graph',        label:'📈 Hourly Graph',  def:false },
-  { key:'regional-forecast',   label:'🗺 Regional',       def:false },
-  { key:'travel',              label:'✈ Travel',         def:false },
-  { key:'almanac',             label:'📚 Almanac',       def:false },
-  { key:'spc-outlook',         label:'⚠ SPC Outlook',   def:false },
-  { key:'hazards',             label:'🚨 Hazards',       def:false },
+const WS_BASES = {
+  '4000': 'https://weatherstar.netbymatt.com/',
+  '3000': 'https://weatherstar3000.netbymatt.com/',
+};
+
+// WS4000 displays — plain param names (no -checkbox suffix)
+const WS4000_DISPLAYS = [
+  { key:'current-weather',     label:'🌡 Current Conditions', def:true  },
+  { key:'latest-observations', label:'📊 Latest Observations',def:true  },
+  { key:'local-forecast',      label:'📅 Local Forecast',     def:true  },
+  { key:'extended-forecast',   label:'📆 Extended Forecast',  def:true  },
+  { key:'radar',               label:'🌀 Local Radar',        def:true  },
+  { key:'hourly',              label:'⏱ Hourly Forecast',     def:false },
+  { key:'hourly-graph',        label:'📈 Hourly Graph',       def:false },
+  { key:'regional-forecast',   label:'🗺 Regional Forecast',  def:false },
+  { key:'travel',              label:'✈ Travel Forecast',     def:false },
+  { key:'almanac',             label:'📚 Almanac',            def:false },
+  { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
+  { key:'hazards',             label:'🚨 Hazards',            def:false },
 ];
 
-function loadWS4KPSettings() {
+// WS3000 displays — uses -checkbox suffix in URL
+const WS3000_DISPLAYS = [
+  { key:'hazards',           label:'🚨 Hazards',            def:true  },
+  { key:'current-weather',   label:'🌡 Current Conditions', def:true  },
+  { key:'latest-observations',label:'📊 Latest Observations',def:true  },
+  { key:'regional-forecast', label:'🗺 Regional Forecast',  def:true  },
+  { key:'local-forecast',    label:'📅 Local Forecast',     def:true  },
+  { key:'extended-forecast', label:'📆 Extended Forecast',  def:true  },
+  { key:'almanac',           label:'📚 Almanac',            def:true  },
+];
+
+function wsDefaultSettings(ver) {
+  const displays = ver === '3000'
+    ? Object.fromEntries(WS3000_DISPLAYS.map(d=>[d.key, d.def]))
+    : Object.fromEntries(WS4000_DISPLAYS.map(d=>[d.key, d.def]));
+  return {
+    version:    ver || '4000',
+    displays,
+    viewMode:   'standard',   // 4000: standard/wide/enhanced | 3000: standard/wide
+    speed:      1.0,
+    scanLines:  false,
+    music:      false,        // 4000 only — mediaVolume 0.75 vs 0
+    location:   '',
+    lat:        null,
+    lon:        null,
+  };
+}
+
+function loadWSSettings() {
   try {
-    const s = JSON.parse(localStorage.getItem('ws4kp-v2') || '{}');
+    const raw = localStorage.getItem('weatherstar-v3');
+    if (!raw) return { '4000': wsDefaultSettings('4000'), '3000': wsDefaultSettings('3000') };
+    const s = JSON.parse(raw);
     return {
-      displays:  s.displays  || Object.fromEntries(WS4KP_DISPLAYS.map(d=>[d.key, d.def])),
-      viewMode:  s.viewMode  || 'standard',
-      speed:     s.speed     || 1.0,
-      units:     s.units     || 'us',
-      location:  s.location  || '',
-      lat:       s.lat       || null,
-      lon:       s.lon       || null,
-      scanLines: s.scanLines !== undefined ? s.scanLines : false,
+      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
+      '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
     };
-  } catch { return { displays: Object.fromEntries(WS4KP_DISPLAYS.map(d=>[d.key, d.def])), viewMode:'standard', speed:1.0, units:'us', location:'', lat:null, lon:null }; }
+  } catch {
+    return { '4000': wsDefaultSettings('4000'), '3000': wsDefaultSettings('3000') };
+  }
 }
 
-function saveWS4KPSettings(s) {
-  localStorage.setItem('ws4kp-v2', JSON.stringify(s));
+function saveWSSettings() {
+  localStorage.setItem('weatherstar-v3', JSON.stringify(wsAllSettings));
 }
 
-function buildWS4KPUrl(s) {
+function buildWSUrl(ver) {
+  const s = wsAllSettings[ver];
   const p = new URLSearchParams();
-  WS4KP_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
-  p.set('speed',           s.speed.toFixed(2));
-  p.set('units',           s.units);
-  p.set('kiosk',           'true');
-  p.set('stickyKiosk',     'false');
-  p.set('customTextEnable','false');
-  p.set('scanLines',       s.scanLines ? 'true' : 'false');
-  p.set('viewMode',        s.viewMode);
-  p.set('wide',            (s.viewMode==='wide'||s.viewMode==='enhanced') ? 'true':'false');
-  p.set('enhanced',        s.viewMode==='enhanced' ? 'true':'false');
-  p.set('portrait',        'false');
+  if (ver === '4000') {
+    WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
+    p.set('speed',            s.speed.toFixed(2));
+    p.set('units',            'us');
+    p.set('kiosk',            'true');
+    p.set('stickyKiosk',      'false');
+    p.set('customTextEnable', 'false');
+    p.set('scanLines',        s.scanLines ? 'true' : 'false');
+    p.set('viewMode',         s.viewMode);
+    p.set('wide',             (s.viewMode==='wide'||s.viewMode==='enhanced') ? 'true' : 'false');
+    p.set('enhanced',         s.viewMode==='enhanced' ? 'true' : 'false');
+    p.set('portrait',         'false');
+    p.set('mediaVolume',      s.music ? '0.75' : '0');
+  } else {
+    WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
+    p.set('settings-speed-select',  s.speed.toFixed(2));
+    p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
+    p.set('settings-kiosk-checkbox','true');
+  }
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
-    if (s.location) { p.set('txtLocation', s.location); p.set('latLonQuery', s.location); }
+    if (s.location) { p.set('latLonQuery', s.location); p.set('txtLocation', s.location); }
   }
-  return WS4KP_BASE + '?' + p.toString();
+  return WS_BASES[ver] + '?' + p.toString();
 }
 
-let ws4kpSettings = loadWS4KPSettings();
-let ws4kpActive = false;
+let wsAllSettings = loadWSSettings();
+let wsActiveVersion = '4000';
+let wsIsLaunched = false;
 
 function buildWSPanel() {
   const panel = document.getElementById('weatherstar-panel');
   if (!panel) return;
-
-  const s = ws4kpSettings;
+  const ver = wsActiveVersion;
+  const s = wsAllSettings[ver];
+  const displays = ver === '4000' ? WS4000_DISPLAYS : WS3000_DISPLAYS;
+  const accentOn  = 'background:rgba(0,180,216,0.18);border-color:var(--accent);color:var(--accent);';
+  const accentOff = 'background:transparent;border-color:var(--border);color:var(--muted);';
+  const chipStyle = `flex-shrink:0;font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;padding:0.28rem 0.55rem;border-radius:14px;border:1px solid;cursor:pointer;white-space:nowrap;transition:all 0.12s;`;
+  const smBtn     = `font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;font-weight:600;letter-spacing:0.06em;padding:0.25rem 0.45rem;border-radius:4px;cursor:pointer;white-space:nowrap;border:1px solid;transition:all 0.12s;`;
 
   panel.innerHTML = `
     <div class="divider"></div>
 
-    <!-- Location -->
-    <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.25rem;min-width:110px">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent)">WeatherStar 4000+</div>
-      <input id="ws-location" type="text" placeholder="Zip or City, ST"
-        value="${s.location || ''}"
-        style="font-size:0.72rem;padding:0.25rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:108px;outline:none;"
-        onkeydown="if(event.key==='Enter') ws4kpGeocode()" />
-      <button onclick="ws4kpGeocode()" style="font-size:0.62rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;padding:0.15rem 0.4rem;background:transparent;border:1px solid var(--border);border-radius:3px;color:var(--muted);cursor:pointer;">📍 Locate</button>
+    <!-- Version + setup note -->
+    <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;padding:0 0.5rem;">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:${ver==='4000'?'var(--accent)':'var(--gold)'};">
+        ${ver==='4000' ? '📺 WeatherStar 4000+' : '📺 WeatherStar 3000+'}
+      </div>
+      <div style="font-size:0.62rem;color:var(--muted);line-height:1.3;">Set options,<br>then Save ▶</div>
+      <button onclick="wsSwitchVersion()"
+        style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);font-size:0.62rem;padding:0.15rem 0.35rem;">
+        ⇄ ${ver==='4000' ? 'Use WS3000' : 'Use WS4000+'}
+      </button>
     </div>
 
     <div class="divider"></div>
 
-    <!-- Display toggles -->
-    <div id="ws-displays" style="display:flex;flex-direction:row;align-items:center;gap:0.35rem;overflow-x:auto;flex:1;scrollbar-width:none;padding:0 0.25rem;">
-      ${WS4KP_DISPLAYS.map(d => `
-        <button id="ws-btn-${d.key}"
-          onclick="ws4kpToggle('${d.key}')"
-          style="flex-shrink:0;font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;
-                 padding:0.3rem 0.6rem;border-radius:16px;border:1px solid;cursor:pointer;white-space:nowrap;
-                 transition:all 0.15s;
-                 ${s.displays[d.key]
-                   ? 'background:rgba(0,180,216,0.18);border-color:var(--accent);color:var(--accent);'
-                   : 'background:transparent;border-color:var(--border);color:var(--muted);'}">
+    <!-- Location -->
+    <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.22rem;padding:0 0.4rem;">
+      <input id="ws-location" type="text" placeholder="Enter Zip Code"
+        value="${s.location || ''}"
+        style="font-size:0.72rem;padding:0.26rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:110px;outline:none;"
+        onkeydown="if(event.key==='Enter') ws4kpGeocode()" />
+      <button onclick="ws4kpGeocode()"
+        style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);">
+        📍 Locate
+      </button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Display chips — scrollable middle section -->
+    <div id="ws-displays"
+      style="flex:1;min-width:0;display:flex;align-items:center;gap:0.3rem;overflow-x:auto;padding:0 0.35rem;scrollbar-width:none;">
+      ${displays.map(d => `
+        <button id="ws-btn-${d.key}" onclick="wsToggleDisplay('${d.key}')"
+          style="${chipStyle}${s.displays[d.key] ? accentOn : accentOff}">
           ${d.label}
         </button>`).join('')}
     </div>
 
     <div class="divider"></div>
 
-    <!-- View mode + speed + launch -->
-    <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.3rem;min-width:120px">
-      <select id="ws-viewmode"
-        style="font-size:0.72rem;font-family:'Barlow Condensed',sans-serif;padding:0.25rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:100%;"
-        onchange="ws4kpSettings.viewMode=this.value; saveWS4KPSettings(ws4kpSettings);">
-        <option value="standard"  ${s.viewMode==='standard'  ?'selected':''}>4:3 Standard</option>
-        <option value="wide"      ${s.viewMode==='wide'      ?'selected':''}>16:9 Widescreen</option>
-        <option value="enhanced"  ${s.viewMode==='enhanced'  ?'selected':''}>16:9 Enhanced</option>
+    <!-- Settings controls — all horizontal -->
+    <div style="flex-shrink:0;display:flex;align-items:center;gap:0.3rem;padding:0 0.4rem;">
+
+      <!-- Speed -->
+      <select id="ws-speed" title="Playback speed"
+        style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;padding:0.22rem 0.3rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        <option value="0.5"  ${s.speed===0.5 ?'selected':''}>⏩ 0.5×</option>
+        <option value="0.75" ${s.speed===0.75?'selected':''}>⏩ 0.75×</option>
+        <option value="1.0"  ${s.speed===1.0 ?'selected':''}>⏩ 1×</option>
+        <option value="1.25" ${s.speed===1.25?'selected':''}>⏩ 1.25×</option>
+        <option value="1.5"  ${s.speed===1.5 ?'selected':''}>⏩ 1.5×</option>
       </select>
-      <select id="ws-speed"
-        style="font-size:0.72rem;font-family:'Barlow Condensed',sans-serif;padding:0.25rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:100%;"
-        onchange="ws4kpSettings.speed=parseFloat(this.value); saveWS4KPSettings(ws4kpSettings);">
-        <option value="0.5"  ${s.speed===0.5 ?'selected':''}>Speed: Slow</option>
-        <option value="0.75" ${s.speed===0.75?'selected':''}>Speed: Relaxed</option>
-        <option value="1.0"  ${s.speed===1.0 ?'selected':''}>Speed: Normal</option>
-        <option value="1.25" ${s.speed===1.25?'selected':''}>Speed: Fast</option>
-        <option value="1.5"  ${s.speed===1.5 ?'selected':''}>Speed: Very Fast</option>
+
+      <!-- View mode -->
+      <select id="ws-viewmode" title="Display size"
+        style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;padding:0.22rem 0.3rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        <option value="standard" ${s.viewMode==='standard'?'selected':''}>📐 4:3</option>
+        <option value="wide"     ${s.viewMode==='wide'    ?'selected':''}>📐 16:9</option>
+        ${ver==='4000' ? `<option value="enhanced" ${s.viewMode==='enhanced'?'selected':''}>📐 16:9+</option>` : ''}
       </select>
-      <button id="ws-scanlines-btn" onclick="ws4kpToggleScanLines()"
-        style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;
-               padding:0.25rem 0.5rem;border-radius:4px;cursor:pointer;width:100%;
-               ${s.scanLines
-                 ? 'background:rgba(0,180,216,0.18);border:1px solid var(--accent);color:var(--accent);'
-                 : 'background:transparent;border:1px solid var(--border);color:var(--muted);'}">
-        📺 Scan Lines${s.scanLines ? ' ✓' : ''}
+
+      <!-- Scan lines -->
+      <button id="ws-scanlines-btn" onclick="wsToggleScanLines()" title="Scan lines"
+        style="${smBtn}${s.scanLines ? accentOn : accentOff}">
+        📺
       </button>
+
+      ${ver === '4000' ? `
+      <!-- Music (WS4000 only) -->
+      <button id="ws-music-btn" onclick="wsToggleMusic()" title="Background music"
+        style="${smBtn}${s.music ? accentOn : accentOff}">
+        🎵
+      </button>` : ''}
+
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Save / Reset / Switch -->
+    <div style="flex-shrink:0;display:flex;align-items:center;gap:0.3rem;padding:0 0.5rem;">
       <button id="ws-launch-btn" onclick="ws4kpLaunch()"
-        style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;
-               padding:0.35rem 0.75rem;border-radius:5px;cursor:pointer;
-               background:var(--accent);border:1px solid var(--accent);color:#0a0e14;
-               transition:opacity 0.15s;">
-        ▶ Launch
+        style="${smBtn}background:var(--accent);border-color:var(--accent);color:#0a0e14;font-size:0.75rem;">
+        ${wsIsLaunched ? '↺ Restart' : '▶ Save'}
+      </button>
+      <button onclick="wsResetSettings()" title="Reset to defaults"
+        style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);">
+        ↺ Reset
       </button>
     </div>
   `;
 }
 
-function ws4kpToggleScanLines() {
-  ws4kpSettings.scanLines = !ws4kpSettings.scanLines;
-  saveWS4KPSettings(ws4kpSettings);
-  const btn = document.getElementById('ws-scanlines-btn');
+// Toggle a display chip
+function wsToggleDisplay(key) {
+  const s = wsAllSettings[wsActiveVersion];
+  s.displays[key] = !s.displays[key];
+  saveWSSettings();
+  const btn = document.getElementById('ws-btn-' + key);
   if (!btn) return;
-  if (ws4kpSettings.scanLines) {
+  if (s.displays[key]) {
+    btn.style.cssText = btn.style.cssText.replace(/background[^;]+;/g,'').replace(/border-color[^;]+;/g,'').replace(/color[^;]+;/g,'');
     btn.style.background = 'rgba(0,180,216,0.18)';
     btn.style.borderColor = 'var(--accent)';
     btn.style.color = 'var(--accent)';
-    btn.textContent = '📺 Scan Lines ✓';
   } else {
     btn.style.background = 'transparent';
     btn.style.borderColor = 'var(--border)';
     btn.style.color = 'var(--muted)';
-    btn.textContent = '📺 Scan Lines';
   }
 }
 
-function ws4kpToggle(key) {
-  ws4kpSettings.displays[key] = !ws4kpSettings.displays[key];
-  saveWS4KPSettings(ws4kpSettings);
-  const btn = document.getElementById('ws-btn-' + key);
+function wsToggleScanLines() {
+  const s = wsAllSettings[wsActiveVersion];
+  s.scanLines = !s.scanLines;
+  saveWSSettings();
+  const btn = document.getElementById('ws-scanlines-btn');
   if (!btn) return;
-  if (ws4kpSettings.displays[key]) {
-    btn.style.background = 'rgba(0,180,216,0.18)';
-    btn.style.borderColor = 'var(--accent)';
-    btn.style.color = 'var(--accent)';
-  } else {
-    btn.style.background = 'transparent';
-    btn.style.borderColor = 'var(--border)';
-    btn.style.color = 'var(--muted)';
+  btn.style.background   = s.scanLines ? 'rgba(0,180,216,0.18)' : 'transparent';
+  btn.style.borderColor  = s.scanLines ? 'var(--accent)' : 'var(--border)';
+  btn.style.color        = s.scanLines ? 'var(--accent)' : 'var(--muted)';
+}
+
+function wsToggleMusic() {
+  const s = wsAllSettings['4000'];
+  s.music = !s.music;
+  saveWSSettings();
+  const btn = document.getElementById('ws-music-btn');
+  if (!btn) return;
+  btn.style.background  = s.music ? 'rgba(0,180,216,0.18)' : 'transparent';
+  btn.style.borderColor = s.music ? 'var(--accent)' : 'var(--border)';
+  btn.style.color       = s.music ? 'var(--accent)' : 'var(--muted)';
+}
+
+function wsSwitchVersion() {
+  wsActiveVersion = wsActiveVersion === '4000' ? '3000' : '4000';
+  // Sync location between versions
+  const other = wsActiveVersion === '4000' ? '3000' : '4000';
+  if (!wsAllSettings[wsActiveVersion].lat && wsAllSettings[other].lat) {
+    wsAllSettings[wsActiveVersion].lat = wsAllSettings[other].lat;
+    wsAllSettings[wsActiveVersion].lon = wsAllSettings[other].lon;
+    wsAllSettings[wsActiveVersion].location = wsAllSettings[other].location;
   }
+  saveWSSettings();
+  buildWSPanel();
+}
+
+function wsResetSettings() {
+  if (!confirm('Reset WeatherStar ' + wsActiveVersion + '+ settings to defaults?')) return;
+  const loc = wsAllSettings[wsActiveVersion].location;
+  const lat = wsAllSettings[wsActiveVersion].lat;
+  const lon = wsAllSettings[wsActiveVersion].lon;
+  wsAllSettings[wsActiveVersion] = wsDefaultSettings(wsActiveVersion);
+  wsAllSettings[wsActiveVersion].location = loc;
+  wsAllSettings[wsActiveVersion].lat = lat;
+  wsAllSettings[wsActiveVersion].lon = lon;
+  saveWSSettings();
+  buildWSPanel();
 }
 
 async function ws4kpGeocode() {
   const input = document.getElementById('ws-location');
   const query = (input ? input.value : '').trim();
+
   if (!query) {
-    // Fall back to IP geolocation
     try {
       const r = await fetch('https://ipapi.co/json/');
       const d = await r.json();
       if (d.latitude && d.longitude) {
-        ws4kpSettings.lat = d.latitude;
-        ws4kpSettings.lon = d.longitude;
-        ws4kpSettings.location = [d.city, d.region_code].filter(Boolean).join(', ');
-        if (input) input.value = ws4kpSettings.location;
-        saveWS4KPSettings(ws4kpSettings);
+        const loc = [d.city, d.region_code].filter(Boolean).join(', ');
+        ['4000','3000'].forEach(v => {
+          wsAllSettings[v].lat = d.latitude;
+          wsAllSettings[v].lon = d.longitude;
+          wsAllSettings[v].location = loc;
+        });
+        saveWSSettings();
+        if (input) input.value = loc;
       }
     } catch {}
     return;
   }
-  // Use NWS Points API for US locations (zip/city)
+
+  // Detect US zip code
+  if (/^\d{5}$/.test(query)) {
+    try {
+      const r = await fetch(`https://api.zippopotam.us/us/${query}`);
+      const d = await r.json();
+      if (d.places && d.places[0]) {
+        const pl = d.places[0];
+        const loc = `${pl['place name']}, ${pl['state abbreviation']}`;
+        ['4000','3000'].forEach(v => {
+          wsAllSettings[v].lat = parseFloat(pl.latitude);
+          wsAllSettings[v].lon = parseFloat(pl.longitude);
+          wsAllSettings[v].location = loc;
+        });
+        saveWSSettings();
+        if (input) input.value = loc;
+        return;
+      }
+    } catch {}
+  }
+
+  // City / state search
   try {
-    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`);
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&countryCode=US&language=en&format=json`);
     const d = await r.json();
     const loc = d.results && d.results[0];
     if (loc) {
-      ws4kpSettings.lat = loc.latitude;
-      ws4kpSettings.lon = loc.longitude;
-      ws4kpSettings.location = [loc.name, loc.admin1].filter(Boolean).join(', ');
-      if (input) input.value = ws4kpSettings.location;
-      saveWS4KPSettings(ws4kpSettings);
+      const locStr = [loc.name, loc.admin1].filter(Boolean).join(', ');
+      ['4000','3000'].forEach(v => {
+        wsAllSettings[v].lat = loc.latitude;
+        wsAllSettings[v].lon = loc.longitude;
+        wsAllSettings[v].location = locStr;
+      });
+      saveWSSettings();
+      if (input) input.value = locStr;
     }
   } catch {}
 }
 
 function ws4kpLaunch() {
-  const s = ws4kpSettings;
-  // Sync viewMode and speed from selects in case user changed them
+  const s = wsAllSettings[wsActiveVersion];
   const vmSel = document.getElementById('ws-viewmode');
   const spSel = document.getElementById('ws-speed');
   if (vmSel) s.viewMode = vmSel.value;
   if (spSel) s.speed = parseFloat(spSel.value);
-  saveWS4KPSettings(s);
-
-  const url = buildWS4KPUrl(s);
+  saveWSSettings();
+  const url = buildWSUrl(wsActiveVersion);
   loadIframe(url, '', false);
-  ws4kpActive = true;
-
+  wsIsLaunched = true;
   const btn = document.getElementById('ws-launch-btn');
   if (btn) btn.textContent = '↺ Restart';
 }
 
-// When WeatherStar nav button is clicked, build panel + auto-locate if no location stored
 async function launchWeatherStar() {
   buildWSPanel();
-  // Auto-locate if no saved location
-  if (!ws4kpSettings.lat) {
-    await ws4kpGeocode();  // IP fallback since no query is passed
-    buildWSPanel();        // Rebuild to show resolved location
+  if (!wsAllSettings[wsActiveVersion].lat) {
+    await ws4kpGeocode();
+    buildWSPanel();
   }
-  // Auto-launch if already had settings
-  if (ws4kpActive) ws4kpLaunch();
+  if (wsIsLaunched) ws4kpLaunch();
 }
 
-// Legacy alias
 function showWSPanel() { launchWeatherStar(); }
+
+// Keep legacy aliases in case any old code references them
+function ws4kpToggle(key) { wsToggleDisplay(key); }
+function ws4kpToggleScanLines() { wsToggleScanLines(); }
 
 function loadIframe(src, label, isLive) {
   const hint = document.getElementById('channel-hint');
