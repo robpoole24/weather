@@ -2204,8 +2204,17 @@ function loadIframe(src, label, isLive) {
   newFrame.allow = frame.allow;
   newFrame.allowFullscreen = true;
   newFrame.style.cssText = frame.style.cssText;
-  newFrame.style.width = '100%';
-  newFrame.style.height = '100%';
+  // WS3000 needs auto width + 4:3 aspect ratio to center in the 16:9 player
+  // WS4000 and everything else fills the full area
+  if (isWS3000) {
+    newFrame.style.width = 'auto';
+    newFrame.style.height = '100%';
+    newFrame.style.aspectRatio = '4 / 3';
+  } else {
+    newFrame.style.width = '100%';
+    newFrame.style.height = '100%';
+    newFrame.style.aspectRatio = '';
+  }
   newFrame.style.border = 'none';
   newFrame.style.display = 'block';
   frame.parentNode.replaceChild(newFrame, frame);
