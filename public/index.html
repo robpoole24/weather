@@ -1670,6 +1670,11 @@ function makeStoreBtn(link, comingSoon, label, tooltip) {
 // WeatherTV scales the iframe via CSS zoom/transform to fill the container.
 // ═══════════════════════════════════════════
 
+// ─── WeatherStar hosted instance URL ────────────────────────────────────────
+// Self-hosted at /weatherstar/ — same origin as WeatherTV, enables full music control.
+// If you haven't deployed the static files yet, set to null to fall back to the live site.
+const WTV_WS4KP_URL = '/weatherstar';
+
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
   '3000': 'https://weatherstar3000.netbymatt.com/',
@@ -1908,11 +1913,6 @@ function wsToggleScanLines() {
   btn.style.borderColor  = s.scanLines ? 'var(--accent)' : 'var(--border)';
   btn.style.color        = s.scanLines ? 'var(--accent)' : 'var(--muted)';
 }
-
-// ─── WeatherStar hosted instance URL ────────────────────────────────────────
-// Self-hosted at /weatherstar/ — same origin as WeatherTV, enables full music control.
-// If you haven't deployed the static files yet, set to null to fall back to the live site.
-const WTV_WS4KP_URL = '/weatherstar';
 
 function wsToggleMusic() {
   const s = wsAllSettings['4000'];
