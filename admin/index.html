@@ -547,6 +547,8 @@ async function loadData() {
   appData = await res.json();
   renderAll();
   loadCacheStatus();
+  // Prevent rendered inputs from scrolling the page on load
+  requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'instant' }));
 }
 
 async function restoreBackup(input) {
@@ -632,6 +634,7 @@ function renderGroupCard(group, gi) {
     <div style="display:flex;gap:0.3rem">
       <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','up')">▲</button>
       <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','down')">▼</button>
+      <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();sortGroupAlpha('${group.id}')" title="Sort channels A–Z">A-Z</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleAddChannelForm('${group.id}')">+ Channel</button>
       <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGroup('${group.id}','${group.label}')">Delete</button>
     </div>
@@ -715,7 +718,7 @@ function renderChannelRow(groupId, ch) {
   row.addEventListener('dragend', () => { row.style.opacity = ''; document.querySelectorAll('.drag-over-row').forEach(r => r.classList.remove('drag-over-row')); });
   row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; row.classList.add('drag-over-row'); });
   row.addEventListener('dragleave', () => row.classList.remove('drag-over-row'));
-  row.addEventListener('drop', e => {
+  row.addEventListener('drop', async e => {
     e.preventDefault();
     row.classList.remove('drag-over-row');
     const [srcId, srcGroup] = e.dataTransfer.getData('text/plain').split('|');
@@ -733,8 +736,8 @@ function renderChannelRow(groupId, ch) {
       list.innerHTML = '';
       group.channels.forEach(c => list.appendChild(renderChannelRow(groupId, c)));
     }
-    saveConfig();
-    showToast('Channel moved — saving...');
+    await saveAll();   // ← was saveConfig() which only saves API settings, not channel order
+    showToast('Channel moved — saved');
   });
 
   const colCount = currentIds.length;
@@ -756,8 +759,13 @@ function renderChannelRow(groupId, ch) {
       '<input type="checkbox" ' + (ch.enabled !== false ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{enabled:this.checked})" />' +
       '<span class="toggle-slider"></span>' +
     '</label>' +
+    '<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:0.2rem 0.5rem;" ' +
+      'data-group-id="' + groupId + '" data-ch-id="' + ch.id + '" onclick="openEditChannel(this)">✎ Edit</button>' +
     '<button class="btn btn-gold btn-sm" onclick="openColManager(\'' + groupId + '\',\'' + ch.id + '\')">+ Collection</button>' +
-    '<button class="btn btn-danger btn-sm" onclick="deleteChannel(\'' + groupId + '\',\'' + ch.id + '\',\'' + ch.name + '\')">✕</button>';
+    '<button class="btn btn-danger btn-sm" ' +
+      'data-group-id="' + groupId + '" data-ch-id="' + ch.id + '" ' +
+      'data-ch-name="' + ch.name.replace(/"/g, '&quot;').replace(/'/g, '&#39;') + '" ' +
+      'onclick="handleDeleteChannel(this)">✕</button>';
 
   // Collections display
   if (ch.collections && ch.collections.length > 0) {
@@ -789,8 +797,91 @@ function renderChannelRow(groupId, ch) {
   return row;
 }
 
-// ── Group actions ──
-function showAddGroup() { document.getElementById('add-group-form').classList.toggle('open'); }
+// Safe delete handler — avoids apostrophe breakage in inline onclick
+function handleDeleteChannel(btn) {
+  const groupId = btn.getAttribute('data-group-id');
+  const chId    = btn.getAttribute('data-ch-id');
+  const name    = btn.getAttribute('data-ch-name') || chId;
+  deleteChannel(groupId, chId, name);
+}
+
+// Inline edit — expands a form below the channel row
+function openEditChannel(btn) {
+  const groupId = btn.getAttribute('data-group-id');
+  const chId    = btn.getAttribute('data-ch-id');
+  const existingForm = document.getElementById('edit-ch-form-' + chId);
+  if (existingForm) { existingForm.remove(); return; }  // toggle off
+
+  const group = (appData.groups || []).find(g => g.id === groupId);
+  const ch = group && group.channels.find(c => c.id === chId);
+  if (!ch) return;
+
+  const row = document.getElementById('ch-row-' + chId);
+  if (!row) return;
+
+  const form = document.createElement('div');
+  form.id = 'edit-ch-form-' + chId;
+  form.style.cssText = 'width:100%;margin-top:0.5rem;padding:0.75rem;background:rgba(0,180,216,0.05);border:1px solid var(--accent);border-radius:6px;display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end;';
+  form.innerHTML =
+    '<div style="flex:2;min-width:140px"><label style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:0.25rem">Channel Name</label>' +
+    '<input id="edit-ch-name-' + chId + '" type="text" value="' + ch.name.replace(/"/g,'&quot;') + '" style="margin:0;width:100%" /></div>' +
+    '<div style="flex:2;min-width:140px"><label style="font-size:0.7rem;color:var(--muted);display:block;margin-bottom:0.25rem">YouTube Channel ID</label>' +
+    '<input id="edit-ch-id-' + chId + '" type="text" value="' + ch.id + '" style="margin:0;width:100%;font-family:monospace;font-size:0.8rem" /></div>' +
+    '<div style="display:flex;gap:0.5rem;align-items:flex-end;padding-bottom:2px">' +
+    '<button class="btn btn-primary btn-sm" onclick="saveEditChannel(\'' + groupId + '\',\'' + chId + '\')">Save</button>' +
+    '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'edit-ch-form-' + chId + '\').remove()">Cancel</button></div>';
+
+  row.style.flexWrap = 'wrap';
+  row.appendChild(form);
+  setTimeout(() => {
+    form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    document.getElementById('edit-ch-name-' + chId).focus();
+  }, 50);
+}
+
+async function saveEditChannel(groupId, oldChId) {
+  const newName = document.getElementById('edit-ch-name-' + oldChId).value.trim();
+  const newId   = document.getElementById('edit-ch-id-' + oldChId).value.trim();
+  if (!newName || !newId) { showToast('⚠ Both fields required'); return; }
+
+  const group = (appData.groups || []).find(g => g.id === groupId);
+  const ch = group && group.channels.find(c => c.id === oldChId);
+  if (!ch) return;
+
+  // Update in appData
+  ch.name = newName;
+  ch.id   = newId;
+
+  await saveAll();
+  showToast('Channel updated');
+  await loadData();
+}
+
+// A-Z sort for a group
+async function sortGroupAlpha(groupId) {
+  const group = (appData.groups || []).find(g => g.id === groupId);
+  if (!group || !group.channels) return;
+  group.channels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const list = document.getElementById('ch-list-' + groupId);
+  if (list) {
+    list.innerHTML = '';
+    group.channels.forEach(c => list.appendChild(renderChannelRow(groupId, c)));
+  }
+  await saveAll();
+  showToast('Sorted A–Z and saved');
+}
+
+function toggleAddChannelForm(groupId) {
+  const form = document.getElementById('add-ch-form-' + groupId);
+  form.classList.toggle('open');
+  if (form.classList.contains('open')) {
+    setTimeout(() => {
+      form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const nameInput = document.getElementById('new-ch-name-' + groupId);
+      if (nameInput) nameInput.focus();
+    }, 100);
+  }
+}
 
 async function addGroup() {
   const label = document.getElementById('new-group-label').value.trim();
@@ -821,9 +912,6 @@ async function reorderGroup(groupId, direction) {
 }
 
 // ── Channel actions ──
-function toggleAddChannelForm(groupId) {
-  document.getElementById('add-ch-form-' + groupId).classList.toggle('open');
-}
 
 async function addChannel(groupId) {
   const name = document.getElementById('new-ch-name-' + groupId).value.trim();
@@ -841,6 +929,11 @@ async function addChannel(groupId) {
     document.getElementById('new-ch-id-' + groupId).value = '';
     toggleAddChannelForm(groupId);
     await loadData();
+    // Auto-sort if group already had channels (keeps list tidy)
+    const group = (appData.groups || []).find(g => g.id === groupId);
+    if (group && group.channels && group.channels.length > 1) {
+      await sortGroupAlpha(groupId);
+    }
   }
 }
 
