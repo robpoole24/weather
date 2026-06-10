@@ -2104,11 +2104,40 @@ function ws4kpLaunch() {
   if (vmSel) s.viewMode = vmSel.value;
   if (spSel) s.speed = parseFloat(spSel.value);
   saveWSSettings();
+
+  // ── Stop all music before switching instances ──────────────────────────────
+  // Kill WeatherTV's native player (WS3000 mode) regardless of which version
+  // we're switching to — it must not bleed into the new instance.
+  wtvPauseMusic();
+  // Also tell the outgoing WS4000 iframe to pause (it may be mid-playing)
+  const oldFrame = document.getElementById('video-frame');
+  if (oldFrame && oldFrame.contentWindow) {
+    try { oldFrame.contentWindow.postMessage({ wtv: true, action: 'pauseMusic' }, '*'); } catch (_) {}
+  }
+
   const url = buildWSUrl(wsActiveVersion);
   loadIframe(url, '', false);
   wsIsLaunched = true;
   const btn = document.getElementById('ws-launch-btn');
   if (btn) btn.textContent = '↺ Restart';
+
+  // ── Start music for the incoming version if the user has it enabled ────────
+  if (s.music) {
+    if (wsActiveVersion === '3000') {
+      // WS3000: WeatherTV owns the audio — start immediately
+      wtvPlayMusic(s.volume || 0.75);
+    } else {
+      // WS4000: postMessage after WS4KP finishes initializing (~4s)
+      // WS4KP also has its own sticky mediaPlaying setting, but we sync
+      // WeatherTV's preference to ensure they stay in step.
+      setTimeout(() => {
+        const frame = document.getElementById('video-frame');
+        if (frame && frame.contentWindow && wsAllSettings['4000'].music) {
+          frame.contentWindow.postMessage({ wtv: true, action: 'playMusic' }, '*');
+        }
+      }, 4000);
+    }
+  }
 }
 
 async function launchWeatherStar() {
