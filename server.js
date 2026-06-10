@@ -1832,6 +1832,12 @@ app.get('/api/admin/cache/status', (req, res) => {
   });
 });
 
+// ── WS4KP static data — must be before catch-all ──
+// WS4KP fetches these as absolute paths (/data/..., /scripts/...)
+// regardless of where it's hosted, so we intercept here.
+app.use('/data', express.static(path.join(__dirname, 'public', 'weatherstar', 'data')));
+app.use('/scripts', express.static(path.join(__dirname, 'public', 'weatherstar', 'scripts')));
+
 // ── Serve index for all other routes ──
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
