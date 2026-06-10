@@ -493,6 +493,11 @@
   </div>
 
   <div class="lp-section">
+    <div class="lp-section-label">Extended Coverage</div>
+    <div id="lp-extended"></div>
+  </div>
+
+  <div class="lp-section">
     <div class="lp-section-label">Alerts &amp; Warnings</div>
     <div id="lp-alerts"></div>
   </div>
@@ -1318,6 +1323,83 @@ function ensureGoes() {
   return goesLayer;
 }
 
+// ── CANADIAN RADAR (MSC GeoMet composite — no site selector needed) ───────────
+let canadaFrameLayers = [];
+let canadaFrameIdx    = 0;
+let canadaAnimTimer   = null;
+
+function parseISO8601Duration(dur) {
+  const m = dur.match(/PT?(\d+)M/i);
+  return m ? parseInt(m[1]) * 60 * 1000 : 10 * 60 * 1000;
+}
+
+async function getCanadaTimestamps() {
+  const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=RADAR_1KM_RDBR&t=${Date.now()}`;
+  try {
+    const res  = await fetch(url);
+    const text = await res.text();
+    const xml  = new DOMParser().parseFromString(text, 'text/xml');
+    const dim  = xml.getElementsByTagName('Dimension')[0];
+    if (!dim) return [];
+    const parts = dim.innerHTML.trim().split('/');
+    const [start, end, interval] = parts;
+    const step = parseISO8601Duration(interval || 'PT10M');
+    const times = [];
+    for (let t = new Date(start).getTime(); t <= new Date(end).getTime(); t += step) {
+      times.push(new Date(t).toISOString());
+    }
+    return times;
+  } catch (e) {
+    console.warn('Canada radar GetCapabilities failed:', e);
+    return [];
+  }
+}
+
+function clearCanada() {
+  if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; }
+  canadaFrameLayers.forEach(l => { try { map.removeLayer(l); } catch (_) {} });
+  canadaFrameLayers = [];
+  canadaFrameIdx = 0;
+}
+
+async function startCanadaRadar() {
+  clearCanada();
+  setStatus('Loading Canadian radar…');
+  const times = await getCanadaTimestamps();
+  if (!times.length) { setStatus('Canadian radar unavailable'); return; }
+
+  // Pre-load one WMS layer per timestamp (oldest → newest)
+  times.forEach((time, i) => {
+    const layer = L.tileLayer.wms('https://geo.weather.gc.ca/geomet', {
+      layers: 'RADAR_1KM_RDBR',
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      time: time,
+      opacity: 0,
+      zIndex: 195,
+      attribution: i === 0 ? 'Canadian Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a>' : '',
+    });
+    layer.addTo(map);
+    canadaFrameLayers.push(layer);
+  });
+
+  // Start at most recent frame
+  canadaFrameIdx = canadaFrameLayers.length - 1;
+  canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+
+  // Animate oldest → newest → loop
+  let animPos = 0;
+  canadaAnimTimer = setInterval(() => {
+    canadaFrameLayers[canadaFrameIdx].setOpacity(0);
+    canadaFrameIdx = animPos % canadaFrameLayers.length;
+    animPos++;
+    canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+  }, 600);
+
+  setStatus(`Canadian radar — ${times.length} frames (last 3 hrs)`);
+}
+
 const SS_PRODUCTS = { velocity:{code:'N0U'}, srv:{code:'N0S'}, echotops:{code:'NET'} };
 // ── SINGLE-SITE ANIMATED PRODUCTS ────────────────────────────────────────────
 // IEM RIDGE archives ~6 past scans per product, indexed 0 (newest) → N (oldest).
@@ -1702,12 +1784,13 @@ function clearAllPaint(){
   forecastFrames.forEach(f => f.layer.setOpacity(0));
   radarVisible = false;
   if (goesLayer && map.hasLayer(goesLayer)) map.removeLayer(goesLayer);
-  clearSS(); clearCC(); clearAppTemp();
+  clearSS(); clearCC(); clearAppTemp(); clearCanada();
 }
 function setStatus(t){ const el=document.getElementById('alerts-status'); if(el) el.textContent=t; }
 function paintStatusText(member){
   const names={ reflectivity:'Base Reflectivity', goes:'GOES Satellite', apptemp:'Apparent Temperature (feels-like)',
-    velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient' };
+    velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient',
+    canada:'Canadian Radar (MSC GeoMet composite)' };
   return 'Showing: ' + (names[member]||member);
 }
 function setPaint(member){
@@ -1727,6 +1810,7 @@ function setPaint(member){
       else forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
       break;
     case 'goes':    ensureGoes().addTo(map); break;
+    case 'canada':  startCanadaRadar(); break;
     case 'apptemp': showAppTemp(); break;
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
     case 'cc':      showCC(); break;
@@ -2071,6 +2155,9 @@ const RADAR_ITEMS=[
   // Velocity, SRV, Echo Tops, and CC are pulled pending better animation
   // infrastructure and memory resources. Back end of year.
 ];
+const EXTENDED_ITEMS=[
+  {id:'canada', ico:'🇨🇦', name:'Canadian Radar', sub:'MSC GeoMet composite — animated'},
+];
 const ALERT_ITEMS=[
   {id:'alerts',ico:'⚠️',name:'NWS Alerts',sub:'Warnings & watches',def:true},
   {id:'banner',ico:'🔔',name:'Warning Banner',sub:'Scroll alert inside polygon',def:true},
@@ -2080,7 +2167,7 @@ const CHASER_ITEMS=[
   {id:'mcd',ico:'💬',name:'Mesoscale Discussions',sub:'Active MCDs',def:false},
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS);
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -2098,6 +2185,7 @@ function applyOverlay(id,on){
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
+    case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
     case 'banner':
       if (!on){ bannerDismissed=true; hideBanner(); }
       else { bannerDismissed=false; if (activeBannerAlerts.length) showBanner(activeBannerAlerts); }
@@ -2115,6 +2203,7 @@ function toggleRowHTML(item){
 function renderPanel(){
   document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(radioRowHTML).join('');
   document.getElementById('lp-radaropts').innerHTML=RADAR_ITEMS.map(radioRowHTML).join('');
+  document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
   const needsSite=(activePaint in SS_PRODUCTS)||activePaint==='cc';
