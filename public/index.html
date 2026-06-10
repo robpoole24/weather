@@ -1666,7 +1666,8 @@ function makeStoreBtn(link, comingSoon, label, tooltip) {
 
 // ═══════════════════════════════════════════
 // WEATHERSTAR 4000+ AND 3000+ INTEGRATION
-// Matt Walsh's explicitly-encouraged embed via permalink URL parameters
+// No kiosk mode — toolbar stays visible so music button is accessible.
+// WeatherTV scales the iframe via CSS zoom/transform to fill the container.
 // ═══════════════════════════════════════════
 
 const WS_BASES = {
@@ -1711,7 +1712,6 @@ function wsDefaultSettings(ver) {
     viewMode:   'standard',   // 4000: standard/wide/enhanced | 3000: standard/wide
     speed:      1.0,
     scanLines:  false,
-    music:      false,        // 4000 only — mediaVolume 0.75 vs 0
     location:   '',
     lat:        null,
     lon:        null,
@@ -1743,15 +1743,15 @@ function buildWSUrl(ver) {
     WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
     p.set('speed',            s.speed.toFixed(2));
     p.set('units',            'us');
-    p.set('kiosk',            'true');
+    p.set('kiosk',            'false');  // toolbar visible so music button is accessible
     p.set('stickyKiosk',      'false');
     p.set('customTextEnable', 'false');
     p.set('scanLines',        s.scanLines ? 'true' : 'false');
     p.set('viewMode',         s.viewMode);
-    p.set('wide',             (s.viewMode==='wide'||s.viewMode==='enhanced') ? 'true' : 'false');
-    p.set('enhanced',         s.viewMode==='enhanced' ? 'true' : 'false');
+    p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
+    p.set('enhanced',         'false');  // enhanced requires kiosk scaling; not used
     p.set('portrait',         'false');
-    p.set('mediaVolume',      s.music ? '0.75' : '0');
+    p.set('mediaVolume',      '0.75');   // pre-set; user toggles with toolbar music button
   } else {
     WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
     p.set('settings-speed-select',  s.speed.toFixed(2));
@@ -1843,22 +1843,19 @@ function buildWSPanel() {
         style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;padding:0.22rem 0.3rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
         <option value="standard" ${s.viewMode==='standard'?'selected':''}>📐 4:3</option>
         <option value="wide"     ${s.viewMode==='wide'    ?'selected':''}>📐 16:9</option>
-        ${ver==='4000' ? `<option value="enhanced" ${s.viewMode==='enhanced'?'selected':''}>📐 16:9+</option>` : ''}
       </select>
 
-      <!-- Scan lines -->
+      <!-- Scan lines (WS4000 only — WS3000 doesn't support it) -->
+      ${ver === '4000' ? `
       <button id="ws-scanlines-btn" onclick="wsToggleScanLines()" title="Scan lines"
         style="${smBtn}${s.scanLines ? accentOn : accentOff}">
         📺
-      </button>
+      </button>` : ''}
 
       ${ver === '4000' ? `
-      <!-- Music (WS4000 only) -->
-      <button id="ws-music-btn" onclick="wsToggleMusic()"
-        title="Background music — browser may require one manual enable inside the player on first use"
-        style="${smBtn}${s.music ? accentOn : accentOff}">
-        🎵
-      </button>` : ''}
+      <!-- Music note — controlled via WS4KP toolbar, not here -->
+      <span title="Click the music icon in the player to enable music — it persists across sessions"
+        style="font-size:0.68rem;color:var(--muted);cursor:default;padding:0 0.2rem;">🎵</span>` : ''}
 
     </div>
 
@@ -1908,17 +1905,6 @@ function wsToggleScanLines() {
   btn.style.background   = s.scanLines ? 'rgba(0,180,216,0.18)' : 'transparent';
   btn.style.borderColor  = s.scanLines ? 'var(--accent)' : 'var(--border)';
   btn.style.color        = s.scanLines ? 'var(--accent)' : 'var(--muted)';
-}
-
-function wsToggleMusic() {
-  const s = wsAllSettings['4000'];
-  s.music = !s.music;
-  saveWSSettings();
-  const btn = document.getElementById('ws-music-btn');
-  if (!btn) return;
-  btn.style.background  = s.music ? 'rgba(0,180,216,0.18)' : 'transparent';
-  btn.style.borderColor = s.music ? 'var(--accent)' : 'var(--border)';
-  btn.style.color       = s.music ? 'var(--accent)' : 'var(--muted)';
 }
 
 function wsSwitchVersion() {
@@ -2020,23 +2006,37 @@ function ws4kpLaunch() {
   const btn = document.getElementById('ws-launch-btn');
   if (btn) btn.textContent = '↺ Restart';
 
-  // WS3000 renders at native size (~640×480) and doesn't self-scale.
-  // After a brief load delay, measure the wrapper and scale the iframe to fill it.
-  if (wsActiveVersion === '3000') {
-    setTimeout(() => {
-      const wrapper = document.getElementById('video-wrapper');
-      const frame   = document.getElementById('video-frame');
-      if (!wrapper || !frame) return;
-      const WS3_W = 640, WS3_H = 480;  // WS3000 native resolution
-      const scaleX = wrapper.clientWidth  / WS3_W;
-      const scaleY = wrapper.clientHeight / WS3_H;
-      const scale  = Math.min(scaleX, scaleY); // fill without cropping
-      frame.style.width  = WS3_W + 'px';
-      frame.style.height = WS3_H + 'px';
-      frame.style.transform = `scale(${scale.toFixed(3)})`;
-      frame.style.transformOrigin = 'center center';
-    }, 800);
-  }
+  // Both versions need CSS scaling since neither uses kiosk auto-scaling.
+  // WS4000 standard page ~640×590 (480 display + ~110px chrome)
+  // WS4000 wide page   ~1280×830 (720 display + ~110px chrome)
+  // WS3000 page        ~640×540  (480 display + ~60px location bar, no bottom toolbar)
+  setTimeout(() => {
+    const wrapper = document.getElementById('video-wrapper');
+    const frame   = document.getElementById('video-frame');
+    if (!wrapper || !frame) return;
+    let nativeW, nativeH;
+    if (wsActiveVersion === '3000') {
+      nativeW = 640; nativeH = 540;
+    } else {
+      const wide = wsAllSettings['4000'].viewMode === 'wide';
+      nativeW = wide ? 1280 : 640;
+      nativeH = wide ? 830  : 590;
+    }
+    frame.style.width  = nativeW + 'px';
+    frame.style.height = nativeH + 'px';
+    const scaleX = wrapper.clientWidth  / nativeW;
+    const scaleY = wrapper.clientHeight / nativeH;
+    const scale  = Math.min(scaleX, scaleY).toFixed(4);
+    // Use zoom for WS3000 (fixes click/input targets); transform for WS4000
+    if (wsActiveVersion === '3000') {
+      frame.style.transform = '';
+      frame.style.zoom = scale;
+    } else {
+      frame.style.zoom = '';
+      frame.style.transform = `scale(${scale})`;
+      frame.style.transformOrigin = 'top center';
+    }
+  }, 800);
 }
 
 async function launchWeatherStar() {
