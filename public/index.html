@@ -1924,15 +1924,56 @@ function wsToggleScanLines() {
   btn.style.color        = s.scanLines ? 'var(--accent)' : 'var(--muted)';
 }
 
+// ── WeatherTV-native audio player (used for WS3000; WS4000 uses postMessage) ──
+let wtvAudio = null;
+let wtvAudioPlaylist = [];
+let wtvAudioTrack = 0;
+
+async function wtvLoadPlaylist() {
+  if (wtvAudioPlaylist.length) return;
+  try {
+    const r = await fetch('/weatherstar/playlist.json');
+    const data = await r.json();
+    const files = data.availableFiles || [];
+    // shuffle
+    wtvAudioPlaylist = files.sort(() => Math.random() - 0.5);
+  } catch (e) { wtvAudioPlaylist = []; }
+}
+
+async function wtvPlayMusic(vol) {
+  await wtvLoadPlaylist();
+  if (!wtvAudioPlaylist.length) return;
+  if (!wtvAudio) {
+    wtvAudio = new Audio();
+    wtvAudio.addEventListener('ended', () => {
+      wtvAudioTrack = (wtvAudioTrack + 1) % wtvAudioPlaylist.length;
+      if (wtvAudioTrack === 0) wtvAudioPlaylist.sort(() => Math.random() - 0.5);
+      wtvAudio.src = `/weatherstar/music/${wtvAudioPlaylist[wtvAudioTrack]}`;
+      wtvAudio.play().catch(() => {});
+    });
+  }
+  wtvAudio.volume = typeof vol === 'number' ? vol : (wsAllSettings[wsActiveVersion].volume || 0.75);
+  wtvAudio.src = `/weatherstar/music/${wtvAudioPlaylist[wtvAudioTrack]}`;
+  wtvAudio.play().catch(() => {});
+}
+
+function wtvPauseMusic() {
+  if (wtvAudio) wtvAudio.pause();
+}
+
 function wsSetVolume(val) {
   val = Math.max(0, Math.min(1, val));
   wsAllSettings[wsActiveVersion].volume = val;
   saveWSSettings();
   const label = document.getElementById('ws-volume-label');
   if (label) label.textContent = Math.round(val * 100) + '%';
-  const frame = document.getElementById('video-frame');
-  if (frame && frame.contentWindow) {
-    frame.contentWindow.postMessage({ wtv: true, action: 'setVolume', value: val }, '*');
+  if (wsActiveVersion === '3000') {
+    if (wtvAudio) wtvAudio.volume = val;
+  } else {
+    const frame = document.getElementById('video-frame');
+    if (frame && frame.contentWindow) {
+      frame.contentWindow.postMessage({ wtv: true, action: 'setVolume', value: val }, '*');
+    }
   }
 }
 
@@ -1948,12 +1989,22 @@ function wsToggleMusic() {
     btn.style.color       = s.music ? 'var(--accent)' : 'var(--muted)';
   }
 
-  const frame = document.getElementById('video-frame');
-  if (frame && frame.contentWindow) {
-    frame.contentWindow.postMessage({
-      wtv: true,
-      action: s.music ? 'playMusic' : 'pauseMusic',
-    }, '*');
+  if (wsActiveVersion === '3000') {
+    // WS3000 is cross-origin — WeatherTV manages audio directly
+    if (s.music) {
+      wtvPlayMusic(s.volume || 0.75);
+    } else {
+      wtvPauseMusic();
+    }
+  } else {
+    // WS4000 — postMessage to our hosted iframe
+    const frame = document.getElementById('video-frame');
+    if (frame && frame.contentWindow) {
+      frame.contentWindow.postMessage({
+        wtv: true,
+        action: s.music ? 'playMusic' : 'pauseMusic',
+      }, '*');
+    }
   }
 }
 
@@ -2025,13 +2076,16 @@ async function ws4kpGeocode() {
     } catch {}
   }
 
-  // City / state search
+  // City / country search — no countryCode restriction, supports US, Canada, Mexico, Caribbean, etc.
+  // Note: WS4000 uses NWS data (US + territories only); WS3000 may vary
   try {
-    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&countryCode=US&language=en&format=json`);
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`);
     const d = await r.json();
     const loc = d.results && d.results[0];
     if (loc) {
-      const locStr = [loc.name, loc.admin1].filter(Boolean).join(', ');
+      // For US show "City, State", for others show "City, Country"
+      const region = loc.country_code === 'US' ? loc.admin1 : loc.country;
+      const locStr = [loc.name, region].filter(Boolean).join(', ');
       ['4000', '3000'].forEach(v => {
         wsAllSettings[v].lat = loc.latitude;
         wsAllSettings[v].lon = loc.longitude;
@@ -2114,6 +2168,23 @@ function loadIframe(src, label, isLive) {
     wrapper.style.overflow = 'hidden';
     frame.style.transform = '';
     frame.style.zoom = '';
+
+    if (isWS3000) {
+      // WS3000 renders in 4:3 — center it in the 16:9 player with pillarboxing
+      wrapper.style.display = 'flex';
+      wrapper.style.alignItems = 'center';
+      wrapper.style.justifyContent = 'center';
+      frame.style.width = 'auto';
+      frame.style.aspectRatio = '4 / 3';
+      frame.style.height = '100%';
+    } else {
+      // WS4000 fills the full player area
+      wrapper.style.display = '';
+      wrapper.style.alignItems = '';
+      wrapper.style.justifyContent = '';
+      frame.style.width = '100%';
+      frame.style.aspectRatio = '';
+    }
   } else {
     frame.style.marginTop = '0';
     frame.style.height = '100%';
