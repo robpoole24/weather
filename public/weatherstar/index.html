@@ -8,18 +8,17 @@
   window.addEventListener('message',function(e){
     var d=e.data;
     if(!d||d.wtv!==true)return;
-    if(d.action==='playMusic'||d.action==='pauseMusic'){
-      var btn=document.getElementById('ToggleMedia');
-      if(btn){
-        var imgs=btn.querySelectorAll('img');
-        var isOn=Array.from(imgs).some(function(i){return i.style.display!==''&&i.style.display!=='none'&&i.title==='Volume';});
-        if(d.action==='playMusic'&&!isOn)btn.click();
-        if(d.action==='pauseMusic'&&isOn)btn.click();
-      }
-    }
+    var container=document.getElementById('ToggleMediaContainer');
+    var btn=document.getElementById('ToggleMedia');
+    // .playing class is added by WS4KP when music is active — this is the reliable state check
+    var isPlaying=container&&container.classList.contains('playing');
+    if(d.action==='playMusic'&&!isPlaying&&btn)btn.click();
+    if(d.action==='pauseMusic'&&isPlaying&&btn)btn.click();
     if(d.action==='setVolume'&&typeof d.value==='number'){
       var sl=document.querySelector('.volume-slider input[type=range]');
-      if(sl){sl.value=Math.max(1,Math.min(100,d.value));sl.dispatchEvent(new Event('input',{bubbles:true}));}
+      if(sl){sl.value=Math.max(1,Math.min(100,Math.round(d.value*100)));sl.dispatchEvent(new Event('input',{bubbles:true}));}
+      // also set directly on audio element for immediate effect
+      document.querySelectorAll('audio').forEach(function(a){a.volume=Math.max(0,Math.min(1,d.value));});
     }
   });
 })();

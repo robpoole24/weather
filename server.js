@@ -24,6 +24,29 @@ const DATA_FILE = path.join(__dirname, 'data', 'channels.json');
 
 app.use(cors());
 app.use(express.json());
+
+// ── WS4KP dynamic music playlist ──────────────────────────────────────────
+// Scans the actual music folder so any MP3 pushed to GitHub is auto-included.
+// Must be before express.static so it takes precedence over any static file.
+app.get('/weatherstar/playlist.json', (req, res) => {
+  const fs = require('fs');
+  const musicRoot = path.join(__dirname, 'public', 'weatherstar', 'music');
+  const files = [];
+  // Root music/ folder
+  try {
+    fs.readdirSync(musicRoot)
+      .filter(f => /\.mp3$/i.test(f))
+      .forEach(f => files.push(f));
+  } catch (_) {}
+  // music/default/ subfolder (WS4KP's built-in location)
+  try {
+    fs.readdirSync(path.join(musicRoot, 'default'))
+      .filter(f => /\.mp3$/i.test(f))
+      .forEach(f => files.push(`default/${f}`));
+  } catch (_) {}
+  res.json({ availableFiles: files });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
 

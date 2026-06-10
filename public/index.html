@@ -1677,6 +1677,7 @@ const WTV_WS4KP_URL = '/weatherstar';
 
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
+  '3000': 'https://weatherstar3000.netbymatt.com/',
 };
 
 // WS4000 displays — plain param names (no -checkbox suffix)
@@ -1696,16 +1697,30 @@ const WS4000_DISPLAYS = [
 ];
 
 // WS3000 displays — uses -checkbox suffix in URL
-function wsDefaultSettings() {
+const WS3000_DISPLAYS = [
+  { key:'hazards',              label:'🚨 Hazards',            def:true  },
+  { key:'current-weather',      label:'🌡 Current Conditions', def:true  },
+  { key:'latest-observations',  label:'📊 Latest Observations',def:true  },
+  { key:'regional-forecast',    label:'🗺 Regional Forecast',  def:true  },
+  { key:'local-forecast',       label:'📅 Local Forecast',     def:true  },
+  { key:'extended-forecast',    label:'📆 Extended Forecast',  def:true  },
+  { key:'almanac',              label:'📚 Almanac',            def:true  },
+];
+
+function wsDefaultSettings(ver) {
+  ver = ver || '4000';
+  const displays = ver === '3000'
+    ? Object.fromEntries(WS3000_DISPLAYS.map(d => [d.key, d.def]))
+    : Object.fromEntries(WS4000_DISPLAYS.map(d => [d.key, d.def]));
   return {
-    version:  '4000',
-    displays: Object.fromEntries(WS4000_DISPLAYS.map(d => [d.key, d.def])),
-    viewMode: 'standard',
-    speed:    1.0,
+    version:   ver,
+    displays,
+    viewMode:  ver === '3000' ? 'wide' : 'standard',
+    speed:     1.0,
     scanLines: false,
-    location: '',
-    lat:      null,
-    lon:      null,
+    location:  '',
+    lat:       null,
+    lon:       null,
   };
 }
 
@@ -1713,10 +1728,12 @@ function loadWSSettings() {
   try {
     const raw = localStorage.getItem('weatherstar-v4');
     const s = raw ? JSON.parse(raw) : {};
-    const saved = s['4000'] || s || {};
-    return { '4000': { ...wsDefaultSettings(), ...saved, location: saved.location || s.location || '', lat: saved.lat || s.lat || null, lon: saved.lon || s.lon || null } };
+    return {
+      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
+      '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
+    };
   } catch {
-    return { '4000': wsDefaultSettings() };
+    return { '4000': wsDefaultSettings('4000'), '3000': wsDefaultSettings('3000') };
   }
 }
 
@@ -1724,36 +1741,46 @@ function saveWSSettings() {
   localStorage.setItem('weatherstar-v4', JSON.stringify(wsAllSettings));
 }
 
-function buildWSUrl() {
-  const s = wsAllSettings['4000'];
+function buildWSUrl(ver) {
+  ver = ver || wsActiveVersion;
+  const s = wsAllSettings[ver];
   const p = new URLSearchParams();
-  WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
-  p.set('speed',            s.speed.toFixed(2));
-  p.set('units',            'us');
-  p.set('kiosk',            'true');
-  p.set('stickyKiosk',      'false');
-  p.set('customTextEnable', 'false');
-  p.set('scanLines',        s.scanLines ? 'true' : 'false');
-  p.set('viewMode',         s.viewMode);
-  p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
-  p.set('enhanced',         'false');
-  p.set('portrait',         'false');
-  p.set('mediaVolume',      '0.75');
+  if (ver === '4000') {
+    WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
+    p.set('speed',            s.speed.toFixed(2));
+    p.set('units',            'us');
+    p.set('kiosk',            'true');
+    p.set('stickyKiosk',      'false');
+    p.set('customTextEnable', 'false');
+    p.set('scanLines',        s.scanLines ? 'true' : 'false');
+    p.set('viewMode',         s.viewMode);
+    p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
+    p.set('enhanced',         'false');
+    p.set('portrait',         'false');
+    p.set('mediaVolume',      '0.75');
+  } else {
+    WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
+    p.set('settings-speed-select',  s.speed.toFixed(2));
+    p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
+    p.set('settings-kiosk-checkbox','true');
+  }
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
     if (s.location) { p.set('latLonQuery', s.location); p.set('txtLocation', s.location); }
   }
-  return WS_BASES['4000'] + '?' + p.toString();
+  return WS_BASES[ver] + '?' + p.toString();
 }
 
 let wsAllSettings = loadWSSettings();
+let wsActiveVersion = '4000';
 let wsIsLaunched = false;
 
 function buildWSPanel() {
   const panel = document.getElementById('weatherstar-panel');
   if (!panel) return;
-  const s = wsAllSettings['4000'];
-  const displays = WS4000_DISPLAYS;
+  const ver = wsActiveVersion;
+  const s = wsAllSettings[ver];
+  const displays = ver === '4000' ? WS4000_DISPLAYS : WS3000_DISPLAYS;
   const accentOn  = 'background:rgba(0,180,216,0.18);border-color:var(--accent);color:var(--accent);';
   const accentOff = 'background:transparent;border-color:var(--border);color:var(--muted);';
   const chipStyle = `flex-shrink:0;font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;padding:0.28rem 0.55rem;border-radius:14px;border:1px solid;cursor:pointer;white-space:nowrap;transition:all 0.12s;`;
@@ -1762,12 +1789,16 @@ function buildWSPanel() {
   panel.innerHTML = `
     <div class="divider"></div>
 
-    <!-- Setup note -->
+    <!-- Version label + toggle -->
     <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;padding:0 0.5rem;">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:var(--accent);">
-        📺 WeatherStar 4000+
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:${ver==='4000'?'var(--accent)':'var(--gold)'};">
+        ${ver==='4000' ? '📺 WeatherStar 4000+' : '📺 WeatherStar 3000+'}
       </div>
       <div style="font-size:0.62rem;color:var(--muted);line-height:1.3;">Set options,<br>then Save ▶</div>
+      <button onclick="wsSwitchVersion()"
+        style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);font-size:0.62rem;padding:0.15rem 0.35rem;">
+        ⇄ ${ver==='4000' ? 'Use WS3000' : 'Use WS4000+'}
+      </button>
     </div>
 
     <div class="divider"></div>
@@ -1824,11 +1855,24 @@ function buildWSPanel() {
         📺
       </button>
 
-      <!-- Music — sends postMessage to our hosted WS4KP instance -->
+      <!-- Music + volume — sends postMessage to our hosted WS4KP instance -->
       <button id="ws-music-btn" onclick="wsToggleMusic()" title="Background music"
         style="${smBtn}${s.music ? accentOn : accentOff}">
         🎵
       </button>
+
+      <!-- Volume slider (only visible when on our self-hosted WS4KP) -->
+      ${wsActiveVersion === '4000' ? `
+      <div style="display:flex;align-items:center;gap:0.25rem;flex-shrink:0;" title="Volume">
+        <span style="font-size:0.65rem;color:var(--muted);">🔈</span>
+        <input id="ws-volume-slider" type="range" min="0" max="100"
+          value="${Math.round((s.volume||0.75)*100)}"
+          oninput="wsSetVolume(this.value/100)"
+          style="width:60px;height:3px;accent-color:var(--accent);cursor:pointer;vertical-align:middle;">
+        <span id="ws-volume-label" style="font-size:0.62rem;color:var(--muted);min-width:1.8rem;">
+          ${Math.round((s.volume||0.75)*100)}%
+        </span>
+      </div>\` : ''}
 
     </div>
 
@@ -1852,7 +1896,7 @@ function buildWSPanel() {
 
 // Toggle a display chip
 function wsToggleDisplay(key) {
-  const s = wsAllSettings['4000'];
+  const s = wsAllSettings[wsActiveVersion];
   s.displays[key] = !s.displays[key];
   saveWSSettings();
   const btn = document.getElementById('ws-btn-' + key);
@@ -1870,7 +1914,7 @@ function wsToggleDisplay(key) {
 }
 
 function wsToggleScanLines() {
-  const s = wsAllSettings['4000'];
+  const s = wsAllSettings[wsActiveVersion];
   s.scanLines = !s.scanLines;
   saveWSSettings();
   const btn = document.getElementById('ws-scanlines-btn');
@@ -1880,8 +1924,20 @@ function wsToggleScanLines() {
   btn.style.color        = s.scanLines ? 'var(--accent)' : 'var(--muted)';
 }
 
+function wsSetVolume(val) {
+  val = Math.max(0, Math.min(1, val));
+  wsAllSettings[wsActiveVersion].volume = val;
+  saveWSSettings();
+  const label = document.getElementById('ws-volume-label');
+  if (label) label.textContent = Math.round(val * 100) + '%';
+  const frame = document.getElementById('video-frame');
+  if (frame && frame.contentWindow) {
+    frame.contentWindow.postMessage({ wtv: true, action: 'setVolume', value: val }, '*');
+  }
+}
+
 function wsToggleMusic() {
-  const s = wsAllSettings['4000'];
+  const s = wsAllSettings[wsActiveVersion];
   s.music = !s.music;
   saveWSSettings();
 
@@ -1892,7 +1948,6 @@ function wsToggleMusic() {
     btn.style.color       = s.music ? 'var(--accent)' : 'var(--muted)';
   }
 
-  // Send postMessage to the iframe (only works when using our hosted WS4KP)
   const frame = document.getElementById('video-frame');
   if (frame && frame.contentWindow) {
     frame.contentWindow.postMessage({
@@ -1902,15 +1957,28 @@ function wsToggleMusic() {
   }
 }
 
+function wsSwitchVersion() {
+  wsActiveVersion = wsActiveVersion === '4000' ? '3000' : '4000';
+  const other = wsActiveVersion === '4000' ? '3000' : '4000';
+  if (!wsAllSettings[wsActiveVersion].lat && wsAllSettings[other].lat) {
+    wsAllSettings[wsActiveVersion].lat = wsAllSettings[other].lat;
+    wsAllSettings[wsActiveVersion].lon = wsAllSettings[other].lon;
+    wsAllSettings[wsActiveVersion].location = wsAllSettings[other].location;
+  }
+  saveWSSettings();
+  wsIsLaunched = false;
+  buildWSPanel();
+}
+
 function wsResetSettings() {
-  if (!confirm('Reset WeatherStar 4000+ settings to defaults?')) return;
-  const loc = wsAllSettings['4000'].location;
-  const lat = wsAllSettings['4000'].lat;
-  const lon = wsAllSettings['4000'].lon;
-  wsAllSettings['4000'] = wsDefaultSettings();
-  wsAllSettings['4000'].location = loc;
-  wsAllSettings['4000'].lat = lat;
-  wsAllSettings['4000'].lon = lon;
+  if (!confirm('Reset WeatherStar ' + wsActiveVersion + '+ settings to defaults?')) return;
+  const loc = wsAllSettings[wsActiveVersion].location;
+  const lat = wsAllSettings[wsActiveVersion].lat;
+  const lon = wsAllSettings[wsActiveVersion].lon;
+  wsAllSettings[wsActiveVersion] = wsDefaultSettings(wsActiveVersion);
+  wsAllSettings[wsActiveVersion].location = loc;
+  wsAllSettings[wsActiveVersion].lat = lat;
+  wsAllSettings[wsActiveVersion].lon = lon;
   saveWSSettings();
   buildWSPanel();
 }
@@ -1925,10 +1993,10 @@ async function ws4kpGeocode() {
       const d = await r.json();
       if (d.latitude && d.longitude) {
         const loc = [d.city, d.region_code].filter(Boolean).join(', ');
-        [['4000']].forEach(v => {
-          wsAllSettings['4000'].lat = d.latitude;
-          wsAllSettings['4000'].lon = d.longitude;
-          wsAllSettings['4000'].location = loc;
+        ['4000', '3000'].forEach(v => {
+          wsAllSettings[v].lat = d.latitude;
+          wsAllSettings[v].lon = d.longitude;
+          wsAllSettings[v].location = loc;
         });
         saveWSSettings();
         if (input) input.value = loc;
@@ -1945,10 +2013,10 @@ async function ws4kpGeocode() {
       if (d.places && d.places[0]) {
         const pl = d.places[0];
         const loc = `${pl['place name']}, ${pl['state abbreviation']}`;
-        [['4000']].forEach(v => {
-          wsAllSettings['4000'].lat = parseFloat(pl.latitude);
-          wsAllSettings['4000'].lon = parseFloat(pl.longitude);
-          wsAllSettings['4000'].location = loc;
+        ['4000', '3000'].forEach(v => {
+          wsAllSettings[v].lat = parseFloat(pl.latitude);
+          wsAllSettings[v].lon = parseFloat(pl.longitude);
+          wsAllSettings[v].location = loc;
         });
         saveWSSettings();
         if (input) input.value = loc;
@@ -1964,10 +2032,10 @@ async function ws4kpGeocode() {
     const loc = d.results && d.results[0];
     if (loc) {
       const locStr = [loc.name, loc.admin1].filter(Boolean).join(', ');
-      [['4000']].forEach(v => {
-        wsAllSettings['4000'].lat = loc.latitude;
-        wsAllSettings['4000'].lon = loc.longitude;
-        wsAllSettings['4000'].location = locStr;
+      ['4000', '3000'].forEach(v => {
+        wsAllSettings[v].lat = loc.latitude;
+        wsAllSettings[v].lon = loc.longitude;
+        wsAllSettings[v].location = locStr;
       });
       saveWSSettings();
       if (input) input.value = locStr;
@@ -1976,13 +2044,13 @@ async function ws4kpGeocode() {
 }
 
 function ws4kpLaunch() {
-  const s = wsAllSettings['4000'];
+  const s = wsAllSettings[wsActiveVersion];
   const vmSel = document.getElementById('ws-viewmode');
   const spSel = document.getElementById('ws-speed');
   if (vmSel) s.viewMode = vmSel.value;
   if (spSel) s.speed = parseFloat(spSel.value);
   saveWSSettings();
-  const url = buildWSUrl();
+  const url = buildWSUrl(wsActiveVersion);
   loadIframe(url, '', false);
   wsIsLaunched = true;
   const btn = document.getElementById('ws-launch-btn');
@@ -1991,11 +2059,11 @@ function ws4kpLaunch() {
 
 async function launchWeatherStar() {
   buildWSPanel();
-  if (!wsAllSettings['4000'].lat) {
+  if (!wsAllSettings[wsActiveVersion].lat) {
     await ws4kpGeocode();
     buildWSPanel();
   }
-  if (!wsIsLaunched) ws4kpLaunch();  // auto-launch first time; Save ▶ handles explicit reloads
+  if (!wsIsLaunched) ws4kpLaunch();
 }
 
 function showWSPanel() { launchWeatherStar(); }
