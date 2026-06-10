@@ -220,6 +220,24 @@
   .alert-popup { font-family:'Barlow',sans-serif; font-size:0.8rem; max-width:240px; line-height:1.5; }
   .alert-popup .ev { font-family:'Barlow Condensed',sans-serif; font-size:1rem; letter-spacing:0.05em; text-transform:uppercase; font-weight:700; }
   .alert-popup .exp { color:#7a9bb5; font-size:0.72rem; margin-top:4px; }
+  /* Scrollable text blocks inside alert/MCD popups */
+  .alert-popup [style*="overflow-y"] {
+    -webkit-overflow-scrolling: touch;   /* iOS momentum scroll */
+    overscroll-behavior: contain;        /* prevent scroll bleeding to map */
+  }
+  /* Make scrollbar visible on webkit browsers (Chrome, Safari, Edge) */
+  .alert-popup ::-webkit-scrollbar { width: 5px; }
+  .alert-popup ::-webkit-scrollbar-track { background: transparent; }
+  .alert-popup ::-webkit-scrollbar-thumb { background: #7a9bb5; border-radius: 3px; }
+  /* Gradient fade at bottom to hint there's more content */
+  .alert-scroll-fade {
+    position:relative;
+  }
+  .alert-scroll-fade::after {
+    content:''; position:absolute; bottom:0; left:0; right:0; height:24px;
+    background:linear-gradient(transparent, #1a2535);
+    pointer-events:none; border-radius:0 0 3px 3px;
+  }
 
   /* ══ LAYER PANEL (left slide-out) ════════════════════════════════════════ */
   #layers-fab {
@@ -658,6 +676,23 @@ const updateZoomIndicator = () => {
   zoomIndicator.textContent = label;
 };
 map.on('zoomend', updateZoomIndicator);
+
+// Fix touch-scroll inside Leaflet popups on mobile.
+// Without this the map captures touch events before they reach the popup's
+// scrollable text div, making it impossible to scroll on iOS/Android.
+map.on('popupopen', function(e) {
+  const node = e.popup._contentNode;
+  if (!node) return;
+  node.querySelectorAll('div[style]').forEach(div => {
+    const s = div.getAttribute('style') || '';
+    if (s.includes('overflow-y')) {
+      L.DomEvent.disableScrollPropagation(div);
+    }
+  });
+});
+
+// Show MCD button — always visible since MCDs are fetched on demand
+document.getElementById('btn-mcd').style.display = '';
 updateZoomIndicator();
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -1009,30 +1044,20 @@ async function loadMCD() {
   if (!mcdVisible) return;
   document.getElementById('alerts-status').textContent = 'Loading discussions...';
   try {
-    // NWS active MCD via api.weather.gov alerts — filter for SPC products
-    // SPC MCDs appear as NWS alerts with specific event types
-    // Also try the SPC RSS feed for current MCD list
+    // SPC MCDs are NOT NWS alerts — they live in NOAA's ArcGIS MapServer,
+    // the same infrastructure used for SPC outlooks.
     const res = await fetch(
-      'https://api.weather.gov/alerts/active?status=actual&message_type=alert&source=SPC',
-      { headers:{ 'Accept':'application/geo+json' } }
+      'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson',
+      { headers:{ 'Accept':'application/json' } }
     );
     const data = await res.json();
     mcdLayer.clearLayers();
     let count = 0;
 
-    // Filter for mesoscale discussions specifically
-    const mcdFeatures = (data.features || []).filter(f => {
-      const event = (f.properties?.event || '').toLowerCase();
-      const sender = (f.properties?.senderName || '').toLowerCase();
-      return sender.includes('storm prediction') ||
-             event.includes('mesoscale') ||
-             event.includes('severe potential') ||
-             (f.properties?.id || '').includes('SPC');
-    });
-
-    mcdFeatures.forEach(feature => {
+    (data.features || []).forEach(feature => {
       if (!feature.geometry) return;
       const props = feature.properties || {};
+
       const layer = L.geoJSON(feature.geometry, {
         style:{
           color:'#f4a261', fillColor:'#f4a261',
@@ -1041,24 +1066,26 @@ async function loadMCD() {
         }
       });
 
-      const expires = props.expires
-        ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
-        : '';
-      const text = (props.description || props.instruction || '').replace(/\*/g,'').trim();
+      // Field names from the MapServer (similar to SPC watch layer)
+      const mdNum   = props.name || props.md || props.NAME || '';
+      const concern = props.concerning || props.CONCERNING || props.discuss || '';
+      const valid   = props.valid   || props.VALID   || '';
+      const expire  = props.expire  || props.EXPIRE  || props.expired || '';
+      const expStr  = expire ? new Date(expire).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
 
       layer.bindPopup(`
         <div class="alert-popup">
-          <div class="ev" style="color:#f4a261">Mesoscale Discussion</div>
-          <div style="margin-top:4px;font-weight:600">${props.headline || props.event || 'SPC Mesoscale Discussion'}</div>
-          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${props.areaDesc || ''}</div>
-          ${expires ? `<div class="exp">Valid until: ${expires}</div>` : ''}
-          ${text ? `
-          <div style="margin-top:8px;max-height:200px;overflow-y:auto;
+          <div class="ev" style="color:#f4a261">SPC Mesoscale Discussion</div>
+          ${mdNum ? `<div style="margin-top:4px;font-weight:600">MCD #${mdNum}</div>` : ''}
+          ${concern ? `<div style="margin-top:6px;max-height:200px;overflow-y:auto;
             border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
             font-size:0.74rem;line-height:1.65;color:#c8dde8;
-            white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;">${text.replace(/\n\n+/g,'\n').trim()}</div>` : ''}
+            white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;
+            -webkit-overflow-scrolling:touch;">${concern.replace(/\n\n+/g,'\n').trim()}</div>` : ''}
+          ${expStr ? `<div class="exp" style="margin-top:4px">Expires: ${expStr}</div>` : ''}
+          ${valid ? `<div class="exp">Valid: ${valid}</div>` : ''}
         </div>
-      `, { maxWidth:300 });
+      `, { maxWidth:320 });
 
       layer.on('mouseover', function(e) {
         this.setStyle({ fillOpacity:0.28, weight:3 });
