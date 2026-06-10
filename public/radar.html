@@ -1040,17 +1040,58 @@ function toggleMCD() {
   else { map.closePopup(); mcdLayer.clearLayers(); map.removeLayer(mcdLayer); }
 }
 
+// ── Format raw MCD product text into readable sections ───────────────────────
+function formatMCDText(raw) {
+  if (!raw) return '';
+  var text = raw;
+  // Strip WMO/NOAA header (everything before "Areas affected" line)
+  var bodyStart = text.search(/Areas affected\.\.\.| AREAS AFFECTED\.\.\./i);
+  if (bodyStart > 0) text = text.slice(bodyStart);
+  // Remove ATTN/LAT-LON footer lines
+  text = text.replace(/ATTN\.\.\.WFO\.[\s\S]*$/im, '').trim();
+  text = text.replace(/LAT\.\.\.LON[\s\S]*$/im, '').trim();
+  // Condense 3+ blank lines to 2
+  text = text.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  return text;
+}
+
 async function loadMCD() {
   if (!mcdVisible) return;
+
+  // Turn off alert polygons when MCDs are visible — both layers at once is too cluttered
+  if (alertsVisible) toggleAlerts();
+
   document.getElementById('alerts-status').textContent = 'Loading discussions...';
   try {
-    // SPC MCDs are NOT NWS alerts — they live in NOAA's ArcGIS MapServer,
-    // the same infrastructure used for SPC outlooks.
-    const res = await fetch(
-      'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson',
-      { headers:{ 'Accept':'application/json' } }
-    );
-    const data = await res.json();
+    // Fetch MapServer polygons + NWS product texts in parallel
+    const [geoResult, prodResult] = await Promise.allSettled([
+      fetch(
+        'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=name,folderpath,idp_filedate&f=geojson',
+        { headers:{ 'Accept':'application/json' } }
+      ).then(r => r.json()),
+      fetch(
+        'https://api.weather.gov/products?type=MCD',
+        { headers:{ 'Accept':'application/geo+json' } }
+      ).then(r => r.json()),
+    ]);
+
+    // Build MD-number → productText map from NWS API
+    const textMap = {};
+    if (prodResult.status === 'fulfilled') {
+      const products = (prodResult.value['@graph'] || []).slice(0, 20);
+      const textFetches = products.map(async (p) => {
+        try {
+          const detail = await fetch(p['@id'], { headers:{ 'Accept':'application/geo+json' } });
+          const d = await detail.json();
+          // Product name is like "SPC MCD 1044" — extract the 4-digit number
+          const m = (d.productName || '').match(/(\d{3,4})/);
+          if (m) textMap[m[1].padStart(4,'0')] = d.productText || '';
+        } catch(_) {}
+      });
+      await Promise.allSettled(textFetches);
+    }
+
+    const data = geoResult.status === 'fulfilled' ? geoResult.value : { features: [] };
     mcdLayer.clearLayers();
     let count = 0;
 
@@ -1066,44 +1107,34 @@ async function loadMCD() {
         }
       });
 
-      // Actual field names from the MapServer schema:
-      //   name       → "Discussion Number" (e.g. "MD 0587")
-      //   folderpath → "Discussion Info"
-      //   popupinfo  → "Discussion Link" (1GB max — holds the full HTML discussion)
-      //   idp_filedate → "GIS File Date" (timestamp)
       const mdName = props.name || '';
-      const mdNum  = mdName.replace(/\D/g, '').padStart(4, '0');  // extract digits → "0587"
-
-      // Construct SPC URL from MD number + year from the file date
+      const mdNum  = mdName.replace(/\D/g, '').padStart(4, '0');
       const fileDate = props.idp_filedate ? new Date(props.idp_filedate) : new Date();
       const mdYear   = fileDate.getFullYear();
       const spcUrl   = `https://www.spc.noaa.gov/products/md/${mdYear}/md${mdNum}.html`;
 
-      // popupinfo holds the discussion text (may be HTML from NOAA's viewer)
-      const rawContent = (props.popupinfo || props.folderpath || '').trim();
-      // Strip HTML tags to get clean text if it's HTML-formatted
-      const discussText = rawContent.includes('<')
-        ? rawContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-        : rawContent;
+      // Get and format the discussion text
+      const rawText     = textMap[mdNum] || textMap[String(parseInt(mdNum,10))] || '';
+      const displayText = formatMCDText(rawText);
 
       layer.bindPopup(`
         <div class="alert-popup">
           <div class="ev" style="color:#f4a261">SPC Mesoscale Discussion</div>
           ${mdName ? `<div style="margin-top:4px;font-weight:600">${mdName}</div>` : ''}
-          ${discussText ? `
-          <div style="margin-top:8px;max-height:220px;overflow-y:auto;
+          ${displayText ? `
+          <div style="margin-top:8px;max-height:260px;overflow-y:auto;
             border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
-            font-size:0.74rem;line-height:1.7;color:#c8dde8;
+            font-size:0.74rem;line-height:1.75;color:#c8dde8;
             white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;
-            -webkit-overflow-scrolling:touch;">${discussText.replace(/\n\n+/g,'\n').trim()}</div>` : ''}
+            -webkit-overflow-scrolling:touch;">${displayText}</div>` : ''}
           <div style="margin-top:8px;font-size:0.75rem;">
             <a href="${spcUrl}" target="_blank" rel="noopener"
               style="color:#f4a261;text-decoration:none;border-bottom:1px solid rgba(244,162,97,0.4);">
-              Read full discussion on SPC ↗
+              ${displayText ? 'Full discussion on SPC ↗' : 'Read discussion on SPC ↗'}
             </a>
           </div>
         </div>
-      `, { maxWidth:340 });
+      `, { maxWidth:360, maxHeight:420 });
 
       layer.on('mouseover', function(e) {
         this.setStyle({ fillOpacity:0.28, weight:3 });
