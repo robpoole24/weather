@@ -859,7 +859,7 @@
       <span class="radar-icon" aria-hidden="true"></span>LIVE RADAR
     </button>
     <div style="flex:1;min-width:0.5rem;flex-shrink:1;"></div>
-    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto" aria-label="WeatherStar 4000 plus weather display">📺 WeatherStar 4000+</button>
+    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto" aria-label="WeatherStar weather display">📺 WeatherStar</button>
     <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
     <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
   </nav>
@@ -1671,14 +1671,12 @@ function makeStoreBtn(link, comingSoon, label, tooltip) {
 // ═══════════════════════════════════════════
 
 // ─── WeatherStar hosted instance URL ────────────────────────────────────────
-// Set to '/weatherstar' once you've deployed weatherstar-public.zip contents
-// into public/weatherstar/ on your Railway server. Until then, null falls
-// back to the live weatherstar.netbymatt.com (no music control).
-const WTV_WS4KP_URL = null;
+// Self-hosted at /weatherstar/ — same origin as WeatherTV, enables full music control.
+// Set to null to fall back to the live weatherstar.netbymatt.com (no music control).
+const WTV_WS4KP_URL = '/weatherstar';
 
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
-  '3000': 'https://weatherstar3000.netbymatt.com/',
 };
 
 // WS4000 displays — plain param names (no -checkbox suffix)
@@ -1698,91 +1696,64 @@ const WS4000_DISPLAYS = [
 ];
 
 // WS3000 displays — uses -checkbox suffix in URL
-const WS3000_DISPLAYS = [
-  { key:'hazards',           label:'🚨 Hazards',            def:true  },
-  { key:'current-weather',   label:'🌡 Current Conditions', def:true  },
-  { key:'latest-observations',label:'📊 Latest Observations',def:true  },
-  { key:'regional-forecast', label:'🗺 Regional Forecast',  def:true  },
-  { key:'local-forecast',    label:'📅 Local Forecast',     def:true  },
-  { key:'extended-forecast', label:'📆 Extended Forecast',  def:true  },
-  { key:'almanac',           label:'📚 Almanac',            def:true  },
-];
-
-function wsDefaultSettings(ver) {
-  const displays = ver === '3000'
-    ? Object.fromEntries(WS3000_DISPLAYS.map(d=>[d.key, d.def]))
-    : Object.fromEntries(WS4000_DISPLAYS.map(d=>[d.key, d.def]));
+function wsDefaultSettings() {
   return {
-    version:    ver || '4000',
-    displays,
-    viewMode:   'standard',   // 4000: standard/wide/enhanced | 3000: standard/wide
-    speed:      1.0,
-    scanLines:  false,
-    location:   '',
-    lat:        null,
-    lon:        null,
+    version:  '4000',
+    displays: Object.fromEntries(WS4000_DISPLAYS.map(d => [d.key, d.def])),
+    viewMode: 'standard',
+    speed:    1.0,
+    scanLines: false,
+    location: '',
+    lat:      null,
+    lon:      null,
   };
 }
 
 function loadWSSettings() {
   try {
-    const raw = localStorage.getItem('weatherstar-v3');
-    if (!raw) return { '4000': wsDefaultSettings('4000'), '3000': wsDefaultSettings('3000') };
-    const s = JSON.parse(raw);
-    return {
-      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
-      '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
-    };
+    const raw = localStorage.getItem('weatherstar-v4');
+    const s = raw ? JSON.parse(raw) : {};
+    const saved = s['4000'] || s || {};
+    return { '4000': { ...wsDefaultSettings(), ...saved, location: saved.location || s.location || '', lat: saved.lat || s.lat || null, lon: saved.lon || s.lon || null } };
   } catch {
-    return { '4000': wsDefaultSettings('4000'), '3000': wsDefaultSettings('3000') };
+    return { '4000': wsDefaultSettings() };
   }
 }
 
 function saveWSSettings() {
-  localStorage.setItem('weatherstar-v3', JSON.stringify(wsAllSettings));
+  localStorage.setItem('weatherstar-v4', JSON.stringify(wsAllSettings));
 }
 
-function buildWSUrl(ver) {
-  const s = wsAllSettings[ver];
+function buildWSUrl() {
+  const s = wsAllSettings['4000'];
   const p = new URLSearchParams();
-  if (ver === '4000') {
-    WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
-    p.set('speed',            s.speed.toFixed(2));
-    p.set('units',            'us');
-    p.set('kiosk',            'true');   // restored — fills screen, auto-plays
-    p.set('stickyKiosk',      'false');
-    p.set('customTextEnable', 'false');
-    p.set('scanLines',        s.scanLines ? 'true' : 'false');
-    p.set('viewMode',         s.viewMode);
-    p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
-    p.set('enhanced',         'false');
-    p.set('portrait',         'false');
-    p.set('mediaVolume',      '0.75');
-  } else {
-    WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
-    p.set('settings-speed-select',  s.speed.toFixed(2));
-    p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
-    // WS3000 doesn't scale properly in kiosk mode — leave kiosk off so it
-    // renders at native size; WeatherTV scales the iframe via CSS transform
-    p.set('settings-kiosk-checkbox','false');
-  }
+  WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
+  p.set('speed',            s.speed.toFixed(2));
+  p.set('units',            'us');
+  p.set('kiosk',            'true');
+  p.set('stickyKiosk',      'false');
+  p.set('customTextEnable', 'false');
+  p.set('scanLines',        s.scanLines ? 'true' : 'false');
+  p.set('viewMode',         s.viewMode);
+  p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
+  p.set('enhanced',         'false');
+  p.set('portrait',         'false');
+  p.set('mediaVolume',      '0.75');
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
     if (s.location) { p.set('latLonQuery', s.location); p.set('txtLocation', s.location); }
   }
-  return WS_BASES[ver] + '?' + p.toString();
+  return WS_BASES['4000'] + '?' + p.toString();
 }
 
 let wsAllSettings = loadWSSettings();
-let wsActiveVersion = '4000';
 let wsIsLaunched = false;
 
 function buildWSPanel() {
   const panel = document.getElementById('weatherstar-panel');
   if (!panel) return;
-  const ver = wsActiveVersion;
-  const s = wsAllSettings[ver];
-  const displays = ver === '4000' ? WS4000_DISPLAYS : WS3000_DISPLAYS;
+  const s = wsAllSettings['4000'];
+  const displays = WS4000_DISPLAYS;
   const accentOn  = 'background:rgba(0,180,216,0.18);border-color:var(--accent);color:var(--accent);';
   const accentOff = 'background:transparent;border-color:var(--border);color:var(--muted);';
   const chipStyle = `flex-shrink:0;font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;padding:0.28rem 0.55rem;border-radius:14px;border:1px solid;cursor:pointer;white-space:nowrap;transition:all 0.12s;`;
@@ -1791,16 +1762,12 @@ function buildWSPanel() {
   panel.innerHTML = `
     <div class="divider"></div>
 
-    <!-- Version + setup note -->
+    <!-- Setup note -->
     <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;padding:0 0.5rem;">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:${ver==='4000'?'var(--accent)':'var(--gold)'};">
-        ${ver==='4000' ? '📺 WeatherStar 4000+' : '📺 WeatherStar 3000+'}
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:var(--accent);">
+        📺 WeatherStar 4000+
       </div>
       <div style="font-size:0.62rem;color:var(--muted);line-height:1.3;">Set options,<br>then Save ▶</div>
-      <button onclick="wsSwitchVersion()"
-        style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);font-size:0.62rem;padding:0.15rem 0.35rem;">
-        ⇄ ${ver==='4000' ? 'Use WS3000' : 'Use WS4000+'}
-      </button>
     </div>
 
     <div class="divider"></div>
@@ -1887,7 +1854,7 @@ function buildWSPanel() {
 
 // Toggle a display chip
 function wsToggleDisplay(key) {
-  const s = wsAllSettings[wsActiveVersion];
+  const s = wsAllSettings['4000'];
   s.displays[key] = !s.displays[key];
   saveWSSettings();
   const btn = document.getElementById('ws-btn-' + key);
@@ -1905,7 +1872,7 @@ function wsToggleDisplay(key) {
 }
 
 function wsToggleScanLines() {
-  const s = wsAllSettings[wsActiveVersion];
+  const s = wsAllSettings['4000'];
   s.scanLines = !s.scanLines;
   saveWSSettings();
   const btn = document.getElementById('ws-scanlines-btn');
@@ -1933,32 +1900,19 @@ function wsToggleMusic() {
     frame.contentWindow.postMessage({
       wtv: true,
       action: s.music ? 'playMusic' : 'pauseMusic',
-    }, WTV_WS4KP_URL || '*');
+    }, '*');
   }
-}
-
-function wsSwitchVersion() {
-  wsActiveVersion = wsActiveVersion === '4000' ? '3000' : '4000';
-  // Sync location between versions
-  const other = wsActiveVersion === '4000' ? '3000' : '4000';
-  if (!wsAllSettings[wsActiveVersion].lat && wsAllSettings[other].lat) {
-    wsAllSettings[wsActiveVersion].lat = wsAllSettings[other].lat;
-    wsAllSettings[wsActiveVersion].lon = wsAllSettings[other].lon;
-    wsAllSettings[wsActiveVersion].location = wsAllSettings[other].location;
-  }
-  saveWSSettings();
-  buildWSPanel();
 }
 
 function wsResetSettings() {
-  if (!confirm('Reset WeatherStar ' + wsActiveVersion + '+ settings to defaults?')) return;
-  const loc = wsAllSettings[wsActiveVersion].location;
-  const lat = wsAllSettings[wsActiveVersion].lat;
-  const lon = wsAllSettings[wsActiveVersion].lon;
-  wsAllSettings[wsActiveVersion] = wsDefaultSettings(wsActiveVersion);
-  wsAllSettings[wsActiveVersion].location = loc;
-  wsAllSettings[wsActiveVersion].lat = lat;
-  wsAllSettings[wsActiveVersion].lon = lon;
+  if (!confirm('Reset WeatherStar 4000+ settings to defaults?')) return;
+  const loc = wsAllSettings['4000'].location;
+  const lat = wsAllSettings['4000'].lat;
+  const lon = wsAllSettings['4000'].lon;
+  wsAllSettings['4000'] = wsDefaultSettings();
+  wsAllSettings['4000'].location = loc;
+  wsAllSettings['4000'].lat = lat;
+  wsAllSettings['4000'].lon = lon;
   saveWSSettings();
   buildWSPanel();
 }
@@ -1973,10 +1927,10 @@ async function ws4kpGeocode() {
       const d = await r.json();
       if (d.latitude && d.longitude) {
         const loc = [d.city, d.region_code].filter(Boolean).join(', ');
-        ['4000','3000'].forEach(v => {
-          wsAllSettings[v].lat = d.latitude;
-          wsAllSettings[v].lon = d.longitude;
-          wsAllSettings[v].location = loc;
+        [['4000']].forEach(v => {
+          wsAllSettings['4000'].lat = d.latitude;
+          wsAllSettings['4000'].lon = d.longitude;
+          wsAllSettings['4000'].location = loc;
         });
         saveWSSettings();
         if (input) input.value = loc;
@@ -1993,10 +1947,10 @@ async function ws4kpGeocode() {
       if (d.places && d.places[0]) {
         const pl = d.places[0];
         const loc = `${pl['place name']}, ${pl['state abbreviation']}`;
-        ['4000','3000'].forEach(v => {
-          wsAllSettings[v].lat = parseFloat(pl.latitude);
-          wsAllSettings[v].lon = parseFloat(pl.longitude);
-          wsAllSettings[v].location = loc;
+        [['4000']].forEach(v => {
+          wsAllSettings['4000'].lat = parseFloat(pl.latitude);
+          wsAllSettings['4000'].lon = parseFloat(pl.longitude);
+          wsAllSettings['4000'].location = loc;
         });
         saveWSSettings();
         if (input) input.value = loc;
@@ -2012,10 +1966,10 @@ async function ws4kpGeocode() {
     const loc = d.results && d.results[0];
     if (loc) {
       const locStr = [loc.name, loc.admin1].filter(Boolean).join(', ');
-      ['4000','3000'].forEach(v => {
-        wsAllSettings[v].lat = loc.latitude;
-        wsAllSettings[v].lon = loc.longitude;
-        wsAllSettings[v].location = locStr;
+      [['4000']].forEach(v => {
+        wsAllSettings['4000'].lat = loc.latitude;
+        wsAllSettings['4000'].lon = loc.longitude;
+        wsAllSettings['4000'].location = locStr;
       });
       saveWSSettings();
       if (input) input.value = locStr;
@@ -2024,41 +1978,22 @@ async function ws4kpGeocode() {
 }
 
 function ws4kpLaunch() {
-  const s = wsAllSettings[wsActiveVersion];
+  const s = wsAllSettings['4000'];
   const vmSel = document.getElementById('ws-viewmode');
   const spSel = document.getElementById('ws-speed');
   if (vmSel) s.viewMode = vmSel.value;
   if (spSel) s.speed = parseFloat(spSel.value);
   saveWSSettings();
-  const url = buildWSUrl(wsActiveVersion);
+  const url = buildWSUrl();
   loadIframe(url, '', false);
   wsIsLaunched = true;
   const btn = document.getElementById('ws-launch-btn');
   if (btn) btn.textContent = '↺ Restart';
-
-  // WS3000 doesn't scale in kiosk mode — scale via CSS zoom after load
-  if (wsActiveVersion === '3000') {
-    setTimeout(() => {
-      const wrapper = document.getElementById('video-wrapper');
-      const frame   = document.getElementById('video-frame');
-      if (!wrapper || !frame) return;
-      // WS3000 native layout: ~60px location bar + ~480px display + ~80px toolbar
-      const nativeW = 640, nativeH = 620;
-      frame.style.width  = nativeW + 'px';
-      frame.style.height = nativeH + 'px';
-      const scale = Math.min(
-        wrapper.clientWidth  / nativeW,
-        wrapper.clientHeight / nativeH
-      ).toFixed(4);
-      frame.style.zoom      = scale;
-      frame.style.transform = '';
-    }, 800);
-  }
 }
 
 async function launchWeatherStar() {
   buildWSPanel();
-  if (!wsAllSettings[wsActiveVersion].lat) {
+  if (!wsAllSettings['4000'].lat) {
     await ws4kpGeocode();
     buildWSPanel();
   }
@@ -2108,22 +2043,18 @@ function loadIframe(src, label, isLive) {
     // Dark background so 4:3 pillar areas match WeatherTV aesthetic
     wrapper.style.background = '#0a0a14';
     frame.style.background = '#0a0a14';
-    // Center content for both versions
-    wrapper.style.display = 'flex';
-    wrapper.style.alignItems = 'center';
-    wrapper.style.justifyContent = 'center';
-    if (isWS3000) {
-      // WS3000 doesn't scale in kiosk mode — scale via CSS transform to fill
-      frame.style.transformOrigin = 'center center';
-      frame.style.transition = 'none';
-    } else {
-      frame.style.transform = '';
-    }
+    wrapper.style.background = '#0a0a14';
+    // overflow:hidden prevents toolbar/below-fold content from bleeding outside player
+    wrapper.style.overflow = 'hidden';
+    frame.style.transform = '';
+    frame.style.zoom = '';
   } else {
     frame.style.marginTop = '0';
     frame.style.height = '100%';
     frame.style.transform = '';
+    frame.style.zoom = '';
     wrapper.style.background = '#000000';
+    wrapper.style.overflow = 'hidden';
     wrapper.style.display = '';
     wrapper.style.alignItems = '';
     wrapper.style.justifyContent = '';
