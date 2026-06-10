@@ -714,16 +714,20 @@ const frameLayers = FRAMES.map((f, idx) => {
       tileSize: 256,
       zIndex: 200 + idx,
       crossOrigin: true,
-      keepBuffer: 4,
-      updateWhenIdle: false,
+      keepBuffer: 1,
+      updateWhenIdle: true,
       updateWhenZooming: false,
     }
   );
   return layer;
 });
 
-// Add ALL layers to map (they're invisible until activated)
-frameLayers.forEach(l => l.addTo(map));
+// Resource-safe: only the ACTIVE frame layer stays attached to the map.
+// Others are detached during pan/zoom (see movestart/moveend below) and
+// re-attached one at a time by preloadAllFrames — prevents all 12 layers
+// from independently reloading tiles for every new viewport (was causing
+// ERR_INSUFFICIENT_RESOURCES, especially with My Location's zoom jump).
+frameLayers[FRAMES.length - 1].addTo(map);
 
 let currentFrame = FRAMES.length - 1;
 let radarVisible = true;
@@ -756,55 +760,79 @@ const forecastFrames = FORECAST_STEPS.map((mins, idx) => {
   return { layer, label, mins };
 });
 
-// Add forecast layers to map (invisible until forecast mode activated)
-forecastFrames.forEach(f => f.layer.addTo(map));
+// Resource-safe: only attach the first forecast frame initially.
+forecastFrames[0].layer.addTo(map);
 let currentForecastFrame = 0;
 
-// ── AGGRESSIVE TILE PRELOADING ───────────────────────────────────────────────
-// Cycle through all past frames at 0.001 opacity briefly to force browser
-// to fetch and cache all tiles. Once cached, switching is instant with no lag.
-let preloadCount = 0;
-let tilesLoaded = 0;
-const totalTiles = FRAMES.length;
+// ── RESOURCE-SAFE TILE PRELOADING ────────────────────────────────────────────
+// Sequentially attach each non-active layer to the map (one at a time, with a
+// short delay between), letting tiles load and cache, then leave it attached
+// at opacity 0. This keeps switching instant without ever having more than
+// ~1 layer's worth of tiles in flight at once.
+//
+// On any pan/zoom (movestart), ALL non-active layers are detached immediately —
+// this is the key fix for ERR_INSUFFICIENT_RESOURCES, since previously all 25
+// layers (12 past + 13 forecast) would independently reload tiles for the new
+// viewport simultaneously. After the view settles (moveend), only the active
+// layer reloads (manageable), then preloadAllFrames re-attaches the rest
+// one-by-one for the new zoom/location.
 
-function preloadAllFrames() {
-  // Show each non-current frame at near-zero opacity for 80ms to trigger fetch
-  let idx = 0;
-  function showNext() {
-    if (idx >= FRAMES.length) return;
-    if (idx !== currentFrame) {
-      frameLayers[idx].setOpacity(0.001);
-      setTimeout(() => {
-        if (idx !== currentFrame) frameLayers[idx].setOpacity(0);
-        idx++;
-        setTimeout(showNext, 80);
-      }, 100);
-    } else {
-      idx++;
-      setTimeout(showNext, 10);
-    }
-  }
-  // Start preloading after map settles
-  setTimeout(showNext, 1500);
+function ensureAttached(layer) {
+  if (!map.hasLayer(layer)) layer.addTo(map);
 }
 
-// Track tile load progress
-frameLayers.forEach((layer, idx) => {
-  layer.on('load', () => {
-    preloadCount++;
-    const pct = Math.round((preloadCount / FRAMES.length) * 100);
+let preloadGen = 0;
+
+function preloadAllFrames() {
+  const myGen = ++preloadGen;
+  const queue = [];
+  frameLayers.forEach((l, i) => { if (i !== currentFrame) queue.push(l); });
+  forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame) queue.push(f.layer); });
+
+  let idx = 0;
+  function next() {
+    if (myGen !== preloadGen) return; // superseded by a newer view change
     const el = document.getElementById('preload-status');
-    if (el && pct < 100) el.textContent = `Caching ${pct}%`;
-    else if (el) el.textContent = '';
-  });
+    if (idx >= queue.length) { if (el) el.textContent = ''; return; }
+    const layer = queue[idx];
+    if (map.hasLayer(layer)) { idx++; return next(); }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      layer.off('load', finish);
+      idx++;
+      if (el) el.textContent = idx < queue.length ? `Caching ${Math.round((idx/queue.length)*100)}%` : '';
+      setTimeout(next, 80);
+    };
+    layer.setOpacity(0);
+    layer.on('load', finish);
+    layer.addTo(map);
+    setTimeout(finish, 2500); // safety net if 'load' never fires
+  }
+  next();
+}
+
+// Detach all inactive layers the instant a pan/zoom begins — prevents the
+// "25 layers reload at once" burst that caused ERR_INSUFFICIENT_RESOURCES.
+map.on('movestart zoomstart', () => {
+  preloadGen++; // cancel any in-flight preload chain
+  frameLayers.forEach((l, i) => { if (i !== currentFrame && map.hasLayer(l)) map.removeLayer(l); });
+  forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame && map.hasLayer(f.layer)) map.removeLayer(f.layer); });
 });
 
-// Re-preload tiles when user zooms (new zoom level = new tiles needed)
-map.on('zoomend', () => {
+// After the view settles, ensure the active layer is attached, then
+// re-preload the rest for the new viewport.
+map.on('moveend zoomend', () => {
+  if (radarMode === 'past') {
+    ensureAttached(frameLayers[currentFrame]);
+  } else {
+    ensureAttached(forecastFrames[currentForecastFrame].layer);
+  }
   setTimeout(preloadAllFrames, 500);
 });
 
-preloadAllFrames();
+setTimeout(preloadAllFrames, 1500);
 
 updateFrameLabel();
 
@@ -819,6 +847,7 @@ function showFrame(idx) {
   if (!radarVisible) return;
   // Fade out current, fade in new
   frameLayers[currentFrame].setOpacity(0);
+  ensureAttached(frameLayers[idx]);
   frameLayers[idx].setOpacity(0.72);
   currentFrame = idx;
   updateFrameLabel();
@@ -858,7 +887,10 @@ function togglePlay() {
         let next = currentForecastFrame + 1;
         if (next >= forecastFrames.length) next = 0;
         currentForecastFrame = next;
-        if (radarVisible) forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+        if (radarVisible) {
+          ensureAttached(forecastFrames[currentForecastFrame].layer);
+          forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+        }
         updateForecastLabel();
       }
       playTimer = setTimeout(advance, radarMode === 'forecast' ? 700 : 450);
@@ -877,8 +909,13 @@ function toggleRadar() {
   const _btn = document.getElementById('btn-radar');
   if (_btn) _btn.className = 'tb-btn' + (radarVisible ? ' on' : '');
   if (radarVisible) {
-    if (radarMode === 'past') frameLayers[currentFrame].setOpacity(0.72);
-    else forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+    if (radarMode === 'past') {
+      ensureAttached(frameLayers[currentFrame]);
+      frameLayers[currentFrame].setOpacity(0.72);
+    } else {
+      ensureAttached(forecastFrames[currentForecastFrame].layer);
+      forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+    }
   } else {
     frameLayers.forEach(l => l.setOpacity(0));
     forecastFrames.forEach(f => f.layer.setOpacity(0));
@@ -903,9 +940,11 @@ function setRadarMode(mode) {
   if (!radarVisible) return;
 
   if (mode === 'past') {
+    ensureAttached(frameLayers[currentFrame]);
     frameLayers[currentFrame].setOpacity(0.72);
     updateFrameLabel();
   } else {
+    ensureAttached(forecastFrames[currentForecastFrame].layer);
     forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
     updateForecastLabel();
   }
@@ -927,7 +966,10 @@ window.stepFrame = function(dir) {
     if (next < 0) next = forecastFrames.length - 1;
     if (next >= forecastFrames.length) next = 0;
     currentForecastFrame = next;
-    if (radarVisible) forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+    if (radarVisible) {
+      ensureAttached(forecastFrames[currentForecastFrame].layer);
+      forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+    }
     updateForecastLabel();
   }
 };
@@ -1891,8 +1933,13 @@ function setPaint(member){
   switch(member){
     case 'reflectivity':
       radarVisible = true;
-      if (radarMode==='past') frameLayers[currentFrame].setOpacity(0.72);
-      else forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+      if (radarMode==='past') {
+        ensureAttached(frameLayers[currentFrame]);
+        frameLayers[currentFrame].setOpacity(0.72);
+      } else {
+        ensureAttached(forecastFrames[currentForecastFrame].layer);
+        forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
+      }
       break;
     case 'goes':    ensureGoes().addTo(map); break;
     case 'canada':  startCanadaRadar(); break;
@@ -2215,7 +2262,8 @@ function buildForecastFrames(model){
     let url;
     if (model==='rrfs'){ const fhour=Math.round(mins/60); url=`${WXTILES_BASE}/tiles/rrfs/${fhour}/{z}/{x}/{y}.png`; }
     else { url=`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`; }
-    const layer=L.tileLayer(url,{opacity:0,tileSize:256,zIndex:300+idx,crossOrigin:true}); layer.addTo(map);
+    const layer=L.tileLayer(url,{opacity:0,tileSize:256,zIndex:300+idx,crossOrigin:true});
+    if (idx === 0) layer.addTo(map); // only attach the first frame; rest load via preloadAllFrames
     forecastFrames.push({layer,label,mins});
   });
   currentForecastFrame=0;
@@ -2226,6 +2274,7 @@ function onModelChange(model){
   buildForecastFrames(model);
   if (radarMode==='forecast' && activePaint==='reflectivity'){
     forecastFrames.forEach(f=>f.layer.setOpacity(0));
+    ensureAttached(forecastFrames[currentForecastFrame].layer);
     forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
     updateForecastLabel();
   }
