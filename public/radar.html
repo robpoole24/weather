@@ -1066,26 +1066,44 @@ async function loadMCD() {
         }
       });
 
-      // Field names from the MapServer (similar to SPC watch layer)
-      const mdNum   = props.name || props.md || props.NAME || '';
-      const concern = props.concerning || props.CONCERNING || props.discuss || '';
-      const valid   = props.valid   || props.VALID   || '';
-      const expire  = props.expire  || props.EXPIRE  || props.expired || '';
-      const expStr  = expire ? new Date(expire).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
+      // Actual field names from the MapServer schema:
+      //   name       → "Discussion Number" (e.g. "MD 0587")
+      //   folderpath → "Discussion Info"
+      //   popupinfo  → "Discussion Link" (1GB max — holds the full HTML discussion)
+      //   idp_filedate → "GIS File Date" (timestamp)
+      const mdName = props.name || '';
+      const mdNum  = mdName.replace(/\D/g, '').padStart(4, '0');  // extract digits → "0587"
+
+      // Construct SPC URL from MD number + year from the file date
+      const fileDate = props.idp_filedate ? new Date(props.idp_filedate) : new Date();
+      const mdYear   = fileDate.getFullYear();
+      const spcUrl   = `https://www.spc.noaa.gov/products/md/${mdYear}/md${mdNum}.html`;
+
+      // popupinfo holds the discussion text (may be HTML from NOAA's viewer)
+      const rawContent = (props.popupinfo || props.folderpath || '').trim();
+      // Strip HTML tags to get clean text if it's HTML-formatted
+      const discussText = rawContent.includes('<')
+        ? rawContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+        : rawContent;
 
       layer.bindPopup(`
         <div class="alert-popup">
           <div class="ev" style="color:#f4a261">SPC Mesoscale Discussion</div>
-          ${mdNum ? `<div style="margin-top:4px;font-weight:600">MCD #${mdNum}</div>` : ''}
-          ${concern ? `<div style="margin-top:6px;max-height:200px;overflow-y:auto;
+          ${mdName ? `<div style="margin-top:4px;font-weight:600">${mdName}</div>` : ''}
+          ${discussText ? `
+          <div style="margin-top:8px;max-height:220px;overflow-y:auto;
             border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
-            font-size:0.74rem;line-height:1.65;color:#c8dde8;
+            font-size:0.74rem;line-height:1.7;color:#c8dde8;
             white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;
-            -webkit-overflow-scrolling:touch;">${concern.replace(/\n\n+/g,'\n').trim()}</div>` : ''}
-          ${expStr ? `<div class="exp" style="margin-top:4px">Expires: ${expStr}</div>` : ''}
-          ${valid ? `<div class="exp">Valid: ${valid}</div>` : ''}
+            -webkit-overflow-scrolling:touch;">${discussText.replace(/\n\n+/g,'\n').trim()}</div>` : ''}
+          <div style="margin-top:8px;font-size:0.75rem;">
+            <a href="${spcUrl}" target="_blank" rel="noopener"
+              style="color:#f4a261;text-decoration:none;border-bottom:1px solid rgba(244,162,97,0.4);">
+              Read full discussion on SPC ↗
+            </a>
+          </div>
         </div>
-      `, { maxWidth:320 });
+      `, { maxWidth:340 });
 
       layer.on('mouseover', function(e) {
         this.setStyle({ fillOpacity:0.28, weight:3 });
@@ -1210,6 +1228,15 @@ async function loadAlerts() {
             description: props.description || '',
             instruction: props.instruction || '',
           });
+          // Fire a browser system notification for this alert (works when tab is
+          // open but in background — lock screen, other apps, etc.)
+          maybeNotifyAlert(
+            props.id || (event + props.onset),
+            event,
+            props.headline || '',
+            props.areaDesc || '',
+            s.color
+          );
         }
       }
     });
@@ -2437,6 +2464,49 @@ async function registerFcmToken() {
   }
 }
 
+// ── BROWSER NOTIFICATION API ─────────────────────────────────────────────────
+// Works when the radar tab is open but in the background (lock screen, other app).
+// This is separate from FCM push (which works when the browser is fully closed).
+// We request permission once and fire a system notification whenever a new alert
+// lands on the user's location, using a Set to avoid re-notifying on each poll.
+const notifiedAlertIds = new Set();
+
+function requestNotificationPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    // Ask for permission after first geolocation success so the context is clear
+    Notification.requestPermission();
+  }
+}
+
+function maybeNotifyAlert(alertId, event, headline, areaDesc, color) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (notifiedAlertIds.has(alertId)) return; // already notified for this alert
+  notifiedAlertIds.add(alertId);
+
+  const icons = {
+    'Tornado Warning': '🌪️', 'Tornado Watch': '🌪️',
+    'Severe Thunderstorm Warning': '⛈️', 'Severe Thunderstorm Watch': '⛈️',
+    'Flash Flood Warning': '🌊', 'Flood Warning': '🌊',
+    'Winter Storm Warning': '🌨️', 'Blizzard Warning': '🌨️',
+  };
+  const icon = icons[event] || '⚠️';
+
+  try {
+    const n = new Notification(`${icon} ${event}`, {
+      body: headline || areaDesc || 'NWS Alert for your area',
+      icon: '/images/icon-192.png',
+      badge: '/images/icon-192.png',
+      tag: alertId,         // prevents duplicate banners for same alert
+      renotify: false,
+      requireInteraction: event.includes('Warning'), // keep visible for warnings
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch(e) {
+    console.warn('[Radar] Notification failed:', e.message);
+  }
+}
+
 // ── AUTO GEOLOCATE ON LOAD ───────────────────────────────────────────────────
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
@@ -2446,6 +2516,7 @@ if (navigator.geolocation) {
       updateViewButtons('local');
       loadAlerts();
       registerFcmToken(); // register now that we have location
+      requestNotificationPermission(); // ask for browser notification permission
       if (typeof updateFeelsLike === 'function') updateFeelsLike(userLat, userLng);
     },
     () => {},
