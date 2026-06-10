@@ -1873,6 +1873,8 @@ function buildWSPanel() {
       </button>
     </div>
   `;
+  // Wire up scroll arrows on the chips strip
+  setTimeout(() => addWSDisplayArrows(), 50);
 }
 
 // Toggle a display chip
@@ -2026,6 +2028,18 @@ async function launchWeatherStar() {
 }
 
 function showWSPanel() { launchWeatherStar(); }
+
+// Add scroll arrows to the WeatherStar display chips strip
+function addWSDisplayArrows() {
+  const list = document.getElementById('ws-displays');
+  if (!list || !list.parentElement) return;
+  list.parentElement.querySelectorAll('.ws-chip-arrow').forEach(a => a.remove());
+  const { leftBtn, rightBtn } = createScrollArrows(list);
+  leftBtn.classList.add('ws-chip-arrow');
+  rightBtn.classList.add('ws-chip-arrow');
+  list.parentElement.insertBefore(leftBtn, list);
+  list.parentElement.appendChild(rightBtn);
+}
 
 // Keep legacy aliases in case any old code references them
 function ws4kpToggle(key) { wsToggleDisplay(key); }
