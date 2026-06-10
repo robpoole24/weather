@@ -1756,7 +1756,9 @@ function buildWSUrl(ver) {
     WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
     p.set('settings-speed-select',  s.speed.toFixed(2));
     p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
-    p.set('settings-kiosk-checkbox','true');
+    // WS3000 doesn't scale properly in kiosk mode — leave kiosk off so it
+    // renders at native size; WeatherTV scales the iframe via CSS transform
+    p.set('settings-kiosk-checkbox','false');
   }
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
@@ -1799,9 +1801,9 @@ function buildWSPanel() {
 
     <!-- Location -->
     <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.22rem;padding:0 0.4rem;">
-      <input id="ws-location" type="text" placeholder="Enter Zip Code"
+      <input id="ws-location" type="text" placeholder="Zip Code or City Name"
         value="${s.location || ''}"
-        style="font-size:0.72rem;padding:0.26rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:110px;outline:none;"
+        style="font-size:0.72rem;padding:0.26rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:148px;outline:none;"
         onkeydown="if(event.key==='Enter') ws4kpGeocode()" />
       <button onclick="ws4kpGeocode()"
         style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);">
@@ -1852,7 +1854,8 @@ function buildWSPanel() {
 
       ${ver === '4000' ? `
       <!-- Music (WS4000 only) -->
-      <button id="ws-music-btn" onclick="wsToggleMusic()" title="Background music"
+      <button id="ws-music-btn" onclick="wsToggleMusic()"
+        title="Background music — browser may require one manual enable inside the player on first use"
         style="${smBtn}${s.music ? accentOn : accentOff}">
         🎵
       </button>` : ''}
@@ -2016,6 +2019,24 @@ function ws4kpLaunch() {
   wsIsLaunched = true;
   const btn = document.getElementById('ws-launch-btn');
   if (btn) btn.textContent = '↺ Restart';
+
+  // WS3000 renders at native size (~640×480) and doesn't self-scale.
+  // After a brief load delay, measure the wrapper and scale the iframe to fill it.
+  if (wsActiveVersion === '3000') {
+    setTimeout(() => {
+      const wrapper = document.getElementById('video-wrapper');
+      const frame   = document.getElementById('video-frame');
+      if (!wrapper || !frame) return;
+      const WS3_W = 640, WS3_H = 480;  // WS3000 native resolution
+      const scaleX = wrapper.clientWidth  / WS3_W;
+      const scaleY = wrapper.clientHeight / WS3_H;
+      const scale  = Math.min(scaleX, scaleY); // fill without cropping
+      frame.style.width  = WS3_W + 'px';
+      frame.style.height = WS3_H + 'px';
+      frame.style.transform = `scale(${scale.toFixed(3)})`;
+      frame.style.transformOrigin = 'center center';
+    }, 800);
+  }
 }
 
 async function launchWeatherStar() {
@@ -2037,8 +2058,10 @@ function addWSDisplayArrows() {
   const { leftBtn, rightBtn } = createScrollArrows(list);
   leftBtn.classList.add('ws-chip-arrow');
   rightBtn.classList.add('ws-chip-arrow');
+  // Left arrow goes before the chips strip
   list.parentElement.insertBefore(leftBtn, list);
-  list.parentElement.appendChild(rightBtn);
+  // Right arrow goes IMMEDIATELY after the chips strip, before the settings divider
+  list.parentElement.insertBefore(rightBtn, list.nextSibling);
 }
 
 // Keep legacy aliases in case any old code references them
@@ -2057,18 +2080,34 @@ function loadIframe(src, label, isLive) {
   areaInner.style.display = 'flex';
 
 
-  const isWeatherStar = src.includes('weatherstar.netbymatt.com');
+  const isWeatherStar = src.includes('weatherstar.netbymatt.com') || src.includes('weatherstar3000.netbymatt.com');
+  const isWS3000 = src.includes('weatherstar3000.netbymatt.com');
 
   if (isWeatherStar) {
     frame.style.marginTop = '0';
     frame.style.height = '100%';
-    wrapper.style.background = '#ffffff';
-    frame.style.background = '#ffffff';
+    // Dark background so 4:3 pillar areas match WeatherTV aesthetic
+    wrapper.style.background = '#0a0a14';
+    frame.style.background = '#0a0a14';
+    // Center content for both versions
+    wrapper.style.display = 'flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.justifyContent = 'center';
+    if (isWS3000) {
+      // WS3000 doesn't scale in kiosk mode — scale via CSS transform to fill
+      frame.style.transformOrigin = 'center center';
+      frame.style.transition = 'none';
+    } else {
+      frame.style.transform = '';
+    }
   } else {
     frame.style.marginTop = '0';
     frame.style.height = '100%';
+    frame.style.transform = '';
     wrapper.style.background = '#000000';
-    frame.style.background = '#000000';
+    wrapper.style.display = '';
+    wrapper.style.alignItems = '';
+    wrapper.style.justifyContent = '';
   }
 
   // Forcibly replace the iframe element to immediately kill any playing video
