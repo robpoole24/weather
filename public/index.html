@@ -1671,9 +1671,10 @@ function makeStoreBtn(link, comingSoon, label, tooltip) {
 // ═══════════════════════════════════════════
 
 // ─── WeatherStar hosted instance URL ────────────────────────────────────────
-// Self-hosted at /weatherstar/ — same origin as WeatherTV, enables full music control.
-// If you haven't deployed the static files yet, set to null to fall back to the live site.
-const WTV_WS4KP_URL = '/weatherstar';
+// Set to '/weatherstar' once you've deployed weatherstar-public.zip contents
+// into public/weatherstar/ on your Railway server. Until then, null falls
+// back to the live weatherstar.netbymatt.com (no music control).
+const WTV_WS4KP_URL = null;
 
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
@@ -2041,7 +2042,8 @@ function ws4kpLaunch() {
       const wrapper = document.getElementById('video-wrapper');
       const frame   = document.getElementById('video-frame');
       if (!wrapper || !frame) return;
-      const nativeW = 640, nativeH = 540;
+      // WS3000 native layout: ~60px location bar + ~480px display + ~80px toolbar
+      const nativeW = 640, nativeH = 620;
       frame.style.width  = nativeW + 'px';
       frame.style.height = nativeH + 'px';
       const scale = Math.min(
@@ -2095,7 +2097,9 @@ function loadIframe(src, label, isLive) {
   areaInner.style.display = 'flex';
 
 
-  const isWeatherStar = src.includes('weatherstar.netbymatt.com') || src.includes('weatherstar3000.netbymatt.com');
+  const isWeatherStar = src.includes('weatherstar.netbymatt.com')
+    || src.includes('weatherstar3000.netbymatt.com')
+    || src.startsWith('/weatherstar');
   const isWS3000 = src.includes('weatherstar3000.netbymatt.com');
 
   if (isWeatherStar) {
