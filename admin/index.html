@@ -159,11 +159,11 @@
         </div>
         <div style="flex:1;min-width:180px;">
           <label>Daily Video Fetch Hour (EST, 0–23)</label>
-          <input type="number" id="cfg-fetch-hour" min="0" max="23" placeholder="18"
+          <input type="number" id="cfg-fetch-hour" min="0" max="23" placeholder="12"
             style="margin-bottom:0.25rem;" />
           <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
-            Hour in EST (0=midnight, 18=6pm) when recent videos are fetched.<br>
-            Recommended: 18 (6pm EST).<br>
+            Hour in EST (0=midnight, 12=noon, 18=6pm) when recent videos are fetched.<br>
+            Recommended: 12 (noon EST) — most forecasters have posted their daily forecast by then.<br>
             <strong style="color:var(--gold);">Cost: ~${channels} × 100 units once daily.</strong>
           </div>
         </div>
@@ -423,8 +423,17 @@
       <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
         <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Mark Channel Live Manually</div>
         <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Zero quota cost — directly sets a channel's live status. Use when you know a stream is live but notifications missed it. Get the video ID from the YouTube URL: <code style="font-size:0.75rem;color:var(--accent)">youtube.com/watch?v=<strong>VIDEO_ID</strong></code></div>
+
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.8rem;color:var(--text);margin-bottom:0.6rem;cursor:pointer;">
+          <input type="checkbox" id="marklive-use-existing" checked onchange="toggleMarkLiveChannelInput()">
+          Channel already in our lists
+        </label>
+
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;">
-          <input id="marklive-channel-input" type="text" placeholder="Channel ID (UCxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
+          <select id="marklive-channel-select" style="font-size:0.82rem;">
+            <option value="">— Select a channel —</option>
+          </select>
+          <input id="marklive-channel-input" type="text" placeholder="Channel ID (UCxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;display:none;">
           <input id="marklive-video-input" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
         </div>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
@@ -587,7 +596,7 @@ function renderAll() {
   document.getElementById('cfg-apikey').value = appData.config.apiKey || '';
   document.getElementById('cfg-playlist').value = appData.config.playlistId || '';
   document.getElementById('cfg-live-interval').value = appData.config.liveCheckIntervalHours || 12;
-  document.getElementById('cfg-fetch-hour').value = appData.config.recentFetchHourEST !== undefined ? appData.config.recentFetchHourEST : 18;
+  document.getElementById('cfg-fetch-hour').value = appData.config.recentFetchHourEST !== undefined ? appData.config.recentFetchHourEST : 12;
 
   // Show channel count in cost estimates
   const totalChannels = (appData.groups||[]).reduce((sum, g) => sum + (g.channels||[]).filter(c => c.hasLive && c.enabled !== false).length, 0);
@@ -597,6 +606,7 @@ function renderAll() {
 
   renderGroups();
   renderApps();
+  populateMarkLiveChannelSelect();
 }
 
 // ── Groups ──
@@ -1576,8 +1586,70 @@ async function validateChannel() {
 }
 
 // Manual mark live — zero quota cost
+// ── Channel picker for Mark Live form ──────────────────────────────────────
+// Builds a flat, scrollable, alphabetized dropdown of every channel across all
+// groups so the user doesn't have to dig up channel IDs from third-party sites
+// for the common case (channel already in our lists).
+function populateMarkLiveChannelSelect() {
+  const sel = document.getElementById('marklive-channel-select');
+  if (!sel || !appData) return;
+
+  const prevValue = sel.value;
+  const channels = [];
+  (appData.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => {
+      channels.push({ id: ch.id, name: ch.name, group: g.name || g.id });
+    });
+  });
+  channels.sort((a, b) => a.name.localeCompare(b.name));
+
+  sel.innerHTML = '<option value="">— Select a channel —</option>' +
+    channels.map(ch =>
+      `<option value="${ch.id}">${ch.name} — ${ch.group}</option>`
+    ).join('');
+
+  // Restore previous selection if it still exists
+  if (prevValue && channels.some(ch => ch.id === prevValue)) {
+    sel.value = prevValue;
+  }
+}
+
+// Toggle between the "pick from our lists" dropdown and the manual
+// channel-ID text input, depending on the checkbox state.
+function toggleMarkLiveChannelInput() {
+  const useExisting = document.getElementById('marklive-use-existing').checked;
+  const select = document.getElementById('marklive-channel-select');
+  const input = document.getElementById('marklive-channel-input');
+  select.style.display = useExisting ? '' : 'none';
+  input.style.display = useExisting ? 'none' : '';
+  if (useExisting) {
+    input.value = '';
+  } else {
+    select.value = '';
+  }
+}
+
+// Returns the channel ID from whichever input is currently active
+function getMarkLiveChannelId() {
+  const useExisting = document.getElementById('marklive-use-existing').checked;
+  if (useExisting) {
+    return document.getElementById('marklive-channel-select').value.trim();
+  }
+  return document.getElementById('marklive-channel-input').value.trim();
+}
+
+// Looks up a channel's display name by ID across all groups (for result messages)
+function getChannelDisplayName(channelId) {
+  if (!appData) return null;
+  for (const g of (appData.groups || [])) {
+    const ch = (g.channels || []).find(c => c.id === channelId);
+    if (ch) return ch.name;
+  }
+  return null;
+}
+
 async function manualMarkLive() {
-  const channelId = document.getElementById('marklive-channel-input').value.trim();
+  const channelId = getMarkLiveChannelId();
   const videoId = document.getElementById('marklive-video-input').value.trim();
   const resultEl = document.getElementById('marklive-result');
   if (!channelId) { resultEl.style.display='block'; resultEl.innerHTML='<span style="color:var(--red)">Channel ID required</span>'; return; }
@@ -1589,14 +1661,15 @@ async function manualMarkLive() {
       body: JSON.stringify({ channelId, videoId: videoId || null })
     });
     const data = await res.json();
+    const chName = getChannelDisplayName(channelId);
     resultEl.innerHTML = data.ok
-      ? '<span style="color:var(--red)">● Marked LIVE</span> — ' + channelId + (videoId ? ' · video: ' + videoId : ' · no video ID set')
+      ? '<span style="color:var(--red)">● Marked LIVE</span> — ' + (chName ? chName + ' (' + channelId + ')' : channelId) + (videoId ? ' · video: ' + videoId : ' · no video ID set')
       : '<span style="color:var(--red)">✗ Failed: ' + (data.error || 'unknown error') + '</span>';
   } catch(e) { resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>'; }
 }
 
 async function manualMarkOffline() {
-  const channelId = document.getElementById('marklive-channel-input').value.trim();
+  const channelId = getMarkLiveChannelId();
   const resultEl = document.getElementById('marklive-result');
   if (!channelId) { resultEl.style.display='block'; resultEl.innerHTML='<span style="color:var(--red)">Channel ID required</span>'; return; }
   resultEl.style.display = 'block';
