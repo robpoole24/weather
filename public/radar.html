@@ -510,7 +510,8 @@
     </div>
   </div>
 
-  <div class="lp-section">
+  <!-- Extended Coverage section hidden until Canadian radar is fixed (EXTENDED_ITEMS is empty) -->
+  <div class="lp-section" id="lp-extended-section" style="display:none;">
     <div class="lp-section-label">Extended Coverage</div>
     <div id="lp-extended"></div>
   </div>
@@ -2289,8 +2290,11 @@ const RADAR_ITEMS=[
   // Velocity, SRV, Echo Tops, and CC are pulled pending better animation
   // infrastructure and memory resources. Back end of year.
 ];
+// Canadian radar (MSC GeoMet) toggle hidden until the CORS proxy fix lands —
+// startCanadaRadar()/clearCanada() etc. remain in place below, just not
+// exposed in the UI yet. Re-add { id:'canada', ico:'🇨🇦', name:'Canadian Radar',
+// sub:'MSC GeoMet composite — animated' } here once fixed.
 const EXTENDED_ITEMS=[
-  {id:'canada', ico:'🇨🇦', name:'Canadian Radar', sub:'MSC GeoMet composite — animated'},
 ];
 const ALERT_ITEMS=[
   {id:'alerts',ico:'⚠️',name:'NWS Alerts',sub:'Warnings & watches',def:true},
@@ -2338,6 +2342,7 @@ function renderPanel(){
   document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(radioRowHTML).join('');
   document.getElementById('lp-radaropts').innerHTML=RADAR_ITEMS.map(radioRowHTML).join('');
   document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
   const needsSite=(activePaint in SS_PRODUCTS)||activePaint==='cc';
