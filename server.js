@@ -1861,6 +1861,15 @@ app.get('/api/admin/cache/status', (req, res) => {
 app.use('/data', express.static(path.join(__dirname, 'public', 'weatherstar', 'data')));
 app.use('/scripts', express.static(path.join(__dirname, 'public', 'weatherstar', 'scripts')));
 
+// ── WS4KP Local Radar background tiles ─────────────────────────────────────
+// radar-tiles.mjs is the ONE place in WS4KP that uses an ABSOLUTE path
+// (`/images/maps/radar/...`) instead of a relative one. Every other image
+// reference is relative (resolves correctly to /weatherstar/images/...).
+// This absolute path resolves to the site ROOT instead, hitting the
+// catch-all and returning index.html — hence the broken map tiles on the
+// Local Radar display. Map it directly to where the files actually live.
+app.use('/images/maps/radar', express.static(path.join(__dirname, 'public', 'weatherstar', 'images', 'maps', 'radar')));
+
 // ── WS4KP icon fallback ───────────────────────────────────────────────────────
 // Weather condition GIFs are large binary assets; if missing locally, redirect to
 // Matt's server. Strip the /weatherstar/ path prefix — Matt serves at /images/...
