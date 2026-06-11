@@ -421,6 +421,12 @@
 
   <div class="tb-div"></div>
   <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
+  <div style="position:relative;display:inline-block;">
+    <button class="tb-btn" id="btn-alert-types" onclick="toggleAlertTypesPanel()" title="Filter which alert types are shown">🔧 Alert Types</button>
+    <div id="alert-types-panel" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:1000;
+      background:#101826;border:1px solid rgba(255,255,255,0.12);border-radius:6px;
+      min-width:240px;box-shadow:0 4px 16px rgba(0,0,0,0.5);font-family:'Barlow',sans-serif;"></div>
+  </div>
   <button class="tb-btn"         id="btn-spc"    onclick="toggleSPC()" title="SPC Convective Outlook" style="display:none;">🗺 SPC Outlook</button>
   <button class="tb-btn"         id="btn-mcd"    onclick="toggleMCD()" title="SPC Mesoscale Discussions" style="display:none;">💬 Mesoscale Discussions</button>
   <div class="tb-div"></div>
@@ -626,6 +632,99 @@ const ALERT_STYLE = {
   'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
 const DEFAULT_STYLE = { color:'#888888', fill:'#888888', fillOpacity:0.12, weight:1 };
+
+// ── ALERT TYPE FILTER ─────────────────────────────────────────────────────────
+// Controls which alert types render when the Alerts layer is on. Independent
+// from the master Alerts toggle — Alerts on/off shows or hides the whole layer;
+// this filters WHICH types are included. Persisted so a user's preference
+// (e.g. hiding low-priority advisories during an active outbreak) sticks.
+const ALERT_TYPE_KEYS = Object.keys(ALERT_STYLE);
+let enabledAlertTypes = new Set(ALERT_TYPE_KEYS); // default: everything on
+
+(function loadAlertTypePrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('wtv-alert-types') || 'null');
+    if (Array.isArray(saved) && saved.length) {
+      enabledAlertTypes = new Set(saved.filter(t => ALERT_TYPE_KEYS.includes(t)));
+    }
+  } catch(_) {}
+})();
+
+function saveAlertTypePrefs() {
+  try { localStorage.setItem('wtv-alert-types', JSON.stringify([...enabledAlertTypes])); } catch(_) {}
+}
+
+function isAlertTypeEnabled(event) {
+  // Unknown/uncategorized event types default to shown (fail open, so a new
+  // NWS event type added in the future isn't silently hidden).
+  if (!ALERT_TYPE_KEYS.includes(event)) return true;
+  return enabledAlertTypes.has(event);
+}
+
+function toggleAlertType(event) {
+  if (enabledAlertTypes.has(event)) enabledAlertTypes.delete(event);
+  else enabledAlertTypes.add(event);
+  saveAlertTypePrefs();
+  renderAlertLayers();
+  updateAlertTypeBadge();
+}
+
+function setAllAlertTypes(on) {
+  enabledAlertTypes = on ? new Set(ALERT_TYPE_KEYS) : new Set();
+  saveAlertTypePrefs();
+  renderAlertLayers();
+  buildAlertTypePanel(); // refresh checkbox states
+  updateAlertTypeBadge();
+}
+
+function updateAlertTypeBadge() {
+  const btn = document.getElementById('btn-alert-types');
+  if (!btn) return;
+  const allOn = enabledAlertTypes.size === ALERT_TYPE_KEYS.length;
+  const noneOn = enabledAlertTypes.size === 0;
+  btn.classList.toggle('warn-on', !allOn && !noneOn); // highlight when filtered
+  btn.title = allOn ? 'All alert types shown' : noneOn ? 'All alert types hidden' : `${enabledAlertTypes.size} of ${ALERT_TYPE_KEYS.length} alert types shown`;
+}
+
+function toggleAlertTypesPanel() {
+  const panel = document.getElementById('alert-types-panel');
+  const open = panel.style.display !== 'none';
+  if (open) { panel.style.display = 'none'; return; }
+  buildAlertTypePanel();
+  panel.style.display = 'block';
+}
+
+function buildAlertTypePanel() {
+  const panel = document.getElementById('alert-types-panel');
+  const rows = ALERT_TYPE_KEYS.map(event => {
+    const s = ALERT_STYLE[event];
+    const checked = enabledAlertTypes.has(event) ? 'checked' : '';
+    return `
+      <label style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0.4rem;cursor:pointer;font-size:0.78rem;border-radius:3px;" onmouseover="this.style.background='rgba(255,255,255,0.06)'" onmouseout="this.style.background='transparent'">
+        <input type="checkbox" ${checked} onchange="toggleAlertType('${event.replace(/'/g,"\\\\'")}')">
+        <span style="display:inline-block;width:0.7rem;height:0.7rem;border-radius:2px;background:${s.color};flex-shrink:0;"></span>
+        <span style="color:#dfe9f0;">${event}</span>
+      </label>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div style="display:flex;gap:0.4rem;padding:0.4rem 0.4rem 0.5rem;border-bottom:1px solid rgba(255,255,255,0.1);">
+      <button class="tb-btn" style="font-size:0.72rem;padding:0.25rem 0.5rem;" onclick="setAllAlertTypes(true)">All On</button>
+      <button class="tb-btn" style="font-size:0.72rem;padding:0.25rem 0.5rem;" onclick="setAllAlertTypes(false)">All Off</button>
+    </div>
+    <div style="max-height:340px;overflow-y:auto;padding:0.3rem;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;-webkit-overflow-scrolling:touch;">
+      ${rows}
+    </div>`;
+}
+
+// Close the alert-types panel when clicking elsewhere on the page
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('alert-types-panel');
+  const btn = document.getElementById('btn-alert-types');
+  if (!panel || panel.style.display === 'none') return;
+  if (panel.contains(e.target) || (btn && btn.contains(e.target))) return;
+  panel.style.display = 'none';
+});
 
 // ── RADAR FRAME CONFIG ───────────────────────────────────────────────────────
 // Iowa Mesonet tile cache reliably goes back ~55 minutes in 5-min steps
@@ -1136,6 +1235,7 @@ async function loadMCD() {
 
     const data = geoResult.status === 'fulfilled' ? geoResult.value : { features: [] };
     mcdLayer.clearLayers();
+    activeMCDFeatures = [];
     let count = 0;
 
     (data.features || []).forEach(feature => {
@@ -1160,33 +1260,20 @@ async function loadMCD() {
       const rawText     = textMap[mdNum] || textMap[String(parseInt(mdNum,10))] || '';
       const displayText = formatMCDText(rawText);
 
-      layer.bindPopup(`
-        <div class="alert-popup">
-          <div class="ev" style="color:#f4a261">SPC Mesoscale Discussion</div>
-          ${mdName ? `<div style="margin-top:4px;font-weight:600">${mdName}</div>` : ''}
-          ${displayText ? `
-          <div style="margin-top:8px;max-height:260px;overflow-y:auto;
-            border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
-            font-size:0.74rem;line-height:1.75;color:#c8dde8;
-            white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;
-            -webkit-overflow-scrolling:touch;">${displayText}</div>` : ''}
-          <div style="margin-top:8px;font-size:0.75rem;">
-            <a href="${spcUrl}" target="_blank" rel="noopener"
-              style="color:#f4a261;text-decoration:none;border-bottom:1px solid rgba(244,162,97,0.4);">
-              ${displayText ? 'Full discussion on SPC ↗' : 'Read discussion on SPC ↗'}
-            </a>
-          </div>
-        </div>
-      `, { maxWidth:360, maxHeight:420 });
-
-      layer.on('mouseover', function(e) {
+      // No bindPopup here -- MCDs are shown via the unified click handler
+      // (below), which combines MCDs with any overlapping weather alerts
+      // into one popup. Binding a separate popup here would race with that
+      // handler whenever an MCD overlaps a Warning/Watch polygon (very
+      // common), with whichever opens last winning and hiding the other.
+      layer.on('mouseover', function() {
         this.setStyle({ fillOpacity:0.28, weight:3 });
-        this.openPopup(e.latlng);
       });
       layer.on('mouseout', function() {
         this.setStyle({ fillOpacity:0.15, weight:2.5 });
       });
       mcdLayer.addLayer(layer);
+
+      activeMCDFeatures.push({ mdName, displayText, spcUrl, geometry: feature.geometry });
       count++;
     });
 
@@ -1237,6 +1324,18 @@ function toggleAlerts() {
   else map.removeLayer(alertsLayer);
 }
 
+// Raw alert features from the last successful fetch — re-rendered locally
+// when the alert-type filter changes, without re-fetching from NWS.
+let lastAlertsData = null;
+
+// Active alert features, populated by renderAlertLayers()
+let activeAlertFeatures = [];
+
+// Active MCD features (populated by loadMCD), included in the unified
+// click handler so MCDs don't compete with overlapping alert polygons
+// for the popup.
+let activeMCDFeatures = [];
+
 async function loadAlerts() {
   if (!alertsVisible) return;
   const status = document.getElementById('alerts-status');
@@ -1246,91 +1345,174 @@ async function loadAlerts() {
       'https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land',
       { headers:{ 'Accept':'application/geo+json' } }
     );
-    const data = await res.json();
-    alertsLayer.clearLayers();
-    activeBannerAlerts = [];
-    let count = 0;
-
-    (data.features || []).forEach(feature => {
-      if (!feature.geometry) return;
-      const props = feature.properties;
-      const event = props.event || 'Advisory';
-      const s = ALERT_STYLE[event] || DEFAULT_STYLE;
-      const layer = L.geoJSON(feature.geometry, {
-        style:{ color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 },
-        onEachFeature: (feat, lyr) => {
-          // Desktop hover highlight
-          lyr.on('mouseover', function(e) {
-            this.setStyle({ fillOpacity: Math.min(s.fillOpacity + 0.2, 0.7), weight: s.weight + 1 });
-            this.openPopup(e.latlng);
-          });
-          lyr.on('mouseout', function() {
-            this.setStyle({ fillOpacity: s.fillOpacity, weight: s.weight });
-          });
-        }
-      });
-      const expires = props.expires
-        ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
-        : 'Unknown';
-      const fullText = [props.description, props.instruction]
-        .filter(Boolean).join('\n\n').replace(/\*/g,'').trim();
-      layer.bindPopup(`
-        <div class="alert-popup">
-          <div class="ev" style="color:${s.color}">${event}</div>
-          <div style="margin-top:4px;font-weight:600">${props.headline || event}</div>
-          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${props.areaDesc||''}</div>
-          <div class="exp">Expires: ${expires}</div>
-          ${fullText ? `
-          <div style="margin-top:8px;max-height:160px;overflow-y:auto;
-            border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
-            font-size:0.75rem;line-height:1.6;color:#c8dde8;
-            scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;">
-            ${fullText.replace(/\n/g,'<br>')}
-          </div>` : ''}
-        </div>
-      `, { maxWidth: 300, maxHeight: 350 });
-      alertsLayer.addLayer(layer);
-      count++;
-
-      // Check if user is inside this alert polygon
-      if (userLat && userLng && !bannerDismissed) {
-        if (pointInPolygon(userLat, userLng, feature.geometry)) {
-          activeBannerAlerts.push({
-            event,
-            headline: props.headline || '',
-            areaDesc: props.areaDesc || '',
-            description: props.description || '',
-            instruction: props.instruction || '',
-          });
-          // Fire a browser system notification for this alert (works when tab is
-          // open but in background — lock screen, other apps, etc.)
-          maybeNotifyAlert(
-            props.id || (event + props.onset),
-            event,
-            props.headline || '',
-            props.areaDesc || '',
-            s.color
-          );
-        }
-      }
-    });
-
-    // Show or hide banner based on whether user is in a zone
-    if (activeBannerAlerts.length > 0 && !bannerDismissed) {
-      showBanner(activeBannerAlerts);
-    } else if (activeBannerAlerts.length === 0) {
-      bannerDismissed = false; // reset dismiss if alerts cleared
-      hideBanner();
-    }
-
-    const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    status.textContent = count > 0
-      ? `${count} active alert${count!==1?'s':''} · ${now}`
-      : `No active alerts · ${now}`;
+    lastAlertsData = await res.json();
+    renderAlertLayers();
   } catch(e) {
     status.textContent = 'Alerts unavailable';
   }
 }
+
+// Returns the priority index for an event type — lower = more severe/shown first.
+// Unlisted types sort after everything in ALERT_PRIORITY.
+function alertPriorityRank(event) {
+  const idx = ALERT_PRIORITY.indexOf(event);
+  return idx === -1 ? ALERT_PRIORITY.length : idx;
+}
+
+// Rebuilds the alert polygon layers + banner from lastAlertsData, applying the
+// current enabledAlertTypes filter. Called after a fetch, or instantly when the
+// user toggles alert types in the filter panel (no re-fetch needed).
+function renderAlertLayers() {
+  if (!lastAlertsData) return;
+  const status = document.getElementById('alerts-status');
+  const data = lastAlertsData;
+
+  alertsLayer.clearLayers();
+  activeAlertFeatures = [];
+  activeBannerAlerts = [];
+  let count = 0;
+  let shownCount = 0;
+
+  (data.features || []).forEach(feature => {
+    if (!feature.geometry) return;
+    const props = feature.properties;
+    const event = props.event || 'Advisory';
+    count++;
+    if (!isAlertTypeEnabled(event)) return; // filtered out by user's type selection
+    shownCount++;
+
+    const s = ALERT_STYLE[event] || DEFAULT_STYLE;
+    const layer = L.geoJSON(feature.geometry, {
+      style:{ color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 },
+      onEachFeature: (feat, lyr) => {
+        // Desktop hover highlight only — popups are handled by the combined
+        // click handler below, since overlapping polygons need to show
+        // ALL matching alerts, not just whichever layer is on top.
+        lyr.on('mouseover', function() {
+          this.setStyle({ fillOpacity: Math.min(s.fillOpacity + 0.2, 0.7), weight: s.weight + 1 });
+        });
+        lyr.on('mouseout', function() {
+          this.setStyle({ fillOpacity: s.fillOpacity, weight: s.weight });
+        });
+      }
+    });
+    alertsLayer.addLayer(layer);
+
+    const expires = props.expires
+      ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+      : 'Unknown';
+    const fullText = [props.description, props.instruction]
+      .filter(Boolean).join('\n\n').replace(/\*/g,'').trim();
+
+    activeAlertFeatures.push({
+      event, color: s.color, headline: props.headline || event,
+      areaDesc: props.areaDesc || '', expires, fullText,
+      geometry: feature.geometry,
+    });
+
+    // Check if user is inside this alert polygon
+    if (userLat && userLng && !bannerDismissed) {
+      if (pointInPolygon(userLat, userLng, feature.geometry)) {
+        activeBannerAlerts.push({
+          event,
+          headline: props.headline || '',
+          areaDesc: props.areaDesc || '',
+          description: props.description || '',
+          instruction: props.instruction || '',
+        });
+        // Fire a browser system notification for this alert (works when tab is
+        // open but in background — lock screen, other apps, etc.)
+        maybeNotifyAlert(
+          props.id || (event + props.onset),
+          event,
+          props.headline || '',
+          props.areaDesc || '',
+          s.color
+        );
+      }
+    }
+  });
+
+  // Sort so the most severe alert is checked/shown first in overlap popups
+  activeAlertFeatures.sort((a, b) => alertPriorityRank(a.event) - alertPriorityRank(b.event));
+
+  // Show or hide banner based on whether user is in a zone
+  if (activeBannerAlerts.length > 0 && !bannerDismissed) {
+    showBanner(activeBannerAlerts);
+  } else if (activeBannerAlerts.length === 0) {
+    bannerDismissed = false; // reset dismiss if alerts cleared
+    hideBanner();
+  }
+
+  const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  status.textContent = shownCount > 0
+    ? `${shownCount}${shownCount!==count ? ' of '+count : ''} active alert${count!==1?'s':''} · ${now}`
+    : (count > 0 ? `${count} alert${count!==1?'s':''} hidden by filter · ${now}` : `No active alerts · ${now}`);
+}
+
+// ── Combined alert + MCD popup — handles overlapping polygons ─────────────
+// Clicking the map finds every active alert polygon AND every active MCD
+// polygon containing that point. Alerts (Warnings/Watches/Advisories) are
+// sorted most-severe-first per ALERT_PRIORITY and shown first, with any
+// overlapping MCD discussions below. This replaces per-layer bindPopup, where
+// Leaflet only shows whichever polygon happens to be on top -- and avoids a
+// popup race between the alert and MCD layers when they overlap (very common).
+map.on('click', (e) => {
+  const alertMatches = activeAlertFeatures.filter(a => pointInPolygon(e.latlng.lat, e.latlng.lng, a.geometry));
+  const mcdMatches = (mcdVisible ? activeMCDFeatures : []).filter(m => pointInPolygon(e.latlng.lat, e.latlng.lng, m.geometry));
+  const totalMatches = alertMatches.length + mcdMatches.length;
+  if (!totalMatches) return;
+
+  const alertSections = alertMatches.map((a, i) => `
+    <div${i > 0 ? ' style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.15);"' : ''}>
+      <div class="ev" style="color:${a.color}">${a.event}${totalMatches > 1 ? ` <span style="color:#7a9bb5;font-size:0.7rem;font-weight:400;">(${i+1} of ${totalMatches})</span>` : ''}</div>
+      <div style="margin-top:4px;font-weight:600">${a.headline}</div>
+      <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${a.areaDesc}</div>
+      <div class="exp">Expires: ${a.expires}</div>
+      ${a.fullText ? `
+      <div style="margin-top:8px;max-height:140px;overflow-y:auto;
+        border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
+        font-size:0.75rem;line-height:1.6;color:#c8dde8;
+        scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;
+        -webkit-overflow-scrolling:touch;overscroll-behavior:contain;">
+        ${a.fullText.replace(/\n/g,'<br>')}
+      </div>` : ''}
+    </div>
+  `).join('');
+
+  const mcdSections = mcdMatches.map((m, i) => `
+    <div${(alertMatches.length + i) > 0 ? ' style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.15);"' : ''}>
+      <div class="ev" style="color:#f4a261">SPC Mesoscale Discussion${totalMatches > 1 ? ` <span style="color:#7a9bb5;font-size:0.7rem;font-weight:400;">(${alertMatches.length+i+1} of ${totalMatches})</span>` : ''}</div>
+      ${m.mdName ? `<div style="margin-top:4px;font-weight:600">${m.mdName}</div>` : ''}
+      ${m.displayText ? `
+      <div style="margin-top:8px;max-height:160px;overflow-y:auto;
+        border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
+        font-size:0.74rem;line-height:1.75;color:#c8dde8;
+        white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;
+        -webkit-overflow-scrolling:touch;overscroll-behavior:contain;">${m.displayText}</div>` : ''}
+      <div style="margin-top:8px;font-size:0.75rem;">
+        <a href="${m.spcUrl}" target="_blank" rel="noopener"
+          style="color:#f4a261;text-decoration:none;border-bottom:1px solid rgba(244,162,97,0.4);">
+          ${m.displayText ? 'Full discussion on SPC ↗' : 'Read discussion on SPC ↗'}
+        </a>
+      </div>
+    </div>
+  `).join('');
+
+  const popup = L.popup({ maxWidth: 320, maxHeight: 440 })
+    .setLatLng(e.latlng)
+    .setContent(`<div class="alert-popup">${alertSections}${mcdSections}</div>`)
+    .openOn(map);
+
+  // Allow scrolling inside the text divs without the map intercepting touch
+  setTimeout(() => {
+    const node = popup._contentNode;
+    if (!node) return;
+    node.querySelectorAll('div[style*="overflow-y"]').forEach(div => {
+      L.DomEvent.disableScrollPropagation(div);
+    });
+  }, 0);
+});
 
 // ── WARNING BANNER ───────────────────────────────────────────────────────────
 // Priority order — highest danger shown first
@@ -2384,6 +2566,7 @@ renderPanel();
 resolveRadarSites(userLat, userLng);
 OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
 
+updateAlertTypeBadge();
 loadAlerts();
 setInterval(loadAlerts, 120000);
 
