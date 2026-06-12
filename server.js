@@ -97,9 +97,14 @@ function adminAuth(req, res, next) {
   return res.status(401).send('Authentication required');
 }
 
-app.use(express.static(path.join(__dirname, 'public')));
+// /admin and /api/admin must be registered BEFORE the general public static
+// middleware below. express.static() serves a matching file and never calls
+// next() -- if public/admin/ exists for any reason (e.g. leftover from an
+// earlier project layout), the general static handler would serve it directly
+// and adminAuth would never run, regardless of whether ADMIN_PASSWORD is set.
 app.use('/admin', adminAuth, express.static(path.join(__dirname, 'admin')));
 app.use('/api/admin', adminAuth);
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Load / Save data ──
 // In-memory data store — loaded from Redis or file on startup
