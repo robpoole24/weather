@@ -475,10 +475,45 @@ app.delete('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', 
 
 // Update apps
 app.put('/api/admin/apps', (req, res) => {
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: 'Expected an array of apps' });
+  }
   const data = loadData();
   data.apps = req.body;
   saveData(data);
   res.json({ ok: true });
+});
+
+// ── App logo upload ──
+// Accepts a base64 data URL from the admin panel's file picker, decodes it,
+// and writes it to public/images/apps/<slug>.<ext>. Returns the relative path
+// to store in app.img -- index.html's buildAppsPanel() and the collection-button
+// logo (height:10px, auto width) both render whatever this points to, so any
+// reasonably square image works without further resizing.
+app.post('/api/admin/upload-app-logo', express.json({ limit: '4mb' }), (req, res) => {
+  try {
+    const { name, dataUrl } = req.body;
+    if (!name || !dataUrl) return res.status(400).json({ error: 'name and dataUrl required' });
+
+    const match = dataUrl.match(/^data:image\/(png|jpeg|jpg|webp|svg\+xml);base64,(.+)$/);
+    if (!match) return res.status(400).json({ error: 'Unsupported image format -- use PNG, JPEG, WEBP, or SVG' });
+
+    let ext = match[1] === 'jpeg' ? 'jpg' : match[1] === 'svg+xml' ? 'svg' : match[1];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Image too large -- 3MB max' });
+
+    const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
+    const dir = path.join(__dirname, 'public', 'images', 'apps');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const filename = `${slug}-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(dir, filename), buffer);
+
+    res.json({ ok: true, path: `images/apps/${filename}` });
+  } catch (e) {
+    console.error('[WeatherTV] App logo upload failed:', e.message);
+    res.status(500).json({ error: 'Upload failed' });
+  }
 });
 
 // Health check

@@ -472,9 +472,14 @@
   <div class="section">
     <div class="section-header"><div class="section-title">📱 Weather Apps</div></div>
     <div class="section-body">
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;">
+        Logos: square images work best (e.g. 128\u00d7128px PNG/WEBP). They're auto-scaled wherever they appear \u2014
+        the app chip icon, and a small height:10px badge on a "Chasers \u25b8" button if you assign a Chasers Collection below.
+      </div>
       <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
         <thead>
           <tr>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Logo</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">App</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Web Link</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">iOS Link</th>
@@ -483,11 +488,15 @@
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Android Soon</th>
             <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Enabled</th>
              <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);">Chasers Collection</th>
+            <th style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);"></th>
           </tr>
         </thead>
         <tbody id="apps-table-body"></tbody>
       </table>
-      <div style="margin-top:1rem"><button class="btn btn-primary btn-sm" onclick="saveApps()">Save Apps</button></div>
+      <div style="margin-top:1rem;display:flex;gap:0.5rem;">
+        <button class="btn btn-primary btn-sm" onclick="saveApps()">Save Apps</button>
+        <button class="btn btn-ghost btn-sm" onclick="addNewApp()">+ Add App</button>
+      </div>
     </div>
   </div>
 
@@ -1155,13 +1164,27 @@ function renderApps() {
   tbody.innerHTML = '';
   (appData.apps || []).forEach((app, i) => {
     const tr = document.createElement('tr');
+    const logoPreview = app.img
+      ? `<img src="/${app.img}" alt="" style="width:36px;height:36px;object-fit:contain;border-radius:4px;background:var(--surface2);display:block;">`
+      : `<div style="width:36px;height:36px;border-radius:4px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:var(--muted);">📱</div>`;
     tr.innerHTML = `
-      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08);white-space:nowrap"><strong>${app.name}</strong></td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
-        <input type="text" value="${app.web||''}" placeholder="https://..." style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].web=this.value||null" />
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+          <div id="app-logo-preview-${i}">${logoPreview}</div>
+          <label class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.4rem;cursor:pointer;">
+            Upload
+            <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="display:none" onchange="uploadAppLogo(${i}, this)">
+          </label>
+        </div>
+      </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08);white-space:nowrap">
+        <input type="text" value="${(app.name||'').replace(/"/g,'&quot;')}" placeholder="App name" style="margin:0;font-size:0.8rem;font-weight:600;min-width:120px" onchange="appData.apps[${i}].name=this.value">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
-        <input type="text" value="${app.ios||''}" placeholder="${app.iosSoon ? 'Coming soon' : 'No iOS link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value||null" />
+        <input type="text" value="${app.web||''}" placeholder="https://..." style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].web=this.value||null">
+      </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <input type="text" value="${app.ios||''}" placeholder="${app.iosSoon ? 'Coming soon' : 'No iOS link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value||null">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <label class="toggle" title="Show 'iOS coming soon' badge">
@@ -1170,7 +1193,7 @@ function renderApps() {
         </label>
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
-        <input type="text" value="${app.android||''}" placeholder="${app.androidSoon ? 'Coming soon' : 'No Android link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].android=this.value||null" />
+        <input type="text" value="${app.android||''}" placeholder="${app.androidSoon ? 'Coming soon' : 'No Android link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].android=this.value||null">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <label class="toggle" title="Show 'Android coming soon' badge">
@@ -1184,9 +1207,69 @@ function renderApps() {
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         ${buildCollectionRefCell(i, app.collectionRef)}
       </td>
+      <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
+        <button class="btn btn-ghost btn-sm" style="font-size:0.7rem;padding:0.2rem 0.5rem;color:var(--red)" onclick="removeApp(${i})" title="Remove app">🗑</button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
+}
+
+// Adds a blank app entry, disabled by default until configured and saved
+function addNewApp() {
+  if (!appData.apps) appData.apps = [];
+  appData.apps.push({
+    name: 'New App',
+    img: '',
+    web: null,
+    ios: null,
+    iosSoon: true,
+    android: null,
+    androidSoon: true,
+    enabled: false, // off until the admin finishes setup and flips it on
+    collectionRef: null,
+  });
+  renderApps();
+  showToast('Added new app \u2014 fill in details, then Save Apps');
+}
+
+// Removes an app entry (after confirmation). Does not delete any uploaded
+// logo file -- just removes the reference. Save Apps to persist.
+function removeApp(i) {
+  const app = appData.apps[i];
+  if (!confirm(`Remove "${app.name}" from the apps list? This won't take effect until you click Save Apps.`)) return;
+  appData.apps.splice(i, 1);
+  renderApps();
+}
+
+// Uploads a logo image file for an app, then sets app.img to the returned path
+async function uploadAppLogo(i, input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (file.size > 3 * 1024 * 1024) { showToast('\u26a0 Image too large \u2014 3MB max'); return; }
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const res = await fetch('/api/admin/upload-app-logo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: appData.apps[i].name || 'app', dataUrl: reader.result }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        showToast('\u2717 Upload failed: ' + (data.error || 'unknown error'));
+        return;
+      }
+      appData.apps[i].img = data.path;
+      document.getElementById(`app-logo-preview-${i}`).innerHTML =
+        `<img src="/${data.path}" alt="" style="width:36px;height:36px;object-fit:contain;border-radius:4px;background:var(--surface2);display:block;">`;
+      showToast('Logo uploaded \u2014 click Save Apps to persist the reference');
+    } catch (e) {
+      showToast('\u2717 Upload failed');
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 async function saveApps() {
