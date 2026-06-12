@@ -1,5 +1,6 @@
 // WeatherTV Server — updated 2026-05-31 build.1780105000
 const express = require('express');
+const crypto = require('crypto');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
@@ -47,8 +48,58 @@ app.get('/weatherstar/playlist.json', (req, res) => {
   res.json({ availableFiles: files });
 });
 
+// ── Admin Authentication ──
+// HTTP Basic Auth gates the entire admin panel and all /api/admin/* routes.
+// Without this, ANYONE who finds /admin can read the YouTube API key (via
+// GET /api/admin/config, which returns the full data store including
+// config.apiKey), overwrite the entire channel database (POST /api/admin/restore
+// accepts arbitrary JSON with no validation beyond shape), mark channels
+// live/offline, burn API quota on demand, etc.
+//
+// Set ADMIN_USER and ADMIN_PASSWORD as Railway environment variables to enable.
+// If ADMIN_PASSWORD is not set, admin routes remain OPEN (fail-open) so local
+// dev isn't broken by default -- but a loud warning is logged on every request
+// so this can't go unnoticed in production logs.
+function adminAuth(req, res, next) {
+  const expectedUser = process.env.ADMIN_USER || 'admin';
+  const expectedPass = process.env.ADMIN_PASSWORD;
+
+  if (!expectedPass) {
+    console.warn('[WeatherTV] WARNING: ADMIN_PASSWORD not set -- admin panel is UNPROTECTED. Set ADMIN_USER and ADMIN_PASSWORD env vars to secure it.');
+    return next();
+  }
+
+  const authHeader = req.headers.authorization || '';
+  const [scheme, encoded] = authHeader.split(' ');
+
+  if (scheme === 'Basic' && encoded) {
+    try {
+      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+      const sepIdx = decoded.indexOf(':');
+      const user = decoded.slice(0, sepIdx);
+      const pass = decoded.slice(sepIdx + 1);
+
+      // Timing-safe comparison -- pad to equal length first since
+      // timingSafeEqual throws on mismatched buffer lengths.
+      const userBuf = Buffer.from(user);
+      const expectedUserBuf = Buffer.from(expectedUser);
+      const passBuf = Buffer.from(pass);
+      const expectedPassBuf = Buffer.from(expectedPass);
+
+      const userMatch = userBuf.length === expectedUserBuf.length && crypto.timingSafeEqual(userBuf, expectedUserBuf);
+      const passMatch = passBuf.length === expectedPassBuf.length && crypto.timingSafeEqual(passBuf, expectedPassBuf);
+
+      if (userMatch && passMatch) return next();
+    } catch (e) { /* fall through to 401 */ }
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="WeatherTV Admin"');
+  return res.status(401).send('Authentication required');
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/admin', express.static(path.join(__dirname, 'admin')));
+app.use('/admin', adminAuth, express.static(path.join(__dirname, 'admin')));
+app.use('/api/admin', adminAuth);
 
 // ── Load / Save data ──
 // In-memory data store — loaded from Redis or file on startup
