@@ -3177,7 +3177,7 @@ function formatPreciseTime(timestamp) {
 
 async function updateCacheStatus() {
   try {
-    const res = await fetch('/api/admin/cache/status');
+    const res = await fetch('/api/cache/status');
     const data = await res.json();
 
     const liveEl = document.getElementById('live-update-status');

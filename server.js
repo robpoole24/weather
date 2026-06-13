@@ -1954,7 +1954,7 @@ app.post('/api/admin/cache/clear-recent', async (req, res) => {
   res.json({ ok: true, message: 'Recent videos cache cleared — will fetch fresh on next request' });
 });
 
-app.get('/api/admin/cache/status', (req, res) => {
+function getCacheStatus() {
   const playlistCached = Object.keys(cache.playlist).length;
   const recentCached = Object.keys(cache.recentVideos).length;
   const liveCached = Object.keys(cache.liveStatuses).length;
@@ -1975,7 +1975,7 @@ app.get('/api/admin/cache/status', (req, res) => {
     if (timestamps.length > 0) lastLiveCheck = Math.max(...timestamps);
   }
 
-  res.json({
+  return {
     playlist: { entries: playlistCached, ttlHours: 48 },
     recentVideos: { entries: recentCached, ttlHours: 168, lastFetch },
     liveStatuses: {
@@ -1990,7 +1990,21 @@ app.get('/api/admin/cache/status', (req, res) => {
     liveChecksToday: getLiveChecksToday(),
     liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
     archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
-  });
+  };
+}
+
+app.get('/api/admin/cache/status', (req, res) => {
+  res.json(getCacheStatus());
+});
+
+// Public, read-only mirror of the cache status above — the main site's
+// status bar (live/video update times, notification time) polls this on
+// every page load. It MUST NOT be under /api/admin: that path requires
+// HTTP Basic Auth, and a 401 response with WWW-Authenticate triggers the
+// browser's native login prompt on first page load for ALL visitors.
+// Same read-only data, no admin actions exposed.
+app.get('/api/cache/status', (req, res) => {
+  res.json(getCacheStatus());
 });
 
 // ── WS4KP static data — must be before catch-all ──
