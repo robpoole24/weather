@@ -747,6 +747,71 @@
     color: white;
   }
 
+  /* Favorite heart toggle */
+  .ch-btn.favorite {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.25);
+    color: rgba(255,255,255,0.6);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0.3rem 0.5rem;
+    min-width: 30px;
+  }
+  .ch-btn.favorite:hover {
+    border-color: #ff4d6d;
+    color: #ff4d6d;
+  }
+  .ch-btn.favorite.active {
+    border-color: #ff4d6d;
+    color: #ff4d6d;
+    background: rgba(255,77,109,0.12);
+  }
+
+  /* Favorites nav button */
+  #favorites-btn {
+    background: transparent;
+    color: var(--gold);
+    border-color: var(--gold) !important;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  #favorites-btn:hover { background: var(--gold); color: #000; }
+  #favorites-btn.active { background: var(--gold); color: #000; font-weight: 700; }
+
+  /* Favorites panel */
+  #favorites-panel {
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    box-sizing: border-box;
+  }
+  #favorites-header {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 150px;
+  }
+  #favorites-header .fav-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  #favorites-header .fav-count {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  #fav-share-status {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.65rem;
+    color: var(--accent);
+    min-height: 1em;
+  }
+
   /* Live chat panel — desktop/tablet: side-by-side with video */
   #live-chat-panel {
     display: none;
@@ -871,6 +936,7 @@
     <button type="button" id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)" style="display:none;" aria-label="View live channels">
       <span class="live-dot" style="margin-right:4px;" aria-hidden="true"></span>LIVE NOW
     </button>
+    <button type="button" id="favorites-btn" class="nav-btn" onclick="showPanel('favorites', event)" style="display:none;" aria-label="View favorite channels">★ FAVORITES</button>
     <button type="button" id="radar-btn" class="nav-btn" onclick="showPanel('radar', event)" aria-label="Live radar and weather alerts">
       <span class="radar-icon" aria-hidden="true"></span>LIVE RADAR
     </button>
@@ -890,6 +956,10 @@
 
     <!-- LIVE NOW -->
     <div class="panel" id="live-now-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+    </div>
+
+    <!-- FAVORITES -->
+    <div class="panel" id="favorites-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
     </div>
 
     <!-- WEATHERSTAR -->
@@ -1122,11 +1192,13 @@ let currentChannel = null;
 // ═══════════════════════════════════════════
 async function init() {
   startClock();
+  applyFavoritesFromURL();
   await loadGroupsFromServer();
   buildNavButtons();
   buildChannelPanels();
   buildAppsPanel();
   buildWSPanel();
+  updateFavoritesBtnVisibility();
   await checkAllLiveStatuses();
   setTimeout(updateCacheStatus, 1500);
   setInterval(updateCacheStatus, 60000);
@@ -1265,6 +1337,9 @@ function showPanel(name, e) {
   if (name === 'radar') {
     loadRadarPanel();
   }
+  if (name === 'favorites') {
+    buildFavoritesPanel();
+  }
 
   // Add channel list arrows when a group panel or live-now panel is shown
   const isGroup = GROUPS.some(g => g.id === name);
@@ -1347,109 +1422,334 @@ function buildChannelLists() {
     });
 
     channels.forEach(ch => {
-      const card = document.createElement('div');
-      card.className = 'channel-card';
-      card.id = 'card-' + ch.id;
-
-      const nameEl = document.createElement('div');
-      nameEl.className = 'channel-name';
-      nameEl.textContent = ch.name;
-      card.appendChild(nameEl);
-
-      const btns = document.createElement('div');
-      btns.className = 'channel-btns';
-
-      // Only show Live/Recent/Subscribe if not hidden from group list
-      // Hidden channels show collection button only — they're entry points to collections
-      if (!ch.hiddenInGroup) {
-        // Live button — only rendered if hasLive is true, hidden until confirmed live
-        if (ch.hasLive) {
-          const liveBtn = document.createElement('button');
-          liveBtn.className = 'ch-btn live';
-          liveBtn.id = 'live-' + ch.id;
-          liveBtn.innerHTML = '<span class="live-dot" aria-hidden="true"></span>LIVE';
-          liveBtn.setAttribute('aria-label', 'Watch ' + ch.name + ' live stream');
-          liveBtn.style.display = 'none'; // hidden until API confirms live
-          liveBtn.onclick = () => playLive(ch);
-          btns.appendChild(liveBtn);
-        }
-
-        // Recent button
-        const recentBtn = document.createElement('button');
-        recentBtn.className = 'ch-btn recent';
-        recentBtn.textContent = 'RECENT ▸';
-        recentBtn.setAttribute('aria-label', 'Recent videos from ' + ch.name);
-        recentBtn.onclick = () => showRecent(ch, group.id);
-        btns.appendChild(recentBtn);
-
-        // Subscribe button
-        const subBtn = document.createElement('button');
-        subBtn.className = 'ch-btn subscribe';
-        subBtn.innerHTML = 'Subscribe';
-        subBtn.setAttribute('aria-label', 'Subscribe to ' + ch.name + ' on YouTube');
-        subBtn.title = 'Subscribe to ' + ch.name + ' on YouTube';
-        subBtn.onclick = () => {
-          window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener');
-        };
-        btns.appendChild(subBtn);
-      }
-
-      // Collections buttons — only shown when collection is enabled AND has members
-      if (ch.collections && ch.collections.length > 0) {
-        const allChannels = GROUPS.flatMap(g => g.channels || []); // includes hiddenInGroup channels
-        ch.collections.forEach(col => {
-          if (!col.enabled) return;
-          const colKey = ch.id + '::' + col.id;
-          const hasMembers = allChannels.some(c => {
-            if (c.enabled === false) return false;
-            if (Array.isArray(c.collectionIds)) return c.collectionIds.includes(colKey);
-            return c.collectionId === colKey;
-          });
-          if (!hasMembers) return;
-
-          const colBtn = document.createElement('button');
-          colBtn.className = 'ch-btn collection';
-          colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.65rem;display:inline-flex;align-items:center;gap:4px;padding:0.25rem 0.5rem;';
-          colBtn.onclick = () => showCollection(ch, col);
-
-          // Check for sponsor app logo
-          const sponsorMap = {
-            'weatherfront': 'images/weatherfront.webp',
-            'weather wise': 'images/weather-wise.webp',
-            'weatherwise':  'images/weather-wise.webp',
-            'accuweather':  'images/accuweather.webp',
-            'radar omega':  'images/radar-omega.webp',
-            'radaromega':   'images/radar-omega.webp',
-          };
-          const labelLower = col.label.toLowerCase();
-          let sponsorImg = null;
-          for (const [key, src] of Object.entries(sponsorMap)) {
-            if (labelLower.includes(key)) { sponsorImg = src; break; }
-          }
-
-          if (sponsorImg) {
-            const img = document.createElement('img');
-            img.src = sponsorImg;
-            img.alt = '';
-            img.style.cssText = 'height:14px;width:auto;object-fit:contain;border-radius:2px;flex-shrink:0;';
-            colBtn.appendChild(img);
-          }
-
-          const label = document.createElement('span');
-          label.textContent = col.label + ' ▸';
-          colBtn.appendChild(label);
-
-          btns.appendChild(colBtn);
-        });
-      }
-
-      card.appendChild(btns);
-      list.appendChild(card);
+      list.appendChild(buildChannelCard(ch, group.id));
     });
   });
 }
 
-// Show a sub-collection — finds channels by their collectionId field
+// Build a single channel card — used by the main group lists, the Live Now
+// panel substitute, and the Favorites panel. groupId is used for the
+// RECENT overlay (it looks up the panel by groupId + '-panel').
+function buildChannelCard(ch, groupId) {
+  const card = document.createElement('div');
+  card.className = 'channel-card';
+  card.id = 'card-' + ch.id;
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'channel-name';
+  nameEl.textContent = ch.name;
+  card.appendChild(nameEl);
+
+  const btns = document.createElement('div');
+  btns.className = 'channel-btns';
+
+  // Only show Live/Recent/Subscribe/Favorite if not hidden from group list
+  // Hidden channels show collection button only — they're entry points to collections
+  if (!ch.hiddenInGroup) {
+    // Favorite heart toggle
+    const favBtn = document.createElement('button');
+    const favActive = isFavorite(ch.id);
+    favBtn.className = 'ch-btn favorite' + (favActive ? ' active' : '');
+    favBtn.dataset.chId = ch.id;
+    favBtn.innerHTML = favActive ? '♥' : '♡';
+    favBtn.setAttribute('aria-label', (favActive ? 'Remove ' : 'Add ') + ch.name + (favActive ? ' from' : ' to') + ' favorites');
+    favBtn.title = favActive ? 'Remove from favorites' : 'Add to favorites';
+    favBtn.onclick = () => toggleFavorite(ch);
+    btns.appendChild(favBtn);
+
+    // Live button — only rendered if hasLive is true, hidden until confirmed live
+    if (ch.hasLive) {
+      const liveBtn = document.createElement('button');
+      liveBtn.className = 'ch-btn live';
+      liveBtn.id = 'live-' + ch.id;
+      liveBtn.innerHTML = '<span class="live-dot" aria-hidden="true"></span>LIVE';
+      liveBtn.setAttribute('aria-label', 'Watch ' + ch.name + ' live stream');
+      liveBtn.style.display = 'none'; // hidden until API confirms live
+      liveBtn.onclick = () => playLive(ch);
+      btns.appendChild(liveBtn);
+    }
+
+    // Recent button
+    const recentBtn = document.createElement('button');
+    recentBtn.className = 'ch-btn recent';
+    recentBtn.textContent = 'RECENT ▸';
+    recentBtn.setAttribute('aria-label', 'Recent videos from ' + ch.name);
+    recentBtn.onclick = () => showRecent(ch, groupId);
+    btns.appendChild(recentBtn);
+
+    // Subscribe button
+    const subBtn = document.createElement('button');
+    subBtn.className = 'ch-btn subscribe';
+    subBtn.innerHTML = 'Subscribe';
+    subBtn.setAttribute('aria-label', 'Subscribe to ' + ch.name + ' on YouTube');
+    subBtn.title = 'Subscribe to ' + ch.name + ' on YouTube';
+    subBtn.onclick = () => {
+      window.open('https://www.youtube.com/channel/' + ch.id + '?sub_confirmation=1', '_blank', 'noopener');
+    };
+    btns.appendChild(subBtn);
+  }
+
+  // Collections buttons — only shown when collection is enabled AND has members
+  if (ch.collections && ch.collections.length > 0) {
+    const allChannels = GROUPS.flatMap(g => g.channels || []); // includes hiddenInGroup channels
+    ch.collections.forEach(col => {
+      if (!col.enabled) return;
+      const colKey = ch.id + '::' + col.id;
+      const hasMembers = allChannels.some(c => {
+        if (c.enabled === false) return false;
+        if (Array.isArray(c.collectionIds)) return c.collectionIds.includes(colKey);
+        return c.collectionId === colKey;
+      });
+      if (!hasMembers) return;
+
+      const colBtn = document.createElement('button');
+      colBtn.className = 'ch-btn collection';
+      colBtn.style.cssText = 'background:var(--gold);color:#000;font-size:0.65rem;display:inline-flex;align-items:center;gap:4px;padding:0.25rem 0.5rem;';
+      colBtn.onclick = () => showCollection(ch, col);
+
+      // Check for sponsor app logo
+      const sponsorMap = {
+        'weatherfront': 'images/weatherfront.webp',
+        'weather wise': 'images/weather-wise.webp',
+        'weatherwise':  'images/weather-wise.webp',
+        'accuweather':  'images/accuweather.webp',
+        'radar omega':  'images/radar-omega.webp',
+        'radaromega':   'images/radar-omega.webp',
+      };
+      const labelLower = col.label.toLowerCase();
+      let sponsorImg = null;
+      for (const [key, src] of Object.entries(sponsorMap)) {
+        if (labelLower.includes(key)) { sponsorImg = src; break; }
+      }
+
+      if (sponsorImg) {
+        const img = document.createElement('img');
+        img.src = sponsorImg;
+        img.alt = '';
+        img.style.cssText = 'height:14px;width:auto;object-fit:contain;border-radius:2px;flex-shrink:0;';
+        colBtn.appendChild(img);
+      }
+
+      const label = document.createElement('span');
+      label.textContent = col.label + ' ▸';
+      colBtn.appendChild(label);
+
+      btns.appendChild(colBtn);
+    });
+  }
+
+  card.appendChild(btns);
+  return card;
+}
+
+// ═══════════════════════════════════════════
+// FAVORITES
+// ═══════════════════════════════════════════
+const FAV_STORAGE_KEY = 'wtv-favorites';
+
+function loadFavorites() {
+  try {
+    const raw = localStorage.getItem(FAV_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveFavorites(favs) {
+  try {
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(favs));
+  } catch (e) {
+    console.warn('[WeatherTV] Could not save favorites:', e.message);
+  }
+}
+
+function isFavorite(chId) {
+  return loadFavorites().includes(chId);
+}
+
+function toggleFavorite(ch) {
+  const favs = loadFavorites();
+  const idx = favs.indexOf(ch.id);
+  const nowFavorite = idx === -1;
+  if (nowFavorite) {
+    favs.push(ch.id);
+  } else {
+    favs.splice(idx, 1);
+  }
+  saveFavorites(favs);
+  refreshFavoriteButtons(ch, nowFavorite);
+  updateFavoritesBtnVisibility();
+  if (activePanel === 'favorites') buildFavoritesPanel();
+}
+
+// Update every heart button for this channel (it may appear in a group
+// panel AND the Favorites panel at the same time).
+function refreshFavoriteButtons(ch, isFav) {
+  document.querySelectorAll('.ch-btn.favorite[data-ch-id="' + ch.id + '"]').forEach(btn => {
+    btn.classList.toggle('active', isFav);
+    btn.innerHTML = isFav ? '♥' : '♡';
+    btn.setAttribute('aria-label', (isFav ? 'Remove ' : 'Add ') + ch.name + (isFav ? ' from' : ' to') + ' favorites');
+    btn.title = isFav ? 'Remove from favorites' : 'Add to favorites';
+  });
+}
+
+function updateFavoritesBtnVisibility() {
+  const btn = document.getElementById('favorites-btn');
+  if (!btn) return;
+  const hasFavs = loadFavorites().length > 0;
+  btn.style.display = hasFavs ? 'inline-flex' : 'none';
+  if (!hasFavs && activePanel === 'favorites') {
+    // No favorites left — switch away so we're not stuck on an empty panel
+    if (GROUPS.length > 0) showPanel(GROUPS[0].id, null);
+  }
+}
+
+// Build the Favorites panel — a header (title, count, share button) plus a
+// scrollable strip of channel cards, same pattern as the Live Now panel.
+function buildFavoritesPanel() {
+  const panel = document.getElementById('favorites-panel');
+  if (!panel) return;
+  panel.innerHTML = '';
+
+  const favs = loadFavorites();
+  const allChannels = GROUPS.flatMap(g => g.channels || []);
+  const favChannels = favs
+    .map(id => allChannels.find(c => c.id === id))
+    .filter(Boolean);
+
+  // Header
+  const header = document.createElement('div');
+  header.id = 'favorites-header';
+
+  const title = document.createElement('div');
+  title.className = 'fav-title';
+  title.textContent = '★ My Favorites';
+  header.appendChild(title);
+
+  const count = document.createElement('div');
+  count.className = 'fav-count';
+  count.textContent = favChannels.length + ' channel' + (favChannels.length !== 1 ? 's' : '');
+  header.appendChild(count);
+
+  const shareBtn = document.createElement('button');
+  shareBtn.className = 'ch-btn recent';
+  shareBtn.textContent = '🔗 Save / Share Link';
+  shareBtn.setAttribute('aria-label', 'Save or share a link to your favorites');
+  shareBtn.onclick = () => shareFavoritesLink();
+  header.appendChild(shareBtn);
+
+  const status = document.createElement('div');
+  status.id = 'fav-share-status';
+  header.appendChild(status);
+
+  panel.appendChild(header);
+
+  const divider = document.createElement('div');
+  divider.className = 'divider';
+  panel.appendChild(divider);
+
+  const list = document.createElement('div');
+  list.id = 'favorites-list';
+  list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;height:100%;box-sizing:border-box;';
+  panel.appendChild(list);
+
+  if (favChannels.length === 0) {
+    list.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No favorites yet — tap the ♡ on any channel card to add it here.</span>';
+    return;
+  }
+
+  favChannels.forEach(ch => {
+    const group = GROUPS.find(g => (g.channels || []).some(c => c.id === ch.id));
+    list.appendChild(buildChannelCard(ch, group ? group.id : 'favorites'));
+  });
+
+  // Scroll arrows — same pattern as other channel lists
+  const { leftBtn, rightBtn } = createScrollArrows(list);
+  leftBtn.classList.add('ch-list-arrow');
+  rightBtn.classList.add('ch-list-arrow');
+  panel.insertBefore(leftBtn, list);
+  panel.appendChild(rightBtn);
+}
+
+// Build a shareable/bookmarkable URL encoding the current favorites.
+// Strips the common "UC" channel-ID prefix to keep the URL short.
+function getBookmarkURL() {
+  const favs = loadFavorites();
+  const stripped = favs.map(id => (id.startsWith('UC') ? id.slice(2) : id));
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  if (stripped.length > 0) {
+    url.searchParams.set('fav', stripped.join(','));
+  }
+  return url.toString();
+}
+
+function showFavShareStatus(msg) {
+  const status = document.getElementById('fav-share-status');
+  if (!status) return;
+  status.textContent = msg;
+  clearTimeout(window._favShareStatusTimer);
+  window._favShareStatusTimer = setTimeout(() => { status.textContent = ''; }, 6000);
+}
+
+// Save/Share button handler — uses the native share sheet where available,
+// otherwise copies the link to the clipboard with a bookmark hint.
+async function shareFavoritesLink() {
+  const favs = loadFavorites();
+  if (favs.length === 0) {
+    showFavShareStatus('Add some favorites first by tapping the ♡ on a channel card.');
+    return;
+  }
+
+  const url = getBookmarkURL();
+  const shareData = {
+    title: 'My WeatherTV Favorites',
+    text: 'My favorite WeatherTV channels — open this link to load them.',
+    url: url,
+  };
+
+  if (navigator.share) {
+    try {
+      await navigator.share(shareData);
+      return;
+    } catch (e) {
+      // User cancelled the share sheet, or share() unsupported for this data —
+      // fall through to clipboard copy below.
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(url);
+    showFavShareStatus('Link copied! Paste it into Notes, Messages, or press Ctrl+D / Cmd+D to bookmark this page.');
+  } catch (e) {
+    showFavShareStatus('Press Ctrl+D / Cmd+D to bookmark this page and save your favorites.');
+  }
+}
+
+// On load, a ?fav=<ids> URL param overwrites (not merges) localStorage —
+// "this link is my favorites" — then cleans the URL via replaceState.
+function applyFavoritesFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('fav')) return;
+
+  const raw = params.get('fav') || '';
+  const ids = raw.split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => (s.startsWith('UC') ? s : 'UC' + s));
+
+  saveFavorites(ids);
+
+  params.delete('fav');
+  const qs = params.toString();
+  const newUrl = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+  history.replaceState({}, '', newUrl);
+}
+
+
 // Format: parentChannelId::collectionId
 function showCollection(parentCh, collection) {
   const collectionKey = parentCh.id + '::' + collection.id;
