@@ -238,5 +238,135 @@
       "y": 71,
       "wfo": "LWX"
     }
+  },
+  {
+    "Name": "Toronto",
+    "Latitude": 43.6532,
+    "Longitude": -79.3832
+  },
+  {
+    "Name": "Vancouver",
+    "Latitude": 49.2827,
+    "Longitude": -123.1207
+  },
+  {
+    "Name": "Montreal",
+    "Latitude": 45.5017,
+    "Longitude": -73.5673
+  },
+  {
+    "Name": "Calgary",
+    "Latitude": 51.0447,
+    "Longitude": -114.0719
+  },
+  {
+    "Name": "Ottawa",
+    "Latitude": 45.4215,
+    "Longitude": -75.6919
+  },
+  {
+    "Name": "Quebec City",
+    "Latitude": 46.8139,
+    "Longitude": -71.208
+  },
+  {
+    "Name": "Winnipeg",
+    "Latitude": 49.8951,
+    "Longitude": -97.1384
+  },
+  {
+    "Name": "Edmonton",
+    "Latitude": 53.5461,
+    "Longitude": -113.4938
+  },
+  {
+    "Name": "Halifax",
+    "Latitude": 44.6488,
+    "Longitude": -63.5752
+  },
+  {
+    "Name": "Saskatoon",
+    "Latitude": 52.1332,
+    "Longitude": -106.67
+  },
+  {
+    "Name": "Cancun",
+    "Latitude": 21.1619,
+    "Longitude": -86.8515
+  },
+  {
+    "Name": "Mexico City",
+    "Latitude": 19.4326,
+    "Longitude": -99.1332
+  },
+  {
+    "Name": "Puerto Vallarta",
+    "Latitude": 20.6534,
+    "Longitude": -105.2253
+  },
+  {
+    "Name": "Los Cabos",
+    "Latitude": 22.8905,
+    "Longitude": -109.9167
+  },
+  {
+    "Name": "Playa Del Carmen",
+    "Latitude": 20.6296,
+    "Longitude": -87.0739
+  },
+  {
+    "Name": "Tijuana",
+    "Latitude": 32.5149,
+    "Longitude": -117.0382
+  },
+  {
+    "Name": "Nassau",
+    "Latitude": 25.0443,
+    "Longitude": -77.3504
+  },
+  {
+    "Name": "Punta Cana",
+    "Latitude": 18.5601,
+    "Longitude": -68.3725
+  },
+  {
+    "Name": "Montego Bay",
+    "Latitude": 18.4762,
+    "Longitude": -77.8939
+  },
+  {
+    "Name": "San Juan PR",
+    "Latitude": 18.4655,
+    "Longitude": -66.1057
+  },
+  {
+    "Name": "Aruba",
+    "Latitude": 12.5211,
+    "Longitude": -69.9683
+  },
+  {
+    "Name": "Barbados",
+    "Latitude": 13.1939,
+    "Longitude": -59.5432
+  },
+  {
+    "Name": "St. Thomas",
+    "Latitude": 18.3419,
+    "Longitude": -64.9307
+  },
+  {
+    "Name": "Bermuda",
+    "Latitude": 32.3078,
+    "Longitude": -64.7505
+  },
+  {
+    "Name": "San Jose CR",
+    "Latitude": 9.9281,
+    "Longitude": -84.0907
+  },
+  {
+    "Name": "Panama City",
+    "Latitude": 8.9936,
+    "Longitude": -79.5197
   }
 ]
