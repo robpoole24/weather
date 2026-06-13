@@ -264,15 +264,33 @@
     "group": "US"
   },
   {
+    "Name": "Amsterdam",
+    "Latitude": 52.3676,
+    "Longitude": 4.9041,
+    "group": "International"
+  },
+  {
     "Name": "Aruba",
     "Latitude": 12.5211,
     "Longitude": -69.9683,
     "group": "International"
   },
   {
+    "Name": "Athens",
+    "Latitude": 37.9838,
+    "Longitude": 23.7275,
+    "group": "International"
+  },
+  {
     "Name": "Barbados",
     "Latitude": 13.1939,
     "Longitude": -59.5432,
+    "group": "International"
+  },
+  {
+    "Name": "Beijing",
+    "Latitude": 39.9042,
+    "Longitude": 116.4074,
     "group": "International"
   },
   {
@@ -300,6 +318,12 @@
     "group": "International"
   },
   {
+    "Name": "Dublin",
+    "Latitude": 53.3498,
+    "Longitude": -6.2603,
+    "group": "International"
+  },
+  {
     "Name": "Edmonton",
     "Latitude": 53.5461,
     "Longitude": -113.4938,
@@ -324,6 +348,12 @@
     "group": "International"
   },
   {
+    "Name": "Melbourne",
+    "Latitude": -37.8136,
+    "Longitude": 144.9631,
+    "group": "International"
+  },
+  {
     "Name": "Mexico City",
     "Latitude": 19.4326,
     "Longitude": -99.1332,
@@ -339,6 +369,12 @@
     "Name": "Montreal",
     "Latitude": 45.5017,
     "Longitude": -73.5673,
+    "group": "International"
+  },
+  {
+    "Name": "Moscow",
+    "Latitude": 55.7558,
+    "Longitude": 37.6173,
     "group": "International"
   },
   {
@@ -396,9 +432,21 @@
     "group": "International"
   },
   {
+    "Name": "Seoul",
+    "Latitude": 37.5665,
+    "Longitude": 126.978,
+    "group": "International"
+  },
+  {
     "Name": "St. Thomas",
     "Latitude": 18.3419,
     "Longitude": -64.9307,
+    "group": "International"
+  },
+  {
+    "Name": "Sydney",
+    "Latitude": -33.8688,
+    "Longitude": 151.2093,
     "group": "International"
   },
   {
