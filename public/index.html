@@ -18,7 +18,50 @@
   <meta name="theme-color" content="#0a0e14">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/images/icon-192.png">
-<title>Weather TV</title>
+<link rel="icon" href="/images/icon-192.png" type="image/png">
+<title>WeatherTV — Watch 130+ Live Storm Chasers &amp; Weather Channels Free</title>
+<meta name="description" content="Watch 130+ live storm chasers and weather forecasters free, plus live NEXRAD radar with NWS alerts and a retro WeatherStar 4000 display. No sign-up, no ads, ever.">
+<link rel="canonical" href="https://www.watchweathertv.com/">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.watchweathertv.com/">
+<meta property="og:site_name" content="WeatherTV">
+<meta property="og:title" content="WeatherTV — Watch 130+ Live Storm Chasers &amp; Weather Channels Free">
+<meta property="og:description" content="A free, ad-free hub for live severe weather coverage — 130+ storm chaser and forecaster channels, live NEXRAD radar with NWS alerts, and a retro WeatherStar 4000 display.">
+<meta property="og:image" content="https://www.watchweathertv.com/images/screenshot-wide.jpg">
+<meta property="og:image:width" content="1920">
+<meta property="og:image:height" content="1080">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="WeatherTV — Watch 130+ Live Storm Chasers &amp; Weather Channels Free">
+<meta name="twitter:description" content="A free, ad-free hub for live severe weather coverage — 130+ storm chaser and forecaster channels, live NEXRAD radar, NWS alerts, and a retro WeatherStar 4000 display.">
+<meta name="twitter:image" content="https://www.watchweathertv.com/images/screenshot-wide.jpg">
+
+<!-- Structured data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "WeatherTV",
+  "alternateName": "Weather TV",
+  "url": "https://www.watchweathertv.com/",
+  "description": "A free, ad-free hub for live severe weather coverage: 130+ storm chaser and weather forecaster channels, live NEXRAD radar with NWS alerts and SPC outlooks, and a retro WeatherStar 4000 display.",
+  "applicationCategory": "WeatherApplication",
+  "operatingSystem": "Web browser",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Altruistic Apps",
+    "url": "https://altruisticapps.com"
+  }
+}
+</script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
 
@@ -646,6 +689,21 @@
     margin-right: 4px;
   }
 
+  /* Visually hidden but available to screen readers and search crawlers —
+     used for the static page summary, since the rest of the UI is built
+     dynamically via JS after the channel data loads. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   /* Skip to content link (screen readers / keyboard nav) */
   .skip-link {
     position: absolute;
@@ -887,6 +945,26 @@
 </style>
 </head>
 <body>
+
+<div class="sr-only">
+  <h1>WeatherTV — Free Live Storm Chasers, Weather Forecasters &amp; Live Radar</h1>
+  <p>
+    WeatherTV is a free, ad-free streaming hub for live severe weather coverage.
+    Watch 130+ YouTube channels from storm chasers, professional meteorologists,
+    and weather creators across the United States — organized into Weather
+    Forecasters, Storm Chasers, and Other Weather Creators groups, with a
+    Live Now view for channels currently broadcasting.
+  </p>
+  <p>
+    Also included: an interactive live NEXRAD radar with National Weather
+    Service alerts, SPC severe weather outlooks, Mesoscale Discussions, and
+    HRRR short-term forecast mode; a retro WeatherStar 4000 local forecast
+    display; and a curated playlist of recent weather videos.
+  </p>
+  <p>
+    No account, no sign-up, no ads, and no personal data collected — ever.
+  </p>
+</div>
 
 <a href="#panels" class="skip-link">Skip to channel list</a>
 
