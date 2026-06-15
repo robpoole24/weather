@@ -1,0 +1,202 @@
+[
+  {
+    "Name": "Amsterdam",
+    "Latitude": 52.3676,
+    "Longitude": 4.9041
+  },
+  {
+    "Name": "Aruba",
+    "Latitude": 12.5211,
+    "Longitude": -69.9683
+  },
+  {
+    "Name": "Athens",
+    "Latitude": 37.9838,
+    "Longitude": 23.7275
+  },
+  {
+    "Name": "Barbados",
+    "Latitude": 13.1939,
+    "Longitude": -59.5432
+  },
+  {
+    "Name": "Beijing",
+    "Latitude": 39.9042,
+    "Longitude": 116.4074
+  },
+  {
+    "Name": "Berlin",
+    "Latitude": 52.52,
+    "Longitude": 13.405
+  },
+  {
+    "Name": "Bermuda",
+    "Latitude": 32.3078,
+    "Longitude": -64.7505
+  },
+  {
+    "Name": "Buenos Aires",
+    "Latitude": -34.6037,
+    "Longitude": -58.3816
+  },
+  {
+    "Name": "Calgary",
+    "Latitude": 51.0447,
+    "Longitude": -114.0719
+  },
+  {
+    "Name": "Cancun",
+    "Latitude": 21.1619,
+    "Longitude": -86.8515
+  },
+  {
+    "Name": "Dublin",
+    "Latitude": 53.3498,
+    "Longitude": -6.2603
+  },
+  {
+    "Name": "Edmonton",
+    "Latitude": 53.5461,
+    "Longitude": -113.4938
+  },
+  {
+    "Name": "Halifax",
+    "Latitude": 44.6488,
+    "Longitude": -63.5752
+  },
+  {
+    "Name": "Lisbon",
+    "Latitude": 38.7223,
+    "Longitude": -9.1393
+  },
+  {
+    "Name": "London",
+    "Latitude": 51.5074,
+    "Longitude": -0.1278
+  },
+  {
+    "Name": "Madrid",
+    "Latitude": 40.4168,
+    "Longitude": -3.7038
+  },
+  {
+    "Name": "Melbourne",
+    "Latitude": -37.8136,
+    "Longitude": 144.9631
+  },
+  {
+    "Name": "Mexico City",
+    "Latitude": 19.4326,
+    "Longitude": -99.1332
+  },
+  {
+    "Name": "Montego Bay",
+    "Latitude": 18.4762,
+    "Longitude": -77.8939
+  },
+  {
+    "Name": "Montreal",
+    "Latitude": 45.5017,
+    "Longitude": -73.5673
+  },
+  {
+    "Name": "Moscow",
+    "Latitude": 55.7558,
+    "Longitude": 37.6173
+  },
+  {
+    "Name": "Nassau",
+    "Latitude": 25.0443,
+    "Longitude": -77.3504
+  },
+  {
+    "Name": "Ottawa",
+    "Latitude": 45.4215,
+    "Longitude": -75.6919
+  },
+  {
+    "Name": "Panama City",
+    "Latitude": 8.9936,
+    "Longitude": -79.5197
+  },
+  {
+    "Name": "Paris",
+    "Latitude": 48.8566,
+    "Longitude": 2.3522
+  },
+  {
+    "Name": "Quebec City",
+    "Latitude": 46.8139,
+    "Longitude": -71.208
+  },
+  {
+    "Name": "Reykjavik",
+    "Latitude": 64.1466,
+    "Longitude": -21.9426
+  },
+  {
+    "Name": "Rio de Janeiro",
+    "Latitude": -22.9068,
+    "Longitude": -43.1729
+  },
+  {
+    "Name": "Rome",
+    "Latitude": 41.9028,
+    "Longitude": 12.4964
+  },
+  {
+    "Name": "San Juan",
+    "Latitude": 18.4655,
+    "Longitude": -66.1057
+  },
+  {
+    "Name": "Saskatoon",
+    "Latitude": 52.1332,
+    "Longitude": -106.67
+  },
+  {
+    "Name": "Seoul",
+    "Latitude": 37.5665,
+    "Longitude": 126.978
+  },
+  {
+    "Name": "St. Thomas",
+    "Latitude": 18.3419,
+    "Longitude": -64.9307
+  },
+  {
+    "Name": "Sydney",
+    "Latitude": -33.8688,
+    "Longitude": 151.2093
+  },
+  {
+    "Name": "Tijuana",
+    "Latitude": 32.5149,
+    "Longitude": -117.0382
+  },
+  {
+    "Name": "Tokyo",
+    "Latitude": 35.6762,
+    "Longitude": 139.6503
+  },
+  {
+    "Name": "Toronto",
+    "Latitude": 43.6532,
+    "Longitude": -79.3832
+  },
+  {
+    "Name": "Vancouver",
+    "Latitude": 49.2827,
+    "Longitude": -123.1207
+  },
+  {
+    "Name": "Vienna",
+    "Latitude": 48.2082,
+    "Longitude": 16.3738
+  },
+  {
+    "Name": "Winnipeg",
+    "Latitude": 49.8951,
+    "Longitude": -97.1384
+  }
+]
