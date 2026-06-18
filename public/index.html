@@ -293,6 +293,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
   }
 
   /* Main nav buttons */
@@ -1049,10 +1050,11 @@
   }
   #search-clear-btn:hover { border-color: var(--red); color: var(--red); }
 
-  /* Autocomplete dropdown */
+  /* Autocomplete dropdown — anchored to #control-bar (position:relative parent).
+     Top offset = nav height, set via JS on openSearch as --nav-h custom property. */
   #search-suggestions {
     position: absolute;
-    top: 100%;
+    top: var(--nav-h, 42px);
     left: 0;
     right: 0;
     background: var(--surface2);
@@ -1147,6 +1149,17 @@
     height: 100%;
   }
   #search-results-list::-webkit-scrollbar { display: none; }
+
+  /* Search result cards get a bit more room so names don't truncate */
+  #search-results-list .channel-card {
+    min-width: 180px;
+  }
+  #search-results-list .channel-name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    word-break: break-word;
+  }
 
   /* nav-right-btns — the group of right-side utility nav buttons */
   #nav-right-btns {
@@ -1279,9 +1292,6 @@
       <button type="button" id="search-clear-btn" onclick="closeSearch()" aria-label="Close search">✕</button>
     </div>
 
-    <!-- Autocomplete dropdown — anchored to the nav bar via position:absolute -->
-    <div id="search-suggestions" role="listbox" aria-label="Channel suggestions"></div>
-
     <!-- Search icon button — always visible, opens search -->
     <button type="button" id="search-btn" onclick="openSearch()" aria-label="Search channels" title="Search channels">🔍</button>
 
@@ -1292,6 +1302,10 @@
       <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
     </div>
   </nav>
+
+  <!-- Autocomplete dropdown — lives OUTSIDE <nav> so nav's overflow-y:hidden can't clip it.
+       Positioned absolutely relative to #control-bar (which gets position:relative below). -->
+  <div id="search-suggestions" role="listbox" aria-label="Channel suggestions"></div>
 
   <!-- Panels -->
   <div id="panels" role="region" aria-label="Channel list">
@@ -3174,10 +3188,15 @@ function openSearch() {
   const nav = document.getElementById('main-nav');
   const expand = document.getElementById('search-expand');
   const btn = document.getElementById('search-btn');
+  const controlBar = document.getElementById('control-bar');
   nav.classList.add('search-open');
   expand.classList.add('visible');
   btn.classList.add('active');
   btn.setAttribute('aria-expanded', 'true');
+  // Set dropdown top offset = nav's rendered height so it appears flush below the nav bar
+  if (controlBar && nav) {
+    controlBar.style.setProperty('--nav-h', nav.offsetHeight + 'px');
+  }
   setTimeout(() => {
     const input = document.getElementById('search-input');
     if (input) { input.focus(); input.select(); }
@@ -3363,15 +3382,17 @@ function runSearchPanelForChannels(matches, label) {
   document.getElementById('panel-hint') && (document.getElementById('panel-hint').style.display = 'none');
 }
 
-// Close suggestions if user clicks outside the search area
+// Close suggestions if user clicks outside the search area or the dropdown itself
 document.addEventListener('click', (e) => {
   const expand = document.getElementById('search-expand');
   const sugs = document.getElementById('search-suggestions');
-  if (expand && !expand.contains(e.target) && sugs) {
-    sugs.innerHTML = '';
-    sugs.classList.remove('visible');
-    searchSugIndex = -1;
-  }
+  const searchBtn = document.getElementById('search-btn');
+  if (!expand || !sugs) return;
+  // Keep suggestions open if click is inside the input area, suggestions, or search button
+  if (expand.contains(e.target) || sugs.contains(e.target) || e.target === searchBtn) return;
+  sugs.innerHTML = '';
+  sugs.classList.remove('visible');
+  searchSugIndex = -1;
 });
 
 // ═══════════════════════════════════════════
