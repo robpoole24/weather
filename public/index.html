@@ -159,6 +159,10 @@
     /* Compact nav — shrink buttons to give the channel panel more vertical room */
     #main-nav { padding: 0.15rem 0.4rem !important; gap: 0.2rem !important; }
     .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
+    #search-btn { padding: 0.15rem 0.4rem !important; font-size: 0.85rem !important; }
+    /* When search is open on mobile, right-side nav utility buttons hide to give full width to input */
+    #main-nav.search-open #nav-right-btns { display: none !important; }
+    #main-nav.search-open #search-expand { max-width: none !important; }
     #status-bar { padding: 0.08rem 0.5rem !important; gap: 0.25rem !important; }
     .status-item { font-size: 0.5rem !important; }
 
@@ -906,6 +910,249 @@
   }
   #chat-close-btn:hover { color: var(--text); border-color: var(--text); }
 
+  /* ── Live Chat toggle button (in status bar) ────────────────────────────── */
+  #chat-toggle-btn {
+    background: #000 !important;
+    border-color: var(--red) !important;
+    color: #fff !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  #chat-toggle-btn .live-dot {
+    background: var(--red);
+    box-shadow: 0 0 4px var(--red);
+    flex-shrink: 0;
+  }
+  #chat-toggle-btn.chat-open {
+    background: var(--red) !important;
+    border-color: var(--red) !important;
+    color: #fff !important;
+  }
+  #chat-toggle-btn.chat-open .live-dot {
+    background: #fff;
+    box-shadow: 0 0 5px rgba(255,255,255,0.8);
+  }
+
+  /* ── Highlights nav button ──────────────────────────────────────────────── */
+  #highlights-btn {
+    background: transparent;
+    color: var(--gold);
+    border-color: var(--gold) !important;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    position: relative;
+  }
+  #highlights-btn:hover { background: var(--gold); color: #000; }
+  #highlights-btn.active { background: var(--gold); color: #000; font-weight: 700; }
+  #highlights-btn .new-badge {
+    font-size: 0.5rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    background: var(--gold);
+    color: #000;
+    border-radius: 2px;
+    padding: 1px 3px;
+    line-height: 1;
+    vertical-align: middle;
+  }
+  #highlights-btn.active .new-badge { background: #000; color: var(--gold); }
+  #highlights-btn:hover .new-badge  { background: #000; color: var(--gold); }
+
+  /* ── Highlights panel ───────────────────────────────────────────────────── */
+  #highlights-panel {
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    box-sizing: border-box;
+  }
+  #highlights-header {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 150px;
+  }
+  #highlights-header .hl-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  #highlights-header .hl-sub {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ── Search button & overlay in nav ────────────────────────────────────── */
+  #search-btn {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    transition: all 0.2s;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(0,180,216,0.2);
+  }
+  #search-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #search-btn.active { background: var(--accent); border-color: var(--accent); color: #000; }
+
+  /* Search expand container — replaces right-side buttons when active */
+  #search-expand {
+    display: none;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 1;
+    min-width: 0;
+    max-width: 340px;
+    animation: searchSlideIn 0.18s ease;
+  }
+  #search-expand.visible { display: flex; }
+  @keyframes searchSlideIn {
+    from { opacity: 0; transform: scaleX(0.7); transform-origin: right; }
+    to   { opacity: 1; transform: scaleX(1); }
+  }
+  #search-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 0.35rem 0.6rem;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+    outline: none;
+  }
+  #search-input::placeholder { color: var(--muted); }
+  #search-clear-btn {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    font-family: 'Barlow Condensed', sans-serif;
+    transition: all 0.15s;
+  }
+  #search-clear-btn:hover { border-color: var(--red); color: var(--red); }
+
+  /* Autocomplete dropdown */
+  #search-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    z-index: 200;
+    max-height: 220px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent2) transparent;
+    display: none;
+  }
+  #search-suggestions.visible { display: block; }
+  .search-suggestion {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.75rem;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 0.12s;
+    border-bottom: 1px solid rgba(0,180,216,0.08);
+  }
+  .search-suggestion:last-child { border-bottom: none; }
+  .search-suggestion:hover,
+  .search-suggestion.selected { background: rgba(0,180,216,0.12); color: var(--text); }
+  .search-suggestion .sug-group {
+    font-size: 0.65rem;
+    color: var(--muted);
+    opacity: 0.7;
+    margin-left: auto;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .search-suggestion mark {
+    background: transparent;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  #search-no-results {
+    padding: 0.6rem 0.75rem;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.8rem;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* Search results panel */
+  #search-panel {
+    padding: 0.5rem 1rem;
+    box-sizing: border-box;
+    gap: 0.5rem;
+  }
+  #search-panel-header {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 130px;
+  }
+  #search-panel-title {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  #search-panel-count {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+  #search-results-list {
+    display: flex;
+    gap: 0.5rem;
+    flex: 1;
+    overflow-x: auto;
+    align-items: center;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    min-width: 0;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    padding: 0.4rem 0.5rem;
+    box-sizing: border-box;
+    height: 100%;
+  }
+  #search-results-list::-webkit-scrollbar { display: none; }
+
+  /* nav-right-btns — the group of right-side utility nav buttons */
+  #nav-right-btns {
+    display: contents; /* transparent wrapper, children lay out as normal flex items */
+  }
+
   /* Panel hint — visible when no group panel is open, hides when one opens */
   #panel-hint {
     display: flex;
@@ -996,7 +1243,7 @@
       </iframe>
     </div>
     <div id="live-chat-panel">
-      <button type="button" id="chat-close-btn" onclick="closeLiveChat()">✕ Hide Chat</button>
+      <button type="button" id="chat-close-btn" onclick="hideChatPanel()">✕ Hide Chat</button>
       <iframe id="chat-frame" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media"></iframe>
     </div>
   </div>
@@ -1008,20 +1255,42 @@
 <div id="control-bar" role="region" aria-label="Channel navigation">
 
   <!-- Main nav -->
-  <nav id="main-nav" aria-label="Channel groups">
+  <nav id="main-nav" aria-label="Channel groups" style="position:relative;">
     <!-- Group buttons injected here dynamically by buildNavButtons() -->
     <!-- Live Now appears after group buttons, before fixed buttons -->
     <button type="button" id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)" style="display:none;" aria-label="View live channels">
       <span class="live-dot" style="margin-right:4px;" aria-hidden="true"></span>LIVE NOW
     </button>
     <button type="button" id="favorites-btn" class="nav-btn" onclick="showPanel('favorites', event)" style="display:none;" aria-label="View favorite channels">★ FAVORITES</button>
+    <button type="button" id="highlights-btn" class="nav-btn" onclick="showPanel('highlights', event)" style="display:none;" aria-label="View highlighted videos curated by WeatherTV">★ HIGHLIGHTS <span class="new-badge" aria-hidden="true">NEW</span></button>
     <button type="button" id="radar-btn" class="nav-btn" onclick="showPanel('radar', event)" aria-label="Live radar and weather alerts">
       <span class="radar-icon" aria-hidden="true"></span>LIVE RADAR
     </button>
-    <div style="flex:1;min-width:0.5rem;flex-shrink:1;"></div>
-    <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" style="margin-left:auto" aria-label="WeatherStar weather display">📺 WeatherStar</button>
-    <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
-    <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
+
+    <!-- Spacer — pushes right-side buttons to the end; shrinks to zero when search expands -->
+    <div id="nav-spacer" style="flex:1;min-width:0.25rem;flex-shrink:1;"></div>
+
+    <!-- Search expand — slides in from the right when search is activated, replaces right-side btns -->
+    <div id="search-expand" role="search" aria-label="Search channels">
+      <input id="search-input" type="search" placeholder="Search channels…" autocomplete="off"
+             aria-label="Search channels" aria-autocomplete="list" aria-controls="search-suggestions"
+             oninput="onSearchInput(this.value)"
+             onkeydown="onSearchKeydown(event)" />
+      <button type="button" id="search-clear-btn" onclick="closeSearch()" aria-label="Close search">✕</button>
+    </div>
+
+    <!-- Autocomplete dropdown — anchored to the nav bar via position:absolute -->
+    <div id="search-suggestions" role="listbox" aria-label="Channel suggestions"></div>
+
+    <!-- Search icon button — always visible, opens search -->
+    <button type="button" id="search-btn" onclick="openSearch()" aria-label="Search channels" title="Search channels">🔍</button>
+
+    <!-- Right-side utility nav buttons — wrapped so mobile can hide the group on search open -->
+    <div id="nav-right-btns">
+      <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" aria-label="WeatherStar weather display">📺 WeatherStar</button>
+      <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
+      <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
+    </div>
   </nav>
 
   <!-- Panels -->
@@ -1038,6 +1307,19 @@
 
     <!-- FAVORITES -->
     <div class="panel" id="favorites-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+    </div>
+
+    <!-- HIGHLIGHTS -->
+    <div class="panel" id="highlights-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+    </div>
+
+    <!-- SEARCH RESULTS -->
+    <div class="panel" id="search-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+      <div id="search-panel-header">
+        <div id="search-panel-title">Search Results</div>
+        <div id="search-panel-count"></div>
+      </div>
+      <div id="search-results-list"></div>
     </div>
 
     <!-- WEATHERSTAR -->
@@ -1382,6 +1664,13 @@ function showPanel(name, e) {
   const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
   if (btn) btn.classList.add('active');
 
+  // Collapse search suggestions if navigating away from search
+  if (name !== 'search') {
+    const sugs = document.getElementById('search-suggestions');
+    if (sugs) { sugs.innerHTML = ''; sugs.classList.remove('visible'); }
+    searchSugIndex = -1;
+  }
+
   // Collapse radar expanded mode when switching away from radar
   if (name !== 'radar') {
     document.body.classList.remove('radar-expanded');
@@ -1417,6 +1706,9 @@ function showPanel(name, e) {
   }
   if (name === 'favorites') {
     buildFavoritesPanel();
+  }
+  if (name === 'highlights') {
+    buildHighlightsPanel();
   }
 
   // Add channel list arrows when a group panel or live-now panel is shown
@@ -2744,8 +3036,7 @@ function showChatButton(ch) {
   const chatBtn = document.createElement('button');
   chatBtn.id = 'chat-toggle-btn';
   chatBtn.className = 'about-btn';
-  chatBtn.style.cssText = 'margin-left:0;border-color:var(--red);color:var(--red);';
-  chatBtn.innerHTML = '💬 Live Chat';
+  chatBtn.innerHTML = '<span class="live-dot" aria-hidden="true"></span>Live Chat';
   chatBtn.onclick = () => toggleLiveChat(ch);
   const aboutBtn = statusBar.querySelector('.about-btn');
   statusBar.insertBefore(chatBtn, aboutBtn);
@@ -2756,12 +3047,14 @@ async function toggleLiveChat(ch) {
   const mobileOverlay = document.getElementById('mobile-chat-overlay');
   if (mobileOverlay && mobileOverlay.style.display !== 'none') {
     closeMobileChatOverlay();
+    const btn = document.getElementById('chat-toggle-btn');
+    if (btn) btn.classList.remove('chat-open');
     return;
   }
   // Close desktop panel if already open
   const chatPanel = document.getElementById('live-chat-panel');
   if (chatPanel && chatPanel.classList.contains('visible')) {
-    closeLiveChat();
+    hideChatPanel();
     return;
   }
   // Fetch current live video ID for this channel
@@ -2783,6 +3076,8 @@ function openLiveChat(videoId, channelName) {
                    window.innerWidth < 900;
   if (isMobile) {
     openMobileChatOverlay(videoId, channelName);
+    const btn = document.getElementById('chat-toggle-btn');
+    if (btn) btn.classList.add('chat-open');
     return;
   }
   // Desktop: sidebar chat panel
@@ -2790,6 +3085,8 @@ function openLiveChat(videoId, channelName) {
   const domain = window.location.hostname;
   chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain;
   document.getElementById('live-chat-panel').classList.add('visible');
+  const btn = document.getElementById('chat-toggle-btn');
+  if (btn) btn.classList.add('chat-open');
 }
 
 // ── Mobile chat overlay — pure JS, no CSS media queries ──────────────────────
@@ -2840,13 +3137,23 @@ window.addEventListener('resize', () => {
   if (overlay && overlay.style.display !== 'none') setMobileChatLayout();
 });
 
-function closeLiveChat() {
-  document.body.classList.remove('mobile-chat-open');
+// hideChatPanel — closes the chat UI but keeps the button alive in the DOM.
+// Called when user clicks the Live Chat button to dismiss the panel.
+function hideChatPanel() {
   closeMobileChatOverlay();
   const panel = document.getElementById('live-chat-panel');
   if (panel) panel.classList.remove('visible');
   const chatFrame = document.getElementById('chat-frame');
   if (chatFrame) chatFrame.src = '';
+  const btn = document.getElementById('chat-toggle-btn');
+  if (btn) btn.classList.remove('chat-open');
+  document.body.classList.remove('mobile-chat-open');
+}
+
+// destroyChatButton — fully removes the chat button and clears channel state.
+// Called when the live session ends (clearVideo / playLive navigates away).
+function closeLiveChat() {
+  hideChatPanel();
   const btn = document.getElementById('chat-toggle-btn');
   if (btn) btn.remove();
   currentLiveCh = null;
@@ -2856,6 +3163,243 @@ function playVideo(videoId, title) {
   const url = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
   loadIframe(url, title, false);
   closeRecentOverlay();
+}
+
+// ═══════════════════════════════════════════
+// CHANNEL SEARCH
+// ═══════════════════════════════════════════
+let searchSugIndex = -1; // keyboard nav index in suggestions
+
+function openSearch() {
+  const nav = document.getElementById('main-nav');
+  const expand = document.getElementById('search-expand');
+  const btn = document.getElementById('search-btn');
+  nav.classList.add('search-open');
+  expand.classList.add('visible');
+  btn.classList.add('active');
+  btn.setAttribute('aria-expanded', 'true');
+  setTimeout(() => {
+    const input = document.getElementById('search-input');
+    if (input) { input.focus(); input.select(); }
+  }, 50);
+}
+
+function closeSearch() {
+  const nav = document.getElementById('main-nav');
+  const expand = document.getElementById('search-expand');
+  const btn = document.getElementById('search-btn');
+  const sugs = document.getElementById('search-suggestions');
+  const input = document.getElementById('search-input');
+  nav.classList.remove('search-open');
+  expand.classList.remove('visible');
+  btn.classList.remove('active');
+  btn.setAttribute('aria-expanded', 'false');
+  if (sugs) { sugs.innerHTML = ''; sugs.classList.remove('visible'); }
+  if (input) input.value = '';
+  searchSugIndex = -1;
+  // If we're currently showing search results, go back to panel hint
+  if (activePanel === 'search') {
+    document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
+    activePanel = null;
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  }
+}
+
+function getAllSearchableChannels() {
+  // Flatten all groups, deduplicate by ch.id, exclude hiddenInGroup entries for display
+  const seen = new Set();
+  const result = [];
+  GROUPS.forEach(g => {
+    (g.channels || []).forEach(ch => {
+      if (ch.enabled === false) return;
+      if (seen.has(ch.id)) return;
+      seen.add(ch.id);
+      result.push({ ch, groupLabel: g.label });
+    });
+  });
+  return result;
+}
+
+function scoreMatch(name, query) {
+  const n = name.toLowerCase();
+  const q = query.toLowerCase().trim();
+  if (!q) return -1;
+  if (n === q) return 100;
+  if (n.startsWith(q)) return 90;
+  if (n.includes(q)) return 70;
+  // Word-boundary match: any word in name starts with query
+  if (n.split(/\s+/).some(w => w.startsWith(q))) return 60;
+  return -1;
+}
+
+function highlightMatch(name, query) {
+  const q = query.trim();
+  if (!q) return name;
+  const idx = name.toLowerCase().indexOf(q.toLowerCase());
+  if (idx === -1) return name;
+  return name.slice(0, idx) + '<mark>' + name.slice(idx, idx + q.length) + '</mark>' + name.slice(idx + q.length);
+}
+
+function onSearchInput(value) {
+  const sugs = document.getElementById('search-suggestions');
+  searchSugIndex = -1;
+  const q = value.trim();
+
+  if (!q) {
+    sugs.innerHTML = '';
+    sugs.classList.remove('visible');
+    // Clear search results panel if showing
+    if (activePanel === 'search') {
+      document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
+      activePanel = null;
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    }
+    return;
+  }
+
+  const all = getAllSearchableChannels();
+  const matches = all
+    .map(({ ch, groupLabel }) => ({ ch, groupLabel, score: scoreMatch(ch.name, q) }))
+    .filter(m => m.score > -1)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  sugs.innerHTML = '';
+  if (matches.length === 0) {
+    sugs.innerHTML = '<div id="search-no-results">No channels found for "' + q + '"</div>';
+    sugs.classList.add('visible');
+    return;
+  }
+
+  matches.forEach(({ ch, groupLabel }) => {
+    const item = document.createElement('div');
+    item.className = 'search-suggestion';
+    item.setAttribute('role', 'option');
+    item.setAttribute('data-ch-id', ch.id);
+    item.innerHTML = '<span>' + highlightMatch(ch.name, q) + '</span><span class="sug-group">' + groupLabel + '</span>';
+    item.onmousedown = (e) => { e.preventDefault(); selectSearchResult(ch); };
+    sugs.appendChild(item);
+  });
+  sugs.classList.add('visible');
+}
+
+function onSearchKeydown(e) {
+  const sugs = document.getElementById('search-suggestions');
+  const items = sugs.querySelectorAll('.search-suggestion');
+  if (e.key === 'Escape') { closeSearch(); return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    searchSugIndex = Math.min(searchSugIndex + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('selected', i === searchSugIndex));
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    searchSugIndex = Math.max(searchSugIndex - 1, 0);
+    items.forEach((el, i) => el.classList.toggle('selected', i === searchSugIndex));
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (searchSugIndex >= 0 && items[searchSugIndex]) {
+      const chId = items[searchSugIndex].dataset.chId;
+      const found = getAllSearchableChannels().find(({ ch }) => ch.id === chId);
+      if (found) { selectSearchResult(found.ch); return; }
+    }
+    // No selection — run search with current value
+    runSearchPanel(document.getElementById('search-input').value.trim());
+    return;
+  }
+}
+
+function selectSearchResult(ch) {
+  // Close suggestions
+  const sugs = document.getElementById('search-suggestions');
+  sugs.innerHTML = '';
+  sugs.classList.remove('visible');
+  // Populate input with channel name
+  const input = document.getElementById('search-input');
+  if (input) input.value = ch.name;
+  // Show single-channel search results panel
+  runSearchPanelForChannels([{ ch, groupLabel: GROUPS.find(g => (g.channels||[]).some(c => c.id === ch.id))?.label || '' }], ch.name);
+}
+
+function runSearchPanel(q) {
+  if (!q) return;
+  const sugs = document.getElementById('search-suggestions');
+  sugs.innerHTML = '';
+  sugs.classList.remove('visible');
+  const all = getAllSearchableChannels();
+  const matches = all
+    .map(({ ch, groupLabel }) => ({ ch, groupLabel, score: scoreMatch(ch.name, q) }))
+    .filter(m => m.score > -1)
+    .sort((a, b) => b.score - a.score);
+  runSearchPanelForChannels(matches, q);
+}
+
+function runSearchPanelForChannels(matches, label) {
+  const list = document.getElementById('search-results-list');
+  const countEl = document.getElementById('search-panel-count');
+  const titleEl = document.getElementById('search-panel-title');
+  list.innerHTML = '';
+  if (matches.length === 0) {
+    list.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No channels matched "' + label + '"</span>';
+    countEl.textContent = '0 results';
+  } else {
+    countEl.textContent = matches.length === 1 ? '1 channel' : matches.length + ' channels';
+    matches.forEach(({ ch, groupLabel }) => {
+      const card = buildChannelCard(ch, groupLabel.toLowerCase().replace(/\s+/g, '-'));
+      list.appendChild(card);
+    });
+  }
+  titleEl.textContent = matches.length === 1 ? matches[0].ch.name : 'Search Results';
+  // Show search panel
+  document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const panel = document.getElementById('search-panel');
+  panel.style.display = 'flex';
+  panel.classList.add('active');
+  activePanel = 'search';
+  document.getElementById('panel-hint') && (document.getElementById('panel-hint').style.display = 'none');
+}
+
+// Close suggestions if user clicks outside the search area
+document.addEventListener('click', (e) => {
+  const expand = document.getElementById('search-expand');
+  const sugs = document.getElementById('search-suggestions');
+  if (expand && !expand.contains(e.target) && sugs) {
+    sugs.innerHTML = '';
+    sugs.classList.remove('visible');
+    searchSugIndex = -1;
+  }
+});
+
+// ═══════════════════════════════════════════
+// HIGHLIGHTS PANEL
+// ═══════════════════════════════════════════
+function buildHighlightsPanel() {
+  const panel = document.getElementById('highlights-panel');
+  panel.innerHTML = '';
+  // Placeholder until Highlights feature is built in admin
+  // When highlights data is available (fetched from /api/highlights), this will render cards
+  const header = document.createElement('div');
+  header.id = 'highlights-header';
+  header.innerHTML =
+    '<div class="hl-title">⭐ Featured by WeatherTV</div>' +
+    '<div class="hl-sub">Admin-curated must-watch content</div>';
+  panel.appendChild(header);
+
+  const list = document.createElement('div');
+  list.id = 'highlights-list';
+  list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.5rem;box-sizing:border-box;height:100%;';
+  list.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No highlights yet — check back soon.</span>';
+  panel.appendChild(list);
+}
+
+// Show highlights button when highlights data is available
+function updateHighlightsBtn(hasHighlights) {
+  const btn = document.getElementById('highlights-btn');
+  if (btn) btn.style.display = hasHighlights ? '' : 'none';
 }
 
 let playlistLoaded = false;
