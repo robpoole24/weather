@@ -139,6 +139,47 @@
     z-index: 10;
     box-shadow: 0 2px 12px rgba(0,0,0,0.5);
   }
+
+  /* Chaser Mapping panel */
+  .chaser-tab {
+    border-radius: 6px 6px 0 0;
+    border: 1px solid transparent;
+    border-bottom: none;
+    color: var(--muted);
+  }
+  .chaser-tab.active {
+    color: var(--accent);
+    background: var(--surface2);
+    border-color: var(--border);
+  }
+  .chaser-tab-badge {
+    display: inline-block;
+    margin-left: 0.3rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--gold);
+  }
+  .chaser-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .chaser-row:last-child { border-bottom: none; }
+  .chaser-row-name {
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+  .chaser-row-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .chaser-status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
+  }
 </style>
 </head>
 <body>
@@ -277,6 +318,59 @@
           <button class="btn btn-primary btn-sm" onclick="addPlaylist()">Add</button>
           <button class="btn btn-ghost btn-sm" onclick="document.getElementById('add-playlist-form').classList.remove('open')">Cancel</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chaser Mapping -->
+  <div class="section" id="chaser-mapping-section">
+    <div class="section-header">
+      <div class="section-title">🚗 Chaser Mapping</div>
+      <button class="btn btn-ghost btn-sm" onclick="refreshChaserData()">↻ Refresh</button>
+    </div>
+    <div class="section-body">
+      <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;line-height:1.5">
+        Maps live Spotter Network positions to your channels. Mapped chasers show a gold tag and click-to-watch on the radar's Live Storm Chasers layer.
+      </p>
+      <div id="chaser-feed-status" style="font-size:0.72rem;color:var(--muted);margin-bottom:1rem;"></div>
+
+      <!-- Sub-tabs -->
+      <div style="display:flex;gap:0.4rem;margin-bottom:1rem;border-bottom:1px solid var(--border);">
+        <button class="btn btn-ghost btn-sm chaser-tab active" data-tab="mapped" onclick="setChaserTab('mapped')">Mapped <span id="ct-count-mapped" class="chaser-tab-badge"></span></button>
+        <button class="btn btn-ghost btn-sm chaser-tab" data-tab="suggestions" onclick="setChaserTab('suggestions')">Suggestions <span id="ct-count-suggestions" class="chaser-tab-badge"></span></button>
+        <button class="btn btn-ghost btn-sm chaser-tab" data-tab="newfound" onclick="setChaserTab('newfound')">New Chasers Found <span id="ct-count-newfound" class="chaser-tab-badge"></span></button>
+        <button class="btn btn-ghost btn-sm chaser-tab" data-tab="manual" onclick="setChaserTab('manual')">Manual Map</button>
+      </div>
+
+      <!-- Mapped tab -->
+      <div id="chaser-tab-mapped" class="chaser-tab-panel"></div>
+
+      <!-- Suggestions tab -->
+      <div id="chaser-tab-suggestions" class="chaser-tab-panel" style="display:none;">
+        <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;">
+          Spotter Network names that closely match one of your channel names. Confirm to map, or dismiss if it's a coincidence.
+        </p>
+        <div id="chaser-suggestions-list"></div>
+      </div>
+
+      <!-- New Chasers Found tab -->
+      <div id="chaser-tab-newfound" class="chaser-tab-panel" style="display:none;">
+        <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;">
+          Chasers on Spotter Network who self-reported a YouTube link but aren't in your channel list yet. Click <strong>+ Add as Channel</strong> to resolve their channel, add them to Storm Chasers (alphabetized automatically), and map them in one step.
+        </p>
+        <div id="chaser-newfound-list"></div>
+      </div>
+
+      <!-- Manual Map tab -->
+      <div id="chaser-tab-manual" class="chaser-tab-panel" style="display:none;">
+        <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;">
+          Search Spotter Network by name and map directly to one of your channels.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
+          <input type="text" id="chaser-manual-search" placeholder="Search Spotter Network name..." oninput="renderManualChaserSearch()" />
+          <select id="chaser-manual-channel-select"><option value="">— Select a channel —</option></select>
+        </div>
+        <div id="chaser-manual-results" style="max-height:280px;overflow-y:auto;"></div>
       </div>
     </div>
   </div>
@@ -1733,6 +1827,243 @@ async function validateChannel() {
 }
 
 // Manual mark live — zero quota cost
+// ── Chaser Mapping (Spotter Network) ───────────────────────────────────────
+
+let chaserState = {
+  updatedAt: null,
+  chasers: [],       // raw cache from /api/admin/chasers
+  chaserMap: {},      // { spotterNetworkId: channelId }
+  suggestions: [],
+  unmappedYoutube: [],
+  activeTab: 'mapped'
+};
+
+function allWeatherTVChannels() {
+  const channels = [];
+  (appData.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => channels.push({ id: ch.id, name: ch.name, group: g.label || g.id }));
+  });
+  return channels;
+}
+
+function channelNameById(channelId) {
+  for (const g of (appData.groups || [])) {
+    for (const ch of (g.channels || [])) {
+      if (ch.id === channelId) return ch.name;
+    }
+  }
+  return channelId;
+}
+
+async function refreshChaserData() {
+  try {
+    const [adminRes, suggRes, unmappedRes] = await Promise.all([
+      fetch('/api/admin/chasers'),
+      fetch('/api/admin/chasers/suggestions'),
+      fetch('/api/admin/chasers/unmapped-youtube')
+    ]);
+    const adminData = await adminRes.json();
+    const suggData = await suggRes.json();
+    const unmappedData = await unmappedRes.json();
+
+    chaserState.updatedAt = adminData.updatedAt;
+    chaserState.chasers = adminData.chasers || [];
+    chaserState.chaserMap = adminData.chaserMap || {};
+    chaserState.suggestions = suggData.suggestions || [];
+    chaserState.unmappedYoutube = unmappedData.unmapped || [];
+
+    renderChaserPanel();
+  } catch(e) {
+    console.warn('Could not load chaser data:', e.message);
+    const statusEl = document.getElementById('chaser-feed-status');
+    if (statusEl) statusEl.textContent = '⚠ Could not load Spotter Network feed.';
+  }
+}
+
+function setChaserTab(tab) {
+  chaserState.activeTab = tab;
+  document.querySelectorAll('.chaser-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  document.querySelectorAll('.chaser-tab-panel').forEach(panel => {
+    panel.style.display = panel.id === 'chaser-tab-' + tab ? '' : 'none';
+  });
+  if (tab === 'manual') populateManualChaserChannelSelect();
+}
+
+function renderChaserPanel() {
+  const statusEl = document.getElementById('chaser-feed-status');
+  if (statusEl) {
+    const ts = chaserState.updatedAt ? new Date(chaserState.updatedAt).toLocaleTimeString() : '—';
+    statusEl.textContent = `${chaserState.chasers.length} chasers in feed · last updated ${ts}`;
+  }
+
+  const mappedEntries = Object.entries(chaserState.chaserMap);
+  document.getElementById('ct-count-mapped').textContent = mappedEntries.length ? `(${mappedEntries.length})` : '';
+  document.getElementById('ct-count-suggestions').textContent = chaserState.suggestions.length ? `(${chaserState.suggestions.length})` : '';
+  document.getElementById('ct-count-newfound').textContent = chaserState.unmappedYoutube.length ? `(${chaserState.unmappedYoutube.length})` : '';
+
+  renderMappedTab();
+  renderSuggestionsTab();
+  renderNewFoundTab();
+}
+
+function renderMappedTab() {
+  const container = document.getElementById('chaser-tab-mapped');
+  const mappedEntries = Object.entries(chaserState.chaserMap);
+  if (!mappedEntries.length) {
+    container.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No chasers mapped yet — check Suggestions or Manual Map.</p>';
+    return;
+  }
+  const chaserById = {};
+  chaserState.chasers.forEach(c => { chaserById[c.id] = c; });
+
+  container.innerHTML = mappedEntries.map(([spotterNetworkId, channelId]) => {
+    const c = chaserById[spotterNetworkId];
+    const chName = channelNameById(channelId);
+    const dotColor = c ? (c.status === 'inactive' ? '#8a96a3' : '#00b4d8') : '#444';
+    const liveLabel = c ? (c.status === 'inactive' ? 'Inactive' : (c.mobile ? 'Moving' : 'Active')) : 'Not currently in feed';
+    return `<div class="chaser-row">
+      <span class="chaser-status-dot" style="background:${dotColor}"></span>
+      <div style="flex:1;min-width:0;">
+        <div class="chaser-row-name">${c ? c.name : '(Spotter Network ID ' + spotterNetworkId + ')'} → ${chName}</div>
+        <div class="chaser-row-sub">${liveLabel}${c && c.youtubeUrl ? ' · 📺 self-reported channel on file' : ''}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="unmapChaser('${spotterNetworkId}')">✕ Unmap</button>
+    </div>`;
+  }).join('');
+}
+
+function renderSuggestionsTab() {
+  const container = document.getElementById('chaser-suggestions-list');
+  if (!chaserState.suggestions.length) {
+    container.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No name matches found right now.</p>';
+    return;
+  }
+  container.innerHTML = chaserState.suggestions.map(s => `
+    <div class="chaser-row">
+      <div style="flex:1;min-width:0;">
+        <div class="chaser-row-name">${s.spotterName} → ${s.channelName}</div>
+        <div class="chaser-row-sub">Name match · Spotter Network ID ${s.spotterNetworkId}</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="confirmChaserMap('${s.spotterNetworkId}','${s.channelId}')">✓ Confirm</button>
+    </div>`).join('');
+}
+
+function renderNewFoundTab() {
+  const container = document.getElementById('chaser-newfound-list');
+  if (!chaserState.unmappedYoutube.length) {
+    container.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No new self-reported channels found right now.</p>';
+    return;
+  }
+  container.innerHTML = chaserState.unmappedYoutube.map(c => `
+    <div class="chaser-row" id="newfound-row-${c.spotterNetworkId}">
+      <span class="chaser-status-dot" style="background:${c.status === 'inactive' ? '#8a96a3' : '#00b4d8'}"></span>
+      <div style="flex:1;min-width:0;">
+        <div class="chaser-row-name">${c.name}</div>
+        <div class="chaser-row-sub"><a href="${c.youtubeUrl}" target="_blank" rel="noopener" style="color:var(--accent);">${c.youtubeUrl}</a></div>
+        <div class="chaser-row-sub" id="newfound-status-${c.spotterNetworkId}"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="window.open('${c.youtubeUrl}','_blank')">View Channel</button>
+      <button class="btn btn-primary btn-sm" onclick="addChaserAsChannel('${c.spotterNetworkId}','${c.youtubeUrl.replace(/'/g,"\\'")}')">+ Add as Channel</button>
+    </div>`).join('');
+}
+
+async function addChaserAsChannel(spotterNetworkId, youtubeUrl) {
+  const statusEl = document.getElementById('newfound-status-' + spotterNetworkId);
+  if (statusEl) { statusEl.textContent = 'Resolving channel…'; statusEl.style.color = 'var(--muted)'; }
+
+  const res = await fetch('/api/admin/chasers/add-and-map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spotterNetworkId, youtubeUrl })
+  });
+  const data = await res.json();
+
+  if (data.ok) {
+    showToast(data.alreadyExisted
+      ? `${data.channelName} already in Storm Chasers — mapped`
+      : `${data.channelName} added to Storm Chasers and mapped`);
+    await loadData();          // refresh appData.groups so Channel Groups + selects update
+    await refreshChaserData(); // refresh chaser tabs — row moves to Mapped
+  } else if (data.error === 'quota_exceeded') {
+    if (statusEl) { statusEl.textContent = '⚠ YouTube API quota exceeded — try again after midnight Pacific.'; statusEl.style.color = 'var(--gold)'; }
+  } else {
+    if (statusEl) { statusEl.textContent = '⚠ ' + (data.error || 'Could not add channel.'); statusEl.style.color = 'var(--gold)'; }
+  }
+}
+
+async function confirmChaserMap(spotterNetworkId, channelId) {
+  const res = await fetch('/api/admin/chasers/map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spotterNetworkId, channelId })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    showToast('Chaser mapped');
+    await refreshChaserData();
+  } else {
+    showToast('⚠ ' + (data.error || 'Failed'));
+  }
+}
+
+async function unmapChaser(spotterNetworkId) {
+  if (!confirm('Remove this mapping?')) return;
+  const res = await fetch('/api/admin/chasers/map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spotterNetworkId, channelId: null })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    showToast('Mapping removed');
+    await refreshChaserData();
+  }
+}
+
+function populateManualChaserChannelSelect() {
+  const sel = document.getElementById('chaser-manual-channel-select');
+  if (!sel) return;
+  const channels = allWeatherTVChannels().sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— Select a channel —</option>' +
+    channels.map(ch => `<option value="${ch.id}">${ch.name} — ${ch.group}</option>`).join('');
+}
+
+function renderManualChaserSearch() {
+  const query = (document.getElementById('chaser-manual-search').value || '').toLowerCase().trim();
+  const resultsEl = document.getElementById('chaser-manual-results');
+  if (!query) { resultsEl.innerHTML = ''; return; }
+
+  const matches = chaserState.chasers
+    .filter(c => c.name.toLowerCase().includes(query))
+    .slice(0, 25);
+
+  if (!matches.length) {
+    resultsEl.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No matches.</p>';
+    return;
+  }
+
+  resultsEl.innerHTML = matches.map(c => {
+    const alreadyMapped = !!chaserState.chaserMap[c.id];
+    return `<div class="chaser-row">
+      <span class="chaser-status-dot" style="background:${c.status === 'inactive' ? '#8a96a3' : '#00b4d8'}"></span>
+      <div style="flex:1;min-width:0;">
+        <div class="chaser-row-name">${c.name}</div>
+        <div class="chaser-row-sub">ID ${c.id}${alreadyMapped ? ' · already mapped' : ''}${c.youtubeUrl ? ' · 📺 has YouTube link' : ''}</div>
+      </div>
+      <button class="btn btn-primary btn-sm" ${alreadyMapped ? 'disabled' : ''} onclick="mapFromManualSearch('${c.id}')">${alreadyMapped ? 'Mapped' : 'Map →'}</button>
+    </div>`;
+  }).join('');
+}
+
+async function mapFromManualSearch(spotterNetworkId) {
+  const channelId = document.getElementById('chaser-manual-channel-select').value;
+  if (!channelId) { showToast('⚠ Select a channel first'); return; }
+  await confirmChaserMap(spotterNetworkId, channelId);
+  renderManualChaserSearch();
+}
+
 // ── Playlists ────────────────────────────────────────────────────────────────
 
 function renderPlaylists() {
@@ -2079,6 +2410,8 @@ function showToast(msg) {
 
 loadData();
 setInterval(loadCacheStatus, 30000);
+refreshChaserData();
+setInterval(refreshChaserData, 90000);
 loadSystemHealth();
 loadWebSubHealth();
 loadFetchErrors();

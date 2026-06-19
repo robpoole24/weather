@@ -304,6 +304,7 @@ function getDefaultData() {
       { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                              iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',      androidSoon: false, enabled: true, collectionRef: 'UCuYqi3hOfz6-3Hdp6tEJjAg::col-1780335893616' },
     ],
     highlights: [],
+    chaserMap: {},
     playlists: [
       { id: 'playlist-1', title: 'Weather Playlist', playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI' }
     ]
@@ -801,6 +802,334 @@ function trackBurn(isPrimary, units = 100) {
   if (isPrimary) burnTracker.primaryUnits += units;
   else burnTracker.archiveUnits += units;
 }
+
+// ── Storm Chaser Tracker (Spotter Network) ──────────────────────────────────
+// Polls the public Spotter Network KML feed every 2 minutes and caches the
+// parsed result in memory. No API key required — this is a public feed.
+// Source: https://www.spotternetwork.org/feeds/earth-all.txt
+//
+// Each chaser record looks like:
+// { id, name, lat, lng, status, movement, heading, note, positionTime, youtubeUrl }
+//
+// youtubeUrl is auto-detected from the free-text `Note` field when a chaser
+// has self-reported their channel — this lets us flag chasers we don't have
+// in our Groups yet (see /api/admin/chasers/unmapped-youtube below).
+
+const SPOTTER_NETWORK_FEED_URL = 'https://www.spotternetwork.org/feeds/earth-all.txt';
+
+let chaserCache = { updatedAt: null, chasers: [] };
+
+function fetchTextOverHttp(url) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https://') ? https : require('http');
+    lib.get(url, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchTextOverHttp(res.headers.location).then(resolve, reject);
+      }
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
+
+// Extracts a YouTube channel/handle/video URL from free text, if present.
+function extractYouTubeUrl(text) {
+  if (!text) return null;
+  const match = text.match(/https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/[^\s<>"']+/i);
+  if (match) return match[0].replace(/[.,)]+$/, ''); // trim trailing punctuation
+  return null;
+}
+
+// Parses the Spotter Network KML text into an array of chaser objects.
+// Regex-based rather than a full XML parser — the feed's structure is flat
+// and consistent (one <Placemark> per chaser), so this avoids adding a
+// dependency for a one-off parse.
+function parseSpotterNetworkKML(kmlText) {
+  const chasers = [];
+  const placemarkRegex = /<Placemark id="(\d+)">([\s\S]*?)<\/Placemark>/g;
+  let pm;
+  while ((pm = placemarkRegex.exec(kmlText)) !== null) {
+    const id = pm[1];
+    const block = pm[2];
+
+    const iconMatch = block.match(/<href>([^<]+)<\/href>/);
+    const icon = iconMatch ? iconMatch[1] : '';
+    let status = 'active';
+    let mobile = false;
+    if (icon.includes('red_house')) status = 'inactive';
+    if (icon.includes('mobile')) mobile = true;
+    if (icon.includes('inactive_mobile')) status = 'inactive';
+
+    const nameMatch = block.match(/<name>([^<]*)<\/name>/);
+    const name = nameMatch ? nameMatch[1].trim() : 'Unknown';
+
+    const descMatch = block.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/);
+    const descRaw = descMatch ? descMatch[1] : '';
+
+    const posTimeMatch = descRaw.match(/Position Time:\s*([^<]+)</);
+    const positionTime = posTimeMatch ? posTimeMatch[1].trim() : null;
+
+    const movementMatch = descRaw.match(/Movement:\s*([^<]+)</);
+    const movement = movementMatch ? movementMatch[1].trim() : 'Stationary';
+
+    const noteMatch = descRaw.match(/Note:\s*([^<]+)</);
+    const note = noteMatch ? noteMatch[1].trim() : null;
+
+    const coordMatch = block.match(/<coordinates>([^<]+)<\/coordinates>/);
+    let lat = null, lng = null;
+    if (coordMatch) {
+      const parts = coordMatch[1].split(',');
+      lng = parseFloat(parts[0]);
+      lat = parseFloat(parts[1]);
+    }
+
+    if (lat === null || lng === null || isNaN(lat) || isNaN(lng)) continue;
+
+    chasers.push({
+      id,
+      name,
+      lat,
+      lng,
+      status,           // 'active' | 'inactive'
+      mobile,           // true if currently moving
+      movement,         // e.g. 'NNW (321)' or 'Stationary'
+      note,
+      positionTime,
+      youtubeUrl: extractYouTubeUrl(note)
+    });
+  }
+  return chasers;
+}
+
+async function refreshChaserCache() {
+  try {
+    const text = await fetchTextOverHttp(SPOTTER_NETWORK_FEED_URL);
+    const chasers = parseSpotterNetworkKML(text);
+    chaserCache = { updatedAt: new Date().toISOString(), chasers };
+    console.log(`[Chasers] Refreshed Spotter Network feed: ${chasers.length} positions`);
+  } catch (e) {
+    console.warn('[Chasers] Failed to refresh Spotter Network feed:', e.message);
+  }
+}
+
+// Public — all current chaser positions, with our channel mapping applied
+app.get('/api/chasers', (req, res) => {
+  const data = loadData();
+  const chaserMap = data.chaserMap || {}; // { spotterNetworkId: channelId }
+  // Build reverse lookup: channelId -> name, for attaching to mapped chasers
+  const channelById = {};
+  (data.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => { channelById[ch.id] = ch; });
+  });
+
+  const enriched = chaserCache.chasers.map(c => {
+    const mappedChannelId = chaserMap[c.id] || null;
+    const mappedChannel = mappedChannelId ? channelById[mappedChannelId] : null;
+    return {
+      ...c,
+      channelId: mappedChannelId,
+      channelName: mappedChannel ? mappedChannel.name : null
+    };
+  });
+
+  res.json({ updatedAt: chaserCache.updatedAt, chasers: enriched });
+});
+
+// Admin — same data, used by the Chaser Mapping panel
+app.get('/api/admin/chasers', (req, res) => {
+  const data = loadData();
+  res.json({ updatedAt: chaserCache.updatedAt, chasers: chaserCache.chasers, chaserMap: data.chaserMap || {} });
+});
+
+// Admin — map a Spotter Network chaser ID to one of our channel IDs
+app.post('/api/admin/chasers/map', express.json(), (req, res) => {
+  const { spotterNetworkId, channelId } = req.body;
+  if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
+  const data = loadData();
+  if (!data.chaserMap) data.chaserMap = {};
+  if (channelId) {
+    data.chaserMap[spotterNetworkId] = channelId;
+  } else {
+    delete data.chaserMap[spotterNetworkId]; // unmap
+  }
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — suggested matches: compares Spotter Network names against our
+// existing channel names (case-insensitive substring match) so the admin
+// doesn't have to manually search 400+ chasers for matches by hand.
+app.get('/api/admin/chasers/suggestions', (req, res) => {
+  const data = loadData();
+  const chaserMap = data.chaserMap || {};
+  const allChannels = [];
+  (data.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
+  });
+
+  const suggestions = [];
+  chaserCache.chasers.forEach(c => {
+    if (chaserMap[c.id]) return; // already mapped
+    const cNameLower = c.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    allChannels.forEach(ch => {
+      const chNameLower = ch.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!cNameLower || !chNameLower) return;
+      if (chNameLower.includes(cNameLower) || cNameLower.includes(chNameLower)) {
+        suggestions.push({ spotterNetworkId: c.id, spotterName: c.name, channelId: ch.id, channelName: ch.name });
+      }
+    });
+  });
+
+  res.json({ suggestions });
+});
+
+// Admin — chasers with a self-reported YouTube link in their Note field who
+// are NOT yet mapped to one of our channels. Surfaces new chasers to add.
+app.get('/api/admin/chasers/unmapped-youtube', (req, res) => {
+  const data = loadData();
+  const chaserMap = data.chaserMap || {};
+  const mappedIds = new Set(Object.keys(chaserMap));
+
+  const found = chaserCache.chasers
+    .filter(c => c.youtubeUrl && !mappedIds.has(c.id))
+    .map(c => ({
+      spotterNetworkId: c.id,
+      name: c.name,
+      youtubeUrl: c.youtubeUrl,
+      lat: c.lat,
+      lng: c.lng,
+      status: c.status
+    }));
+
+  res.json({ unmapped: found });
+});
+
+// Resolves a YouTube URL (handle, /channel/UC..., /c/name, /user/name, or a
+// video URL) into a channel ID + display name + thumbnail via the YouTube
+// Data API. Used by the "Add as Channel" button on the New Chasers Found
+// tab, since chasers self-report arbitrary YouTube URL formats in their
+// Spotter Network Note field, not raw channel IDs.
+function parseYouTubeUrlParts(url) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, ''); // strip trailing slash
+
+    let m;
+    if ((m = path.match(/^\/channel\/(UC[\w-]{10,})/))) return { type: 'id', value: m[1] };
+    if ((m = path.match(/^\/@([\w.-]+)/)))              return { type: 'handle', value: '@' + m[1] };
+    if ((m = path.match(/^\/c\/([\w.-]+)/)))             return { type: 'custom', value: m[1] };
+    if ((m = path.match(/^\/user\/([\w.-]+)/)))          return { type: 'legacy', value: m[1] };
+    // Video URL — resolve via the video's channelId instead
+    if (path === '/watch' && u.searchParams.get('v'))   return { type: 'video', value: u.searchParams.get('v') };
+    if (u.hostname.includes('youtu.be'))                 return { type: 'video', value: path.slice(1) };
+  } catch(e) {}
+  return null;
+}
+
+async function resolveYouTubeChannel(url) {
+  const parts = parseYouTubeUrlParts(url);
+  if (!parts) return null;
+  const key = getApiKey();
+
+  let apiUrl = null;
+  if (parts.type === 'id') {
+    apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&id=${parts.value}&part=snippet`;
+  } else if (parts.type === 'handle') {
+    apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&forHandle=${encodeURIComponent(parts.value)}&part=snippet`;
+  } else if (parts.type === 'custom' || parts.type === 'legacy') {
+    // Legacy /c/ and /user/ URLs aren't directly resolvable by the v3 API —
+    // fall back to a search, which costs more quota but covers the format.
+    apiUrl = `https://www.googleapis.com/youtube/v3/search?key=${key}&q=${encodeURIComponent(parts.value)}&type=channel&part=snippet&maxResults=1`;
+  } else if (parts.type === 'video') {
+    const videoData = await ytFetch(`https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${parts.value}&part=snippet`);
+    const channelId = videoData.items && videoData.items[0] && videoData.items[0].snippet.channelId;
+    if (!channelId) return null;
+    apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&id=${channelId}&part=snippet`;
+  }
+
+  if (!apiUrl) return null;
+  const data = await ytFetch(apiUrl);
+  if (checkQuotaError(data)) { markQuotaExceeded(true); throw new Error('quota_exceeded'); }
+
+  const item = data.items && data.items[0];
+  if (!item) return null;
+
+  const channelId = item.id?.channelId || item.id; // search results nest id.channelId
+  const snippet = item.snippet || {};
+  return {
+    channelId,
+    name: snippet.title || parts.value,
+    thumbnail: snippet.thumbnails?.default?.url || null
+  };
+}
+
+// Admin — resolve a YouTube URL to a channel ID/name without adding it yet.
+// Lets the admin preview what will be added before confirming.
+app.post('/api/admin/chasers/resolve-youtube', express.json(), async (req, res) => {
+  const { youtubeUrl } = req.body;
+  if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
+  try {
+    const resolved = await resolveYouTubeChannel(youtubeUrl);
+    if (!resolved) return res.status(404).json({ error: 'Could not resolve a channel from that URL' });
+    res.json(resolved);
+  } catch(e) {
+    if (e.message === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
+    res.status(500).json({ error: 'Resolve failed: ' + e.message });
+  }
+});
+
+// Admin — one-click flow for the New Chasers Found tab: resolves the
+// chaser's self-reported YouTube URL to a channel ID, adds it as a new
+// channel in the Storm Chasers group (alphabetized), and immediately maps
+// the Spotter Network ID to the new channel. All three steps happen
+// server-side in one call so the UI doesn't need multiple round trips.
+app.post('/api/admin/chasers/add-and-map', express.json(), async (req, res) => {
+  const { spotterNetworkId, youtubeUrl, groupId } = req.body;
+  if (!spotterNetworkId || !youtubeUrl) {
+    return res.status(400).json({ error: 'spotterNetworkId and youtubeUrl required' });
+  }
+  try {
+    const resolved = await resolveYouTubeChannel(youtubeUrl);
+    if (!resolved) return res.status(404).json({ error: 'Could not resolve a channel from that URL' });
+
+    const data = loadData();
+    const targetGroupId = groupId || 'storm-chasers';
+    const group = (data.groups || []).find(g => g.id === targetGroupId);
+    if (!group) return res.status(404).json({ error: 'Target group not found: ' + targetGroupId });
+
+    // Skip if this channel ID is already in the group (avoid duplicates)
+    const exists = (group.channels || []).some(ch => ch.id === resolved.channelId);
+    if (!exists) {
+      group.channels = group.channels || [];
+      group.channels.push({
+        id: resolved.channelId,
+        name: resolved.name,
+        hasLive: true,
+        enabled: true
+      });
+      // Re-alphabetize the group by name, case-insensitive — matches the
+      // existing sort order convention used across all channel groups.
+      group.channels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    }
+
+    if (!data.chaserMap) data.chaserMap = {};
+    data.chaserMap[spotterNetworkId] = resolved.channelId;
+
+    saveData(data);
+    res.json({ ok: true, channelId: resolved.channelId, channelName: resolved.name, alreadyExisted: exists });
+  } catch(e) {
+    if (e.message === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
+    res.status(500).json({ error: 'Add failed: ' + e.message });
+  }
+});
+
+// Refresh the chaser cache every 2 minutes (Spotter Network positions
+// update roughly every 30-60s in the field, so this keeps dots reasonably
+// current without hammering their public feed).
+setInterval(refreshChaserCache, 2 * 60 * 1000);
+// Initial fetch shortly after boot
+setTimeout(refreshChaserCache, 5000);
 
 // ── WebSub subscription lease tracker ───────────────────────────────────────
 // Tracks per-channel subscription status and lease expiry.

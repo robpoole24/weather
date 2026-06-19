@@ -257,6 +257,11 @@
   .leaflet-control-zoom a:hover { background:#1a2433 !important; color:#00b4d8 !important; }
   .leaflet-control-attribution { background:rgba(10,14,20,0.7) !important; color:#7a9bb5 !important; font-size:9px !important; }
   .leaflet-control-attribution a { color:#00b4d8 !important; }
+  .chaser-tag { background:#111820 !important; color:#e8f4fd !important; border:1px solid rgba(0,180,216,0.4) !important;
+    font-family:'Barlow Condensed',sans-serif; font-size:0.7rem; font-weight:600; padding:2px 6px !important;
+    border-radius:4px; box-shadow:0 2px 6px rgba(0,0,0,0.5); }
+  .chaser-tag-mapped { border-color:rgba(255,209,102,0.6) !important; color:#ffd166 !important; }
+  .chaser-tag::before { border-top-color:#111820 !important; }
   .alert-popup { font-family:'Barlow',sans-serif; font-size:0.8rem; max-width:240px; line-height:1.5; }
   .alert-popup .ev { font-family:'Barlow Condensed',sans-serif; font-size:1rem; letter-spacing:0.05em; text-transform:uppercase; font-weight:700; }
   .alert-popup .exp { color:#7a9bb5; font-size:0.72rem; margin-top:4px; }
@@ -2454,6 +2459,144 @@ async function startLSR(){
 }
 function stopLSR(){ if (lsrLayer){ lsrLayer.clearLayers(); map.removeLayer(lsrLayer); lsrLayer=null; } }
 
+// ── Live Storm Chasers (Spotter Network) ─────────────────────────────────────
+// Pulls our server's cached/parsed Spotter Network feed (see /api/chasers in
+// server.js) and plots every chaser as a dot. Every dot gets a name tag on
+// hover/tap regardless of whether we've mapped it to one of our channels —
+// mapped chasers get a clickable tag that opens their channel card instead.
+let chaserLayer = null;
+let chaserPollTimer = null;
+let chaserMarkers = {}; // spotterNetworkId -> L.marker, so we can update in place
+
+function chaserIconHTML(c) {
+  const color = c.status === 'inactive' ? '#8a96a3' : (c.mapped ? '#ffd166' : '#00b4d8');
+  const mobileRotation = c.mobile && typeof c.headingDeg === 'number' ? c.headingDeg : null;
+  // Mobile chasers get a small directional arrow; stationary get a plain dot.
+  const shape = mobileRotation !== null
+    ? `<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;
+         border-bottom:12px solid ${color};transform:rotate(${mobileRotation}deg);
+         filter:drop-shadow(0 1px 2px rgba(0,0,0,0.6));"></div>`
+    : `<div style="width:10px;height:10px;border-radius:50%;background:${color};
+         border:1.5px solid rgba(255,255,255,0.8);box-shadow:0 1px 3px rgba(0,0,0,0.6);"></div>`;
+  return `<div style="display:flex;align-items:center;justify-content:center;width:16px;height:16px;">${shape}</div>`;
+}
+
+// Converts a compass label like "NNW (321)" into a degree number for the
+// arrow icon. Falls back to null (renders as a plain dot) if unparseable.
+function headingFromMovement(movement) {
+  if (!movement) return null;
+  const m = movement.match(/\((-?\d+)\)/);
+  if (!m) return null;
+  const deg = parseInt(m[1], 10);
+  return isNaN(deg) ? null : deg;
+}
+
+function chaserPopupHTML(c) {
+  const statusLabel = c.status === 'inactive' ? 'Inactive' : (c.mobile ? 'Active · Moving' : 'Active · Stationary');
+  const statusColor  = c.status === 'inactive' ? '#8a96a3' : '#00b4d8';
+  const tagLine = c.mapped
+    ? `<div style="margin-top:6px;font-size:0.78rem;"><a href="#" onclick="openChaserChannel('${c.channelId}');return false;"
+         style="color:#ffd166;font-weight:700;text-decoration:none;">▶ Watch ${c.channelName}'s stream</a></div>`
+    : `<div style="margin-top:6px;font-size:0.7rem;color:#7a9bb5;">Not yet linked to a WeatherTV channel</div>`;
+  const ytLine = c.youtubeUrl
+    ? `<div style="margin-top:4px;font-size:0.7rem;"><a href="${c.youtubeUrl}" target="_blank" rel="noopener" style="color:#00b4d8;">📺 Self-reported channel</a></div>`
+    : '';
+  return `<div class="alert-popup">
+    <div class="ev" style="color:${statusColor}">${c.name}</div>
+    <div style="margin-top:2px;font-size:0.72rem;color:#7a9bb5;">${statusLabel}${c.mobile ? ' · ' + c.movement : ''}</div>
+    ${tagLine}
+    ${ytLine}
+    <div class="exp">Updated ${c.positionTime || ''}</div>
+  </div>`;
+}
+
+// Opens a chaser's mapped channel — reuses whatever the parent app's channel
+// player function is. WeatherTV's main UI exposes playLive(channelId) on the
+// parent window when radar.html is embedded in an iframe; falls back to
+// posting a message for the parent to handle if not directly reachable.
+function openChaserChannel(channelId) {
+  if (!channelId) return;
+  try {
+    if (window.parent && window.parent.playLive) {
+      window.parent.playLive(channelId);
+      minimizeRadar();
+      return;
+    }
+  } catch(e) {}
+  try {
+    window.parent.postMessage({ action: 'playChaserChannel', channelId }, '*');
+    minimizeRadar();
+  } catch(e) {}
+}
+
+async function refreshChasers() {
+  if (!chaserLayer) return;
+  try {
+    const res = await fetch('/api/chasers');
+    const data = await res.json();
+    const chasers = data.chasers || [];
+
+    const seenIds = new Set();
+    chasers.forEach(c => {
+      seenIds.add(c.id);
+      const headingDeg = headingFromMovement(c.movement);
+      const enriched = {
+        ...c,
+        mobile: c.mobile || (headingDeg !== null),
+        headingDeg,
+        mapped: !!c.channelId
+      };
+
+      const existing = chaserMarkers[c.id];
+      if (existing) {
+        existing.setLatLng([c.lat, c.lng]);
+        existing.setIcon(L.divIcon({ className:'', iconSize:[16,16], iconAnchor:[8,8], html: chaserIconHTML(enriched) }));
+        existing.setPopupContent(chaserPopupHTML(enriched));
+        existing._chaserData = enriched;
+      } else {
+        const icon = L.divIcon({ className:'', iconSize:[16,16], iconAnchor:[8,8], html: chaserIconHTML(enriched) });
+        const mk = L.marker([c.lat, c.lng], { icon, zIndexOffset: 200, interactive: true });
+        mk.bindPopup(chaserPopupHTML(enriched), { maxWidth: 260 });
+        // Permanent small name tag, always visible regardless of mapping —
+        // this is the "tag with a name on every dot" requirement.
+        mk.bindTooltip(enriched.mapped ? `★ ${c.name}` : c.name, {
+          permanent: false, direction: 'top', offset: [0, -10],
+          className: enriched.mapped ? 'chaser-tag chaser-tag-mapped' : 'chaser-tag'
+        });
+        mk.on('click', function(){ this.openPopup(); });
+        mk._chaserData = enriched;
+        chaserMarkers[c.id] = mk;
+        chaserLayer.addLayer(mk);
+      }
+    });
+
+    // Remove markers for chasers no longer in the feed (gone offline / aged out)
+    Object.keys(chaserMarkers).forEach(id => {
+      if (!seenIds.has(id)) {
+        chaserLayer.removeLayer(chaserMarkers[id]);
+        delete chaserMarkers[id];
+      }
+    });
+
+    const mappedCount = chasers.filter(c => c.channelId).length;
+    setStatus(`${chasers.length} chasers tracked · ${mappedCount} linked to channels`);
+  } catch(e) {
+    console.warn('[Chasers] refresh failed:', e.message);
+  }
+}
+
+function startChasers() {
+  if (!chaserLayer) chaserLayer = L.layerGroup().addTo(map);
+  refreshChasers();
+  if (!chaserPollTimer) chaserPollTimer = setInterval(refreshChasers, 90 * 1000);
+}
+
+function stopChasers() {
+  if (chaserPollTimer) { clearInterval(chaserPollTimer); chaserPollTimer = null; }
+  if (chaserLayer) { chaserLayer.clearLayers(); map.removeLayer(chaserLayer); chaserLayer = null; }
+  chaserMarkers = {};
+}
+
 async function updateFeelsLike(lat,lng){
   if (!lat||!lng) return;
   try {
@@ -2526,6 +2669,7 @@ const CHASER_ITEMS=[
   {id:'spc',ico:'🗺',name:'SPC Outlooks',sub:'Day 1 / 2 / 3',def:false},
   {id:'mcd',ico:'💬',name:'Mesoscale Discussions',sub:'Active MCDs',def:false},
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
+  {id:'chasers',ico:'🚗',name:'Live Storm Chasers',sub:'Spotter Network · live',def:false},
 ];
 const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS);
 
@@ -2544,6 +2688,7 @@ function applyOverlay(id,on){
     case 'spc':       if (on!==spcVisible) toggleSPC(); break;
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
+    case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
     case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
     case 'banner':
