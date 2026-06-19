@@ -994,6 +994,33 @@ app.get('/api/admin/chasers', (req, res) => {
   });
 });
 
+// Admin — full accumulated registry of every chaser we've ever seen, for
+// browsing directly (the "All Known" tab). The Suggestions matcher is
+// intentionally conservative to avoid false positives, so this gives the
+// admin a way to manually catch anything the matcher missed — e.g. a
+// channel name that's a stage name with zero token overlap with the
+// chaser's real name on Spotter Network.
+app.get('/api/admin/chasers/known', (req, res) => {
+  const data = loadData();
+  const knownChasers = data.knownChasers || {};
+  const chaserMap = data.chaserMap || {};
+  const dismissedNew = new Set(data.dismissedNewChasers || []);
+  const liveIds = new Set(chaserCache.chasers.map(c => c.id));
+
+  const all = Object.entries(knownChasers).map(([spotterNetworkId, c]) => ({
+    spotterNetworkId,
+    name: c.name,
+    firstSeenAt: c.firstSeenAt,
+    lastSeenAt: c.lastSeenAt,
+    youtubeUrl: c.youtubeUrl || null,
+    isLiveNow: liveIds.has(spotterNetworkId),
+    mappedChannelId: chaserMap[spotterNetworkId] || null,
+    dismissedAsNew: dismissedNew.has(spotterNetworkId)
+  }));
+
+  res.json({ total: all.length, chasers: all });
+});
+
 // Admin — map a Spotter Network chaser ID to one of our channel IDs
 app.post('/api/admin/chasers/map', express.json(), (req, res) => {
   const { spotterNetworkId, channelId } = req.body;

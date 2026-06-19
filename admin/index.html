@@ -341,6 +341,7 @@
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="suggestions" onclick="setChaserTab('suggestions')">Suggestions <span id="ct-count-suggestions" class="chaser-tab-badge"></span></button>
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="newfound" onclick="setChaserTab('newfound')">New Chasers Found <span id="ct-count-newfound" class="chaser-tab-badge"></span></button>
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="manual" onclick="setChaserTab('manual')">Manual Map</button>
+        <button class="btn btn-ghost btn-sm chaser-tab" data-tab="allknown" onclick="setChaserTab('allknown')">All Known <span id="ct-count-allknown" class="chaser-tab-badge"></span></button>
       </div>
 
       <!-- Mapped tab -->
@@ -372,6 +373,24 @@
           <select id="chaser-manual-channel-select"><option value="">— Select a channel —</option></select>
         </div>
         <div id="chaser-manual-results" style="max-height:280px;overflow-y:auto;"></div>
+      </div>
+
+      <!-- All Known tab -->
+      <div id="chaser-tab-allknown" class="chaser-tab-panel" style="display:none;">
+        <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;">
+          Every chaser ever seen in the Spotter Network feed since this registry started collecting. The Suggestions matcher is intentionally conservative — browse here to catch matches it may have missed (e.g. a stage name with no overlap with their real name).
+        </p>
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
+          <input type="text" id="allknown-search" placeholder="Filter by name..." oninput="renderAllKnownTab()" />
+          <select id="allknown-filter" onchange="renderAllKnownTab()">
+            <option value="all">All</option>
+            <option value="unmapped">Unmapped only</option>
+            <option value="mapped">Mapped only</option>
+            <option value="youtube">Has YouTube link</option>
+            <option value="live">Live right now</option>
+          </select>
+        </div>
+        <div id="allknown-list" style="max-height:420px;overflow-y:auto;"></div>
       </div>
     </div>
   </div>
@@ -1864,6 +1883,8 @@ let chaserState = {
   chaserMap: {},      // { spotterNetworkId: channelId }
   suggestions: [],
   unmappedYoutube: [],
+  allKnown: [],        // full registry, loaded lazily when All Known tab opens
+  allKnownLoaded: false,
   activeTab: 'mapped'
 };
 
@@ -1928,6 +1949,77 @@ function setChaserTab(tab) {
     panel.style.display = panel.id === 'chaser-tab-' + tab ? '' : 'none';
   });
   if (tab === 'manual') populateManualChaserChannelSelect();
+  if (tab === 'allknown') loadAllKnownChasers();
+}
+
+async function loadAllKnownChasers(force) {
+  if (chaserState.allKnownLoaded && !force) { renderAllKnownTab(); return; }
+  const listEl = document.getElementById('allknown-list');
+  if (listEl) listEl.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">Loading…</p>';
+  try {
+    const res = await fetch('/api/admin/chasers/known');
+    const data = await res.json();
+    chaserState.allKnown = data.chasers || [];
+    chaserState.allKnownLoaded = true;
+    document.getElementById('ct-count-allknown').textContent = chaserState.allKnown.length ? `(${chaserState.allKnown.length})` : '';
+    renderAllKnownTab();
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<p style="font-size:0.8rem;color:var(--gold);">⚠ Could not load registry.</p>';
+  }
+}
+
+function renderAllKnownTab() {
+  const listEl = document.getElementById('allknown-list');
+  if (!listEl) return;
+  const query = (document.getElementById('allknown-search').value || '').toLowerCase().trim();
+  const filter = document.getElementById('allknown-filter').value;
+
+  let rows = chaserState.allKnown;
+  if (query) rows = rows.filter(c => c.name.toLowerCase().includes(query));
+  if (filter === 'unmapped') rows = rows.filter(c => !c.mappedChannelId);
+  if (filter === 'mapped') rows = rows.filter(c => !!c.mappedChannelId);
+  if (filter === 'youtube') rows = rows.filter(c => !!c.youtubeUrl);
+  if (filter === 'live') rows = rows.filter(c => c.isLiveNow);
+
+  // Most-recently-seen first — surfaces active/relevant chasers over
+  // someone seen once months ago.
+  rows = [...rows].sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
+
+  if (!rows.length) {
+    listEl.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No chasers match this filter.</p>';
+    return;
+  }
+
+  listEl.innerHTML = rows.slice(0, 300).map(c => {
+    const lastSeen = c.lastSeenAt ? new Date(c.lastSeenAt).toLocaleDateString() : '—';
+    const dotColor = c.isLiveNow ? '#00b4d8' : '#444';
+    const mappedLabel = c.mappedChannelId
+      ? `Mapped → ${channelNameById(c.mappedChannelId)}`
+      : (c.dismissedAsNew ? 'Dismissed' : 'Unmapped');
+    const mapControl = c.mappedChannelId
+      ? `<button class="btn btn-ghost btn-sm" onclick="unmapChaser('${c.spotterNetworkId}')">✕ Unmap</button>`
+      : `<select id="allknown-select-${c.spotterNetworkId}" style="font-size:0.75rem;max-width:160px;">
+           <option value="">Map to channel...</option>
+           ${allWeatherTVChannels().sort((a,b)=>a.name.localeCompare(b.name)).map(ch => `<option value="${ch.id}">${ch.name}</option>`).join('')}
+         </select>
+         <button class="btn btn-primary btn-sm" onclick="mapFromAllKnown('${c.spotterNetworkId}')">Map</button>`;
+    return `<div class="chaser-row">
+      <span class="chaser-status-dot" style="background:${dotColor}"></span>
+      <div style="flex:1;min-width:0;">
+        <div class="chaser-row-name">${c.name}</div>
+        <div class="chaser-row-sub">Last seen ${lastSeen} · ${mappedLabel}${c.youtubeUrl ? ` · <a href="${c.youtubeUrl}" target="_blank" rel="noopener" style="color:var(--accent);">📺 link</a>` : ''}</div>
+      </div>
+      ${mapControl}
+    </div>`;
+  }).join('') + (rows.length > 300 ? `<p style="font-size:0.74rem;color:var(--muted);margin-top:0.5rem;">Showing first 300 of ${rows.length} — narrow your filter to see more.</p>` : '');
+}
+
+async function mapFromAllKnown(spotterNetworkId) {
+  const sel = document.getElementById('allknown-select-' + spotterNetworkId);
+  const channelId = sel ? sel.value : '';
+  if (!channelId) { showToast('⚠ Select a channel first'); return; }
+  await confirmChaserMap(spotterNetworkId, channelId);
+  await loadAllKnownChasers(true); // force refresh so this row updates to Mapped
 }
 
 function renderChaserPanel() {
