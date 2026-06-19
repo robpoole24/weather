@@ -1109,7 +1109,11 @@ function parseYouTubeUrlParts(url) {
 
 async function resolveYouTubeChannel(url) {
   const parts = parseYouTubeUrlParts(url);
-  if (!parts) return null;
+  if (!parts) {
+    const err = new Error('Could not parse a recognizable YouTube URL format from: ' + url);
+    err.code = 'unparseable_url';
+    throw err;
+  }
   const key = getApiKey();
 
   let apiUrl = null;
@@ -1123,17 +1127,46 @@ async function resolveYouTubeChannel(url) {
     apiUrl = `https://www.googleapis.com/youtube/v3/search?key=${key}&q=${encodeURIComponent(parts.value)}&type=channel&part=snippet&maxResults=1`;
   } else if (parts.type === 'video') {
     const videoData = await ytFetch(`https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${parts.value}&part=snippet`);
+    if (checkQuotaError(videoData)) { markQuotaExceeded(true); const e = new Error('quota_exceeded'); e.code = 'quota_exceeded'; throw e; }
     const channelId = videoData.items && videoData.items[0] && videoData.items[0].snippet.channelId;
-    if (!channelId) return null;
+    if (!channelId) {
+      const err = new Error('Video lookup returned no channelId (video may be private, deleted, or ID is wrong). Raw API response: ' + JSON.stringify(videoData).slice(0, 300));
+      err.code = 'video_lookup_empty';
+      throw err;
+    }
     apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&id=${channelId}&part=snippet`;
   }
 
-  if (!apiUrl) return null;
+  if (!apiUrl) {
+    const err = new Error('Internal: no API URL constructed for parsed type "' + parts.type + '"');
+    err.code = 'internal_no_url';
+    throw err;
+  }
+
   const data = await ytFetch(apiUrl);
-  if (checkQuotaError(data)) { markQuotaExceeded(true); throw new Error('quota_exceeded'); }
+  if (checkQuotaError(data)) { markQuotaExceeded(true); const e = new Error('quota_exceeded'); e.code = 'quota_exceeded'; throw e; }
+
+  // Surface the API's own error payload rather than swallowing it — this is
+  // what was previously hidden behind a generic "Could not resolve" message,
+  // making it impossible to tell a bad handle apart from an API-level
+  // rejection (e.g. forHandle not recognizing a channel that exists but
+  // hasn't claimed a handle, or a transient API error).
+  if (data.error) {
+    const err = new Error('YouTube API error: ' + (data.error.message || JSON.stringify(data.error)));
+    err.code = 'api_error';
+    throw err;
+  }
 
   const item = data.items && data.items[0];
-  if (!item) return null;
+  if (!item) {
+    const err = new Error(
+      `No channel found for ${parts.type} "${parts.value}". This can happen if the channel was deleted/suspended, ` +
+      `the handle was never claimed by this exact string, or (for older accounts) the channel has no handle set at all. ` +
+      `Use the channel ID override below if you have it.`
+    );
+    err.code = 'not_found';
+    throw err;
+  }
 
   const channelId = item.id?.channelId || item.id; // search results nest id.channelId
   const snippet = item.snippet || {};
@@ -1151,11 +1184,10 @@ app.post('/api/admin/chasers/resolve-youtube', express.json(), async (req, res) 
   if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
   try {
     const resolved = await resolveYouTubeChannel(youtubeUrl);
-    if (!resolved) return res.status(404).json({ error: 'Could not resolve a channel from that URL' });
     res.json(resolved);
   } catch(e) {
-    if (e.message === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
-    res.status(500).json({ error: 'Resolve failed: ' + e.message });
+    if (e.code === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
+    res.status(404).json({ error: e.message, code: e.code || 'unknown' });
   }
 });
 
@@ -1164,14 +1196,37 @@ app.post('/api/admin/chasers/resolve-youtube', express.json(), async (req, res) 
 // channel in the Storm Chasers group (alphabetized), and immediately maps
 // the Spotter Network ID to the new channel. All three steps happen
 // server-side in one call so the UI doesn't need multiple round trips.
+//
+// If `manualChannelId` is provided, resolution is skipped entirely and that
+// ID is used directly — this is the workaround for chasers whose handle
+// won't resolve via forHandle (deleted/renamed channel, handle never
+// claimed, transient API quirk, etc.) but whose channel ID the admin found
+// by hand (e.g. via the page source or a third-party ID lookup tool).
+// channelName is required alongside manualChannelId since there's no API
+// call to fetch a display name from in this path.
 app.post('/api/admin/chasers/add-and-map', express.json(), async (req, res) => {
-  const { spotterNetworkId, youtubeUrl, groupId } = req.body;
-  if (!spotterNetworkId || !youtubeUrl) {
-    return res.status(400).json({ error: 'spotterNetworkId and youtubeUrl required' });
+  const { spotterNetworkId, youtubeUrl, groupId, manualChannelId, manualChannelName } = req.body;
+  if (!spotterNetworkId) {
+    return res.status(400).json({ error: 'spotterNetworkId required' });
   }
+  if (!youtubeUrl && !manualChannelId) {
+    return res.status(400).json({ error: 'youtubeUrl or manualChannelId required' });
+  }
+
   try {
-    const resolved = await resolveYouTubeChannel(youtubeUrl);
-    if (!resolved) return res.status(404).json({ error: 'Could not resolve a channel from that URL' });
+    let resolved;
+    if (manualChannelId) {
+      const trimmedId = manualChannelId.trim();
+      if (!/^UC[\w-]{10,}$/.test(trimmedId)) {
+        return res.status(400).json({ error: 'That doesn\'t look like a valid YouTube channel ID — it should start with "UC" (e.g. UCcJ8bLvmhJgK_cCGESPjzxQ).' });
+      }
+      if (!manualChannelName || !manualChannelName.trim()) {
+        return res.status(400).json({ error: 'A display name is required when adding by channel ID manually.' });
+      }
+      resolved = { channelId: trimmedId, name: manualChannelName.trim(), thumbnail: null };
+    } else {
+      resolved = await resolveYouTubeChannel(youtubeUrl);
+    }
 
     const data = loadData();
     const targetGroupId = groupId || 'storm-chasers';
@@ -1199,8 +1254,8 @@ app.post('/api/admin/chasers/add-and-map', express.json(), async (req, res) => {
     saveData(data);
     res.json({ ok: true, channelId: resolved.channelId, channelName: resolved.name, alreadyExisted: exists });
   } catch(e) {
-    if (e.message === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
-    res.status(500).json({ error: 'Add failed: ' + e.message });
+    if (e.code === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
+    res.status(404).json({ error: e.message, code: e.code || 'unknown' });
   }
 });
 

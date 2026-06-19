@@ -1995,21 +1995,35 @@ function renderNewFoundTab() {
     return;
   }
   container.innerHTML = chaserState.unmappedYoutube.map(c => `
-    <div class="chaser-row" id="newfound-row-${c.spotterNetworkId}">
-      <span class="chaser-status-dot" style="background:${c.status === 'inactive' ? '#8a96a3' : '#00b4d8'}"></span>
-      <div style="flex:1;min-width:0;">
-        <div class="chaser-row-name">${c.name}</div>
-        <div class="chaser-row-sub"><a href="${c.youtubeUrl}" target="_blank" rel="noopener" style="color:var(--accent);">${c.youtubeUrl}</a></div>
-        <div class="chaser-row-sub" id="newfound-status-${c.spotterNetworkId}"></div>
+    <div class="chaser-row" id="newfound-row-${c.spotterNetworkId}" style="flex-direction:column;align-items:stretch;">
+      <div style="display:flex;align-items:center;gap:0.75rem;">
+        <span class="chaser-status-dot" style="background:${c.status === 'inactive' ? '#8a96a3' : '#00b4d8'}"></span>
+        <div style="flex:1;min-width:0;">
+          <div class="chaser-row-name">${c.name}</div>
+          <div class="chaser-row-sub"><a href="${c.youtubeUrl}" target="_blank" rel="noopener" style="color:var(--accent);">${c.youtubeUrl}</a></div>
+          <div class="chaser-row-sub" id="newfound-status-${c.spotterNetworkId}"></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="window.open('${c.youtubeUrl}','_blank')">View Channel</button>
+        <button class="btn btn-primary btn-sm" id="newfound-addbtn-${c.spotterNetworkId}" onclick="addChaserAsChannel('${c.spotterNetworkId}','${c.youtubeUrl.replace(/'/g,"\\'")}')">+ Add as Channel</button>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="window.open('${c.youtubeUrl}','_blank')">View Channel</button>
-      <button class="btn btn-primary btn-sm" onclick="addChaserAsChannel('${c.spotterNetworkId}','${c.youtubeUrl.replace(/'/g,"\\'")}')">+ Add as Channel</button>
+      <div id="newfound-manual-${c.spotterNetworkId}" style="display:none;margin-top:0.6rem;padding:0.6rem;background:var(--surface2);border-radius:6px;">
+        <div style="font-size:0.74rem;color:var(--muted);margin-bottom:0.5rem;">
+          Couldn't auto-resolve. If you found their channel ID manually (open the channel, view page source, search "channelId"), enter it here:
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
+          <input type="text" id="newfound-manualid-${c.spotterNetworkId}" placeholder="UCxxxxxxxxxxxxxxxxxx" style="font-family:monospace;font-size:0.78rem;">
+          <input type="text" id="newfound-manualname-${c.spotterNetworkId}" placeholder="Display name (e.g. ${c.name})" value="${c.name}" style="font-size:0.8rem;">
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:0.5rem;" onclick="addChaserAsChannelManual('${c.spotterNetworkId}')">Add with this ID</button>
+      </div>
     </div>`).join('');
 }
 
 async function addChaserAsChannel(spotterNetworkId, youtubeUrl) {
   const statusEl = document.getElementById('newfound-status-' + spotterNetworkId);
+  const manualPanel = document.getElementById('newfound-manual-' + spotterNetworkId);
   if (statusEl) { statusEl.textContent = 'Resolving channel…'; statusEl.style.color = 'var(--muted)'; }
+  if (manualPanel) manualPanel.style.display = 'none';
 
   const res = await fetch('/api/admin/chasers/add-and-map', {
     method: 'POST',
@@ -2026,6 +2040,37 @@ async function addChaserAsChannel(spotterNetworkId, youtubeUrl) {
     await refreshChaserData(); // refresh chaser tabs — row moves to Mapped
   } else if (data.error === 'quota_exceeded') {
     if (statusEl) { statusEl.textContent = '⚠ YouTube API quota exceeded — try again after midnight Pacific.'; statusEl.style.color = 'var(--gold)'; }
+  } else {
+    // Show the real error from the server, and reveal the manual override
+    // form so a failed auto-resolve never becomes a dead end.
+    if (statusEl) { statusEl.textContent = '⚠ ' + (data.error || 'Could not add channel.'); statusEl.style.color = 'var(--gold)'; }
+    if (manualPanel) manualPanel.style.display = '';
+  }
+}
+
+async function addChaserAsChannelManual(spotterNetworkId) {
+  const manualChannelId = document.getElementById('newfound-manualid-' + spotterNetworkId).value.trim();
+  const manualChannelName = document.getElementById('newfound-manualname-' + spotterNetworkId).value.trim();
+  const statusEl = document.getElementById('newfound-status-' + spotterNetworkId);
+
+  if (!manualChannelId) { showToast('⚠ Enter a channel ID'); return; }
+  if (!manualChannelName) { showToast('⚠ Enter a display name'); return; }
+
+  if (statusEl) { statusEl.textContent = 'Adding…'; statusEl.style.color = 'var(--muted)'; }
+
+  const res = await fetch('/api/admin/chasers/add-and-map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spotterNetworkId, manualChannelId, manualChannelName })
+  });
+  const data = await res.json();
+
+  if (data.ok) {
+    showToast(data.alreadyExisted
+      ? `${data.channelName} already in Storm Chasers — mapped`
+      : `${data.channelName} added to Storm Chasers and mapped`);
+    await loadData();
+    await refreshChaserData();
   } else {
     if (statusEl) { statusEl.textContent = '⚠ ' + (data.error || 'Could not add channel.'); statusEl.style.color = 'var(--gold)'; }
   }
