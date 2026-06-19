@@ -957,9 +957,90 @@ app.post('/api/admin/chasers/map', express.json(), (req, res) => {
   res.json({ ok: true });
 });
 
+// Admin — auto-maps every current "exact" tier match in one call. Exact
+// matches are normalized-identical names or full-token-subset matches (see
+// matchConfidence above), which is a low false-positive-risk bar — these
+// don't need a human click each. Fuzzy matches are intentionally excluded
+// and still require manual confirmation in the Suggestions tab.
+app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
+  const data = loadData();
+  if (!data.chaserMap) data.chaserMap = {};
+  const allChannels = [];
+  (data.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
+  });
+
+  let mapped = 0;
+  const mappedNames = [];
+  chaserCache.chasers.forEach(c => {
+    if (data.chaserMap[c.id]) return; // already mapped
+    for (const ch of allChannels) {
+      if (matchConfidence(c.name, ch.name) === 'exact') {
+        data.chaserMap[c.id] = ch.id;
+        mapped++;
+        mappedNames.push({ spotterName: c.name, channelName: ch.name });
+        break; // first exact match wins — exact tier is narrow enough that
+                // multiple exact matches for one chaser should be rare
+      }
+    }
+  });
+
+  if (mapped > 0) saveData(data);
+  res.json({ ok: true, mapped, mappedNames });
+});
+
 // Admin — suggested matches: compares Spotter Network names against our
 // existing channel names (case-insensitive substring match) so the admin
 // doesn't have to manually search 400+ chasers for matches by hand.
+// Compares a Spotter Network name against a channel name and returns a
+// confidence tier: 'exact' (normalized names are identical — safe to
+// auto-map), 'fuzzy' (one contains the other, or they share both first and
+// last token — needs human review), or null (no meaningful match).
+function matchConfidence(spotterName, channelName) {
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const sNorm = norm(spotterName);
+  const cNorm = norm(channelName);
+  if (!sNorm || !cNorm) return null;
+
+  if (sNorm === cNorm) return 'exact';
+
+  const sTokens = spotterName.toLowerCase().split(/\s+/).filter(Boolean);
+  const cTokens = channelName.toLowerCase().split(/\s+/).filter(Boolean);
+
+  // Suffix case: every token of the shorter name appears, in order, at the
+  // start of the longer name's token list — e.g. "Brandon Copic" vs.
+  // "Brandon Copic Live" / "Brandon Copic Archive". This only checks a
+  // leading prefix match (not "any shared tokens"), so it can't be
+  // triggered by two people merely sharing a first name.
+  const [shorter, longer] = sTokens.length <= cTokens.length ? [sTokens, cTokens] : [cTokens, sTokens];
+  if (shorter.length >= 2 && longer.length > shorter.length) {
+    const isPrefixMatch = shorter.every((t, i) => longer[i] === t);
+    if (isPrefixMatch) return 'exact';
+  }
+
+  // Last-name token must match for any further comparison — this is what
+  // prevents "John Brown" from fuzzy-matching "John Smith" just because
+  // they share a common first name. Without this guard, common first names
+  // (John, Mike, etc.) across hundreds of live chasers would flood the
+  // fuzzy review list with false positives.
+  const sLast = sTokens[sTokens.length - 1];
+  const cLast = cTokens[cTokens.length - 1];
+  if (sTokens.length < 2 || cTokens.length < 2 || sLast !== cLast) {
+    // No reliable last-name anchor — only allow a match if one full
+    // normalized name is contained in the other (e.g. single-word channel
+    // brand names that happen to embed the full spotter name).
+    if (cNorm.includes(sNorm) || sNorm.includes(cNorm)) return 'fuzzy';
+    return null;
+  }
+
+  // Last names match — first name token must also match for 'exact',
+  // otherwise fuzzy (covers nicknames/initials on the first name only).
+  const sFirst = sTokens[0];
+  const cFirst = cTokens[0];
+  if (sFirst === cFirst) return 'exact';
+  return 'fuzzy';
+}
+
 app.get('/api/admin/chasers/suggestions', (req, res) => {
   const data = loadData();
   const chaserMap = data.chaserMap || {};
@@ -968,20 +1049,19 @@ app.get('/api/admin/chasers/suggestions', (req, res) => {
     (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
   });
 
-  const suggestions = [];
+  const exact = [];
+  const fuzzy = [];
   chaserCache.chasers.forEach(c => {
     if (chaserMap[c.id]) return; // already mapped
-    const cNameLower = c.name.toLowerCase().replace(/[^a-z0-9]/g, '');
     allChannels.forEach(ch => {
-      const chNameLower = ch.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (!cNameLower || !chNameLower) return;
-      if (chNameLower.includes(cNameLower) || cNameLower.includes(chNameLower)) {
-        suggestions.push({ spotterNetworkId: c.id, spotterName: c.name, channelId: ch.id, channelName: ch.name });
-      }
+      const confidence = matchConfidence(c.name, ch.name);
+      if (!confidence) return;
+      const entry = { spotterNetworkId: c.id, spotterName: c.name, channelId: ch.id, channelName: ch.name };
+      if (confidence === 'exact') exact.push(entry); else fuzzy.push(entry);
     });
   });
 
-  res.json({ suggestions });
+  res.json({ exact, fuzzy, suggestions: fuzzy }); // `suggestions` kept for backward compat — fuzzy tier only
 });
 
 // Admin — chasers with a self-reported YouTube link in their Note field who
@@ -1533,10 +1613,16 @@ async function websubSubscribe(channelId) {
         statusCode: res.statusCode,
       };
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
+      if (status === 'failed') {
+        const ch = getAllChannels().find(c => c.id === channelId);
+        logFetchError(channelId, ch ? ch.name : channelId, 'WebSub subscribe failed — HTTP ' + res.statusCode);
+      }
       resolve(res.statusCode);
     });
     req.on('error', e => {
       websubLeases[channelId] = { subscribedAt: Date.now(), expiresAt: null, status: 'error', error: e.message };
+      const ch = getAllChannels().find(c => c.id === channelId);
+      logFetchError(channelId, ch ? ch.name : channelId, 'WebSub subscribe error — ' + e.message);
       reject(e);
     });
     req.write(postData);
@@ -1752,6 +1838,23 @@ app.post('/api/admin/websub/subscribe', async (req, res) => {
   }
   await subscribeAllChannels();
   res.json({ ok: true, message: 'WebSub subscriptions renewed for all channels' });
+});
+
+// Admin endpoint to resubscribe a single channel — for fixing one FAILED row
+// in the WebSub Health panel without resubscribing all 200+ channels (each
+// full resubscribe takes ~500ms/channel and risks rate limiting from the hub).
+app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
+  if (!process.env.APP_URL) {
+    return res.status(400).json({ error: 'APP_URL not configured — WebSub requires a public URL' });
+  }
+  const { channelId } = req.params;
+  try {
+    const statusCode = await websubSubscribe(channelId);
+    const lease = websubLeases[channelId];
+    res.json({ ok: true, statusCode, status: lease ? lease.status : 'unknown' });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Start WebSub subscriptions after boot (10s delay)

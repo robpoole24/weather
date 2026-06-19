@@ -331,6 +331,7 @@
     <div class="section-body">
       <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem;line-height:1.5">
         Maps live Spotter Network positions to your channels. Mapped chasers show a gold tag and click-to-watch on the radar's Live Storm Chasers layer.
+        <br><strong style="color:var(--gold)">Note:</strong> this list only includes chasers who have pinged a GPS position recently — it's a live activity feed, not Spotter Network's full member roster. Someone you know is registered may not appear here if they haven't opened the app recently.
       </p>
       <div id="chaser-feed-status" style="font-size:0.72rem;color:var(--muted);margin-bottom:1rem;"></div>
 
@@ -348,7 +349,7 @@
       <!-- Suggestions tab -->
       <div id="chaser-tab-suggestions" class="chaser-tab-panel" style="display:none;">
         <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;">
-          Spotter Network names that closely match one of your channel names. Confirm to map, or dismiss if it's a coincidence.
+          Exact name matches are mapped automatically on every refresh. These are the partial/uncertain matches that need your eyes — confirm to map, or leave alone if it's a coincidence.
         </p>
         <div id="chaser-suggestions-list"></div>
       </div>
@@ -540,6 +541,7 @@
               <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Subscribed</th>
               <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Expires</th>
               <th style="padding:0.4rem 0.75rem;text-align:right;border-bottom:1px solid var(--border)">Hrs Remaining</th>
+              <th style="padding:0.4rem 0.75rem;text-align:center;border-bottom:1px solid var(--border)">Action</th>
             </tr>
           </thead>
           <tbody id="websub-tbody"></tbody>
@@ -1747,15 +1749,42 @@ async function loadWebSubHealth() {
       const statusColor = l.status === 'active' ? 'var(--green)' : l.status === 'unknown' ? 'var(--muted)' : 'var(--red)';
       const hrsColor = l.expired ? 'var(--red)' : l.expiringSoon ? 'var(--gold)' : 'var(--text)';
       const hrs = l.hoursUntilExpiry !== null ? (l.expired ? 'EXPIRED' : l.hoursUntilExpiry + 'h') : '—';
-      return '<tr style="border-bottom:1px solid var(--border)">' +
+      const needsAction = l.status !== 'active' || l.expired;
+      const actionBtn = needsAction
+        ? '<button class="btn btn-ghost btn-sm" style="padding:0.15rem 0.5rem;font-size:0.72rem;" onclick="resubscribeOne(\'' + l.id + '\',this)">↻ Resubscribe</button>'
+        : '';
+      return '<tr style="border-bottom:1px solid var(--border)" id="websub-row-' + l.id + '">' +
         '<td style="padding:0.35rem 0.75rem">' + l.name + '</td>' +
         '<td style="padding:0.35rem 0.75rem;text-align:center;color:' + statusColor + ';font-weight:600">' + l.status.toUpperCase() + '</td>' +
         '<td style="padding:0.35rem 0.75rem;color:var(--muted)">' + fmtTs(l.subscribedAt) + '</td>' +
         '<td style="padding:0.35rem 0.75rem;color:var(--muted)">' + fmtTs(l.expiresAt) + '</td>' +
         '<td style="padding:0.35rem 0.75rem;text-align:right;color:' + hrsColor + ';font-weight:' + (l.expiringSoon ? '700' : '400') + '">' + hrs + '</td>' +
+        '<td style="padding:0.35rem 0.75rem;text-align:center">' + actionBtn + '</td>' +
         '</tr>';
     }).join('');
   } catch(e) {}
+}
+
+async function resubscribeOne(channelId, btnEl) {
+  const originalText = btnEl.textContent;
+  btnEl.textContent = '…';
+  btnEl.disabled = true;
+  try {
+    const res = await fetch('/api/admin/websub/subscribe/' + channelId, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(data.status === 'active' ? 'Resubscribed — now active' : 'Resubscribe attempted — status: ' + data.status);
+      await loadWebSubHealth();
+    } else {
+      showToast('⚠ ' + (data.error || 'Resubscribe failed'));
+      btnEl.textContent = originalText;
+      btnEl.disabled = false;
+    }
+  } catch(e) {
+    showToast('⚠ Resubscribe request failed');
+    btnEl.textContent = originalText;
+    btnEl.disabled = false;
+  }
 }
 
 async function loadFetchErrors() {
@@ -1857,6 +1886,15 @@ function channelNameById(channelId) {
 
 async function refreshChaserData() {
   try {
+    // Auto-map any new exact-confidence matches first — this runs every
+    // refresh so newly-active chasers with an exact name match get mapped
+    // automatically without a click. Fuzzy matches are never touched here.
+    const autoMapRes = await fetch('/api/admin/chasers/auto-map-exact', { method: 'POST' });
+    const autoMapData = await autoMapRes.json();
+    if (autoMapData.ok && autoMapData.mapped > 0) {
+      showToast(`Auto-mapped ${autoMapData.mapped} exact match${autoMapData.mapped === 1 ? '' : 'es'}`);
+    }
+
     const [adminRes, suggRes, unmappedRes] = await Promise.all([
       fetch('/api/admin/chasers'),
       fetch('/api/admin/chasers/suggestions'),
@@ -1869,7 +1907,7 @@ async function refreshChaserData() {
     chaserState.updatedAt = adminData.updatedAt;
     chaserState.chasers = adminData.chasers || [];
     chaserState.chaserMap = adminData.chaserMap || {};
-    chaserState.suggestions = suggData.suggestions || [];
+    chaserState.suggestions = suggData.fuzzy || suggData.suggestions || []; // fuzzy tier only — exact already auto-mapped
     chaserState.unmappedYoutube = unmappedData.unmapped || [];
 
     renderChaserPanel();
