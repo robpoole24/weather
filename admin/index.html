@@ -1907,6 +1907,7 @@ async function refreshChaserData() {
     chaserState.updatedAt = adminData.updatedAt;
     chaserState.chasers = adminData.chasers || [];
     chaserState.chaserMap = adminData.chaserMap || {};
+    chaserState.knownChasersCount = adminData.knownChasersCount || 0;
     chaserState.suggestions = suggData.fuzzy || suggData.suggestions || []; // fuzzy tier only — exact already auto-mapped
     chaserState.unmappedYoutube = unmappedData.unmapped || [];
 
@@ -1933,7 +1934,7 @@ function renderChaserPanel() {
   const statusEl = document.getElementById('chaser-feed-status');
   if (statusEl) {
     const ts = chaserState.updatedAt ? new Date(chaserState.updatedAt).toLocaleTimeString() : '—';
-    statusEl.textContent = `${chaserState.chasers.length} chasers in feed · last updated ${ts}`;
+    statusEl.textContent = `${chaserState.chasers.length} live right now · ${chaserState.knownChasersCount} ever seen (accumulating) · last poll ${ts}`;
   }
 
   const mappedEntries = Object.entries(chaserState.chaserMap);
@@ -1957,19 +1958,29 @@ function renderMappedTab() {
   chaserState.chasers.forEach(c => { chaserById[c.id] = c; });
 
   container.innerHTML = mappedEntries.map(([spotterNetworkId, channelId]) => {
-    const c = chaserById[spotterNetworkId];
+    const c = chaserById[spotterNetworkId]; // live right now?
     const chName = channelNameById(channelId);
     const dotColor = c ? (c.status === 'inactive' ? '#8a96a3' : '#00b4d8') : '#444';
-    const liveLabel = c ? (c.status === 'inactive' ? 'Inactive' : (c.mobile ? 'Moving' : 'Active')) : 'Not currently in feed';
+    const liveLabel = c
+      ? (c.status === 'inactive' ? 'Inactive' : (c.mobile ? 'Moving' : 'Active'))
+      : 'Not live right now';
+    const displayName = c ? c.name : channelNameFallbackForSpotter(spotterNetworkId);
     return `<div class="chaser-row">
       <span class="chaser-status-dot" style="background:${dotColor}"></span>
       <div style="flex:1;min-width:0;">
-        <div class="chaser-row-name">${c ? c.name : '(Spotter Network ID ' + spotterNetworkId + ')'} → ${chName}</div>
+        <div class="chaser-row-name">${displayName} → ${chName}</div>
         <div class="chaser-row-sub">${liveLabel}${c && c.youtubeUrl ? ' · 📺 self-reported channel on file' : ''}</div>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="unmapChaser('${spotterNetworkId}')">✕ Unmap</button>
     </div>`;
   }).join('');
+}
+
+// Best-effort display name for a mapped chaser who isn't currently live —
+// we don't keep the full knownChasers registry client-side, so this falls
+// back to the spotter ID rather than guessing.
+function channelNameFallbackForSpotter(spotterNetworkId) {
+  return '(Spotter Network ID ' + spotterNetworkId + ')';
 }
 
 function renderSuggestionsTab() {
@@ -1979,13 +1990,46 @@ function renderSuggestionsTab() {
     return;
   }
   container.innerHTML = chaserState.suggestions.map(s => `
-    <div class="chaser-row">
+    <div class="chaser-row" id="sugg-row-${s.spotterNetworkId}-${s.channelId}">
       <div style="flex:1;min-width:0;">
         <div class="chaser-row-name">${s.spotterName} → ${s.channelName}</div>
         <div class="chaser-row-sub">Name match · Spotter Network ID ${s.spotterNetworkId}</div>
       </div>
+      <button class="btn btn-ghost btn-sm" onclick="dismissSuggestion('${s.spotterNetworkId}','${s.channelId}')">✕ Not a match</button>
       <button class="btn btn-primary btn-sm" onclick="confirmChaserMap('${s.spotterNetworkId}','${s.channelId}')">✓ Confirm</button>
     </div>`).join('');
+}
+
+async function dismissSuggestion(spotterNetworkId, channelId) {
+  const res = await fetch('/api/admin/chasers/dismiss-suggestion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spotterNetworkId, channelId })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    const row = document.getElementById('sugg-row-' + spotterNetworkId + '-' + channelId);
+    if (row) row.remove();
+    chaserState.suggestions = chaserState.suggestions.filter(s => !(s.spotterNetworkId === spotterNetworkId && s.channelId === channelId));
+    document.getElementById('ct-count-suggestions').textContent = chaserState.suggestions.length ? `(${chaserState.suggestions.length})` : '';
+    showToast('Dismissed — won\'t suggest this pair again');
+  }
+}
+
+async function dismissNewChaser(spotterNetworkId) {
+  const res = await fetch('/api/admin/chasers/dismiss-new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spotterNetworkId })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    const row = document.getElementById('newfound-row-' + spotterNetworkId);
+    if (row) row.remove();
+    chaserState.unmappedYoutube = chaserState.unmappedYoutube.filter(c => c.spotterNetworkId !== spotterNetworkId);
+    document.getElementById('ct-count-newfound').textContent = chaserState.unmappedYoutube.length ? `(${chaserState.unmappedYoutube.length})` : '';
+    showToast('Dismissed — won\'t show this chaser again');
+  }
 }
 
 function renderNewFoundTab() {
@@ -2004,6 +2048,7 @@ function renderNewFoundTab() {
           <div class="chaser-row-sub" id="newfound-status-${c.spotterNetworkId}"></div>
         </div>
         <button class="btn btn-ghost btn-sm" onclick="window.open('${c.youtubeUrl}','_blank')">View Channel</button>
+        <button class="btn btn-ghost btn-sm" onclick="dismissNewChaser('${c.spotterNetworkId}')">✕ Not interested</button>
         <button class="btn btn-primary btn-sm" id="newfound-addbtn-${c.spotterNetworkId}" onclick="addChaserAsChannel('${c.spotterNetworkId}','${c.youtubeUrl.replace(/'/g,"\\'")}')">+ Add as Channel</button>
       </div>
       <div id="newfound-manual-${c.spotterNetworkId}" style="display:none;margin-top:0.6rem;padding:0.6rem;background:var(--surface2);border-radius:6px;">

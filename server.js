@@ -305,6 +305,19 @@ function getDefaultData() {
     ],
     highlights: [],
     chaserMap: {},
+    // Accumulating registry of every Spotter Network chaser we've ever seen
+    // in a poll, keyed by their Spotter Network ID. The live feed only
+    // shows who's currently broadcasting a position, so this persists names
+    // across polls — without it, suggestions/matching would be at the mercy
+    // of whoever happens to be active in any given 2-minute window.
+    // Shape: { [spotterNetworkId]: { name, firstSeenAt, lastSeenAt, youtubeUrl } }
+    knownChasers: {},
+    // Spotter Network IDs the admin has explicitly said are NOT a match for
+    // anything (dismissed from Suggestions) or NOT worth adding (dismissed
+    // from New Chasers Found) — excluded from those lists going forward so
+    // a "no" answer doesn't keep resurfacing every refresh.
+    dismissedSuggestions: [], // array of "spotterNetworkId::channelId" pairs
+    dismissedNewChasers: [],  // array of spotterNetworkId
     playlists: [
       { id: 'playlist-1', title: 'Weather Playlist', playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI' }
     ]
@@ -908,9 +921,43 @@ async function refreshChaserCache() {
     const chasers = parseSpotterNetworkKML(text);
     chaserCache = { updatedAt: new Date().toISOString(), chasers };
     console.log(`[Chasers] Refreshed Spotter Network feed: ${chasers.length} positions`);
+    mergeIntoKnownChasers(chasers);
   } catch (e) {
     console.warn('[Chasers] Failed to refresh Spotter Network feed:', e.message);
   }
+}
+
+// Merges this poll's live positions into the persisted, accumulating
+// registry (data.knownChasers). This is what lets suggestions/matching work
+// against everyone we've EVER seen broadcast, not just whoever happens to
+// be active in this specific 2-minute window. Saved to Redis via saveData
+// so it survives restarts and keeps growing over days/weeks.
+function mergeIntoKnownChasers(chasers) {
+  if (!chasers.length) return;
+  const data = loadData();
+  if (!data.knownChasers) data.knownChasers = {};
+  const now = Date.now();
+  let added = 0;
+
+  chasers.forEach(c => {
+    const existing = data.knownChasers[c.id];
+    if (existing) {
+      existing.name = c.name; // keep name current in case they update it
+      existing.lastSeenAt = now;
+      if (c.youtubeUrl) existing.youtubeUrl = c.youtubeUrl; // pick up a newly-added link
+    } else {
+      data.knownChasers[c.id] = {
+        name: c.name,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        youtubeUrl: c.youtubeUrl || null
+      };
+      added++;
+    }
+  });
+
+  if (added > 0) console.log(`[Chasers] Added ${added} newly-seen chaser(s) to known registry (total: ${Object.keys(data.knownChasers).length})`);
+  saveData(data);
 }
 
 // Public — all current chaser positions, with our channel mapping applied
@@ -939,7 +986,12 @@ app.get('/api/chasers', (req, res) => {
 // Admin — same data, used by the Chaser Mapping panel
 app.get('/api/admin/chasers', (req, res) => {
   const data = loadData();
-  res.json({ updatedAt: chaserCache.updatedAt, chasers: chaserCache.chasers, chaserMap: data.chaserMap || {} });
+  res.json({
+    updatedAt: chaserCache.updatedAt,
+    chasers: chaserCache.chasers,
+    chaserMap: data.chaserMap || {},
+    knownChasersCount: Object.keys(data.knownChasers || {}).length
+  });
 });
 
 // Admin — map a Spotter Network chaser ID to one of our channel IDs
@@ -957,6 +1009,38 @@ app.post('/api/admin/chasers/map', express.json(), (req, res) => {
   res.json({ ok: true });
 });
 
+// Admin — dismiss a single (spotterNetworkId, channelId) suggestion pair as
+// "not a match." Stored permanently so it never resurfaces in Suggestions
+// again, even though the same name-similarity will keep recomputing on
+// every refresh. Scoped to the pair, not the whole chaser, since the same
+// person might still be a fuzzy match candidate against a DIFFERENT channel
+// later (e.g. if they're later confirmed as someone else entirely).
+app.post('/api/admin/chasers/dismiss-suggestion', express.json(), (req, res) => {
+  const { spotterNetworkId, channelId } = req.body;
+  if (!spotterNetworkId || !channelId) return res.status(400).json({ error: 'spotterNetworkId and channelId required' });
+  const data = loadData();
+  if (!data.dismissedSuggestions) data.dismissedSuggestions = [];
+  const key = spotterNetworkId + '::' + channelId;
+  if (!data.dismissedSuggestions.includes(key)) data.dismissedSuggestions.push(key);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — dismiss a chaser entirely from "New Chasers Found" (e.g. a
+// self-reported YouTube link that turns out to be unrelated, a duplicate,
+// or just not someone you want to add). Stored permanently — the chaser
+// stays excluded from that list even though they'll keep appearing in the
+// knownChasers registry and the live feed/radar dots.
+app.post('/api/admin/chasers/dismiss-new', express.json(), (req, res) => {
+  const { spotterNetworkId } = req.body;
+  if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
+  const data = loadData();
+  if (!data.dismissedNewChasers) data.dismissedNewChasers = [];
+  if (!data.dismissedNewChasers.includes(spotterNetworkId)) data.dismissedNewChasers.push(spotterNetworkId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
 // Admin — auto-maps every current "exact" tier match in one call. Exact
 // matches are normalized-identical names or full-token-subset matches (see
 // matchConfidence above), which is a low false-positive-risk bar — these
@@ -965,6 +1049,7 @@ app.post('/api/admin/chasers/map', express.json(), (req, res) => {
 app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
   const data = loadData();
   if (!data.chaserMap) data.chaserMap = {};
+  const knownChasers = data.knownChasers || {};
   const allChannels = [];
   (data.groups || []).forEach(g => {
     (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
@@ -972,11 +1057,11 @@ app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
 
   let mapped = 0;
   const mappedNames = [];
-  chaserCache.chasers.forEach(c => {
-    if (data.chaserMap[c.id]) return; // already mapped
+  Object.entries(knownChasers).forEach(([spotterNetworkId, c]) => {
+    if (data.chaserMap[spotterNetworkId]) return; // already mapped
     for (const ch of allChannels) {
       if (matchConfidence(c.name, ch.name) === 'exact') {
-        data.chaserMap[c.id] = ch.id;
+        data.chaserMap[spotterNetworkId] = ch.id;
         mapped++;
         mappedNames.push({ spotterName: c.name, channelName: ch.name });
         break; // first exact match wins — exact tier is narrow enough that
@@ -1044,6 +1129,8 @@ function matchConfidence(spotterName, channelName) {
 app.get('/api/admin/chasers/suggestions', (req, res) => {
   const data = loadData();
   const chaserMap = data.chaserMap || {};
+  const knownChasers = data.knownChasers || {};
+  const dismissed = new Set(data.dismissedSuggestions || []);
   const allChannels = [];
   (data.groups || []).forEach(g => {
     (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
@@ -1051,12 +1138,19 @@ app.get('/api/admin/chasers/suggestions', (req, res) => {
 
   const exact = [];
   const fuzzy = [];
-  chaserCache.chasers.forEach(c => {
-    if (chaserMap[c.id]) return; // already mapped
+  Object.entries(knownChasers).forEach(([spotterNetworkId, c]) => {
+    if (chaserMap[spotterNetworkId]) return; // already mapped
     allChannels.forEach(ch => {
+      if (dismissed.has(spotterNetworkId + '::' + ch.id)) return; // admin already said no
       const confidence = matchConfidence(c.name, ch.name);
       if (!confidence) return;
-      const entry = { spotterNetworkId: c.id, spotterName: c.name, channelId: ch.id, channelName: ch.name };
+      const entry = {
+        spotterNetworkId,
+        spotterName: c.name,
+        channelId: ch.id,
+        channelName: ch.name,
+        lastSeenAt: c.lastSeenAt
+      };
       if (confidence === 'exact') exact.push(entry); else fuzzy.push(entry);
     });
   });
@@ -1066,21 +1160,32 @@ app.get('/api/admin/chasers/suggestions', (req, res) => {
 
 // Admin — chasers with a self-reported YouTube link in their Note field who
 // are NOT yet mapped to one of our channels. Surfaces new chasers to add.
+// Runs against the persisted knownChasers registry, not just the current
+// 2-minute live snapshot, so this accumulates everyone we've ever spotted
+// reporting a link rather than only whoever happens to be active right now.
 app.get('/api/admin/chasers/unmapped-youtube', (req, res) => {
   const data = loadData();
   const chaserMap = data.chaserMap || {};
-  const mappedIds = new Set(Object.keys(chaserMap));
+  const knownChasers = data.knownChasers || {};
+  const dismissedNew = new Set(data.dismissedNewChasers || []);
 
-  const found = chaserCache.chasers
-    .filter(c => c.youtubeUrl && !mappedIds.has(c.id))
-    .map(c => ({
-      spotterNetworkId: c.id,
-      name: c.name,
-      youtubeUrl: c.youtubeUrl,
-      lat: c.lat,
-      lng: c.lng,
-      status: c.status
-    }));
+  const found = Object.entries(knownChasers)
+    .filter(([spotterNetworkId, c]) => c.youtubeUrl && !chaserMap[spotterNetworkId] && !dismissedNew.has(spotterNetworkId))
+    .map(([spotterNetworkId, c]) => {
+      // Pull current live status from the cache if they're active right
+      // now; otherwise fall back to "last seen" since they may not be
+      // broadcasting in this exact poll window.
+      const live = chaserCache.chasers.find(lc => lc.id === spotterNetworkId);
+      return {
+        spotterNetworkId,
+        name: c.name,
+        youtubeUrl: c.youtubeUrl,
+        lat: live ? live.lat : null,
+        lng: live ? live.lng : null,
+        status: live ? live.status : 'offline',
+        lastSeenAt: c.lastSeenAt
+      };
+    });
 
   res.json({ unmapped: found });
 });
