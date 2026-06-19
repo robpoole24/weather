@@ -380,7 +380,7 @@
         <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;">
           Every chaser ever seen in the Spotter Network feed since this registry started collecting. The Suggestions matcher is intentionally conservative — browse here to catch matches it may have missed (e.g. a stage name with no overlap with their real name).
         </p>
-        <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
           <input type="text" id="allknown-search" placeholder="Filter by name..." oninput="renderAllKnownTab()" />
           <select id="allknown-filter" onchange="renderAllKnownTab()">
             <option value="all">All</option>
@@ -388,6 +388,10 @@
             <option value="mapped">Mapped only</option>
             <option value="youtube">Has YouTube link</option>
             <option value="live">Live right now</option>
+          </select>
+          <select id="allknown-sort" onchange="renderAllKnownTab()">
+            <option value="alpha">A → Z</option>
+            <option value="recent">Most recently seen</option>
           </select>
         </div>
         <div id="allknown-list" style="max-height:420px;overflow-y:auto;"></div>
@@ -1973,6 +1977,7 @@ function renderAllKnownTab() {
   if (!listEl) return;
   const query = (document.getElementById('allknown-search').value || '').toLowerCase().trim();
   const filter = document.getElementById('allknown-filter').value;
+  const sortBy = document.getElementById('allknown-sort').value;
 
   let rows = chaserState.allKnown;
   if (query) rows = rows.filter(c => c.name.toLowerCase().includes(query));
@@ -1981,9 +1986,10 @@ function renderAllKnownTab() {
   if (filter === 'youtube') rows = rows.filter(c => !!c.youtubeUrl);
   if (filter === 'live') rows = rows.filter(c => c.isLiveNow);
 
-  // Most-recently-seen first — surfaces active/relevant chasers over
-  // someone seen once months ago.
-  rows = [...rows].sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
+  rows = [...rows].sort((a, b) => {
+    if (sortBy === 'recent') return (b.lastSeenAt || 0) - (a.lastSeenAt || 0);
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }); // A → Z, default
+  });
 
   if (!rows.length) {
     listEl.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No chasers match this filter.</p>';
