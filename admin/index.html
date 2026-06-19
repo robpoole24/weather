@@ -125,6 +125,20 @@
   .picker-item input { accent-color:var(--accent); }
   .picker-item-name { font-size:0.85rem; }
   .picker-item-group { font-size:0.7rem; color:var(--muted); margin-left:auto; }
+  /* App link inputs expand on focus so full URL is visible/editable */
+  .app-link-input {
+    width: 2.5rem;
+    min-width: 0;
+    transition: width 0.2s ease, box-shadow 0.2s ease;
+    position: relative;
+    z-index: 1;
+  }
+  .app-link-input:focus {
+    width: 260px;
+    position: relative;
+    z-index: 10;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+  }
 </style>
 </head>
 <body>
@@ -143,8 +157,6 @@
     <div class="section-body">
       <label>YouTube Data API Key</label>
       <input type="text" id="cfg-apikey" placeholder="Stored in environment variable on server" autocomplete="off" style="font-family:monospace;font-size:0.8rem;" />
-      <label>Weather Playlist ID</label>
-      <input type="text" id="cfg-playlist" placeholder="PLxxxxxxxxxxxxxxxxxx" />
 
       <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">
         <div style="flex:1;min-width:180px;">
@@ -243,6 +255,29 @@
 
       <!-- List -->
       <div id="highlights-list"></div>
+    </div>
+  </div>
+
+  <!-- Playlists -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">▶ Playlists</div>
+      <button class="btn btn-primary btn-sm" onclick="showAddPlaylist()">+ New Playlist</button>
+    </div>
+    <div class="section-body">
+      <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
+        Playlists appear as browse cards in the frontend. Get the Playlist ID from the YouTube URL:
+        <code style="font-size:0.75rem;color:var(--accent)">youtube.com/playlist?list=<strong>PLAYLIST_ID</strong></code>
+      </p>
+      <div id="playlists-list"></div>
+      <div class="add-form" id="add-playlist-form">
+        <div><label>Title</label><input type="text" id="new-playlist-title" placeholder="e.g. Storm Season 2025" /></div>
+        <div><label>YouTube Playlist ID</label><input type="text" id="new-playlist-id" placeholder="PLxxxxxxxxxxxxxxxxxx" style="font-family:monospace;font-size:0.82rem;" /></div>
+        <div style="flex:0;display:flex;gap:0.5rem;align-items:flex-end">
+          <button class="btn btn-primary btn-sm" onclick="addPlaylist()">Add</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('add-playlist-form').classList.remove('open')">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -631,7 +666,6 @@ async function restoreBackup(input) {
 
 function renderAll() {
   document.getElementById('cfg-apikey').value = appData.config.apiKey || '';
-  document.getElementById('cfg-playlist').value = appData.config.playlistId || '';
   document.getElementById('cfg-live-interval').value = appData.config.liveCheckIntervalHours || 12;
   document.getElementById('cfg-fetch-hour').value = appData.config.recentFetchHourEST !== undefined ? appData.config.recentFetchHourEST : 12;
 
@@ -644,6 +678,7 @@ function renderAll() {
   renderGroups();
   renderApps();
   renderHighlights();
+  renderPlaylists();
   populateMarkLiveChannelSelect();
   populateHighlightChannelSelect();
 }
@@ -1180,7 +1215,6 @@ async function saveConfig() {
     method:'PUT', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       apiKey: document.getElementById('cfg-apikey').value,
-      playlistId: document.getElementById('cfg-playlist').value,
       liveCheckIntervalHours: Math.min(24, Math.max(1, liveInterval)),
       recentFetchHourEST: fetchHourValid ? fetchHour : 18,
     })
@@ -1211,10 +1245,10 @@ function renderApps() {
         <input type="text" value="${(app.name||'').replace(/"/g,'&quot;')}" placeholder="App name" style="margin:0;font-size:0.8rem;font-weight:600;min-width:120px" onchange="appData.apps[${i}].name=this.value">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
-        <input type="text" value="${app.web||''}" placeholder="https://..." style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].web=this.value||null">
+        <input type="text" value="${app.web||''}" placeholder="https://..." class="app-link-input" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].web=this.value||null">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
-        <input type="text" value="${app.ios||''}" placeholder="${app.iosSoon ? 'Coming soon' : 'No iOS link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value||null">
+        <input type="text" value="${app.ios||''}" placeholder="${app.iosSoon ? 'Coming soon' : 'No iOS link'}" class="app-link-input" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].ios=this.value||null">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <label class="toggle" title="Show 'iOS coming soon' badge">
@@ -1223,7 +1257,7 @@ function renderApps() {
         </label>
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
-        <input type="text" value="${app.android||''}" placeholder="${app.androidSoon ? 'Coming soon' : 'No Android link'}" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].android=this.value||null">
+        <input type="text" value="${app.android||''}" placeholder="${app.androidSoon ? 'Coming soon' : 'No Android link'}" class="app-link-input" style="margin:0;font-size:0.75rem" onchange="appData.apps[${i}].android=this.value||null">
       </td>
       <td style="padding:0.6rem 0.75rem;border-bottom:1px solid rgba(0,180,216,0.08)">
         <label class="toggle" title="Show 'Android coming soon' badge">
@@ -1699,6 +1733,72 @@ async function validateChannel() {
 }
 
 // Manual mark live — zero quota cost
+// ── Playlists ────────────────────────────────────────────────────────────────
+
+function renderPlaylists() {
+  const list = document.getElementById('playlists-list');
+  if (!list || !appData) return;
+  const playlists = appData.playlists || [];
+  if (playlists.length === 0) {
+    list.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No playlists yet.</p>';
+    return;
+  }
+  list.innerHTML = playlists.map((p, i) => `
+    <div style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0;border-bottom:1px solid var(--border);">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:0.85rem;font-weight:600;">${p.title}</div>
+        <div style="font-size:0.75rem;color:var(--muted);font-family:monospace;">${p.playlistId}</div>
+      </div>
+      <div style="display:flex;gap:0.35rem;flex-shrink:0;">
+        <button class="btn btn-ghost btn-sm" style="padding:0.2rem 0.5rem;" onclick="reorderPlaylist('${p.id}','up')" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn btn-ghost btn-sm" style="padding:0.2rem 0.5rem;" onclick="reorderPlaylist('${p.id}','down')" ${i === playlists.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn btn-ghost btn-sm" style="padding:0.2rem 0.5rem;color:var(--danger,#e05555);" onclick="removePlaylist('${p.id}')">✕</button>
+      </div>
+    </div>`).join('');
+}
+
+function showAddPlaylist() {
+  document.getElementById('add-playlist-form').classList.toggle('open');
+}
+
+async function addPlaylist() {
+  const title = document.getElementById('new-playlist-title').value.trim();
+  const playlistId = document.getElementById('new-playlist-id').value.trim();
+  if (!title || !playlistId) { showToast('⚠ Title and Playlist ID required'); return; }
+  const res = await fetch('/api/admin/playlists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, playlistId })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    document.getElementById('new-playlist-title').value = '';
+    document.getElementById('new-playlist-id').value = '';
+    document.getElementById('add-playlist-form').classList.remove('open');
+    showToast('Playlist added');
+    await loadData();
+  } else {
+    showToast('⚠ ' + (data.error || 'Failed'));
+  }
+}
+
+async function removePlaylist(id) {
+  if (!confirm('Remove this playlist?')) return;
+  const res = await fetch(`/api/admin/playlists/${id}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.ok) { showToast('Playlist removed'); await loadData(); }
+}
+
+async function reorderPlaylist(id, direction) {
+  const res = await fetch('/api/admin/playlists/reorder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, direction })
+  });
+  const data = await res.json();
+  if (data.ok) await loadData();
+}
+
 // ── Highlights ──────────────────────────────────────────────────────────────
 
 function populateHighlightChannelSelect() {

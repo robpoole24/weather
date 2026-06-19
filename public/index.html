@@ -1562,7 +1562,8 @@
 // API key is now stored securely in the .env file on the server
 // You no longer need to edit this file to set your API key
 
-const PLAYLIST_ID = 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI';
+// Playlists loaded dynamically from server — replaces hardcoded PLAYLIST_ID
+let PLAYLISTS = [];
 
 // ═══════════════════════════════════════════
 // CHANNEL DATA — loaded dynamically from server
@@ -1604,6 +1605,7 @@ async function init() {
   updateFavoritesBtnVisibility();
   await checkAllLiveStatuses();
   loadHighlights();
+  loadPlaylists();
   setTimeout(updateCacheStatus, 1500);
   setInterval(updateCacheStatus, 60000);
 }
@@ -3494,8 +3496,6 @@ function updateHighlightsBtn(hasHighlights) {
   if (btn) btn.style.display = hasHighlights ? '' : 'none';
 }
 
-let playlistLoaded = false;
-
 // Listen for minimize message from radar iframe
 window.addEventListener('message', (e) => {
   if (e.data && e.data.action === 'minimizeRadar') {
@@ -3513,64 +3513,145 @@ function loadRadarPanel() {
 }
 
 // Collapse radar expanded mode when switching away
-const _origShowPanel = showPanel;
 window._radarPanelCleanup = function() {
   document.body.classList.remove('radar-expanded');
 };
 
-async function loadPlaylist() {
-  // Update the View on YouTube link with the real playlist ID
-  const ytLink = document.getElementById('playlist-yt-link');
-  if (ytLink && PLAYLIST_ID && PLAYLIST_ID !== 'YOUR_PLAYLIST_ID') {
-    ytLink.href = 'https://www.youtube.com/playlist?list=' + PLAYLIST_ID;
+async function loadPlaylists() {
+  try {
+    const res = await fetch('/api/playlists');
+    if (!res.ok) return;
+    const data = await res.json();
+    PLAYLISTS = Array.isArray(data) ? data : [];
+  } catch(e) {
+    console.warn('[WeatherTV] Could not load playlists:', e.message);
   }
+}
 
-  if (!PLAYLIST_ID || PLAYLIST_ID === 'YOUR_PLAYLIST_ID') {
-    clearVideo();
-    document.getElementById('video-placeholder').querySelector('p').textContent =
-      'No playlist configured — add your Playlist ID to the PLAYLIST_ID config value.';
+// Tracks which playlist is currently loaded in the thumbs view
+let activePlaylistId = null;
+let playlistLoaded = false;
+
+async function loadPlaylist() {
+  const panel = document.getElementById('playlist-panel');
+
+  if (!PLAYLISTS.length) {
+    // Nothing configured
+    panel.innerHTML = `
+      <div class="divider"></div>
+      <span style="color:var(--muted);font-size:0.8rem;padding:0.5rem;">No playlists configured.</span>`;
     return;
   }
 
-  // Load first video into player immediately
-  const firstVideoUrl = `https://www.youtube.com/embed/videoseries?list=${PLAYLIST_ID}&autoplay=0&rel=0&index=0`;
-  loadIframe(firstVideoUrl, 'Weather Playlist', false);
+  if (PLAYLISTS.length === 1) {
+    // Single playlist — go straight to thumbs, same as before
+    openPlaylistThumbs(PLAYLISTS[0]);
+    return;
+  }
 
-  // Only fetch thumbnails once — no need to re-fetch on every panel open
-  if (playlistLoaded) return;
+  // Multiple playlists — show browse cards
+  buildPlaylistBrowse();
+}
+
+function buildPlaylistBrowse() {
+  const panel = document.getElementById('playlist-panel');
+  panel.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.3rem;min-width:90px';
+  header.innerHTML = `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.05em">🌦 Playlists</div>
+    <div style="font-size:0.7rem;color:var(--muted)">Choose a playlist</div>`;
+  panel.appendChild(header);
+
+  const divider = document.createElement('div');
+  divider.className = 'divider';
+  panel.appendChild(divider);
+
+  const cards = document.createElement('div');
+  cards.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:thin;scrollbar-color:var(--accent2) transparent;padding:0.4rem 0.5rem;box-sizing:border-box;';
+
+  PLAYLISTS.forEach(p => {
+    const card = document.createElement('div');
+    card.style.cssText = 'flex-shrink:0;cursor:pointer;border:1px solid var(--border);border-radius:6px;overflow:hidden;width:140px;transition:border-color 0.15s;';
+    card.onmouseenter = () => card.style.borderColor = 'var(--accent)';
+    card.onmouseleave = () => card.style.borderColor = 'var(--border)';
+    card.onclick = () => openPlaylistThumbs(p);
+    card.innerHTML = `
+      <div style="background:var(--surface2);height:52px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;">▶</div>
+      <div style="padding:0.35rem 0.5rem;font-size:0.75rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.title}</div>`;
+    cards.appendChild(card);
+  });
+
+  panel.appendChild(cards);
+}
+
+async function openPlaylistThumbs(playlist) {
+  const panel = document.getElementById('playlist-panel');
+  panel.innerHTML = '';
+
+  const showBack = PLAYLISTS.length > 1;
+
+  // Header
+  const headerWrap = document.createElement('div');
+  headerWrap.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.3rem;min-width:90px';
+  headerWrap.innerHTML = `
+    ${showBack ? `<button onclick="buildPlaylistBrowse()" style="background:none;border:none;color:var(--accent);font-size:0.72rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;cursor:pointer;text-align:left;padding:0;margin-bottom:0.15rem;">← ALL</button>` : ''}
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.9rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.05em">🌦 Playlist</div>
+    <div style="font-size:0.7rem;color:var(--muted)">Click to play</div>
+    <a href="https://www.youtube.com/playlist?list=${playlist.playlistId}" target="_blank" rel="noopener"
+      style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--gold);text-decoration:none;"
+      onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+      ↗ View on YouTube
+    </a>`;
+  panel.appendChild(headerWrap);
+
+  const divider = document.createElement('div');
+  divider.className = 'divider';
+  panel.appendChild(divider);
+
+  const thumbsContainer = document.createElement('div');
+  thumbsContainer.id = 'playlist-thumbs';
+  thumbsContainer.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:thin;scrollbar-color:var(--accent2) transparent;';
+  thumbsContainer.innerHTML = `<div style="display:flex;align-items:center;gap:0.5rem;color:var(--muted);font-size:0.8rem"><div class="spinner"></div> Loading...</div>`;
+  panel.appendChild(thumbsContainer);
+
+  // Auto-play first video
+  const firstVideoUrl = `https://www.youtube.com/embed/videoseries?list=${playlist.playlistId}&autoplay=0&rel=0&index=0`;
+  loadIframe(firstVideoUrl, playlist.title, false);
+
+  // Only re-fetch if switching to a different playlist
+  if (activePlaylistId === playlist.playlistId && playlistLoaded) {
+    return;
+  }
+  activePlaylistId = playlist.playlistId;
   playlistLoaded = true;
 
-  const thumbsContainer = document.getElementById('playlist-thumbs');
-
   try {
-    const res = await fetch(`/api/yt/playlist/${PLAYLIST_ID}`);
+    const res = await fetch(`/api/yt/playlist/${playlist.playlistId}`);
     const data = await res.json();
 
     if (data.error === 'quota_exceeded') {
       thumbsContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Quota reached — thumbnails available after midnight Pacific</span>';
       return;
     }
-
     if (!data.items || data.items.length === 0) {
       thumbsContainer.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No videos found in playlist.</span>';
       return;
     }
 
-    // Add scroll arrows around the playlist thumbs container
-  const playlistPanel = document.getElementById('playlist-panel');
-  const existingLeft = playlistPanel.querySelector('.scroll-arrow');
-  if (!existingLeft) {
-    const { leftBtn: plLeft, rightBtn: plRight } = createScrollArrows(thumbsContainer);
-    // Insert left arrow before thumbsContainer, right arrow after
-    thumbsContainer.parentNode.insertBefore(plLeft, thumbsContainer);
-    thumbsContainer.parentNode.insertBefore(plRight, thumbsContainer.nextSibling);
-    // Hide native scrollbar on thumbs container
-    thumbsContainer.style.scrollbarWidth = 'none';
-    thumbsContainer.style.msOverflowStyle = 'none';
-  }
+    // Add scroll arrows
+    const existingLeft = panel.querySelector('.scroll-arrow');
+    if (!existingLeft) {
+      const { leftBtn, rightBtn } = createScrollArrows(thumbsContainer);
+      thumbsContainer.parentNode.insertBefore(leftBtn, thumbsContainer);
+      thumbsContainer.parentNode.insertBefore(rightBtn, thumbsContainer.nextSibling);
+      thumbsContainer.style.scrollbarWidth = 'none';
+      thumbsContainer.style.msOverflowStyle = 'none';
+    }
 
-  thumbsContainer.innerHTML = '';
-    data.items.forEach((item, index) => {
+    thumbsContainer.innerHTML = '';
+    data.items.forEach(item => {
       const snippet = item.snippet;
       const videoId = snippet.resourceId && snippet.resourceId.videoId;
       if (!videoId) return;
@@ -3579,15 +3660,11 @@ async function loadPlaylist() {
       thumb.className = 'video-thumb';
       thumb.style.flexShrink = '0';
       thumb.onclick = () => {
-        // Load this specific video by index in the playlist
         const url = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
         loadIframe(url, snippet.title, false);
       };
 
-      const imgSrc = snippet.thumbnails?.medium?.url
-        || snippet.thumbnails?.default?.url
-        || '';
-
+      const imgSrc = snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || '';
       thumb.innerHTML = `
         <a class="video-thumb-like" href="https://www.youtube.com/watch?v=${videoId}" target="_blank" rel="noopener"
            title="Like this video on YouTube" aria-label="Like ${snippet.title} on YouTube"

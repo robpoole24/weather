@@ -303,7 +303,10 @@ function getDefaultData() {
       { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',          androidSoon: false, enabled: true },
       { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                              iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',      androidSoon: false, enabled: true, collectionRef: 'UCuYqi3hOfz6-3Hdp6tEJjAg::col-1780335893616' },
     ],
-    highlights: []
+    highlights: [],
+    playlists: [
+      { id: 'playlist-1', title: 'Weather Playlist', playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI' }
+    ]
   };
 }
 
@@ -411,6 +414,61 @@ app.put('/api/admin/highlights/reorder', express.json(), (req, res) => {
   const tmp = data.highlights[index];
   data.highlights[index] = data.highlights[newIdx];
   data.highlights[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// ── Playlists routes ──
+
+// Public — frontend fetches on page load
+app.get('/api/playlists', (req, res) => {
+  const data = loadData();
+  res.json(data.playlists || []);
+});
+
+// Admin — add playlist
+app.post('/api/admin/playlists', express.json(), (req, res) => {
+  const { title, playlistId } = req.body;
+  if (!title || !playlistId) return res.status(400).json({ error: 'title and playlistId required' });
+  const data = loadData();
+  if (!data.playlists) data.playlists = [];
+  data.playlists.push({ id: 'playlist-' + Date.now(), title, playlistId });
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — update playlist
+app.put('/api/admin/playlists/:id', express.json(), (req, res) => {
+  const data = loadData();
+  if (!data.playlists) return res.status(404).json({ error: 'Not found' });
+  const idx = data.playlists.findIndex(p => p.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Playlist not found' });
+  data.playlists[idx] = { ...data.playlists[idx], ...req.body };
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — remove playlist
+app.delete('/api/admin/playlists/:id', (req, res) => {
+  const data = loadData();
+  if (!data.playlists) return res.json({ ok: true });
+  data.playlists = data.playlists.filter(p => p.id !== req.params.id);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — reorder playlists
+app.put('/api/admin/playlists/reorder', express.json(), (req, res) => {
+  const { id, direction } = req.body;
+  const data = loadData();
+  if (!data.playlists) return res.json({ ok: true });
+  const idx = data.playlists.findIndex(p => p.id === id);
+  if (idx === -1) return res.json({ ok: true });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= data.playlists.length) return res.json({ ok: true });
+  const tmp = data.playlists[idx];
+  data.playlists[idx] = data.playlists[newIdx];
+  data.playlists[newIdx] = tmp;
   saveData(data);
   res.json({ ok: true });
 });
