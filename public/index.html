@@ -1603,6 +1603,7 @@ async function init() {
   buildWSPanel();
   updateFavoritesBtnVisibility();
   await checkAllLiveStatuses();
+  loadHighlights();
   setTimeout(updateCacheStatus, 1500);
   setInterval(updateCacheStatus, 60000);
 }
@@ -3426,11 +3427,24 @@ document.addEventListener('click', (e) => {
 // ═══════════════════════════════════════════
 // HIGHLIGHTS PANEL
 // ═══════════════════════════════════════════
+let highlightsData = [];
+
+async function loadHighlights() {
+  try {
+    const res = await fetch('/api/highlights');
+    if (!res.ok) return;
+    const data = await res.json();
+    highlightsData = Array.isArray(data) ? data : [];
+    updateHighlightsBtn(highlightsData.length > 0);
+  } catch(e) {
+    console.warn('[WeatherTV] Could not load highlights:', e.message);
+  }
+}
+
 function buildHighlightsPanel() {
   const panel = document.getElementById('highlights-panel');
   panel.innerHTML = '';
-  // Placeholder until Highlights feature is built in admin
-  // When highlights data is available (fetched from /api/highlights), this will render cards
+
   const header = document.createElement('div');
   header.id = 'highlights-header';
   header.innerHTML =
@@ -3441,7 +3455,36 @@ function buildHighlightsPanel() {
   const list = document.createElement('div');
   list.id = 'highlights-list';
   list.style.cssText = 'display:flex;gap:0.5rem;flex:1;overflow-x:auto;align-items:center;scrollbar-width:none;-ms-overflow-style:none;min-width:0;-webkit-overflow-scrolling:touch;touch-action:pan-x;padding:0.4rem 0.5rem;box-sizing:border-box;height:100%;';
-  list.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No highlights yet — check back soon.</span>';
+
+  if (!highlightsData.length) {
+    list.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No highlights yet — check back soon.</span>';
+    panel.appendChild(list);
+    return;
+  }
+
+  highlightsData.forEach(h => {
+    const thumb = document.createElement('div');
+    thumb.className = 'video-thumb';
+    thumb.style.flexShrink = '0';
+    thumb.onclick = () => {
+      const url = 'https://www.youtube.com/embed/' + h.videoId + '?autoplay=1&rel=0';
+      loadIframe(url, h.title || h.videoId, false);
+    };
+
+    const imgSrc = h.thumbnail || ('https://i.ytimg.com/vi/' + h.videoId + '/mqdefault.jpg');
+    const safeTitle = (h.title || h.videoId).replace(/"/g, '&quot;');
+
+    thumb.innerHTML = `
+      <a class="video-thumb-like" href="https://www.youtube.com/watch?v=${h.videoId}" target="_blank" rel="noopener"
+         title="Like this video on YouTube" aria-label="Like ${safeTitle} on YouTube"
+         onclick="event.stopPropagation()">👍 Like</a>
+      <img src="${imgSrc}" alt="${safeTitle}" loading="lazy"
+        onerror="this.style.background='var(--surface2)'" />
+      <div class="video-thumb-title">${h.title || h.videoId}</div>
+    `;
+    list.appendChild(thumb);
+  });
+
   panel.appendChild(list);
 }
 

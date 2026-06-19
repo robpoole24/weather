@@ -302,7 +302,8 @@ function getDefaultData() {
       { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',             iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.windyty.android',          androidSoon: false, enabled: true },
       { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',          androidSoon: false, enabled: true },
       { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                              iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',      androidSoon: false, enabled: true, collectionRef: 'UCuYqi3hOfz6-3Hdp6tEJjAg::col-1780335893616' },
-    ]
+    ],
+    highlights: []
   };
 }
 
@@ -361,6 +362,57 @@ app.put('/api/admin/config', (req, res) => {
 // Get all groups
 app.get('/api/groups', (req, res) => {
   res.json(loadData().groups);
+});
+
+// ── Highlights routes ──
+
+// Public — frontend fetches on page load
+app.get('/api/highlights', (req, res) => {
+  const data = loadData();
+  res.json(data.highlights || []);
+});
+
+// Admin — get highlights
+app.get('/api/admin/highlights', (req, res) => {
+  const data = loadData();
+  res.json(data.highlights || []);
+});
+
+// Admin — add highlight
+app.post('/api/admin/highlights', express.json(), (req, res) => {
+  const { channelId, videoId, title, thumbnail } = req.body;
+  if (!channelId || !videoId) return res.status(400).json({ error: 'channelId and videoId required' });
+  const data = loadData();
+  if (!data.highlights) data.highlights = [];
+  data.highlights.push({ channelId, videoId, title: title || '', thumbnail: thumbnail || '' });
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — remove highlight by index
+app.delete('/api/admin/highlights/:index', (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  const data = loadData();
+  if (!data.highlights || idx < 0 || idx >= data.highlights.length) {
+    return res.status(404).json({ error: 'Highlight not found' });
+  }
+  data.highlights.splice(idx, 1);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — reorder highlights (swap by index, direction up/down)
+app.put('/api/admin/highlights/reorder', express.json(), (req, res) => {
+  const { index, direction } = req.body;
+  const data = loadData();
+  if (!data.highlights) return res.json({ ok: true });
+  const newIdx = direction === 'up' ? index - 1 : index + 1;
+  if (newIdx < 0 || newIdx >= data.highlights.length) return res.json({ ok: true });
+  const tmp = data.highlights[index];
+  data.highlights[index] = data.highlights[newIdx];
+  data.highlights[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
 });
 
 // Update a group

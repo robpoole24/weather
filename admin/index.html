@@ -218,6 +218,34 @@
     </div>
   </div>
 
+  <!-- Highlights -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">⭐ Highlights</div>
+    </div>
+    <div class="section-body">
+      <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
+        Pin specific videos to the Highlights panel on the frontend. The ⭐ button appears in the nav when at least one highlight exists.
+        Get the Video ID from the YouTube URL: <code style="font-size:0.75rem;color:var(--accent)">youtube.com/watch?v=<strong>VIDEO_ID</strong></code>
+      </p>
+
+      <!-- Add form -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
+        <select id="highlight-channel-select" style="font-size:0.82rem;">
+          <option value="">— Select a channel —</option>
+        </select>
+        <input id="highlight-video-input" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
+      </div>
+      <div style="display:flex;gap:0.5rem;margin-bottom:1.25rem;">
+        <button class="btn btn-primary btn-sm" onclick="addHighlight()">+ Add Highlight</button>
+      </div>
+      <div id="highlight-result" style="font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;margin-bottom:0.75rem;"></div>
+
+      <!-- List -->
+      <div id="highlights-list"></div>
+    </div>
+  </div>
+
   <!-- Cache -->
   <div class="section">
     <div class="section-header"><div class="section-title">⚡ Cache & Diagnostics</div></div>
@@ -615,7 +643,9 @@ function renderAll() {
 
   renderGroups();
   renderApps();
+  renderHighlights();
   populateMarkLiveChannelSelect();
+  populateHighlightChannelSelect();
 }
 
 // ── Groups ──
@@ -1669,6 +1699,117 @@ async function validateChannel() {
 }
 
 // Manual mark live — zero quota cost
+// ── Highlights ──────────────────────────────────────────────────────────────
+
+function populateHighlightChannelSelect() {
+  const sel = document.getElementById('highlight-channel-select');
+  if (!sel || !appData) return;
+  const channels = [];
+  (appData.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => {
+      channels.push({ id: ch.id, name: ch.name, group: g.label || g.id });
+    });
+  });
+  channels.sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— Select a channel —</option>' +
+    channels.map(ch => `<option value="${ch.id}">${ch.name} — ${ch.group}</option>`).join('');
+}
+
+function renderHighlights() {
+  const list = document.getElementById('highlights-list');
+  if (!list || !appData) return;
+  const highlights = appData.highlights || [];
+  if (highlights.length === 0) {
+    list.innerHTML = '<p style="font-size:0.8rem;color:var(--muted);">No highlights yet.</p>';
+    return;
+  }
+  list.innerHTML = highlights.map((h, i) => {
+    const thumbUrl = h.thumbnail || `https://i.ytimg.com/vi/${h.videoId}/mqdefault.jpg`;
+    const chName = getHighlightChannelName(h.channelId);
+    return `
+      <div style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0;border-bottom:1px solid var(--border);">
+        <img src="${thumbUrl}" alt="" style="width:80px;height:45px;object-fit:cover;border-radius:3px;flex-shrink:0;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:0.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${h.title || h.videoId}</div>
+          <div style="font-size:0.75rem;color:var(--muted);">${chName} · <code style="font-size:0.72rem;">${h.videoId}</code></div>
+        </div>
+        <div style="display:flex;gap:0.35rem;flex-shrink:0;">
+          <button class="btn btn-ghost btn-sm" style="padding:0.2rem 0.5rem;" onclick="reorderHighlight(${i},'up')" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn btn-ghost btn-sm" style="padding:0.2rem 0.5rem;" onclick="reorderHighlight(${i},'down')" ${i === highlights.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="btn btn-ghost btn-sm" style="padding:0.2rem 0.5rem;color:var(--danger,#e05555);" onclick="removeHighlight(${i})">✕</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function getHighlightChannelName(channelId) {
+  for (const g of (appData.groups || [])) {
+    for (const ch of (g.channels || [])) {
+      if (ch.id === channelId) return ch.name;
+    }
+  }
+  return channelId;
+}
+
+async function addHighlight() {
+  const channelId = document.getElementById('highlight-channel-select').value.trim();
+  const videoId   = document.getElementById('highlight-video-input').value.trim();
+  if (!channelId || !videoId) {
+    showHighlightResult('⚠ Select a channel and enter a Video ID.', false);
+    return;
+  }
+  // Auto-fetch title + thumbnail via oEmbed — free, zero quota cost
+  let title = '', thumbnail = '';
+  try {
+    const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+    if (oe.ok) {
+      const d = await oe.json();
+      title = d.title || '';
+      thumbnail = d.thumbnail_url || '';
+    }
+  } catch(e) {}
+
+  const res = await fetch('/api/admin/highlights', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channelId, videoId, title, thumbnail })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    document.getElementById('highlight-video-input').value = '';
+    document.getElementById('highlight-channel-select').value = '';
+    showHighlightResult('✓ Highlight added.', true);
+    await loadData();
+  } else {
+    showHighlightResult('⚠ ' + (data.error || 'Failed.'), false);
+  }
+}
+
+async function removeHighlight(index) {
+  if (!confirm('Remove this highlight?')) return;
+  const res = await fetch(`/api/admin/highlights/${index}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.ok) { showToast('Highlight removed'); await loadData(); }
+}
+
+async function reorderHighlight(index, direction) {
+  const res = await fetch('/api/admin/highlights/reorder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ index, direction })
+  });
+  const data = await res.json();
+  if (data.ok) await loadData();
+}
+
+function showHighlightResult(msg, ok) {
+  const el = document.getElementById('highlight-result');
+  el.textContent = msg;
+  el.style.color = ok ? 'var(--accent)' : 'var(--gold)';
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
 // ── Channel picker for Mark Live form ──────────────────────────────────────
 // Builds a flat, scrollable, alphabetized dropdown of every channel across all
 // groups so the user doesn't have to dig up channel IDs from third-party sites
