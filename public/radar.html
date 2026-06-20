@@ -872,6 +872,23 @@ const frameLayers = FRAMES.map((f, idx) => {
       keepBuffer: 1,
       updateWhenIdle: true,
       updateWhenZooming: false,
+      // BUG FIX (June 2026): IEM's n0q mosaic is a fixed 6000×2600px raster
+      // covering CONUS at their documented native resolution of 0.005°/px
+      // — that crosses standard Web Mercator tile resolution at roughly
+      // zoom 9. Past that, IEM's tile.py server has to upsample
+      // increasingly sparse source pixels to fill higher-zoom tile
+      // requests; by zoom 19 (this map's max) that's ~1000x more detail
+      // than the source actually contains. This produced the radial
+      // streaking artifact seen at close zoom — confirmed NOT present on
+      // RadarScope (which renders raw Level II/III data with no native-
+      // resolution ceiling) on the same storm at the same time, isolating
+      // this to our tile request strategy rather than the underlying data.
+      // maxNativeZoom tells Leaflet to stop requesting new tiles from IEM
+      // past zoom 9 and instead smoothly upscale the zoom-9 tile using the
+      // browser's own image scaling — visually softer/blurrier when
+      // zoomed in close, but clean, with no streaking, instead of
+      // server-side upsampling artifacts.
+      maxNativeZoom: 9,
     }
   );
   return layer;
@@ -910,6 +927,10 @@ const forecastFrames = FORECAST_STEPS.map((mins, idx) => {
       tileSize: 256,
       zIndex: 300 + idx,
       crossOrigin: true,
+      // Same fix as the n0q reflectivity layer above — HRRR's native grid
+      // is 3km resolution (coarser than n0q's ~0.5-1km), so its crossover
+      // into upsampling-artifact territory happens at an even lower zoom.
+      maxNativeZoom: 8,
     }
   );
   return { layer, label, mins };
