@@ -262,6 +262,12 @@
     border-radius:4px; box-shadow:0 2px 6px rgba(0,0,0,0.5); }
   .chaser-tag-mapped { border-color:rgba(255,209,102,0.6) !important; color:#ffd166 !important; }
   .chaser-tag::before { border-top-color:#111820 !important; }
+  /* Smooths marker repositioning on each poll so moving chasers glide
+     instead of teleporting — Leaflet's marker-pane elements are positioned
+     via CSS transform, so transitioning that property animates the move. */
+  .leaflet-marker-icon.chaser-marker-mobile {
+    transition: transform 1.5s linear;
+  }
   .alert-popup { font-family:'Barlow',sans-serif; font-size:0.8rem; max-width:240px; line-height:1.5; }
   .alert-popup .ev { font-family:'Barlow Condensed',sans-serif; font-size:1rem; letter-spacing:0.05em; text-transform:uppercase; font-weight:700; }
   .alert-popup .exp { color:#7a9bb5; font-size:0.72rem; margin-top:4px; }
@@ -2550,11 +2556,17 @@ async function refreshChasers() {
       const existing = chaserMarkers[c.id];
       if (existing) {
         existing.setLatLng([c.lat, c.lng]);
-        existing.setIcon(L.divIcon({ className:'', iconSize:[16,16], iconAnchor:[8,8], html: chaserIconHTML(enriched) }));
+        existing.setIcon(L.divIcon({
+          className: enriched.mobile ? 'chaser-marker-mobile' : '',
+          iconSize:[16,16], iconAnchor:[8,8], html: chaserIconHTML(enriched)
+        }));
         existing.setPopupContent(chaserPopupHTML(enriched));
         existing._chaserData = enriched;
       } else {
-        const icon = L.divIcon({ className:'', iconSize:[16,16], iconAnchor:[8,8], html: chaserIconHTML(enriched) });
+        const icon = L.divIcon({
+          className: enriched.mobile ? 'chaser-marker-mobile' : '',
+          iconSize:[16,16], iconAnchor:[8,8], html: chaserIconHTML(enriched)
+        });
         const mk = L.marker([c.lat, c.lng], { icon, zIndexOffset: 200, interactive: true });
         mk.bindPopup(chaserPopupHTML(enriched), { maxWidth: 260 });
         // Permanent small name tag, always visible regardless of mapping —
@@ -2588,7 +2600,7 @@ async function refreshChasers() {
 function startChasers() {
   if (!chaserLayer) chaserLayer = L.layerGroup().addTo(map);
   refreshChasers();
-  if (!chaserPollTimer) chaserPollTimer = setInterval(refreshChasers, 90 * 1000);
+  if (!chaserPollTimer) chaserPollTimer = setInterval(refreshChasers, 45 * 1000);
 }
 
 function stopChasers() {

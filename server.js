@@ -1391,10 +1391,12 @@ app.post('/api/admin/chasers/add-and-map', express.json(), async (req, res) => {
   }
 });
 
-// Refresh the chaser cache every 2 minutes (Spotter Network positions
-// update roughly every 30-60s in the field, so this keeps dots reasonably
-// current without hammering their public feed).
-setInterval(refreshChaserCache, 2 * 60 * 1000);
+// Refresh the chaser cache every 45 seconds — close to Spotter Network's own
+// ~30-60s device ping cadence, so we're not adding much extra staleness on
+// top of their source data. This is a public, unauthenticated feed; if
+// Spotter Network ever wants this slowed down they'll let us know (rate
+// limit response, blocked IP, etc.) and we can back off then.
+setInterval(refreshChaserCache, 45 * 1000);
 // Initial fetch shortly after boot
 setTimeout(refreshChaserCache, 5000);
 
