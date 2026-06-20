@@ -157,6 +157,10 @@
   }
 
   #map { position:absolute; top:44px; left:0; right:0; bottom:0; }
+  /* Crosshair cursor while CC is active — signals that clicking the map
+     jumps the CC layer to the nearest station, since there's no other
+     visual affordance for this on a plain Leaflet tile layer. */
+  #map.cc-click-mode { cursor: crosshair; }
 
   /* The radar layers sit inside the map pane — we control opacity via Leaflet */
   .radar-frame-layer { transition: opacity 0.2s ease; }
@@ -1700,7 +1704,13 @@ async function getCanadaTimestamps() {
   // CORS headers — server-to-server requests bypass that question entirely.
   // The WMS tile images themselves still load directly from GeoMet via
   // Leaflet's <img>-based tiles below, which were never CORS-affected.
-  const url = `/api/canada-radar/capabilities?layer=RADAR_1KM_RDBR&t=${Date.now()}`;
+  // BUG FIX (June 2026): was RADAR_1KM_RDBR, which doesn't appear anywhere
+  // in MSC GeoMet's current official documentation and was almost
+  // certainly why nothing rendered. Confirmed correct ID per ECCC's own
+  // readme: https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/
+  // RADAR_1KM_RRAI = "Radar precipitation rate for rain [mm/hr]" — the
+  // actual North American radar composite layer.
+  const url = `/api/canada-radar/capabilities?layer=RADAR_1KM_RRAI&t=${Date.now()}`;
   try {
     const res  = await fetch(url);
     const text = await res.text();
@@ -1737,7 +1747,7 @@ async function startCanadaRadar() {
   // Pre-load one WMS layer per timestamp (oldest → newest)
   times.forEach((time, i) => {
     const layer = L.tileLayer.wms('https://geo.weather.gc.ca/geomet', {
-      layers: 'RADAR_1KM_RDBR',
+      layers: 'RADAR_1KM_RRAI', // see fix note in getCanadaTimestamps() above
       format: 'image/png',
       transparent: true,
       version: '1.3.0',
@@ -1925,19 +1935,49 @@ map.on('moveend zoomend', () => {
 });
 
 let ccLayer=null;
-function clearCC(){ if (ccLayer){ map.removeLayer(ccLayer); ccLayer=null; } }
+function clearCC(){
+  if (ccLayer){ map.removeLayer(ccLayer); ccLayer=null; }
+  hideProductLegend();
+  document.getElementById('map').classList.remove('cc-click-mode');
+  // Only hide the site picker if Velocity/SRV/Echo Tops aren't also using
+  // it right now — CC and those products share the same picker UI.
+  if (!(activePaint in SS_PRODUCTS)) {
+    document.getElementById('site-picker').style.display = 'none';
+  }
+}
 function showCC(){
-  clearCC(); if (!currentSite) return;
+  clearCC();
+  document.getElementById('map').classList.add('cc-click-mode');
+  // CC is a toggle independent of activePaint, so unlike the old
+  // setPaint-driven version this needs to resolve a site itself rather
+  // than relying on setPaint's site-resolution flow.
+  if (!currentSite) {
+    activateSingleSiteProduct('cc'); // will call resolveRadarSites(...), which re-calls showCC() once a site is set
+    return;
+  }
+  activateSingleSiteProduct('cc');
   // CC at very low zoom shows the full 460km radar disk as scattered dots.
   // Require zoom 6+ for a useful view.
   if (map.getZoom() < 6) {
     setStatus('Zoom in to view Correlation Coefficient');
-    map.once('zoomend', () => { if (activePaint === 'cc') showCC(); });
+    map.once('zoomend', () => { if (overlayState['cc']) showCC(); });
     return;
   }
   ccLayer = L.tileLayer(`${WXTILES_BASE}/tiles/cc/${currentSite}/{z}/{x}/{y}.png`,
     { opacity:0.82, zIndex:255, tileSize:256, crossOrigin:true, attribution:'CC: NEXRAD L2 / Py-ART' }).addTo(map);
 }
+
+// Click-to-set-site for CC: instead of hunting a 150+ entry station
+// dropdown blind, click anywhere on the still-visible base reflectivity to
+// jump CC to whichever radar covers that point. Only active while CC is
+// toggled on — does nothing and doesn't interfere with the alert/MCD click
+// handler above otherwise. A small on-map cursor hint communicates this
+// mode is active (see toggleRowHTML/applyOverlay wiring for 'cc').
+map.on('click', (e) => {
+  if (!overlayState['cc']) return;
+  resolveRadarSites(e.latlng.lat, e.latlng.lng, true);
+  setStatus(`Correlation Coefficient — moved to nearest station for clicked location`);
+});
 
 // ── APPARENT TEMPERATURE — client-side city+state map ────────────────────────
 // Replaces RTMA tile layer. Fetches NWS ASOS observations for ~75 major cities,
@@ -2227,7 +2267,12 @@ function clearAllPaint(){
   forecastFrames.forEach(f => f.layer.setOpacity(0));
   radarVisible = false;
   if (goesLayer && map.hasLayer(goesLayer)) map.removeLayer(goesLayer);
-  clearSS(); clearCC(); clearAppTemp(); clearCanada();
+  // NOTE: clearCC() and clearCanada() intentionally removed from here.
+  // CC and Canadian Radar are toggleable overlays (applyOverlay), not
+  // mutually-exclusive paints — switching base reflectivity/GOES/apptemp
+  // should NOT turn them off. clearSS() stays since Velocity/SRV/Echo Tops
+  // remain genuine paint-style single-site products for now.
+  clearSS(); clearAppTemp();
 }
 function setStatus(t){ const el=document.getElementById('alerts-status'); if(el) el.textContent=t; }
 function paintStatusText(member){
@@ -2236,9 +2281,40 @@ function paintStatusText(member){
     canada:'Canadian Radar (MSC GeoMet composite)' };
   return 'Showing: ' + (names[member]||member);
 }
+// Shared by setPaint() (for Velocity/SRV/Echo Tops) and the CC toggle —
+// shows the product legend, resolves a nearby radar site if we don't have
+// one yet, and reveals the site picker. Extracted into its own function so
+// CC doesn't need to duplicate this when it stopped being a setPaint() case.
+function activateSingleSiteProduct(member) {
+  showProductLegend(member);
+  const msg = document.getElementById('site-message');
+  const names = { velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient' };
+  document.getElementById('site-picker').style.display = 'block';
+  // Click-to-select-site is currently CC-only (see the map click handler in
+  // showCC()) — Velocity/SRV/Echo Tops still require the dropdown, so the
+  // messaging shouldn't claim otherwise for those.
+  const clickHint = member === 'cc' ? 'Click the map or use the dropdown to change station.' : 'Use the dropdown to change station.';
+  if (currentSite) {
+    // Already have a site (from a prior product or a map click) — just
+    // make sure the picker reflects it and (re)trigger this product's load.
+    if (msg) msg.textContent = `${names[member]||member} is a single-radar product. ${clickHint}`;
+    return;
+  }
+  if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Showing your nearest station — ${clickHint.charAt(0).toLowerCase() + clickHint.slice(1)}`;
+  if (typeof userLat==='number' && typeof userLng==='number') {
+    resolveRadarSites(userLat, userLng, true);
+  } else if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      resolveRadarSites(pos.coords.latitude, pos.coords.longitude, true);
+    }, () => {
+      if (msg) msg.textContent = `${names[member]||member} is a single-radar product. ${member==='cc' ? 'Click the map or select' : 'Select'} a station below.`;
+    }, { timeout:6000 });
+  }
+}
+
 function setPaint(member){
   clearAllPaint(); activePaint = member;
-  const needsSite   = (member in SS_PRODUCTS) || member==='cc';
+  const needsSite   = (member in SS_PRODUCTS); // CC no longer routes through setPaint
   const needsAppTemp = member === 'apptemp';
   document.getElementById('site-picker').style.display        = needsSite    ? 'block' : 'none';
   document.getElementById('apptemp-mode-picker').style.display = needsAppTemp ? 'block' : 'none';
@@ -2261,32 +2337,18 @@ function setPaint(member){
     case 'canada':  startCanadaRadar(); break;
     case 'apptemp': showAppTemp(); break;
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
-    case 'cc':      showCC(); break;
   }
   setStatus(paintStatusText(member));
-  // Show product color legend for single-site products; hide for others
-  if (['velocity','srv','echotops','cc'].includes(member)) {
-    showProductLegend(member);
-    // Auto-resolve nearest site from current location if we have it
-    const msg = document.getElementById('site-message');
-    const names = { velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient' };
-    if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Showing your nearest station — change below if needed.`;
-    if (typeof userLat==='number' && typeof userLng==='number') {
-      resolveRadarSites(userLat, userLng, true);
-    } else {
-      // Try geolocation on demand
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(pos => {
-          resolveRadarSites(pos.coords.latitude, pos.coords.longitude, true);
-        }, () => {
-          if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Select a station below.`;
-        }, { timeout:6000 });
-      }
-    }
+  // Show product color legend for single-site products; hide for others.
+  // CC is intentionally excluded here — it manages its own legend via
+  // applyOverlay('cc', ...) since it's a toggle, not a paint selection, and
+  // may be on/off independent of whatever paint is currently active.
+  if (['velocity','srv','echotops'].includes(member)) {
+    activateSingleSiteProduct(member);
   } else {
     hideProductLegend();
     const msg = document.getElementById('site-message');
-    if (msg) msg.textContent = 'Tap a station below or allow location for auto-detection.';
+    if (msg && !overlayState['cc']) msg.textContent = 'Tap a station below or allow location for auto-detection.';
   }
 }
 
@@ -2466,14 +2528,17 @@ async function resolveRadarSites(lat,lng, autoActivate=false){
   currentSite = availableSites[0].id;
   sel.innerHTML = availableSites.map(s => `<option value="${s.id}">${s.display}</option>`).join('');
   sel.value = currentSite;
-  // If auto-activating (user just selected a single-site product), load it immediately
+  // If auto-activating, load whichever single-site product triggered this.
+  // Velocity/SRV/Echo Tops still route through activePaint (setPaint); CC
+  // is now an independent toggle (overlayState), so it needs its own check
+  // here or site resolution would silently never re-render the CC layer.
   if (autoActivate && activePaint in SS_PRODUCTS) showSS(activePaint);
-  else if (autoActivate && activePaint==='cc') showCC();
+  else if (autoActivate && overlayState['cc']) showCC();
 }
 function onSiteChange(id){
   currentSite = id;
   if (activePaint in SS_PRODUCTS) showSS(activePaint);
-  else if (activePaint==='cc') showCC();
+  if (overlayState['cc']) showCC(); // independent of activePaint — both can update on the same site change
 }
 
 let ltgSocket=null, ltgLayer=null, ltgMarkers=[];
@@ -2747,10 +2812,17 @@ const BASEMAP_ITEMS=[
   {id:'apptemp',ico:'🌡',name:'Apparent Temperature',sub:'Wind chill / heat index'},
 ];
 const RADAR_ITEMS=[
-  {id:'cc',ico:'💧',name:'Correlation Coefficient',sub:'Dual-pol · debris signature','def':false},
   // Velocity, SRV, and Echo Tops remain pulled pending better animation
-  // infrastructure and memory resources — see scoping notes. CC re-enabled
-  // June 2026 after the color-scale bug fix (see renderers/cc.py).
+  // infrastructure and memory resources — see scoping notes.
+  //
+  // CC moved OUT of this array (June 2026): as a radio-button "paint" it
+  // replaced base reflectivity entirely when selected, with no way to
+  // toggle it back off short of picking a different paint — both confusing
+  // since CC needs reflectivity visible underneath to know which storm
+  // you're even looking at. Now a toggleable overlay — see CC_ITEMS below.
+];
+const CC_ITEMS=[
+  {id:'cc',ico:'💧',name:'Correlation Coefficient',sub:'Dual-pol · debris signature',def:false},
 ];
 const EXTENDED_ITEMS=[
   {id:'canada',ico:'🇨🇦',name:'Canadian Radar',sub:'MSC GeoMet composite — animated',def:false},
@@ -2765,7 +2837,7 @@ const CHASER_ITEMS=[
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
   {id:'chasers',ico:'🚗',name:'Live Storm Chasers',sub:'Spotter Network · live',def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS);
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -2785,6 +2857,7 @@ function applyOverlay(id,on){
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
     case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
+    case 'cc':        if (on) showCC(); else clearCC(); break;
     case 'banner':
       if (!on){ bannerDismissed=true; hideBanner(); }
       else { bannerDismissed=false; if (activeBannerAlerts.length) showBanner(activeBannerAlerts); }
@@ -2801,12 +2874,19 @@ function toggleRowHTML(item){
 }
 function renderPanel(){
   document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(radioRowHTML).join('');
-  document.getElementById('lp-radaropts').innerHTML=RADAR_ITEMS.map(radioRowHTML).join('');
+  // RADAR_ITEMS (paint-style, e.g. future Velocity/SRV/Echo Tops re-add) and
+  // CC_ITEMS (toggle-style) share the same panel section — CC needs
+  // toggleRowHTML so it behaves as an independent on/off overlay rather
+  // than a mutually-exclusive radio option.
+  document.getElementById('lp-radaropts').innerHTML=
+    RADAR_ITEMS.map(radioRowHTML).join('') + CC_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
-  const needsSite=(activePaint in SS_PRODUCTS)||activePaint==='cc';
+  // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
+  // OR CC is toggled on — these are independent now, so both are checked.
+  const needsSite=(activePaint in SS_PRODUCTS)||overlayState['cc'];
   document.getElementById('site-picker').style.display=needsSite?'block':'none';
 }
 document.getElementById('layer-panel').addEventListener('click',(e)=>{

@@ -1022,7 +1022,7 @@ app.get('/api/admin/chasers/known', (req, res) => {
 });
 
 // ── Canadian Radar (MSC GeoMet) GetCapabilities proxy ───────────────────────
-// The WMS tile images themselves (RADAR_1KM_RDBR) load fine directly from
+// The WMS tile images themselves (RADAR_1KM_RRAI) load fine directly from
 // the browser via Leaflet's <img>-based tile layer — <img> tags aren't
 // subject to CORS. The one call that IS subject to CORS is the
 // GetCapabilities XML fetch radar.html uses to discover available frame
@@ -1032,8 +1032,14 @@ app.get('/api/admin/chasers/known', (req, res) => {
 // this proxies that one XML request through our own server — server-to-
 // server requests are never subject to CORS, so this removes the
 // uncertainty entirely regardless of the answer.
+//
+// LAYER ID NOTE: the originally-used RADAR_1KM_RDBR does not appear in MSC
+// GeoMet's current official documentation and was almost certainly the
+// reason nothing rendered. RADAR_1KM_RRAI ("Radar precipitation rate for
+// rain [mm/hr]") is the confirmed correct ID per ECCC's own readme:
+// https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/
 app.get('/api/canada-radar/capabilities', async (req, res) => {
-  const layer = (req.query.layer || 'RADAR_1KM_RDBR').replace(/[^A-Z0-9_]/gi, ''); // basic allowlist sanitization
+  const layer = (req.query.layer || 'RADAR_1KM_RRAI').replace(/[^A-Z0-9_]/gi, ''); // basic allowlist sanitization
   const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=${layer}&t=${Date.now()}`;
   try {
     const xml = await fetchTextOverHttp(url);
