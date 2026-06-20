@@ -3398,7 +3398,14 @@ function runSearchPanelForChannels(matches, label) {
   } else {
     countEl.textContent = matches.length === 1 ? '1 channel' : matches.length + ' channels';
     matches.forEach(({ ch, groupLabel }) => {
-      const card = buildChannelCard(ch, groupLabel.toLowerCase().replace(/\s+/g, '-'));
+      // Cards render into #search-panel, not a per-group panel — pass
+      // 'search' explicitly so showRecent() finds the correct overlay
+      // container (document.getElementById('search-panel')). Previously
+      // this passed a slugified groupLabel (e.g. "storm-chasers"), which
+      // pointed showRecent() at the wrong panel's overlay — the click
+      // fired but the video strip was injected into a hidden element,
+      // so Recent appeared to silently do nothing.
+      const card = buildChannelCard(ch, 'search');
       list.appendChild(card);
     });
   }
