@@ -1741,30 +1741,62 @@ async function getCanadaTimestamps() {
   }
 }
 
+// CANADIAN RADAR — REDESIGNED (June 2026)
+//
+// GeoMet does not offer a Canada-only radar layer — RADAR_1KM_RRAI is
+// explicitly the "North American Radar Composite," confirmed via ECCC's
+// own metadata: "This mosaic... includes all the Canadian and American
+// radars available in the network... up to 180 contributing radars."
+// There is no narrower product to request. Running it alongside the
+// US-only IEM loop meant both layers showed overlapping US coverage
+// simultaneously, each animating on its own unrelated clock — which is
+// exactly the "Canadian radar moves while NWS radar sits still, both show
+// the US" symptom.
+//
+// Fix: stop treating this as a parallel always-on overlay. At zoom 6 or
+// lower (continental view), GeoMet's single unified North American mosaic
+// REPLACES the US reflectivity layer — one radar source, one image, no
+// duplicate coverage, no unsynced double-animation. Zoomed in past that
+// (a single state/region), the IEM US-only loop is plenty + higher detail
+// for that view, so Canadian radar yields back to it automatically.
+const CANADA_ZOOM_THRESHOLD = 6; // continental view and lower → show GeoMet; closer → US-only IEM
+
+let canadaToggleOn = false;
+let canadaZoomListenerAttached = false;
+
 function clearCanada() {
+  canadaToggleOn = false;
   if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; }
   canadaFrameLayers.forEach(l => { try { map.removeLayer(l); } catch (_) {} });
   canadaFrameLayers = [];
   canadaFrameIdx = 0;
+  // Restore whatever US reflectivity state was active before Canadian
+  // radar took over the view, if reflectivity is still the selected paint.
+  if (activePaint === 'reflectivity' && radarMode === 'past') {
+    ensureAttached(frameLayers[currentFrame]);
+    frameLayers[currentFrame].setOpacity(0.72);
+  }
 }
 
-async function startCanadaRadar() {
-  clearCanada();
+async function loadCanadaFrames() {
   setStatus('Loading Canadian radar…');
   const times = await getCanadaTimestamps();
   if (!times.length) { setStatus('Canadian radar unavailable'); return; }
 
+  canadaFrameLayers.forEach(l => { try { map.removeLayer(l); } catch (_) {} });
+  canadaFrameLayers = [];
+
   // Pre-load one WMS layer per timestamp (oldest → newest)
   times.forEach((time, i) => {
     const layer = L.tileLayer.wms('https://geo.weather.gc.ca/geomet', {
-      layers: 'RADAR_1KM_RRAI', // see fix note in getCanadaTimestamps() above
+      layers: 'RADAR_1KM_RRAI', // see fix note in getCanadaTimestamps() above — continental mosaic, not Canada-only
       format: 'image/png',
       transparent: true,
       version: '1.3.0',
       time: time,
       opacity: 0,
       zIndex: 195,
-      attribution: i === 0 ? 'Canadian Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a>' : '',
+      attribution: i === 0 ? 'Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a> (North American composite)' : '',
     });
     layer.addTo(map);
     canadaFrameLayers.push(layer);
@@ -1776,6 +1808,7 @@ async function startCanadaRadar() {
 
   // Animate oldest → newest → loop
   let animPos = 0;
+  if (canadaAnimTimer) clearInterval(canadaAnimTimer);
   canadaAnimTimer = setInterval(() => {
     canadaFrameLayers[canadaFrameIdx].setOpacity(0);
     canadaFrameIdx = animPos % canadaFrameLayers.length;
@@ -1783,7 +1816,55 @@ async function startCanadaRadar() {
     canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
   }, 600);
 
-  setStatus(`Canadian radar — ${times.length} frames (last 3 hrs)`);
+  setStatus(`North American radar (incl. Canada) — ${times.length} frames (last 3 hrs)`);
+}
+
+// Applies the correct radar source for the current zoom level while the
+// Canadian Radar toggle is on. Called on toggle-on and on every zoomend.
+function applyCanadaZoomState() {
+  if (!canadaToggleOn) return;
+  const zoomedOut = map.getZoom() <= CANADA_ZOOM_THRESHOLD;
+  if (zoomedOut) {
+    // Hide US-only reflectivity so we're not showing two overlapping
+    // copies of the same US coverage at once.
+    frameLayers.forEach(l => l.setOpacity(0));
+    if (!canadaFrameLayers.length) {
+      loadCanadaFrames();
+    } else {
+      canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+      if (!canadaAnimTimer) {
+        let animPos = 0;
+        canadaAnimTimer = setInterval(() => {
+          canadaFrameLayers[canadaFrameIdx].setOpacity(0);
+          canadaFrameIdx = animPos % canadaFrameLayers.length;
+          animPos++;
+          canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+        }, 600);
+      }
+      setStatus(`North American radar (incl. Canada) — ${canadaFrameLayers.length} frames (last 3 hrs)`);
+    }
+  } else {
+    // Zoomed in past the continental view — hand back to the higher-detail
+    // US-only IEM loop (which CC/Velocity site selection already depends
+    // on) and pause the GeoMet animation rather than tearing it down, so
+    // zooming back out is instant instead of re-fetching.
+    if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; }
+    canadaFrameLayers.forEach(l => l.setOpacity(0));
+    if (activePaint === 'reflectivity' && radarMode === 'past') {
+      ensureAttached(frameLayers[currentFrame]);
+      frameLayers[currentFrame].setOpacity(0.72);
+    }
+    setStatus('Zoom out to continental view (≤ zoom 6) to see Canadian radar coverage');
+  }
+}
+
+function startCanadaRadar() {
+  canadaToggleOn = true;
+  if (!canadaZoomListenerAttached) {
+    map.on('zoomend', applyCanadaZoomState);
+    canadaZoomListenerAttached = true;
+  }
+  applyCanadaZoomState();
 }
 
 const SS_PRODUCTS = { velocity:{code:'N0U'}, srv:{code:'N0S'}, echotops:{code:'NET'} };
@@ -2271,7 +2352,7 @@ function clearAppTemp() {
   hideProductLegend();
 }
 
-let activePaint = 'reflectivity';
+let activePaint = 'reflectivity'; // can become null — "no base layer selected" is now a valid state
 function clearAllPaint(){
   frameLayers.forEach(l => l.setOpacity(0));
   forecastFrames.forEach(f => f.layer.setOpacity(0));
@@ -2322,6 +2403,27 @@ function activateSingleSiteProduct(member) {
   }
 }
 
+// Entry point for clicking a base-layer row in the panel. Replaces the old
+// forced-radio-button behavior (you could switch which layer was active,
+// but never turn the active one fully off). Reflectivity/GOES/Apptemp (and
+// later Velocity/SRV/Echo Tops) remain mutually exclusive AS A GROUP —
+// only one full-screen base layer makes sense at a time — but the group as
+// a whole can now be empty. Click the active layer again to turn it off;
+// click a different one to switch (auto-clearing the previous, same as
+// before).
+function togglePaint(member){
+  if (activePaint === member) {
+    clearAllPaint();
+    activePaint = null;
+    setStatus('Base layer off');
+    hideProductLegend();
+    document.getElementById('site-picker').style.display = overlayState['cc'] ? 'block' : 'none';
+    document.getElementById('apptemp-mode-picker').style.display = 'none';
+    return;
+  }
+  setPaint(member);
+}
+
 function setPaint(member){
   clearAllPaint(); activePaint = member;
   const needsSite   = (member in SS_PRODUCTS); // CC no longer routes through setPaint
@@ -2344,7 +2446,6 @@ function setPaint(member){
       }
       break;
     case 'goes':    ensureGoes().addTo(map); break;
-    case 'canada':  startCanadaRadar(); break;
     case 'apptemp': showAppTemp(); break;
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
   }
@@ -2874,22 +2975,26 @@ function applyOverlay(id,on){
       break;
   }
 }
-function radioRowHTML(item){
+function exclusiveToggleRowHTML(item){
+  // Same visual language as toggleRowHTML (checkbox-style switch, not a
+  // radio dot) — communicates honestly that clicking the active one again
+  // turns it off, unlike a true radio button where one option is always
+  // forced selected.
   const active=activePaint===item.id;
-  return `<div class="lp-row${active?' active':''}" data-kind="paint" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-radio-dot">${active?'◉':'○'}</span></div>`;
+  return `<div class="lp-row${active?' active':''}" data-kind="paint" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-toggle"></span></div>`;
 }
 function toggleRowHTML(item){
   const active=!!overlayState[item.id];
   return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-toggle"></span></div>`;
 }
 function renderPanel(){
-  document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(radioRowHTML).join('');
+  document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(exclusiveToggleRowHTML).join('');
   // RADAR_ITEMS (paint-style, e.g. future Velocity/SRV/Echo Tops re-add) and
   // CC_ITEMS (toggle-style) share the same panel section — CC needs
   // toggleRowHTML so it behaves as an independent on/off overlay rather
   // than a mutually-exclusive radio option.
   document.getElementById('lp-radaropts').innerHTML=
-    RADAR_ITEMS.map(radioRowHTML).join('') + CC_ITEMS.map(toggleRowHTML).join('');
+    RADAR_ITEMS.map(exclusiveToggleRowHTML).join('') + CC_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
@@ -2902,7 +3007,7 @@ function renderPanel(){
 document.getElementById('layer-panel').addEventListener('click',(e)=>{
   const row=e.target.closest('.lp-row'); if(!row) return;
   const id=row.dataset.id, kind=row.dataset.kind;
-  if (kind==='paint'){ setPaint(id); }
+  if (kind==='paint'){ togglePaint(id); }
   else { overlayState[id]=!overlayState[id]; applyOverlay(id,overlayState[id]); }
   renderPanel();
 });
