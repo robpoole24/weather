@@ -1722,7 +1722,17 @@ async function getCanadaTimestamps() {
     const step = parseISO8601Duration(interval || 'PT10M');
     const times = [];
     for (let t = new Date(start).getTime(); t <= new Date(end).getTime(); t += step) {
-      times.push(new Date(t).toISOString());
+      // BUG FIX (June 2026): toISOString() alone produces milliseconds
+      // (e.g. "2026-06-20T14:30:00.000Z"), but GeoMet's WMS server rejects
+      // that with a ServiceException: code="NoMatch" locator="time" —
+      // "Format attendu / Expecting: '%Y-%m-%dT%H:%M:%SZ'" (no fractional
+      // seconds). This is exactly why every tile request was being
+      // CORB-blocked: the server was returning XML error text instead of
+      // a PNG, and the browser correctly refuses to deliver XML/HTML to an
+      // <img>-based tile layer. ECCC's own official Leaflet/OpenLayers
+      // tutorial strips milliseconds the same way before sending TIME:
+      // https://eccc-msc.github.io/open-data/usage/tutorial_web-maps_en/
+      times.push(new Date(t).toISOString().split('.')[0] + 'Z');
     }
     return times;
   } catch (e) {
