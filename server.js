@@ -1021,6 +1021,31 @@ app.get('/api/admin/chasers/known', (req, res) => {
   res.json({ total: all.length, chasers: all });
 });
 
+// ── Canadian Radar (MSC GeoMet) GetCapabilities proxy ───────────────────────
+// The WMS tile images themselves (RADAR_1KM_RDBR) load fine directly from
+// the browser via Leaflet's <img>-based tile layer — <img> tags aren't
+// subject to CORS. The one call that IS subject to CORS is the
+// GetCapabilities XML fetch radar.html uses to discover available frame
+// timestamps, since that goes through fetch(), which browsers do enforce
+// CORS on. Rather than depend on whether geo.weather.gc.ca happens to send
+// permissive CORS headers (unverified, and out of our control either way),
+// this proxies that one XML request through our own server — server-to-
+// server requests are never subject to CORS, so this removes the
+// uncertainty entirely regardless of the answer.
+app.get('/api/canada-radar/capabilities', async (req, res) => {
+  const layer = (req.query.layer || 'RADAR_1KM_RDBR').replace(/[^A-Z0-9_]/gi, ''); // basic allowlist sanitization
+  const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=${layer}&t=${Date.now()}`;
+  try {
+    const xml = await fetchTextOverHttp(url);
+    res.set('Content-Type', 'application/xml');
+    res.set('Cache-Control', 'public, max-age=120'); // capabilities don't change every second
+    res.send(xml);
+  } catch (e) {
+    console.warn('[CanadaRadar] GetCapabilities proxy failed:', e.message);
+    res.status(502).json({ error: 'Could not reach geo.weather.gc.ca' });
+  }
+});
+
 // Admin — map a Spotter Network chaser ID to one of our channel IDs
 app.post('/api/admin/chasers/map', express.json(), (req, res) => {
   const { spotterNetworkId, channelId } = req.body;

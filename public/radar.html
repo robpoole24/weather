@@ -567,7 +567,7 @@
     </div>
   </div>
 
-  <!-- Extended Coverage section hidden until Canadian radar is fixed (EXTENDED_ITEMS is empty) -->
+  <!-- Extended Coverage section — visibility driven by EXTENDED_ITEMS.length at render time -->
   <div class="lp-section" id="lp-extended-section" style="display:none;">
     <div class="lp-section-label">Extended Coverage</div>
     <div id="lp-extended"></div>
@@ -1695,7 +1695,12 @@ function parseISO8601Duration(dur) {
 }
 
 async function getCanadaTimestamps() {
-  const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=RADAR_1KM_RDBR&t=${Date.now()}`;
+  // Proxied through our own server (see /api/canada-radar/capabilities in
+  // server.js) so this doesn't depend on whether geo.weather.gc.ca sends
+  // CORS headers — server-to-server requests bypass that question entirely.
+  // The WMS tile images themselves still load directly from GeoMet via
+  // Leaflet's <img>-based tiles below, which were never CORS-affected.
+  const url = `/api/canada-radar/capabilities?layer=RADAR_1KM_RDBR&t=${Date.now()}`;
   try {
     const res  = await fetch(url);
     const text = await res.text();
@@ -1765,26 +1770,88 @@ const SS_PRODUCTS = { velocity:{code:'N0U'}, srv:{code:'N0S'}, echotops:{code:'N
 // ── SINGLE-SITE ANIMATED PRODUCTS ────────────────────────────────────────────
 // IEM RIDGE archives ~6 past scans per product, indexed 0 (newest) → N (oldest).
 // We load all frames and cycle oldest→newest so the couplet animates.
+//
+// BUG FIX (June 2026): the original version called .addTo(map) on all 6
+// frame layers immediately, relying on opacity:0 to hide the inactive ones.
+// Leaflet still fetches tiles for every attached layer regardless of
+// opacity, so every pan/zoom triggered 6 simultaneous full-viewport tile
+// fetches against IEM's free public server — at zoom 7+ (required for these
+// products) that's already a lot of tiles, times 6, racing each other. This
+// was the actual cause of "tiles slow to load or don't load at all," not an
+// animation or memory problem. The base reflectivity layer hit this exact
+// failure mode earlier (see ensureAttached/preloadAllFrames above,
+// originally fixed for ERR_INSUFFICIENT_RESOURCES) — this applies the same
+// proven pattern: only the active frame stays attached to the map; the rest
+// are detached during pan/zoom and re-attached one at a time afterward.
 const SS_ANIM_FRAMES = 6;   // number of archived frames to load
 const SS_ANIM_SPEED  = 500; // ms per frame
 
-let ssLayers     = [];      // array of tile layers, index 0 = newest
+let ssLayers     = [];      // array of tile layers, index 0 = newest, NOT attached until preloaded
 let ssAnimFrame  = 0;       // currently displayed frame index
 let ssAnimTimer  = null;
+let ssActiveKey  = null;    // which product ('velocity'/'srv'/'echotops') is currently shown
+let ssPreloadGen = 0;       // generation counter — cancels stale preload chains, same pattern as preloadAllFrames
 let currentSite  = null;
 let availableSites = [];
 
 function clearSS() {
   if (ssAnimTimer) { clearInterval(ssAnimTimer); ssAnimTimer = null; }
-  ssLayers.forEach(l => map.removeLayer(l));
+  ssPreloadGen++; // cancel any in-flight preload chain
+  ssLayers.forEach(l => { try { if (map.hasLayer(l)) map.removeLayer(l); } catch(_) {} });
   ssLayers = [];
   ssAnimFrame = 0;
+  ssActiveKey = null;
+}
+
+// Sequentially attach each SS frame, waiting for one to load (or a 2.5s
+// timeout) before starting the next — exactly mirrors preloadAllFrames()
+// above. Once all are loaded, starts the oldest→newest animation loop.
+function preloadSSFrames(myGen) {
+  let idx = 0;
+  function next() {
+    if (myGen !== ssPreloadGen) return; // superseded by a newer view/product change
+    if (idx >= ssLayers.length) { startSSAnimation(); return; }
+    const layer = ssLayers[idx];
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      layer.off('load', finish);
+      idx++;
+      setTimeout(next, 60);
+    };
+    layer.setOpacity(0);
+    layer.on('load', finish);
+    layer.addTo(map);
+    setTimeout(finish, 2500); // safety net if 'load' never fires
+  }
+  next();
+}
+
+function startSSAnimation() {
+  if (!ssLayers.length) return;
+  let playIdx = SS_ANIM_FRAMES - 1; // start at oldest frame
+  const showFrame = (idx) => {
+    ssLayers.forEach((l, i) => { if (map.hasLayer(l)) l.setOpacity(i === idx ? 0.8 : 0); });
+    ssAnimFrame = idx;
+  };
+  showFrame(playIdx);
+  if (ssAnimTimer) clearInterval(ssAnimTimer);
+  ssAnimTimer = setInterval(() => {
+    // Only the currently-visible frame needs to stay attached during
+    // playback (others were already preloaded and cached by the browser),
+    // so this doesn't re-trigger the original bug — it's just toggling
+    // opacity on already-loaded layers.
+    playIdx = playIdx <= 0 ? SS_ANIM_FRAMES - 1 : playIdx - 1;
+    showFrame(playIdx);
+  }, SS_ANIM_SPEED);
 }
 
 function showSS(key) {
   clearSS();
   const p = SS_PRODUCTS[key];
   if (!p || !currentSite) return;
+  ssActiveKey = key;
 
   // Single-site products are meaningless at low zoom — a 460km-diameter radar
   // disk at zoom 6 fills half a state. Require zoom 7+ and prompt the user.
@@ -1814,7 +1881,13 @@ function showSS(key) {
   const hint = document.getElementById('zoom-hint');
   if (hint) hint.style.display = 'none';
 
-  // Build frames: index 0=newest … N-1=oldest
+  setStatus(`Loading ${key}…`);
+
+  // Build frame layer OBJECTS only — none attached to the map yet. They're
+  // attached one at a time by preloadSSFrames(), which is what actually
+  // fixes the slow/failed loading: previously all 6 were force-attached
+  // here and fought each other for tile bandwidth on every pan/zoom.
+  ssLayers = [];
   for (let i = 0; i < SS_ANIM_FRAMES; i++) {
     const layer = L.tileLayer(
       `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/ridge::${currentSite}-${p.code}-${i}/{z}/{x}/{y}.png`,
@@ -1825,22 +1898,31 @@ function showSS(key) {
         crossOrigin: true,
         attribution: i === 0 ? `Radar: IEM RIDGE ${currentSite}` : '',
       }
-    ).addTo(map);
+    );
     ssLayers.push(layer);
   }
 
-  // Start playing oldest→newest (frames N-1 down to 0)
-  let playIdx = SS_ANIM_FRAMES - 1; // start at oldest frame
-  const showFrame = (idx) => {
-    ssLayers.forEach((l, i) => l.setOpacity(i === idx ? 0.8 : 0));
-    ssAnimFrame = idx;
-  };
-  showFrame(playIdx);
-  ssAnimTimer = setInterval(() => {
-    playIdx = playIdx <= 0 ? SS_ANIM_FRAMES - 1 : playIdx - 1;
-    showFrame(playIdx);
-  }, SS_ANIM_SPEED);
+  const myGen = ++ssPreloadGen;
+  preloadSSFrames(myGen);
 }
+
+// Detach all SS frames except the currently-visible one the instant a
+// pan/zoom begins — same fix as the reflectivity loop's movestart handler,
+// applied here because single-site products are typically viewed at tight
+// zoom where this matters even more (more tiles per viewport).
+map.on('movestart zoomstart', () => {
+  if (!ssLayers.length) return;
+  ssPreloadGen++; // cancel any in-flight preload chain
+  ssLayers.forEach((l, i) => { if (i !== ssAnimFrame && map.hasLayer(l)) map.removeLayer(l); });
+});
+
+// After the view settles, re-preload the rest of the SS frames for the new
+// viewport (only if a single-site product is actually active).
+map.on('moveend zoomend', () => {
+  if (!ssActiveKey || !ssLayers.length) return;
+  const myGen = ++ssPreloadGen;
+  setTimeout(() => preloadSSFrames(myGen), 500);
+});
 
 let ccLayer=null;
 function clearCC(){ if (ccLayer){ map.removeLayer(ccLayer); ccLayer=null; } }
@@ -2239,12 +2321,13 @@ const PRODUCT_LEGENDS = {
     { color:'#ff00ff', label:'> 60,000 ft' },
   ],
   cc: [
-    { color:'#283c64', label:'< 0.70 — debris / clutter' },
-    { color:'#3c5aa0', label:'0.70–0.80 — possible debris' },
-    { color:'#3caad2', label:'0.80–0.90 — mixed phase' },
-    { color:'#46c878', label:'0.90–0.95 — melting layer' },
-    { color:'#dcbe50', label:'0.95–0.97 — near-uniform' },
-    { color:'#e68c32', label:'0.97–1.00 — uniform precip' },
+    { color:'#3c2828', label:'< 0.50 — ground clutter / noise' },
+    { color:'#822882', label:'0.50–0.80 — biological (birds/insects)' },
+    { color:'#be2896', label:'0.70–0.85 — debris signature (TDS)' },
+    { color:'#285adc', label:'0.85–0.93 — mixed precip / melting layer' },
+    { color:'#28aadc', label:'0.93–0.97 — light–moderate rain' },
+    { color:'#3cc864', label:'0.97–0.99 — heavy, pure rain' },
+    { color:'#d2dc3c', label:'0.99–1.00 — very pure, uniform rain' },
   ],
 };
 
@@ -2664,14 +2747,13 @@ const BASEMAP_ITEMS=[
   {id:'apptemp',ico:'🌡',name:'Apparent Temperature',sub:'Wind chill / heat index'},
 ];
 const RADAR_ITEMS=[
-  // Velocity, SRV, Echo Tops, and CC are pulled pending better animation
-  // infrastructure and memory resources. Back end of year.
+  {id:'cc',ico:'💧',name:'Correlation Coefficient',sub:'Dual-pol · debris signature','def':false},
+  // Velocity, SRV, and Echo Tops remain pulled pending better animation
+  // infrastructure and memory resources — see scoping notes. CC re-enabled
+  // June 2026 after the color-scale bug fix (see renderers/cc.py).
 ];
-// Canadian radar (MSC GeoMet) toggle hidden until the CORS proxy fix lands —
-// startCanadaRadar()/clearCanada() etc. remain in place below, just not
-// exposed in the UI yet. Re-add { id:'canada', ico:'🇨🇦', name:'Canadian Radar',
-// sub:'MSC GeoMet composite — animated' } here once fixed.
 const EXTENDED_ITEMS=[
+  {id:'canada',ico:'🇨🇦',name:'Canadian Radar',sub:'MSC GeoMet composite — animated',def:false},
 ];
 const ALERT_ITEMS=[
   {id:'alerts',ico:'⚠️',name:'NWS Alerts',sub:'Warnings & watches',def:true},
