@@ -1153,6 +1153,14 @@ const STATE_DOTS = [
     parse: _parseIBI511,
   },
   {
+    id: 'ny',
+    label: 'New York DOT',
+    url: 'https://511ny.org/api/v2/get/cameras?format=json',
+    envKey: 'NY_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+  {
     id: 'ga',
     label: 'Georgia DOT',
     url: 'https://511ga.org/api/v2/get/cameras?format=json',
@@ -1177,6 +1185,41 @@ const STATE_DOTS = [
     parse: _parseIBI511,
   },
 
+  // ── North Carolina ───────────────────────────────────────────────────────
+  // DriveNC (drivenc.gov) — confirmed IBI/Skyline platform, same schema.
+  // Env var: NC_511_KEY (key obtained via drivenc.gov developer portal)
+  {
+    id: 'nc',
+    label: 'North Carolina DOT',
+    url: 'https://www.drivenc.gov/api/v2/get/cameras?format=json',
+    envKey: 'NC_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+
+  // ── Pennsylvania ─────────────────────────────────────────────────────────
+  // PA uses ASP.NET map layer markers per Road511's article — non-standard
+  // format, needs investigation before building a parser.
+  // { id:'pa', label:'Pennsylvania DOT', url:'CONFIRM_URL',
+  //   envKey:'PA_511_KEY', cacheTTL:10*60*1000, parse:_parsePADOT },
+
+  // ── Additional IBI/Skyline states (same _parseIBI511, just needs a key) ─
+  { id:'id', label:'Idaho DOT',   url:'https://511.idaho.gov/api/v2/get/cameras?format=json',     envKey:'ID_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  { id:'nv', label:'Nevada DOT',  url:'https://www.nvroads.com/api/v2/get/cameras?format=json',    envKey:'NV_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  { id:'ut', label:'Utah DOT',    url:'https://prod-ut.ibi511.com/api/v2/get/cameras?format=json', envKey:'UT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+
+  // ── Florida ──────────────────────────────────────────────────────────────
+  // FL511 (fl511.com) runs on FDOT's proprietary SunGuide ATMS platform,
+  // built entirely in-house. There is NO public developer API — no endpoint
+  // docs, no key signup, no documented REST interface. The camera images
+  // are publicly viewable on fl511.com but the data comes from internal
+  // SunGuide feeds that aren't exposed externally. Would require
+  // reverse-engineering the FL511 web app's network requests, which is
+  // fragile, against their ToS, and not worth maintaining.
+  // Florida is one of the few states Road511 had to handle with custom
+  // scraping rather than an official API — if we ever want FL coverage,
+  // Road511 Starter ($29/mo) is the realistic path.
+
   // ── Minnesota DOT ────────────────────────────────────────────────────────
   // Public endpoint, no key required. Different platform from IBI/Skyline.
   // Schema verified defensively — see _parseMnDOT below.
@@ -1190,18 +1233,26 @@ const STATE_DOTS = [
   },
 
   // ── Illinois DOT (Gateway system) ────────────────────────────────────────
-  // Illinois uses a completely different platform from the IBI/Skyline 511
-  // states — it's the "Gateway Traveler Information" system, exposed as an
-  // ArcGIS FeatureServer. Schema fields: y (lat), x (lng), CameraLocation,
-  // CameraDirection, SnapShot (direct image URL — publicly accessible, no
-  // key needed to view images, only to query the feature layer itself).
-  // Env var: IL_ARCGIS_KEY (distinct name since it's ArcGIS, not 511)
+  // Illinois uses IDOT's ArcGIS Hub (public open data portal) for the
+  // Gateway camera dataset. gis-idot.opendata.arcgis.com is IDOT's PUBLIC
+  // data sharing site — NOT the same system as gis1.dot.illinois.gov
+  // (their private internal ArcGIS Server for infrastructure/permits).
+  //
+  // The IL_ARCGIS_KEY obtained from gis1.dot.illinois.gov almost certainly
+  // does NOT authenticate against the public Hub — but the Hub dataset is
+  // likely publicly accessible without any key at all, since that's the
+  // whole point of an open data portal. Setting envKey to null so this
+  // always loads without requiring a key.
+  //
+  // If the public endpoint starts returning 401/403, revisit whether IDOT
+  // has added auth to this specific dataset — at that point contact
+  // travelmidwest.com directly for data feed credentials (which Road511's
+  // article identified as the real upstream for IL camera images).
   {
     id: 'il',
     label: 'Illinois DOT (Gateway)',
     url: 'https://gis-idot.opendata.arcgis.com/datasets/IDOT::illinois-gateway-traffic-cameras/FeatureServer/0/query?where=1%3D1&outFields=*&f=json',
-    envKey: 'IL_ARCGIS_KEY',
-    authParam: 'token',            // ArcGIS uses token= not key=
+    envKey: null,                  // public open data Hub — no key required
     cacheTTL: 10 * 60 * 1000,
     parse: _parseILGateway,
   },
