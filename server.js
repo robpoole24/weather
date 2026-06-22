@@ -855,12 +855,18 @@ const SPOTTER_NETWORK_FEED_URL = 'https://www.spotternetwork.org/feeds/earth-all
 
 let chaserCache = { updatedAt: null, chasers: [] };
 
-function fetchTextOverHttp(url) {
+function fetchTextOverHttp(url, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https://') ? https : require('http');
-    lib.get(url, (res) => {
+    const opts = new URL(url);
+    const reqOptions = {
+      hostname: opts.hostname,
+      path: opts.pathname + opts.search,
+      headers: { 'User-Agent': 'WeatherTV/1.0', ...extraHeaders },
+    };
+    lib.get(reqOptions, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchTextOverHttp(res.headers.location).then(resolve, reject);
+        return fetchTextOverHttp(res.headers.location, extraHeaders).then(resolve, reject);
       }
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -1074,6 +1080,220 @@ app.get('/api/canada-radar/capabilities', async (req, res) => {
     res.status(502).json({ error: 'Could not reach geo.weather.gc.ca' });
   }
 });
+
+// ── TRAFFIC CAMERAS ─────────────────────────────────────────────────────────
+// Merges two sources into one normalised feed:
+//   1. OpenTrafficCamMap (OTC) — MIT-licensed static JSON on GitHub,
+//      ~7,500 US cameras, no API key required. Fetched once and cached for
+//      60 min since it's a static file that rarely changes.
+//   2. Road511 — normalised 511 feed, 10,000+ cameras, requires API key
+//      (ROAD511_API_KEY env var). Queried per bounding-box viewport so
+//      we only pull what's visible. Cached 3 min per viewport cell.
+//
+// The client sees ONE endpoint, ONE schema. Source attribution is invisible
+// to users. Road511 data is preferred when both sources have a camera at
+// the same physical location (deduplicated within 100m).
+//
+// CORS handling: DOT camera image URLs almost universally block direct
+// browser requests. We don't proxy the images themselves (that would
+// massively increase bandwidth costs) — instead, the client fetches
+// images via /api/camera-image?url=... which pipes them back with the
+// right CORS headers. Cached 25s so a 30-second refresh cycle stays fresh.
+
+const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/master/cameras/USA.json';
+let _otcCache = null;       // parsed flat array of cameras
+let _otcCacheTime = 0;
+const OTC_TTL = 60 * 60 * 1000; // 60 min — static file, rarely changes
+
+// Road511 viewport cache: key = `${bbox}` -> { cameras, ts }
+const _road511Cache = new Map();
+const ROAD511_TTL = 3 * 60 * 1000; // 3 min
+
+// Image proxy cache: key = url -> { buf, ct, ts }
+const _imgCache = new Map();
+const IMG_TTL = 25 * 1000; // 25s — keeps refresh cycle fresh
+
+function _haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+async function _loadOTC() {
+  if (_otcCache && Date.now() - _otcCacheTime < OTC_TTL) return _otcCache;
+  console.log('[Cameras] Fetching OpenTrafficCamMap USA.json…');
+  const text = await fetchTextOverHttp(OTC_JSON_URL);
+  const raw = JSON.parse(text);
+  const cameras = [];
+  // OTC schema: { state: { county: [ {description, latitude, longitude, url, format, ...} ] } }
+  for (const state of Object.values(raw)) {
+    for (const countyArr of Object.values(state)) {
+      if (!Array.isArray(countyArr)) continue;
+      for (const cam of countyArr) {
+        const lat = parseFloat(cam.latitude), lng = parseFloat(cam.longitude);
+        if (!isFinite(lat) || !isFinite(lng)) continue;
+        if (Math.abs(lat) < 1 && Math.abs(lng) < 1) continue; // Gulf of Guinea junk
+        const isHLS = cam.format === 'M3U8' || cam.format === 'M3U9';
+        cameras.push({
+          id: 'otc-' + cameras.length,
+          name: cam.description || 'Traffic Camera',
+          lat, lng,
+          imageUrl: isHLS ? null : (cam.url || null),
+          videoUrl: isHLS ? (cam.url || null) : null,
+          direction: cam.direction || null,
+          source: 'otc',
+        });
+      }
+    }
+  }
+  _otcCache = cameras;
+  _otcCacheTime = Date.now();
+  console.log(`[Cameras] OTC loaded: ${cameras.length} cameras`);
+  return cameras;
+}
+
+async function _loadRoad511(bbox) {
+  const key = bbox;
+  const cached = _road511Cache.get(key);
+  if (cached && Date.now() - cached.ts < ROAD511_TTL) return cached.cameras;
+
+  const apiKey = process.env.ROAD511_API_KEY;
+  if (!apiKey) return [];
+
+  const url = `https://api.road511.com/api/v1/features/geojson?type=cameras&bbox=${encodeURIComponent(bbox)}&limit=500`;
+  let cameras = [];
+  try {
+    const text = await fetchTextOverHttp(url, { 'X-API-Key': apiKey });
+    const gj = JSON.parse(text);
+    cameras = (gj.features || []).map(f => {
+      const p = f.properties || {};
+      return {
+        id: 'r511-' + (p.id || ''),
+        name: p.name || 'Traffic Camera',
+        lat: f.geometry.coordinates[1],
+        lng: f.geometry.coordinates[0],
+        imageUrl: p.image_url || null,
+        videoUrl: p.video_url || null,
+        direction: p.direction || null,
+        source: 'road511',
+      };
+    }).filter(c => isFinite(c.lat) && isFinite(c.lng));
+  } catch (e) {
+    console.warn('[Cameras] Road511 fetch failed:', e.message);
+  }
+  _road511Cache.set(key, { cameras, ts: Date.now() });
+  return cameras;
+}
+
+// GET /api/cameras?bbox=minLng,minLat,maxLng,maxLat
+// Returns merged, deduplicated camera list for the visible viewport.
+app.get('/api/cameras', async (req, res) => {
+  const bboxStr = (req.query.bbox || '').trim();
+  if (!bboxStr) return res.status(400).json({ error: 'bbox required' });
+  const parts = bboxStr.split(',').map(Number);
+  if (parts.length !== 4 || parts.some(n => !isFinite(n))) {
+    return res.status(400).json({ error: 'bbox must be minLng,minLat,maxLng,maxLat' });
+  }
+  const [minLng, minLat, maxLng, maxLat] = parts;
+
+  try {
+    // Load both sources in parallel
+    const [otcAll, road511] = await Promise.all([
+      _loadOTC().catch(e => { console.warn('[Cameras] OTC failed:', e.message); return []; }),
+      _loadRoad511(bboxStr),
+    ]);
+
+    // Filter OTC to current viewport
+    const otcInView = otcAll.filter(c =>
+      c.lat >= minLat && c.lat <= maxLat && c.lng >= minLng && c.lng <= maxLng
+    );
+
+    // Merge: Road511 is authoritative. For each OTC camera, check whether
+    // Road511 already has one within 100m — if so, skip the OTC entry.
+    const merged = [...road511];
+    for (const cam of otcInView) {
+      const tooClose = road511.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
+      if (!tooClose) merged.push(cam);
+    }
+
+    res.set('Cache-Control', 'no-store'); // admin-side; don't let Cloudflare cache this
+    res.json({ cameras: merged, total: merged.length, road511Count: road511.length, otcCount: otcInView.length });
+  } catch (e) {
+    console.error('[Cameras] Merge failed:', e.message);
+    res.status(500).json({ error: 'Camera data unavailable' });
+  }
+});
+
+// GET /api/camera-image?url=...
+// CORS proxy for camera image URLs — almost all DOT servers block direct
+// browser requests with missing CORS headers. We fetch server-side and
+// pipe back the bytes with the correct headers. Cached 25s so repeated
+// refreshes within a poll cycle don't hammer upstream.
+app.get('/api/camera-image', async (req, res) => {
+  const rawUrl = (req.query.url || '').trim();
+  if (!rawUrl) return res.status(400).send('url required');
+
+  // Only allow http/https and block internal addresses — never let this
+  // become an SSRF vector for fetching localhost or Railway internals.
+  let parsedUrl;
+  try { parsedUrl = new URL(rawUrl); } catch { return res.status(400).send('invalid url'); }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) return res.status(400).send('http/https only');
+  const host = parsedUrl.hostname;
+  if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) {
+    return res.status(403).send('private addresses not allowed');
+  }
+
+  const cached = _imgCache.get(rawUrl);
+  if (cached && Date.now() - cached.ts < IMG_TTL) {
+    res.set('Content-Type', cached.ct || 'image/jpeg');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=25');
+    return res.send(cached.buf);
+  }
+
+  try {
+    const buf = await new Promise((resolve, reject) => {
+      const mod = parsedUrl.protocol === 'https:' ? require('https') : require('http');
+      const options = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } };
+      mod.get(rawUrl, options, r => {
+        if (r.statusCode === 301 || r.statusCode === 302) {
+          // Follow one redirect — DOTs love redirecting image URLs
+          const loc = r.headers.location;
+          if (!loc) return reject(new Error('redirect with no location'));
+          const mod2 = loc.startsWith('https') ? require('https') : require('http');
+          mod2.get(loc, options, r2 => {
+            const chunks = [];
+            r2.on('data', c => chunks.push(c));
+            r2.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r2.headers['content-type'] }));
+            r2.on('error', reject);
+          }).on('error', reject);
+          return;
+        }
+        const chunks = [];
+        r.on('data', c => chunks.push(c));
+        r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] }));
+        r.on('error', reject);
+      }).on('error', reject);
+    });
+    _imgCache.set(rawUrl, { ...buf, ts: Date.now() });
+    // Prune cache if it grows large (shouldn't happen with 25s TTL but be safe)
+    if (_imgCache.size > 200) {
+      const oldest = [..._imgCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) _imgCache.delete(oldest[0]);
+    }
+    res.set('Content-Type', buf.ct || 'image/jpeg');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=25');
+    res.send(buf.buf);
+  } catch (e) {
+    console.warn('[CameraProxy]', e.message);
+    res.status(502).send('upstream error');
+  }
+});
+
+
 
 // Admin — map a Spotter Network chaser ID to one of our channel IDs
 app.post('/api/admin/chasers/map', express.json(), (req, res) => {

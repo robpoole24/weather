@@ -46,6 +46,8 @@
 </script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- HLS.js for traffic camera live stream playback (M3U8 feeds) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.7/hls.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap');
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -266,6 +268,62 @@
     border-radius:4px; box-shadow:0 2px 6px rgba(0,0,0,0.5); }
   .chaser-tag-mapped { border-color:rgba(255,209,102,0.6) !important; color:#ffd166 !important; }
   .chaser-tag::before { border-top-color:#111820 !important; }
+
+  /* ── Traffic Camera dots ───────────────────────────────────────────────── */
+  .cam-dot {
+    width:10px; height:10px; border-radius:50%;
+    background:#f97316; border:2px solid rgba(255,255,255,0.7);
+    box-shadow:0 0 4px rgba(249,115,22,0.7);
+    cursor:pointer; transition:transform 0.1s;
+  }
+  .cam-dot:hover { transform:scale(1.5); }
+
+  /* Tooltip shown on hover — location name */
+  .cam-tooltip {
+    background:rgba(10,14,20,0.92); border:1px solid rgba(249,115,22,0.5);
+    border-radius:5px; padding:3px 8px;
+    font-family:'Barlow Condensed',sans-serif; font-size:0.72rem; font-weight:600;
+    color:#fde8d4; white-space:nowrap; pointer-events:none;
+    box-shadow:0 2px 8px rgba(0,0,0,0.6);
+  }
+
+  /* Camera overlay — floating video/image box over the radar */
+  #camera-overlay {
+    position:absolute; z-index:1100;
+    top:60px; right:16px;
+    width:360px; min-width:240px; max-width:90vw;
+    background:#0a0e14; border:1px solid rgba(249,115,22,0.5);
+    border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,0.7);
+    overflow:hidden; display:none; resize:both;
+  }
+  #camera-overlay-header {
+    display:flex; align-items:center; gap:0.5rem;
+    padding:0.5rem 0.7rem; background:rgba(249,115,22,0.12);
+    border-bottom:1px solid rgba(249,115,22,0.2);
+    font-family:'Barlow Condensed',sans-serif; font-size:0.82rem; font-weight:700;
+    color:#fde8d4; letter-spacing:0.04em; text-transform:uppercase;
+  }
+  #camera-overlay-header .cam-close {
+    margin-left:auto; cursor:pointer; font-size:1rem; color:var(--muted);
+    background:none; border:none; padding:0 0.1rem; line-height:1;
+  }
+  #camera-overlay-header .cam-close:hover { color:#f97316; }
+  #camera-overlay-body { position:relative; background:#000; min-height:180px; }
+  #camera-overlay-body video,
+  #camera-overlay-body img {
+    width:100%; display:block; max-height:280px; object-fit:cover;
+  }
+  #camera-overlay-status {
+    position:absolute; inset:0; display:flex; align-items:center;
+    justify-content:center; color:var(--muted);
+    font-family:'Barlow Condensed',sans-serif; font-size:0.8rem;
+    background:#0a0e14; pointer-events:none;
+  }
+  #camera-overlay-footer {
+    padding:0.35rem 0.7rem;
+    font-family:'Barlow Condensed',sans-serif; font-size:0.66rem; color:var(--muted);
+    border-top:1px solid rgba(249,115,22,0.1);
+  }
   /* Smooths marker repositioning on each poll so moving chasers glide
      instead of teleporting — Leaflet's marker-pane elements are positioned
      via CSS transform, so transitioning that property animates the move. */
@@ -519,6 +577,19 @@
 
 <div id="map"></div>
 
+<!-- ── Traffic Camera overlay ─────────────────────────────────────────────── -->
+<div id="camera-overlay">
+  <div id="camera-overlay-header">
+    <span>📷</span>
+    <span id="camera-overlay-title">Traffic Camera</span>
+    <button class="cam-close" id="camera-overlay-close" aria-label="Close camera">✕</button>
+  </div>
+  <div id="camera-overlay-body">
+    <div id="camera-overlay-status">Loading…</div>
+  </div>
+  <div id="camera-overlay-footer" id="camera-overlay-meta"></div>
+</div>
+
 <!-- ══ TEMPERATURE GRADIENT LEGEND ══ -->
 <div id="temp-legend">
   <div class="tl-title" id="temp-legend-title">Feels Like (°F)</div>
@@ -585,6 +656,11 @@
   <div class="lp-section">
     <div class="lp-section-label">Storm Chaser Overlays</div>
     <div id="lp-chaser"></div>
+  </div>
+
+  <div class="lp-section">
+    <div class="lp-section-label">Traffic Cameras</div>
+    <div id="lp-cameras"></div>
   </div>
 
   <div class="lp-section" style="border-bottom:none;">
@@ -2046,6 +2122,213 @@ map.on('moveend zoomend', () => {
   setTimeout(() => preloadSSFrames(myGen), 500);
 });
 
+// ── TRAFFIC CAMERAS ──────────────────────────────────────────────────────────
+// Dots on the map for DOT traffic cameras. Clicking a dot opens a floating
+// overlay showing a refreshing image or live HLS video stream, while the
+// radar layer stays fully visible underneath.
+//
+// Data comes from GET /api/cameras?bbox=... which merges OpenTrafficCamMap
+// (free, ~7,500 cameras) with Road511 (10,000+ cameras, requires API key
+// set as ROAD511_API_KEY on the server). The client never knows or cares
+// which source a camera came from — the server handles merging and
+// deduplication.
+//
+// CORS: DOT image URLs almost universally block direct browser fetches.
+// We route images through /api/camera-image?url=... which proxies them
+// server-side with the right CORS headers. HLS streams go direct to
+// <video> since hls.js handles cross-origin naturally via XHR, not <img>.
+
+let camLayer = null;
+let camMarkers = {};       // id -> L.marker
+let camPollTimer = null;
+let camActiveCamId = null; // which camera's overlay is open
+let camImgRefresh = null;  // setInterval for image-stream refresh
+let hlsPlayer = null;      // hls.js instance, if active
+
+const CAM_BBOX_PAD = 0.3;       // degrees to expand viewport when querying
+const CAM_POLL_INTERVAL = 2 * 60 * 1000; // re-fetch camera list every 2 min
+const CAM_IMG_REFRESH_MS = 30 * 1000;   // image-stream refresh interval
+
+// Build the current map bbox with padding, as minLng,minLat,maxLng,maxLat
+function _camBbox() {
+  const b = map.getBounds();
+  const pad = CAM_BBOX_PAD;
+  return [
+    (b.getWest()  - pad).toFixed(5),
+    (b.getSouth() - pad).toFixed(5),
+    (b.getEast()  + pad).toFixed(5),
+    (b.getNorth() + pad).toFixed(5),
+  ].join(',');
+}
+
+async function refreshCameras() {
+  if (!overlayState['cameras']) return;
+  if (!camLayer) return;
+  const bbox = _camBbox();
+  let cameras = [];
+  try {
+    const res = await fetch(`/api/cameras?bbox=${encodeURIComponent(bbox)}`);
+    const data = await res.json();
+    cameras = data.cameras || [];
+  } catch (e) {
+    console.warn('[Cameras] Fetch failed:', e);
+    return;
+  }
+
+  // Add or update markers — keep existing markers in place to avoid flash
+  const seen = new Set();
+  for (const cam of cameras) {
+    seen.add(cam.id);
+    if (camMarkers[cam.id]) continue; // already on map
+
+    const el = document.createElement('div');
+    el.className = 'cam-dot';
+    el.title = cam.name;
+    const icon = L.divIcon({ className: '', html: el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
+    const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset: 500 });
+
+    // Tooltip on hover (Leaflet's permanent: false tooltip is ideal here)
+    mk.bindTooltip(cam.name, {
+      permanent: false,
+      direction: 'top',
+      offset: [0, -8],
+      className: 'cam-tooltip',
+    });
+
+    mk.on('click', () => openCameraOverlay(cam));
+    mk.addTo(camLayer);
+    camMarkers[cam.id] = mk;
+    // Store camera data on the marker for later access
+    mk._camData = cam;
+  }
+
+  // Remove markers that are no longer in the viewport
+  for (const id of Object.keys(camMarkers)) {
+    if (!seen.has(id)) {
+      camLayer.removeLayer(camMarkers[id]);
+      delete camMarkers[id];
+    }
+  }
+}
+
+function startCameras() {
+  if (!camLayer) camLayer = L.layerGroup().addTo(map);
+  refreshCameras();
+  if (!camPollTimer) camPollTimer = setInterval(refreshCameras, CAM_POLL_INTERVAL);
+  // Also refresh when the user pans/zooms to a new area
+  map.on('moveend zoomend', _onCameraMapMove);
+}
+
+function stopCameras() {
+  if (camPollTimer) { clearInterval(camPollTimer); camPollTimer = null; }
+  map.off('moveend zoomend', _onCameraMapMove);
+  if (camLayer) { camLayer.clearLayers(); map.removeLayer(camLayer); camLayer = null; }
+  camMarkers = {};
+  closeCameraOverlay();
+}
+
+let _camMoveTimer = null;
+function _onCameraMapMove() {
+  // Debounce — don't fire on every intermediate step of a pan
+  clearTimeout(_camMoveTimer);
+  _camMoveTimer = setTimeout(refreshCameras, 600);
+}
+
+// ── Camera overlay (the floating video/image box) ────────────────────────────
+
+function openCameraOverlay(cam) {
+  camActiveCamId = cam.id;
+  const overlay = document.getElementById('camera-overlay');
+  const title   = document.getElementById('camera-overlay-title');
+  const body    = document.getElementById('camera-overlay-body');
+  const status  = document.getElementById('camera-overlay-status');
+  const footer  = document.getElementById('camera-overlay-footer');
+
+  title.textContent = cam.name;
+  if (cam.direction) title.textContent += ` — ${cam.direction}`;
+  overlay.style.display = 'block';
+
+  // Clear previous player
+  _stopCameraMedia();
+  body.innerHTML = '<div id="camera-overlay-status">Loading…</div>';
+
+  if (cam.videoUrl) {
+    // HLS / M3U8 stream
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true;
+    video.controls = true;
+    video.playsInline = true;
+    video.style.cssText = 'width:100%;display:block;max-height:280px;background:#000;';
+    body.innerHTML = '';
+    body.appendChild(video);
+
+    if (Hls.isSupported()) {
+      hlsPlayer = new Hls({ maxBufferLength: 10, maxMaxBufferLength: 20 });
+      hlsPlayer.loadSource(cam.videoUrl);
+      hlsPlayer.attachMedia(video);
+      hlsPlayer.on(Hls.Events.ERROR, (evt, data) => {
+        if (data.fatal) {
+          console.warn('[Cameras] HLS error, falling back to image', data);
+          hlsPlayer.destroy(); hlsPlayer = null;
+          if (cam.imageUrl) _startImageStream(cam, body);
+          else body.innerHTML = '<div id="camera-overlay-status">Stream unavailable</div>';
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS (Safari)
+      video.src = cam.videoUrl;
+      video.play().catch(() => {});
+    } else {
+      // No HLS support at all — fall back to image if available
+      if (cam.imageUrl) _startImageStream(cam, body);
+      else body.innerHTML = '<div id="camera-overlay-status">Stream not supported in this browser</div>';
+    }
+    footer.textContent = 'Live stream · ' + cam.name;
+
+  } else if (cam.imageUrl) {
+    // Refreshing still image
+    _startImageStream(cam, body);
+    footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS / 1000}s · ${cam.name}`;
+  } else {
+    body.innerHTML = '<div id="camera-overlay-status">No feed available for this camera</div>';
+    footer.textContent = cam.name;
+  }
+}
+
+function _startImageStream(cam, body) {
+  const img = document.createElement('img');
+  img.alt = cam.name;
+  img.style.cssText = 'width:100%;display:block;max-height:280px;object-fit:cover;';
+  img.onerror = () => { img.style.display = 'none'; body.innerHTML += '<div id="camera-overlay-status">Image unavailable</div>'; };
+  body.innerHTML = '';
+  body.appendChild(img);
+
+  function loadFrame() {
+    // Route through our CORS proxy, with cache-busting timestamp
+    img.src = `/api/camera-image?url=${encodeURIComponent(cam.imageUrl)}&_t=${Date.now()}`;
+  }
+  loadFrame();
+  if (camImgRefresh) clearInterval(camImgRefresh);
+  camImgRefresh = setInterval(loadFrame, CAM_IMG_REFRESH_MS);
+}
+
+function _stopCameraMedia() {
+  if (camImgRefresh) { clearInterval(camImgRefresh); camImgRefresh = null; }
+  if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
+}
+
+function closeCameraOverlay() {
+  _stopCameraMedia();
+  camActiveCamId = null;
+  const overlay = document.getElementById('camera-overlay');
+  if (overlay) overlay.style.display = 'none';
+  const body = document.getElementById('camera-overlay-body');
+  if (body) body.innerHTML = '<div id="camera-overlay-status">Loading…</div>';
+}
+
+// Close button wired after DOM ready (see init block below)
+
 let ccLayer=null;
 function clearCC(){
   if (ccLayer){ map.removeLayer(ccLayer); ccLayer=null; }
@@ -2969,11 +3252,23 @@ const CHASER_ITEMS=[
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
   {id:'chasers',ico:'🚗',name:'Live Storm Chasers',sub:'Spotter Network · live',def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS);
+const CAM_ITEMS=[
+  {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · click to view · US only',def:false},
+];
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
 lpDefaults();
+
+// Wire camera overlay close button
+document.getElementById('camera-overlay-close').addEventListener('click', closeCameraOverlay);
+// Allow Escape to close the camera overlay too
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('camera-overlay').style.display !== 'none') {
+    closeCameraOverlay();
+  }
+});
 
 function toggleLayerPanel(force){
   const open=(typeof force==='boolean')?force:!document.getElementById('layer-panel').classList.contains('open');
@@ -2990,6 +3285,7 @@ function applyOverlay(id,on){
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
     case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
     case 'cc':        if (on) showCC(); else clearCC(); break;
+    case 'cameras':   if (on) startCameras(); else stopCameras(); break;
     case 'banner':
       if (!on){ bannerDismissed=true; hideBanner(); }
       else { bannerDismissed=false; if (activeBannerAlerts.length) showBanner(activeBannerAlerts); }
@@ -3020,6 +3316,7 @@ function renderPanel(){
   document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
   // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
   // OR CC is toggled on — these are independent now, so both are checked.
   const needsSite=(activePaint in SS_PRODUCTS)||overlayState['cc'];
