@@ -1392,7 +1392,7 @@ app.post('/api/admin/chasers/add-and-map', express.json(), async (req, res) => {
     }
 
     const data = loadData();
-    const targetGroupId = groupId || 'storm-chasers';
+    const targetGroupId = groupId || 'chasers';
     const group = (data.groups || []).find(g => g.id === targetGroupId);
     if (!group) return res.status(404).json({ error: 'Target group not found: ' + targetGroupId });
 

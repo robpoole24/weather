@@ -3191,7 +3191,7 @@ function minimizeRadar() {
     // Call showPanel in the parent WeatherTV app to switch away from radar
     // This also removes the radar-expanded class via the showPanel cleanup
     if (window.parent && window.parent !== window) {
-      window.parent.showPanel('storm-chasers');
+      window.parent.showPanel('chasers');
     }
   } catch(e) {
     // Fallback: post a message to the parent
