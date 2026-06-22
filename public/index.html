@@ -1859,9 +1859,14 @@ function buildChannelCard(ch, groupId) {
   const btns = document.createElement('div');
   btns.className = 'channel-btns';
 
-  // Only show Live/Recent/Subscribe/Favorite if not hidden from group list
-  // Hidden channels show collection button only — they're entry points to collections
-  if (!ch.hiddenInGroup) {
+  // Show Live/Recent/Subscribe/Favorite buttons unless the channel is
+  // hidden from the group list AND this is not a search result.
+  // hiddenInGroup channels are secondary channels (e.g. a chaser's second
+  // channel) that exist for collection membership but shouldn't clutter
+  // the group list. In a search context though, the user deliberately
+  // found this channel — hiding the buttons there is actively unhelpful.
+  const showButtons = !ch.hiddenInGroup || groupId === 'search';
+  if (showButtons) {
     // Favorite heart toggle
     const favBtn = document.createElement('button');
     const favActive = isFavorite(ch.id);
@@ -3985,23 +3990,21 @@ async function updateCacheStatus() {
     const res = await fetch('/api/cache/status');
     const data = await res.json();
 
-    const liveEl = document.getElementById('live-update-status');
     const videoEl = document.getElementById('video-update-status');
+    const notifEl = document.getElementById('notification-status');
 
-    if (!liveEl || !videoEl) {
+    if (!videoEl || !notifEl) {
       console.warn('[WeatherTV] Status bar elements not found');
       return;
     }
 
     const liveTime = data.liveStatuses && data.liveStatuses.lastChecked;
     const videoTime = data.recentVideos && data.recentVideos.lastFetch;
+    const notifTime = data.liveStatuses && data.liveStatuses.lastNotification;
 
     console.log('[WeatherTV] Cache status:', { liveTime, videoTime, data });
 
-    liveEl.textContent = 'Live: ' + formatPreciseTime(liveTime);
-    const notifEl = document.getElementById('notification-status');
-    const notifTime = data.liveStatuses && data.liveStatuses.lastNotification;
-    if (notifEl) notifEl.textContent = 'Notifications: ' + formatPreciseTime(notifTime);
+    notifEl.textContent = 'Notifications: ' + formatPreciseTime(notifTime);
     videoEl.textContent = 'Videos: ' + formatPreciseTime(videoTime);
 
   } catch(e) {

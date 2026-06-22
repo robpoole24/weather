@@ -1047,17 +1047,55 @@ async function saveEditChannel(groupId, oldChId) {
   const newId   = document.getElementById('edit-ch-id-' + oldChId).value.trim();
   if (!newName || !newId) { showToast('⚠ Both fields required'); return; }
 
+  // Use the dedicated PUT endpoint for a single channel rather than
+  // saveAll() (which POSTs the entire appData to /api/admin/restore).
+  // saveAll() was causing the edit to revert because:
+  // 1. Cloudflare may cache the GET /api/admin/config response, so the
+  //    re-fetch in loadData() after saveAll() could return stale data.
+  // 2. If the new name was set in the JS appData object but saveAll posted
+  //    slightly stale data (e.g. a race with a background task reloading
+  //    appData between the mutation and the POST), the save would silently
+  //    overwrite with the old name and say "saved successfully."
+  // The dedicated PUT endpoint updates exactly one channel atomically and
+  // returns immediately — no race, no full-document overwrite risk.
+  try {
+    const res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(oldChId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName, id: newId }),
+    });
+    const result = await res.json();
+    if (!result.ok) { showToast('⚠ ' + (result.error || 'Save failed')); return; }
+  } catch(e) {
+    showToast('⚠ Save failed — check connection');
+    return;
+  }
+
+  // Update local appData to match so the re-render is correct without
+  // needing a full round-trip reload (avoids the Cloudflare cache issue
+  // on the GET /api/admin/config endpoint).
   const group = (appData.groups || []).find(g => g.id === groupId);
   const ch = group && group.channels.find(c => c.id === oldChId);
-  if (!ch) return;
+  if (ch) {
+    ch.name = newName;
+    ch.id   = newId;
+  }
 
-  // Update in appData
-  ch.name = newName;
-  ch.id   = newId;
+  // Remove the edit form, re-render just this group's channel list
+  // rather than calling loadData() (which would hit the potentially-
+  // cached GET endpoint and undo the edit again).
+  const form = document.getElementById('edit-ch-form-' + oldChId);
+  if (form) form.remove();
 
-  await saveAll();
-  showToast('Channel updated');
-  await loadData();
+  if (group) {
+    const list = document.getElementById('ch-list-' + groupId);
+    if (list) {
+      list.innerHTML = '';
+      group.channels.forEach(c => list.appendChild(renderChannelRow(groupId, c)));
+    }
+  }
+
+  showToast('✓ Channel updated');
 }
 
 // A-Z sort for a group
@@ -1070,8 +1108,20 @@ async function sortGroupAlpha(groupId) {
     list.innerHTML = '';
     group.channels.forEach(c => list.appendChild(renderChannelRow(groupId, c)));
   }
-  await saveAll();
-  showToast('Sorted A–Z and saved');
+  // Use the dedicated order endpoint instead of saveAll() — avoids
+  // Cloudflare caching stale data on the subsequent GET.
+  try {
+    const res = await fetch(`/api/admin/groups/${encodeURIComponent(groupId)}/channels/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderedIds: group.channels.map(c => c.id) }),
+    });
+    const result = await res.json();
+    if (result.ok) showToast('\u2713 Sorted A\u2013Z and saved');
+    else showToast('\u26a0 ' + (result.error || 'Sort save failed'));
+  } catch(e) {
+    showToast('\u26a0 Sort save failed \u2014 check connection');
+  }
 }
 
 function toggleAddChannelForm(groupId) {

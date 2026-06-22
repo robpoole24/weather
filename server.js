@@ -336,6 +336,10 @@ app.get('/api/data', (req, res) => {
 
 // Get config (admin only — protect this in production!)
 app.get('/api/admin/config', (req, res) => {
+  // Prevent Cloudflare (and any other proxy) from caching admin API responses.
+  // Without this, a POST to /api/admin/restore followed immediately by a GET
+  // here could return a stale cached version, making edits appear to revert.
+  res.set('Cache-Control', 'no-store');
   res.json(loadData());
 });
 
@@ -521,6 +525,25 @@ app.put('/api/admin/groups/:groupId/channels/reorder', (req, res) => {
   const tmp = group.channels[idx];
   group.channels[idx] = group.channels[newIdx];
   group.channels[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Set full channel order for a group (used by A-Z sort and drag-drop).
+// Accepts an array of channel IDs in the desired order; reorders the
+// channels array in place without touching any other channel fields.
+app.put('/api/admin/groups/:groupId/channels/order', express.json(), (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds)) return res.status(400).json({ error: 'orderedIds must be an array' });
+  const byId = Object.fromEntries(group.channels.map(c => [c.id, c]));
+  const reordered = orderedIds.map(id => byId[id]).filter(Boolean);
+  // Preserve any channels not in orderedIds (edge case safety)
+  const included = new Set(orderedIds);
+  group.channels.find(c => !included.has(c.id)) && reordered.push(...group.channels.filter(c => !included.has(c.id)));
+  group.channels = reordered;
   saveData(data);
   res.json({ ok: true });
 });
