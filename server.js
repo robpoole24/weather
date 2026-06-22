@@ -24,7 +24,7 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'channels.json');
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '5mb' })); // 5MB covers the full appData payload sent by saveAll()
 
 // ── WS4KP dynamic music playlist ──────────────────────────────────────────
 // Scans the actual music folder so any MP3 pushed to GitHub is auto-included.
@@ -353,7 +353,7 @@ app.get('/api/admin/backup', (req, res) => {
 });
 
 // Restore from JSON backup — overwrites current data
-app.post('/api/admin/restore', express.json({ limit: '5mb' }), async (req, res) => {
+app.post('/api/admin/restore', async (req, res) => {
   const data = req.body;
   if (!data || !data.groups || !data.config) {
     return res.status(400).json({ error: 'Invalid backup file — must contain groups and config' });
@@ -400,7 +400,7 @@ app.get('/api/admin/highlights', (req, res) => {
 });
 
 // Admin — add highlight
-app.post('/api/admin/highlights', express.json(), (req, res) => {
+app.post('/api/admin/highlights', (req, res) => {
   const { channelId, videoId, title, thumbnail } = req.body;
   if (!channelId || !videoId) return res.status(400).json({ error: 'channelId and videoId required' });
   const data = loadData();
@@ -423,7 +423,7 @@ app.delete('/api/admin/highlights/:index', (req, res) => {
 });
 
 // Admin — reorder highlights (swap by index, direction up/down)
-app.put('/api/admin/highlights/reorder', express.json(), (req, res) => {
+app.put('/api/admin/highlights/reorder', (req, res) => {
   const { index, direction } = req.body;
   const data = loadData();
   if (!data.highlights) return res.json({ ok: true });
@@ -445,7 +445,7 @@ app.get('/api/playlists', (req, res) => {
 });
 
 // Admin — add playlist
-app.post('/api/admin/playlists', express.json(), (req, res) => {
+app.post('/api/admin/playlists', (req, res) => {
   const { title, playlistId } = req.body;
   if (!title || !playlistId) return res.status(400).json({ error: 'title and playlistId required' });
   const data = loadData();
@@ -456,7 +456,7 @@ app.post('/api/admin/playlists', express.json(), (req, res) => {
 });
 
 // Admin — update playlist
-app.put('/api/admin/playlists/:id', express.json(), (req, res) => {
+app.put('/api/admin/playlists/:id', (req, res) => {
   const data = loadData();
   if (!data.playlists) return res.status(404).json({ error: 'Not found' });
   const idx = data.playlists.findIndex(p => p.id === req.params.id);
@@ -476,7 +476,7 @@ app.delete('/api/admin/playlists/:id', (req, res) => {
 });
 
 // Admin — reorder playlists
-app.put('/api/admin/playlists/reorder', express.json(), (req, res) => {
+app.put('/api/admin/playlists/reorder', (req, res) => {
   const { id, direction } = req.body;
   const data = loadData();
   if (!data.playlists) return res.json({ ok: true });
@@ -532,7 +532,7 @@ app.put('/api/admin/groups/:groupId/channels/reorder', (req, res) => {
 // Set full channel order for a group (used by A-Z sort and drag-drop).
 // Accepts an array of channel IDs in the desired order; reorders the
 // channels array in place without touching any other channel fields.
-app.put('/api/admin/groups/:groupId/channels/order', express.json(), (req, res) => {
+app.put('/api/admin/groups/:groupId/channels/order', (req, res) => {
   const data = loadData();
   const group = data.groups.find(g => g.id === req.params.groupId);
   if (!group) return res.status(404).json({ error: 'Group not found' });
@@ -693,7 +693,7 @@ app.put('/api/admin/apps', (req, res) => {
 // to store in app.img -- index.html's buildAppsPanel() and the collection-button
 // logo (height:10px, auto width) both render whatever this points to, so any
 // reasonably square image works without further resizing.
-app.post('/api/admin/upload-app-logo', express.json({ limit: '4mb' }), (req, res) => {
+app.post('/api/admin/upload-app-logo', (req, res) => {
   try {
     const { name, dataUrl } = req.body;
     if (!name || !dataUrl) return res.status(400).json({ error: 'name and dataUrl required' });
@@ -1604,7 +1604,7 @@ app.get('/api/camera-image', async (req, res) => {
 
 
 // Admin — map a Spotter Network chaser ID to one of our channel IDs
-app.post('/api/admin/chasers/map', express.json(), (req, res) => {
+app.post('/api/admin/chasers/map', (req, res) => {
   const { spotterNetworkId, channelId } = req.body;
   if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
   const data = loadData();
@@ -1624,7 +1624,7 @@ app.post('/api/admin/chasers/map', express.json(), (req, res) => {
 // every refresh. Scoped to the pair, not the whole chaser, since the same
 // person might still be a fuzzy match candidate against a DIFFERENT channel
 // later (e.g. if they're later confirmed as someone else entirely).
-app.post('/api/admin/chasers/dismiss-suggestion', express.json(), (req, res) => {
+app.post('/api/admin/chasers/dismiss-suggestion', (req, res) => {
   const { spotterNetworkId, channelId } = req.body;
   if (!spotterNetworkId || !channelId) return res.status(400).json({ error: 'spotterNetworkId and channelId required' });
   const data = loadData();
@@ -1640,7 +1640,7 @@ app.post('/api/admin/chasers/dismiss-suggestion', express.json(), (req, res) => 
 // or just not someone you want to add). Stored permanently — the chaser
 // stays excluded from that list even though they'll keep appearing in the
 // knownChasers registry and the live feed/radar dots.
-app.post('/api/admin/chasers/dismiss-new', express.json(), (req, res) => {
+app.post('/api/admin/chasers/dismiss-new', (req, res) => {
   const { spotterNetworkId } = req.body;
   if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
   const data = loadData();
@@ -1893,7 +1893,7 @@ async function resolveYouTubeChannel(url) {
 
 // Admin — resolve a YouTube URL to a channel ID/name without adding it yet.
 // Lets the admin preview what will be added before confirming.
-app.post('/api/admin/chasers/resolve-youtube', express.json(), async (req, res) => {
+app.post('/api/admin/chasers/resolve-youtube', async (req, res) => {
   const { youtubeUrl } = req.body;
   if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
   try {
@@ -1918,7 +1918,7 @@ app.post('/api/admin/chasers/resolve-youtube', express.json(), async (req, res) 
 // by hand (e.g. via the page source or a third-party ID lookup tool).
 // channelName is required alongside manualChannelId since there's no API
 // call to fetch a display name from in this path.
-app.post('/api/admin/chasers/add-and-map', express.json(), async (req, res) => {
+app.post('/api/admin/chasers/add-and-map', async (req, res) => {
   const { spotterNetworkId, youtubeUrl, groupId, manualChannelId, manualChannelName } = req.body;
   if (!spotterNetworkId) {
     return res.status(400).json({ error: 'spotterNetworkId required' });
