@@ -1113,6 +1113,247 @@ const ROAD511_TTL = 3 * 60 * 1000; // 3 min
 const _imgCache = new Map();
 const IMG_TTL = 25 * 1000; // 25s — keeps refresh cycle fresh
 
+// ── STATE DOT CAMERA SOURCES ─────────────────────────────────────────────────
+// The IBI Group / Skyline 511 platform is used by the majority of US state
+// DOTs. Every state on this platform uses the IDENTICAL JSON schema:
+//   GET /api/v2/get/cameras?key={key}&format=json
+//   → [ { Id, Latitude, Longitude, Location, Roadway, Direction,
+//          Views: [{ Id, Url, VideoUrl, Status }] } ]
+//
+// Adding a new state DOT is a single entry in STATE_DOTS — no new parse
+// logic, no new edge cases, no code changes beyond this array. The generic
+// _loadStateDOT() loader handles fetch, cache, parse, and error handling
+// uniformly for every entry.
+//
+// To add a state:
+//   1. Sign up for a developer key at their 511 portal (or confirm it's public)
+//   2. Add { id, label, url, envKey, cacheTTL } below
+//   3. Add the env var to Railway — that's it
+//
+// envKey: Railway env var name that holds the API key.
+//         Set to null for public endpoints that need no key.
+//
+// CONFIRMED ON SAME PLATFORM (can add immediately once you have a key):
+//   Arizona:   https://az511.com/api/v2/get/cameras   (AZDOT_511_KEY)
+//   Georgia:   https://511ga.org/api/v2/get/cameras   (GA_511_KEY)
+//   Louisiana: https://511la.org/api/v2/get/cameras   (LA_511_KEY)
+//   (any other state 511 site running the IBI/Skyline platform)
+
+const STATE_DOTS = [
+  // ── IBI Group / Skyline 511 platform ────────────────────────────────────
+  // All these states use the IDENTICAL API schema. Adding any new state on
+  // this platform: copy an entry, update id/label/url/envKey, done.
+  // Env var convention: {STATE}_511_KEY  (e.g. WI_511_KEY, GA_511_KEY)
+  {
+    id: 'wi',
+    label: 'Wisconsin DOT',
+    url: 'https://511wi.gov/api/v2/get/cameras?format=json',
+    envKey: 'WI_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+  {
+    id: 'ga',
+    label: 'Georgia DOT',
+    url: 'https://511ga.org/api/v2/get/cameras?format=json',
+    envKey: 'GA_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+  {
+    id: 'la',
+    label: 'Louisiana DOTD',
+    url: 'https://www.511la.org/api/v2/get/cameras?format=json',
+    envKey: 'LA_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+  {
+    id: 'az',
+    label: 'Arizona DOT',
+    url: 'https://az511.com/api/v2/get/cameras?format=json',
+    envKey: 'AZ_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+
+  // ── Minnesota DOT ────────────────────────────────────────────────────────
+  // Public endpoint, no key required. Different platform from IBI/Skyline.
+  // Schema verified defensively — see _parseMnDOT below.
+  {
+    id: 'mn',
+    label: 'Minnesota DOT',
+    url: 'https://tr.511mn.org/tgcameras/api/cameras',
+    envKey: null,
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseMnDOT,
+  },
+
+  // ── Illinois DOT (Gateway system) ────────────────────────────────────────
+  // Illinois uses a completely different platform from the IBI/Skyline 511
+  // states — it's the "Gateway Traveler Information" system, exposed as an
+  // ArcGIS FeatureServer. Schema fields: y (lat), x (lng), CameraLocation,
+  // CameraDirection, SnapShot (direct image URL — publicly accessible, no
+  // key needed to view images, only to query the feature layer itself).
+  // Env var: IL_ARCGIS_KEY (distinct name since it's ArcGIS, not 511)
+  {
+    id: 'il',
+    label: 'Illinois DOT (Gateway)',
+    url: 'https://gis-idot.opendata.arcgis.com/datasets/IDOT::illinois-gateway-traffic-cameras/FeatureServer/0/query?where=1%3D1&outFields=*&f=json',
+    envKey: 'IL_ARCGIS_KEY',
+    authParam: 'token',            // ArcGIS uses token= not key=
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseILGateway,
+  },
+
+  // ── To add more states ───────────────────────────────────────────────────
+  // IBI/Skyline platform (most US state 511 sites):
+  //   { id:'xx', label:'State DOT', url:'https://511xx.gov/api/v2/get/cameras?format=json',
+  //     envKey:'XX_511_KEY', cacheTTL: 10*60*1000, parse: _parseIBI511 }
+  //
+  // Other platforms: write a new parse function following the same pattern
+  // as _parseILGateway, then use it here.
+];
+
+// Cache for state DOT data: id -> { cameras, ts }
+const _stateDOTCache = new Map();
+
+// Standard IBI Group / Skyline 511 platform parser.
+// Used by WI and confirmed identical on AZ, GA, LA, and most US state DOTs.
+function _parseIBI511(raw, sourceId) {
+  if (!Array.isArray(raw)) return [];
+  const cameras = [];
+  for (const cam of raw) {
+    const lat = parseFloat(cam.Latitude), lng = parseFloat(cam.Longitude);
+    if (!isFinite(lat) || !isFinite(lng)) continue;
+    // Each camera can have multiple Views (different angles). Grab the first
+    // enabled one. Prefer VideoUrl (HLS) over the static Url (webpage link).
+    const views = Array.isArray(cam.Views) ? cam.Views : [];
+    const view = views.find(v => v.Status === 'Enabled') || views[0];
+    if (!view) continue;
+    const videoUrl = view.VideoUrl || null;
+    // The static Url on IBI platforms points to a webpage, not a direct image —
+    // not useful for our image-stream player, so we leave imageUrl null unless
+    // the view has a direct image URL (some states add one).
+    const imageUrl = view.ImageUrl || null;
+    cameras.push({
+      id: `${sourceId}-${cam.Id}`,
+      name: cam.Location || cam.Roadway || 'Traffic Camera',
+      lat, lng,
+      imageUrl,
+      videoUrl,
+      direction: (cam.Direction && cam.Direction !== 'Unknown') ? cam.Direction : null,
+      source: sourceId,
+    });
+  }
+  return cameras;
+}
+
+// Minnesota DOT parser (tr.511mn.org/tgcameras/api/cameras).
+// Schema unverified from official docs — written defensively to handle
+// whatever actually comes back. Will log the raw schema on first load so
+// we can refine this if the field names differ from the IBI standard.
+function _parseMnDOT(raw, sourceId) {
+  if (!Array.isArray(raw)) {
+    // Some MN endpoints wrap the array in a container object
+    if (raw && Array.isArray(raw.cameras)) raw = raw.cameras;
+    else if (raw && Array.isArray(raw.features)) {
+      // GeoJSON FeatureCollection fallback
+      return raw.features.map((f, i) => {
+        const p = f.properties || {};
+        const coords = f.geometry && f.geometry.coordinates;
+        if (!coords) return null;
+        return {
+          id: `${sourceId}-${p.id || p.ID || i}`,
+          name: p.location || p.name || p.roadway || 'MN Traffic Camera',
+          lat: coords[1], lng: coords[0],
+          imageUrl: p.imageUrl || p.image_url || null,
+          videoUrl: p.videoUrl || p.video_url || null,
+          direction: p.direction || null,
+          source: sourceId,
+        };
+      }).filter(Boolean);
+    }
+    else { console.warn('[Cameras] MN DOT: unexpected schema', typeof raw); return []; }
+  }
+  // Log first entry on first load so we can see the real field names
+  if (raw.length > 0 && !_stateDOTCache.has('mn')) {
+    console.log('[Cameras] MN DOT first entry schema:', JSON.stringify(raw[0], null, 2).slice(0, 500));
+  }
+  return raw.map((cam, i) => {
+    // Try the IBI field names first, then common MN-specific variants
+    const lat = parseFloat(cam.Latitude ?? cam.latitude ?? cam.lat ?? cam.Y ?? cam.y);
+    const lng = parseFloat(cam.Longitude ?? cam.longitude ?? cam.lng ?? cam.X ?? cam.x);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    const views = cam.Views || cam.views || [];
+    const view = (Array.isArray(views) ? views : []).find(v => (v.Status || v.status) === 'Enabled') || views[0];
+    const videoUrl = (view && (view.VideoUrl || view.videoUrl)) || cam.videoUrl || cam.VideoUrl || null;
+    const imageUrl = (view && (view.ImageUrl || view.imageUrl)) || cam.imageUrl || cam.url || null;
+    const name = cam.Location || cam.location || cam.name || cam.description || cam.Roadway || cam.roadway || 'MN Traffic Camera';
+    return {
+      id: `${sourceId}-${cam.Id || cam.id || cam.cameraId || i}`,
+      name, lat, lng, imageUrl, videoUrl,
+      direction: cam.Direction || cam.direction || null,
+      source: sourceId,
+    };
+  }).filter(Boolean);
+}
+
+// Illinois Gateway system parser.
+// ArcGIS FeatureServer response; field names: y (lat), x (lng),
+// CameraLocation, CameraDirection, SnapShot (direct image URL).
+// The ArcGIS token goes in the query string as `token=`.
+function _parseILGateway(raw, sourceId) {
+  // ArcGIS query responses wrap features in { features: [{ attributes, geometry }] }
+  const features = raw.features || [];
+  return features.map((f, i) => {
+    const a = f.attributes || {};
+    // Geometry coordinates come in the feature's geometry block if outSR=4326,
+    // but we also have explicit lat/lng attributes from this layer.
+    const lat = parseFloat(a.y ?? (f.geometry && f.geometry.y));
+    const lng = parseFloat(a.x ?? (f.geometry && f.geometry.x));
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return {
+      id: `${sourceId}-${a.OBJECTID || a.FID || i}`,
+      name: a.CameraLocation || a.ImgPath || 'IL Traffic Camera',
+      lat, lng,
+      imageUrl: a.SnapShot || null,   // direct JPEG URL, suitable for <img>
+      videoUrl: null,                  // Gateway is image-only, no HLS streams
+      direction: a.CameraDirection !== 'NONE' ? a.CameraDirection : null,
+      source: sourceId,
+    };
+  }).filter(Boolean);
+}
+
+async function _loadStateDOT(dot) {
+  const cached = _stateDOTCache.get(dot.id);
+  if (cached && Date.now() - cached.ts < dot.cacheTTL) return cached.cameras;
+
+  // Skip if this DOT requires a key and it's not configured
+  if (dot.envKey && !process.env[dot.envKey]) return [];
+
+  let url = dot.url;
+  if (dot.envKey && process.env[dot.envKey]) {
+    // 511 IBI/Skyline platforms use `key=`, ArcGIS services use `token=`.
+    // Each DOT config can specify authParam to override; default is 'key'.
+    const paramName = dot.authParam || 'key';
+    url += (url.includes('?') ? '&' : '?') + `${paramName}=${encodeURIComponent(process.env[dot.envKey])}`;
+  }
+
+  let cameras = [];
+  try {
+    const text = await fetchTextOverHttp(url);
+    const raw = JSON.parse(text);
+    cameras = dot.parse(raw, dot.id);
+    console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`);
+  } catch (e) {
+    console.warn(`[Cameras] ${dot.label} failed:`, e.message);
+  }
+
+  _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
+  return cameras;
+}
+
 function _haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000, r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
@@ -1199,27 +1440,43 @@ app.get('/api/cameras', async (req, res) => {
   const [minLng, minLat, maxLng, maxLat] = parts;
 
   try {
-    // Load both sources in parallel
-    const [otcAll, road511] = await Promise.all([
+    // Load all sources in parallel. State DOT sources are pre-cached for
+    // the whole state (no bbox filter at fetch time — filtering happens
+    // after load, same as OTC). Road511 is bbox-queried server-side.
+    const [otcAll, road511, ...stateDOTResults] = await Promise.all([
       _loadOTC().catch(e => { console.warn('[Cameras] OTC failed:', e.message); return []; }),
       _loadRoad511(bboxStr),
+      ...STATE_DOTS.map(dot => _loadStateDOT(dot).catch(e => {
+        console.warn(`[Cameras] ${dot.label} failed:`, e.message); return [];
+      })),
     ]);
 
-    // Filter OTC to current viewport
+    // Flatten all state DOT results
+    const stateDOTAll = stateDOTResults.flat();
+
+    // Filter pre-fetched sources to current viewport
     const otcInView = otcAll.filter(c =>
       c.lat >= minLat && c.lat <= maxLat && c.lng >= minLng && c.lng <= maxLng
     );
+    const stateDOTInView = stateDOTAll.filter(c =>
+      c.lat >= minLat && c.lat <= maxLat && c.lng >= minLng && c.lng <= maxLng
+    );
 
-    // Merge: Road511 is authoritative. For each OTC camera, check whether
-    // Road511 already has one within 100m — if so, skip the OTC entry.
-    const merged = [...road511];
+    // Priority: Road511 > State DOT > OTC
+    // Road511 has the best live data when configured; state DOTs are official
+    // and more current than OTC crowdsourced static file. Deduplicate at 100m.
+    const merged = [...road511, ...stateDOTInView];
     for (const cam of otcInView) {
-      const tooClose = road511.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
+      const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
       if (!tooClose) merged.push(cam);
     }
 
-    res.set('Cache-Control', 'no-store'); // admin-side; don't let Cloudflare cache this
-    res.json({ cameras: merged, total: merged.length, road511Count: road511.length, otcCount: otcInView.length });
+    // Per-source counts for debugging coverage
+    const sourceCounts = {};
+    merged.forEach(c => { sourceCounts[c.source] = (sourceCounts[c.source] || 0) + 1; });
+
+    res.set('Cache-Control', 'no-store');
+    res.json({ cameras: merged, total: merged.length, sources: sourceCounts });
   } catch (e) {
     console.error('[Cameras] Merge failed:', e.message);
     res.status(500).json({ error: 'Camera data unavailable' });

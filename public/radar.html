@@ -661,6 +661,9 @@
   <div class="lp-section">
     <div class="lp-section-label">Traffic Cameras</div>
     <div id="lp-cameras"></div>
+    <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-top:0.35rem;padding:0 0.1rem;">
+      Coverage is built from free, publicly available DOT feeds. Click a dot to view the camera. More states added as feeds are found.
+    </div>
   </div>
 
   <div class="lp-section" style="border-bottom:none;">
@@ -3253,7 +3256,7 @@ const CHASER_ITEMS=[
   {id:'chasers',ico:'🚗',name:'Live Storm Chasers',sub:'Spotter Network · live',def:false},
 ];
 const CAM_ITEMS=[
-  {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · click to view · US only',def:false},
+  {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
 ];
 const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS);
 
