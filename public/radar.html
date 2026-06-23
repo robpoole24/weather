@@ -661,8 +661,15 @@
   <div class="lp-section">
     <div class="lp-section-label">Traffic Cameras</div>
     <div id="lp-cameras"></div>
+    <div id="lp-cameras-state" style="display:none;margin-top:0.5rem;">
+      <label class="lp-select-label">Select a state to load cameras</label>
+      <select id="cam-state-select" class="lp-select" onchange="onCamStateChange(this.value)">
+        <option value="">— Pick a state —</option>
+      </select>
+      <div id="cam-state-status" style="font-size:0.66rem;color:var(--muted);margin-top:0.35rem;line-height:1.5;min-height:1.2em;"></div>
+    </div>
     <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-top:0.35rem;padding:0 0.1rem;">
-      Coverage is built from free, publicly available DOT feeds. Click a dot to view the camera. More states added as feeds are found.
+      Coverage is built from free, publicly available DOT feeds. More states added as feeds are found.
     </div>
   </div>
 
@@ -2126,173 +2133,191 @@ map.on('moveend zoomend', () => {
 });
 
 // ── TRAFFIC CAMERAS ──────────────────────────────────────────────────────────
-// Dots on the map for DOT traffic cameras. Clicking a dot opens a floating
-// overlay showing a refreshing image or live HLS video stream, while the
-// radar layer stays fully visible underneath.
+// State-by-state camera loading. Rather than loading thousands of cameras
+// across the whole country at once (which froze the map), the user picks
+// a state from a dropdown. Only that state's cameras are fetched and plotted,
+// which is both faster and makes more sense for storm-monitoring use cases —
+// you're watching a specific storm in a specific state, not all of the US.
 //
-// Data comes from GET /api/cameras?bbox=... which merges OpenTrafficCamMap
-// (free, ~7,500 cameras) with Road511 (10,000+ cameras, requires API key
-// set as ROAD511_API_KEY on the server). The client never knows or cares
-// which source a camera came from — the server handles merging and
-// deduplication.
+// The state dropdown is populated from /api/cameras/coverage, which returns
+// which states actually have camera feeds. All 50 states are shown in the
+// dropdown; states without feeds display an appropriate message rather than
+// pretending they don't exist.
 //
-// CORS: DOT image URLs almost universally block direct browser fetches.
-// We route images through /api/camera-image?url=... which proxies them
-// server-side with the right CORS headers. HLS streams go direct to
-// <video> since hls.js handles cross-origin naturally via XHR, not <img>.
+// Camera overlay (the floating video/image box) works the same as before:
+// click a dot, see the camera, X to close. Radar stays fully visible.
 
 let camLayer = null;
-let camMarkers = {};       // id -> L.marker
-let camPollTimer = null;
-let camActiveCamId = null; // which camera's overlay is open
-let camImgRefresh = null;  // setInterval for image-stream refresh
-let hlsPlayer = null;      // hls.js instance, if active
+let camMarkers = {};
+let camActiveState = null;      // currently loaded state code (e.g. 'WI')
+let camActiveCamId = null;
+let camImgRefresh = null;
+let hlsPlayer = null;
 
-const CAM_BBOX_PAD = 0.3;       // degrees to expand viewport when querying
-const CAM_POLL_INTERVAL = 2 * 60 * 1000; // re-fetch camera list every 2 min
-const CAM_IMG_REFRESH_MS = 30 * 1000;   // image-stream refresh interval
+const CAM_IMG_REFRESH_MS = 30 * 1000;
 
-// Build the current map bbox with padding, as minLng,minLat,maxLng,maxLat
-function _camBbox() {
-  const b = map.getBounds();
-  const pad = CAM_BBOX_PAD;
-  return [
-    (b.getWest()  - pad).toFixed(5),
-    (b.getSouth() - pad).toFixed(5),
-    (b.getEast()  + pad).toFixed(5),
-    (b.getNorth() + pad).toFixed(5),
-  ].join(',');
+// All 50 states for the dropdown, in alphabetical order
+const ALL_STATES = [
+  ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],
+  ['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['FL','Florida'],['GA','Georgia'],
+  ['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],
+  ['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],['MD','Maryland'],
+  ['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],['MO','Missouri'],
+  ['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],
+  ['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],
+  ['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],
+  ['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],
+  ['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming'],
+];
+
+// Fetch which states have camera coverage and populate the dropdown
+async function initCamStateDropdown() {
+  const sel = document.getElementById('cam-state-select');
+  if (!sel) return;
+
+  let covered = new Set();
+  try {
+    const res = await fetch('/api/cameras/coverage');
+    const data = await res.json();
+    covered = new Set(data.covered || []);
+  } catch (e) {
+    console.warn('[Cameras] Could not load coverage:', e);
+  }
+
+  sel.innerHTML = '<option value="">— Pick a state —</option>';
+  for (const [code, name] of ALL_STATES) {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = covered.has(code) ? name : `${name} — no feeds yet`;
+    opt.disabled = !covered.has(code);
+    opt.style.color = covered.has(code) ? '' : 'var(--muted)';
+    sel.appendChild(opt);
+  }
 }
 
-async function refreshCameras() {
-  if (!overlayState['cameras']) return;
-  if (!camLayer) return;
-  const bbox = _camBbox();
-  let cameras = [];
-  try {
-    const res = await fetch(`/api/cameras?bbox=${encodeURIComponent(bbox)}`);
-    const data = await res.json();
-    cameras = data.cameras || [];
-  } catch (e) {
-    console.warn('[Cameras] Fetch failed:', e);
+async function onCamStateChange(code) {
+  const status = document.getElementById('cam-state-status');
+  if (!code) {
+    clearCamMarkers();
+    camActiveState = null;
+    if (status) status.textContent = '';
     return;
   }
 
-  // Add or update markers — keep existing markers in place to avoid flash
-  const seen = new Set();
-  for (const cam of cameras) {
-    seen.add(cam.id);
-    if (camMarkers[cam.id]) continue; // already on map
+  camActiveState = code;
+  clearCamMarkers();
+  if (!camLayer) camLayer = L.layerGroup().addTo(map);
+  if (status) status.textContent = 'Loading cameras…';
 
-    const el = document.createElement('div');
-    el.className = 'cam-dot';
-    el.title = cam.name;
-    const icon = L.divIcon({ className: '', html: el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
-    const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset: 500 });
+  try {
+    const res = await fetch(`/api/cameras/state/${encodeURIComponent(code)}`);
+    const data = await res.json();
 
-    // Tooltip on hover (Leaflet's permanent: false tooltip is ideal here)
-    mk.bindTooltip(cam.name, {
-      permanent: false,
-      direction: 'top',
-      offset: [0, -8],
-      className: 'cam-tooltip',
-    });
-
-    mk.on('click', () => openCameraOverlay(cam));
-    mk.addTo(camLayer);
-    camMarkers[cam.id] = mk;
-    // Store camera data on the marker for later access
-    mk._camData = cam;
-  }
-
-  // Remove markers that are no longer in the viewport
-  for (const id of Object.keys(camMarkers)) {
-    if (!seen.has(id)) {
-      camLayer.removeLayer(camMarkers[id]);
-      delete camMarkers[id];
+    if (!data.covered || !data.cameras || data.cameras.length === 0) {
+      if (status) status.textContent = data.message || `No camera feeds available for ${code} yet.`;
+      return;
     }
+
+    for (const cam of data.cameras) {
+      const el = document.createElement('div');
+      el.className = 'cam-dot';
+      const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
+      const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
+      mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
+      mk.on('click', () => openCameraOverlay(cam));
+      mk.addTo(camLayer);
+      mk._camData = cam;
+      camMarkers[cam.id] = mk;
+    }
+
+    // Fly to the selected state so cameras are visible
+    if (data.cameras.length > 0) {
+      const lats = data.cameras.map(c => c.lat);
+      const lngs = data.cameras.map(c => c.lng);
+      map.fitBounds([
+        [Math.min(...lats), Math.min(...lngs)],
+        [Math.max(...lats), Math.max(...lngs)],
+      ], { padding: [40, 40], maxZoom: 9 });
+    }
+
+    const src = Object.entries(data.sources || {})
+      .map(([s,n]) => `${n} from ${s.toUpperCase()}`).join(', ');
+    if (status) status.textContent = `${data.total} cameras loaded${src ? ' · ' + src : ''}`;
+
+  } catch (e) {
+    console.warn('[Cameras] State load failed:', e);
+    if (status) status.textContent = 'Failed to load cameras — check connection';
   }
+}
+
+function clearCamMarkers() {
+  if (camLayer) camLayer.clearLayers();
+  camMarkers = {};
 }
 
 function startCameras() {
   if (!camLayer) camLayer = L.layerGroup().addTo(map);
-  refreshCameras();
-  if (!camPollTimer) camPollTimer = setInterval(refreshCameras, CAM_POLL_INTERVAL);
-  // Also refresh when the user pans/zooms to a new area
-  map.on('moveend zoomend', _onCameraMapMove);
+  document.getElementById('lp-cameras-state').style.display = 'block';
+  initCamStateDropdown();
 }
 
 function stopCameras() {
-  if (camPollTimer) { clearInterval(camPollTimer); camPollTimer = null; }
-  map.off('moveend zoomend', _onCameraMapMove);
-  if (camLayer) { camLayer.clearLayers(); map.removeLayer(camLayer); camLayer = null; }
-  camMarkers = {};
+  document.getElementById('lp-cameras-state').style.display = 'none';
+  clearCamMarkers();
+  if (camLayer) { map.removeLayer(camLayer); camLayer = null; }
+  camActiveState = null;
+  const sel = document.getElementById('cam-state-select');
+  if (sel) sel.value = '';
+  const status = document.getElementById('cam-state-status');
+  if (status) status.textContent = '';
   closeCameraOverlay();
 }
 
-let _camMoveTimer = null;
-function _onCameraMapMove() {
-  // Debounce — don't fire on every intermediate step of a pan
-  clearTimeout(_camMoveTimer);
-  _camMoveTimer = setTimeout(refreshCameras, 600);
-}
-
-// ── Camera overlay (the floating video/image box) ────────────────────────────
+// ── Camera overlay (floating video/image box) ────────────────────────────────
 
 function openCameraOverlay(cam) {
   camActiveCamId = cam.id;
   const overlay = document.getElementById('camera-overlay');
   const title   = document.getElementById('camera-overlay-title');
   const body    = document.getElementById('camera-overlay-body');
-  const status  = document.getElementById('camera-overlay-status');
   const footer  = document.getElementById('camera-overlay-footer');
 
-  title.textContent = cam.name;
-  if (cam.direction) title.textContent += ` — ${cam.direction}`;
+  title.textContent = cam.name + (cam.direction ? ` — ${cam.direction}` : '');
   overlay.style.display = 'block';
 
-  // Clear previous player
   _stopCameraMedia();
   body.innerHTML = '<div id="camera-overlay-status">Loading…</div>';
 
   if (cam.videoUrl) {
-    // HLS / M3U8 stream
     const video = document.createElement('video');
-    video.autoplay = true;
-    video.muted = true;
-    video.controls = true;
-    video.playsInline = true;
+    video.autoplay = true; video.muted = true; video.controls = true; video.playsInline = true;
     video.style.cssText = 'width:100%;display:block;max-height:280px;background:#000;';
     body.innerHTML = '';
     body.appendChild(video);
 
-    if (Hls.isSupported()) {
-      hlsPlayer = new Hls({ maxBufferLength: 10, maxMaxBufferLength: 20 });
+    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+      hlsPlayer = new Hls({ maxBufferLength:10, maxMaxBufferLength:20 });
       hlsPlayer.loadSource(cam.videoUrl);
       hlsPlayer.attachMedia(video);
       hlsPlayer.on(Hls.Events.ERROR, (evt, data) => {
         if (data.fatal) {
-          console.warn('[Cameras] HLS error, falling back to image', data);
           hlsPlayer.destroy(); hlsPlayer = null;
           if (cam.imageUrl) _startImageStream(cam, body);
           else body.innerHTML = '<div id="camera-overlay-status">Stream unavailable</div>';
         }
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Native HLS (Safari)
       video.src = cam.videoUrl;
       video.play().catch(() => {});
     } else {
-      // No HLS support at all — fall back to image if available
       if (cam.imageUrl) _startImageStream(cam, body);
       else body.innerHTML = '<div id="camera-overlay-status">Stream not supported in this browser</div>';
     }
     footer.textContent = 'Live stream · ' + cam.name;
 
   } else if (cam.imageUrl) {
-    // Refreshing still image
     _startImageStream(cam, body);
-    footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS / 1000}s · ${cam.name}`;
+    footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS/1000}s · ${cam.name}`;
   } else {
     body.innerHTML = '<div id="camera-overlay-status">No feed available for this camera</div>';
     footer.textContent = cam.name;
@@ -2303,12 +2328,14 @@ function _startImageStream(cam, body) {
   const img = document.createElement('img');
   img.alt = cam.name;
   img.style.cssText = 'width:100%;display:block;max-height:280px;object-fit:cover;';
-  img.onerror = () => { img.style.display = 'none'; body.innerHTML += '<div id="camera-overlay-status">Image unavailable</div>'; };
+  img.onerror = () => {
+    img.style.display = 'none';
+    body.innerHTML += '<div id="camera-overlay-status">Image unavailable</div>';
+  };
   body.innerHTML = '';
   body.appendChild(img);
 
   function loadFrame() {
-    // Route through our CORS proxy, with cache-busting timestamp
     img.src = `/api/camera-image?url=${encodeURIComponent(cam.imageUrl)}&_t=${Date.now()}`;
   }
   loadFrame();

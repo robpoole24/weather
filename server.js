@@ -1413,20 +1413,35 @@ function _haversineM(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// Full-name → 2-letter code map for OTC state keys
+const OTC_STATE_CODES = {
+  'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+  'Colorado':'CO','Connecticut':'CT','Delaware':'DE','Florida':'FL','Georgia':'GA',
+  'Hawaii':'HI','Idaho':'ID','Illinois':'IL','Indiana':'IN','Iowa':'IA',
+  'Kansas':'KS','Kentucky':'KY','Louisiana':'LA','Maine':'ME','Maryland':'MD',
+  'Massachusetts':'MA','Michigan':'MI','Minnesota':'MN','Mississippi':'MS',
+  'Missouri':'MO','Montana':'MT','Nebraska':'NE','Nevada':'NV','New Hampshire':'NH',
+  'New Jersey':'NJ','New Mexico':'NM','New York':'NY','North Carolina':'NC',
+  'North Dakota':'ND','Ohio':'OH','Oklahoma':'OK','Oregon':'OR','Pennsylvania':'PA',
+  'Rhode Island':'RI','South Carolina':'SC','South Dakota':'SD','Tennessee':'TN',
+  'Texas':'TX','Utah':'UT','Vermont':'VT','Virginia':'VA','Washington':'WA',
+  'West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY',
+};
+
 async function _loadOTC() {
   if (_otcCache && Date.now() - _otcCacheTime < OTC_TTL) return _otcCache;
   console.log('[Cameras] Fetching OpenTrafficCamMap USA.json…');
   const text = await fetchTextOverHttp(OTC_JSON_URL);
   const raw = JSON.parse(text);
   const cameras = [];
-  // OTC schema: { state: { county: [ {description, latitude, longitude, url, format, ...} ] } }
-  for (const state of Object.values(raw)) {
-    for (const countyArr of Object.values(state)) {
+  for (const [stateName, counties] of Object.entries(raw)) {
+    const stateCode = OTC_STATE_CODES[stateName] || null;
+    for (const countyArr of Object.values(counties)) {
       if (!Array.isArray(countyArr)) continue;
       for (const cam of countyArr) {
         const lat = parseFloat(cam.latitude), lng = parseFloat(cam.longitude);
         if (!isFinite(lat) || !isFinite(lng)) continue;
-        if (Math.abs(lat) < 1 && Math.abs(lng) < 1) continue; // Gulf of Guinea junk
+        if (Math.abs(lat) < 1 && Math.abs(lng) < 1) continue;
         const isHLS = cam.format === 'M3U8' || cam.format === 'M3U9';
         cameras.push({
           id: 'otc-' + cameras.length,
@@ -1436,6 +1451,7 @@ async function _loadOTC() {
           videoUrl: isHLS ? (cam.url || null) : null,
           direction: cam.direction || null,
           source: 'otc',
+          state: stateCode,
         });
       }
     }
@@ -1479,57 +1495,75 @@ async function _loadRoad511(bbox) {
   return cameras;
 }
 
-// GET /api/cameras?bbox=minLng,minLat,maxLng,maxLat
-// Returns merged, deduplicated camera list for the visible viewport.
-app.get('/api/cameras', async (req, res) => {
-  const bboxStr = (req.query.bbox || '').trim();
-  if (!bboxStr) return res.status(400).json({ error: 'bbox required' });
-  const parts = bboxStr.split(',').map(Number);
-  if (parts.length !== 4 || parts.some(n => !isFinite(n))) {
-    return res.status(400).json({ error: 'bbox must be minLng,minLat,maxLng,maxLat' });
-  }
-  const [minLng, minLat, maxLng, maxLat] = parts;
+// GET /api/cameras/coverage
+// Returns which state codes have camera data available (used by the client
+// to build the state dropdown and mark states as covered vs. unavailable).
+// STATE_DOTS states are included if their key is configured (or no key required).
+// OTC states are always included since the file is always loaded.
+app.get('/api/cameras/coverage', async (req, res) => {
+  const covered = new Set();
+
+  // OTC states (always available once the file loads)
+  Object.keys(OTC_STATE_CODES).forEach(name => {
+    // We'll only mark a state as covered if OTC actually has cameras there
+  });
+  // Fetch OTC to know which states have entries
+  try {
+    const otc = await _loadOTC();
+    otc.forEach(c => { if (c.state) covered.add(c.state); });
+  } catch (e) { /* OTC unavailable, skip */ }
+
+  // STATE_DOTS states: covered if key is configured (or envKey is null = public)
+  STATE_DOTS.forEach(dot => {
+    if (!dot.envKey || process.env[dot.envKey]) covered.add(dot.id.toUpperCase());
+  });
+
+  res.set('Cache-Control', 'public, max-age=300'); // 5 min — coverage rarely changes
+  res.json({ covered: [...covered].sort() });
+});
+
+// GET /api/cameras/state/:code
+// Returns all cameras for a specific US state code (e.g. WI, CA, MN).
+// Replaces the old bbox-based endpoint — state-level loading is far more
+// performant than loading thousands of cameras across the whole country
+// and filtering by viewport on every pan/zoom. Users select the state they
+// want to monitor (typically where a storm is active) and see only those
+// cameras, which loads fast and doesn't lock up the map.
+app.get('/api/cameras/state/:code', async (req, res) => {
+  const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');
+  if (code.length !== 2) return res.status(400).json({ error: 'Invalid state code' });
 
   try {
-    // Load all sources in parallel. State DOT sources are pre-cached for
-    // the whole state (no bbox filter at fetch time — filtering happens
-    // after load, same as OTC). Road511 is bbox-queried server-side.
-    const [otcAll, road511, ...stateDOTResults] = await Promise.all([
-      _loadOTC().catch(e => { console.warn('[Cameras] OTC failed:', e.message); return []; }),
-      _loadRoad511(bboxStr),
-      ...STATE_DOTS.map(dot => _loadStateDOT(dot).catch(e => {
-        console.warn(`[Cameras] ${dot.label} failed:`, e.message); return [];
-      })),
+    // Find the STATE_DOTS entry for this state, if we have one
+    const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
+
+    const [otcAll, stateDOT] = await Promise.all([
+      _loadOTC().catch(() => []),
+      dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
     ]);
 
-    // Flatten all state DOT results
-    const stateDOTAll = stateDOTResults.flat();
+    // Filter OTC to this state
+    const otcForState = otcAll.filter(c => c.state === code);
 
-    // Filter pre-fetched sources to current viewport
-    const otcInView = otcAll.filter(c =>
-      c.lat >= minLat && c.lat <= maxLat && c.lng >= minLng && c.lng <= maxLng
-    );
-    const stateDOTInView = stateDOTAll.filter(c =>
-      c.lat >= minLat && c.lat <= maxLat && c.lng >= minLng && c.lng <= maxLng
-    );
-
-    // Priority: Road511 > State DOT > OTC
-    // Road511 has the best live data when configured; state DOTs are official
-    // and more current than OTC crowdsourced static file. Deduplicate at 100m.
-    const merged = [...road511, ...stateDOTInView];
-    for (const cam of otcInView) {
+    // Merge: STATE_DOTS is authoritative, OTC fills gaps. Deduplicate at 100m.
+    const merged = [...stateDOT];
+    for (const cam of otcForState) {
       const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
       if (!tooClose) merged.push(cam);
     }
 
-    // Per-source counts for debugging coverage
+    if (merged.length === 0) {
+      return res.json({ cameras: [], total: 0, covered: false,
+        message: `No camera feeds available for ${code} yet.` });
+    }
+
     const sourceCounts = {};
     merged.forEach(c => { sourceCounts[c.source] = (sourceCounts[c.source] || 0) + 1; });
 
     res.set('Cache-Control', 'no-store');
-    res.json({ cameras: merged, total: merged.length, sources: sourceCounts });
+    res.json({ cameras: merged, total: merged.length, covered: true, sources: sourceCounts });
   } catch (e) {
-    console.error('[Cameras] Merge failed:', e.message);
+    console.error(`[Cameras] State ${code} failed:`, e.message);
     res.status(500).json({ error: 'Camera data unavailable' });
   }
 });
