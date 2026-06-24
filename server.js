@@ -749,6 +749,7 @@ function markQuotaExceeded(isPrimary = true) {
   if (already) return;
   if (isPrimary) primaryQuotaExceeded = true; else archiveQuotaExceeded = true;
   console.warn(`[WeatherTV] YouTube ${label} key quota exceeded — pausing ${label}-key calls until midnight Pacific`);
+  logEvent({ type: 'quota', severity: 'warn', source: label + '-key', message: `YouTube ${label} key quota exceeded — pausing until midnight Pacific` });
   const now = new Date();
   const pacific = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
   const midnight = new Date(pacific);
@@ -758,6 +759,7 @@ function markQuotaExceeded(isPrimary = true) {
   const resetFn = () => {
     if (isPrimary) primaryQuotaExceeded = false; else archiveQuotaExceeded = false;
     console.log(`[WeatherTV] ${label} key quota reset — resuming ${label}-key calls`);
+    logEvent({ type: 'quota', severity: 'info', source: label + '-key', message: `${label} key quota reset at midnight Pacific — resuming calls` });
     if (isPrimary) scheduledLiveCheck();
   };
   if (isPrimary) {
@@ -2022,12 +2024,23 @@ const websubLeases = {}; // { channelId: { subscribedAt, expiresAt, status } }
 
 // ── Failed fetch error log ────────────────────────────────────────────────────
 // Circular buffer of last 50 fetch errors — visible in admin panel.
-const fetchErrorLog = [];
-const MAX_FETCH_ERRORS = 50;
+// ── Event log — captures errors, quota hits, fetches, admin actions ──────────
+// type: 'error' | 'quota' | 'fetch' | 'admin' | 'info'
+// severity: 'error' | 'warn' | 'info'
+const eventLog = [];
+const MAX_EVENT_LOG = 200;
 
+function logEvent({ type = 'info', severity = 'info', source = 'system', channelId = null, channelName = null, message, detail = null }) {
+  const entry = { type, severity, source, channelId, channelName, message, detail, timestamp: Date.now() };
+  eventLog.unshift(entry);
+  if (eventLog.length > MAX_EVENT_LOG) eventLog.pop();
+  if (severity === 'error') console.error(`[WeatherTV][${type}] ${message}`, detail || '');
+  else if (severity === 'warn') console.warn(`[WeatherTV][${type}] ${message}`, detail || '');
+}
+
+// Back-compat shim — existing logFetchError calls still work
 function logFetchError(channelId, channelName, errorMsg) {
-  fetchErrorLog.unshift({ channelId, channelName, error: errorMsg, timestamp: Date.now() });
-  if (fetchErrorLog.length > MAX_FETCH_ERRORS) fetchErrorLog.pop();
+  logEvent({ type: 'error', severity: 'error', source: 'fetch', channelId, channelName, message: errorMsg });
 }
 
 // ── Daily live-check quota tracker ──────────────────────────────────────────
@@ -3045,6 +3058,7 @@ app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
   if (!key || key === 'YOUR_YOUTUBE_API_KEY') {
     return res.status(500).json({ error: 'No API key configured' });
   }
+  logEvent({ type: 'admin', severity: 'info', source: 'admin-panel', message: 'Manual recent video fetch triggered via admin panel' });
   res.json({ ok: true, message: 'Recent video fetch started — check cache status in ~1 minute' });
   fetchAllRecentVideos(); // don't await — let it run in background
 });
@@ -3107,9 +3121,33 @@ app.get('/api/admin/websub-health', (req, res) => {
   });
 });
 
-// Failed fetch log
+// Event log (errors, quota hits, fetches, admin actions)
 app.get('/api/admin/fetch-errors', (req, res) => {
-  res.json({ errors: fetchErrorLog, total: fetchErrorLog.length });
+  const { type, severity } = req.query;
+  let entries = eventLog;
+  if (type) entries = entries.filter(e => e.type === type);
+  if (severity) entries = entries.filter(e => e.severity === severity);
+  // Back-compat: also expose as `errors` for old callers
+  res.json({ errors: entries, events: entries, total: entries.length });
+});
+
+// View recent videos cache without triggering a fetch
+app.get('/api/admin/cache/recent/view', requireAdminAuth, (req, res) => {
+  const summary = [];
+  for (const [channelId, data] of Object.entries(cache.recentVideos)) {
+    if (!data || !data.items) continue;
+    const ch = findChannelById(channelId);
+    summary.push({
+      channelId,
+      channelName: ch ? ch.name : channelId,
+      group: ch ? ch.group : 'unknown',
+      videoCount: data.items.length,
+      cachedAt: data.cachedAt || null,
+      videos: data.items.slice(0, 3).map(v => ({ id: v.id?.videoId || v.id, title: v.snippet?.title, published: v.snippet?.publishedAt })),
+    });
+  }
+  summary.sort((a, b) => (b.cachedAt || 0) - (a.cachedAt || 0));
+  res.json({ channels: summary, total: summary.length, generatedAt: Date.now() });
 });
 
 // Redis memory usage

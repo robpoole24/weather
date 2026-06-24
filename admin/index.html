@@ -438,6 +438,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:0.5rem">
           <div id="recent-cache-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
+          <button class="btn btn-ghost btn-sm" onclick="viewRecentCache()">View Cache</button>
           <button class="btn btn-primary btn-sm" onclick="triggerRecentFetch()">Fetch Now</button>
           <button class="btn btn-ghost btn-sm" onclick="clearCache('recent')">Clear</button>
         </div>
@@ -573,11 +574,27 @@
     </div>
   </div>
 
-  <!-- Failed Fetch Log -->
+  <!-- Event Log -->
   <div class="section">
     <div class="section-header">
-      <div class="section-title">⚠ Recent Fetch Errors</div>
-      <button class="btn btn-ghost btn-sm" onclick="exportErrorCSV()">⬇ Export CSV</button>
+      <div class="section-title">📋 Event Log</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <select id="log-filter-type" onchange="renderEventLog()" style="font-size:0.78rem;padding:0.25rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+          <option value="">All Types</option>
+          <option value="error">Errors</option>
+          <option value="quota">Quota</option>
+          <option value="fetch">Fetch</option>
+          <option value="admin">Admin</option>
+          <option value="info">Info</option>
+        </select>
+        <select id="log-filter-severity" onchange="renderEventLog()" style="font-size:0.78rem;padding:0.25rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+          <option value="">All Severity</option>
+          <option value="error">Errors Only</option>
+          <option value="warn">Warnings+</option>
+          <option value="info">Info</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="exportErrorCSV()">⬇ Export CSV</button>
+      </div>
     </div>
     <div class="section-body">
       <div id="fetch-error-count" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
@@ -586,13 +603,34 @@
           <thead>
             <tr style="background:var(--surface2);">
               <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Time</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Type</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Source</th>
               <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Channel</th>
-              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Error</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Message</th>
+              <th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Detail</th>
             </tr>
           </thead>
           <tbody id="error-tbody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- View Recent Cache Modal -->
+  <div id="cache-view-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;overflow:auto;padding:2rem;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;max-width:900px;margin:0 auto;padding:1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <div>
+          <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:1.1rem;letter-spacing:0.06em;text-transform:uppercase">Recent Videos Cache</div>
+          <div id="cache-view-meta" style="font-size:0.75rem;color:var(--muted)">Loading...</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cache-view-modal').style.display='none'">✕ Close</button>
+      </div>
+      <div style="margin-bottom:0.75rem;">
+        <input id="cache-view-search" type="text" placeholder="Filter by channel name..." oninput="filterCacheView()"
+          style="width:100%;padding:0.4rem 0.6rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.82rem;">
+      </div>
+      <div id="cache-view-body" style="font-size:0.8rem;"></div>
     </div>
   </div>
 
@@ -1873,46 +1911,133 @@ async function resubscribeOne(channelId, btnEl) {
   }
 }
 
+// ── Event Log ─────────────────────────────────────────────────────────────────
+const LOG_TYPE_COLORS = {
+  error: 'var(--red)', quota: '#f59e0b', fetch: 'var(--accent)',
+  admin: '#a78bfa', info: 'var(--muted)'
+};
+const LOG_SEV_COLORS = { error: 'var(--red)', warn: '#f59e0b', info: 'var(--muted)' };
+
 async function loadFetchErrors() {
   try {
     const res = await fetch('/api/admin/fetch-errors');
     const data = await res.json();
-    window._fetchErrors = data.errors; // store for export
-    const countEl = document.getElementById('fetch-error-count');
-    if (data.total === 0) {
-      countEl.textContent = '✓ No fetch errors recorded since last server start';
-      countEl.style.color = 'var(--green)';
-      document.getElementById('error-tbody').innerHTML = '<tr><td colspan="3" style="padding:1rem;text-align:center;color:var(--muted)">No errors</td></tr>';
-      return;
-    }
-    countEl.textContent = data.total + ' error(s) recorded since last server start';
-    countEl.style.color = 'var(--red)';
-    document.getElementById('error-tbody').innerHTML = data.errors.map(e =>
-      '<tr style="border-bottom:1px solid var(--border)">' +
-      '<td style="padding:0.35rem 0.75rem;color:var(--muted);white-space:nowrap">' + fmtTs(e.timestamp) + '</td>' +
-      '<td style="padding:0.35rem 0.75rem;white-space:nowrap">' + e.channelName + '</td>' +
-      '<td style="padding:0.35rem 0.75rem;color:var(--red)">' + e.error + '</td>' +
-      '</tr>'
-    ).join('');
+    window._eventLog = data.events || data.errors || [];
+    renderEventLog();
   } catch(e) {}
 }
 
+function renderEventLog() {
+  const typeFilter = document.getElementById('log-filter-type')?.value || '';
+  const sevFilter  = document.getElementById('log-filter-severity')?.value || '';
+  let entries = window._eventLog || [];
+  if (typeFilter) entries = entries.filter(e => e.type === typeFilter);
+  if (sevFilter === 'error') entries = entries.filter(e => e.severity === 'error');
+  if (sevFilter === 'warn')  entries = entries.filter(e => e.severity === 'error' || e.severity === 'warn');
+  if (sevFilter === 'info')  entries = entries.filter(e => e.severity === 'info');
+
+  const countEl = document.getElementById('fetch-error-count');
+  const errors   = (window._eventLog||[]).filter(e => e.severity === 'error').length;
+  const quotas   = (window._eventLog||[]).filter(e => e.type === 'quota').length;
+  const total    = (window._eventLog||[]).length;
+
+  if (total === 0) {
+    countEl.textContent = '✓ No events recorded since last server start';
+    countEl.style.color = 'var(--green)';
+  } else {
+    const parts = [`${total} event(s) since last server start`];
+    if (errors > 0) parts.push(`${errors} error(s)`);
+    if (quotas > 0) parts.push(`${quotas} quota hit(s)`);
+    countEl.textContent = parts.join(' · ');
+    countEl.style.color = errors > 0 ? 'var(--red)' : quotas > 0 ? '#f59e0b' : 'var(--muted)';
+  }
+
+  if (entries.length === 0) {
+    document.getElementById('error-tbody').innerHTML =
+      '<tr><td colspan="6" style="padding:1rem;text-align:center;color:var(--muted)">No events match filter</td></tr>';
+    return;
+  }
+
+  document.getElementById('error-tbody').innerHTML = entries.map(e => {
+    const typeColor = LOG_TYPE_COLORS[e.type] || 'var(--muted)';
+    const sevColor  = LOG_SEV_COLORS[e.severity] || 'var(--muted)';
+    const badge = `<span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;background:${typeColor}22;color:${typeColor};text-transform:uppercase">${e.type||'?'}</span>`;
+    const sevDot = e.severity !== 'info' ? `<span style="color:${sevColor};margin-right:0.3rem">●</span>` : '';
+    return '<tr style="border-bottom:1px solid var(--border)">' +
+      `<td style="padding:0.35rem 0.75rem;color:var(--muted);white-space:nowrap;font-size:0.75rem">${fmtTs(e.timestamp)}</td>` +
+      `<td style="padding:0.35rem 0.75rem">${badge}</td>` +
+      `<td style="padding:0.35rem 0.75rem;font-family:monospace;font-size:0.75rem;color:var(--muted)">${e.source||'—'}</td>` +
+      `<td style="padding:0.35rem 0.75rem;white-space:nowrap">${e.channelName||'—'}</td>` +
+      `<td style="padding:0.35rem 0.75rem">${sevDot}${e.message||e.error||''}</td>` +
+      `<td style="padding:0.35rem 0.75rem;color:var(--muted);font-size:0.73rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(e.detail||'').replace(/"/g,"'")}">${e.detail||''}</td>` +
+      '</tr>';
+  }).join('');
+}
+
 function exportErrorCSV() {
-  const errors = window._fetchErrors || [];
-  if (errors.length === 0) { showToast('No errors to export'); return; }
-  const headers = ['Timestamp', 'Channel Name', 'Channel ID', 'Error'];
-  const rows = errors.map(e => [
+  const entries = window._eventLog || [];
+  if (entries.length === 0) { showToast('No events to export'); return; }
+  const headers = ['Timestamp','Type','Severity','Source','Channel Name','Channel ID','Message','Detail'];
+  const rows = entries.map(e => [
     new Date(e.timestamp).toLocaleString(),
-    e.channelName,
-    e.channelId,
-    e.error
+    e.type||'', e.severity||'', e.source||'',
+    e.channelName||'', e.channelId||'', e.message||e.error||'', e.detail||''
   ]);
   const csv = [headers, ...rows].map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'weathertv-fetch-errors-' + new Date().toISOString().split('T')[0] + '.csv';
+  a.download = 'weathertv-event-log-' + new Date().toISOString().split('T')[0] + '.csv';
   a.click();
+}
+
+// ── View Recent Cache (no API hit) ────────────────────────────────────────────
+async function viewRecentCache() {
+  const modal = document.getElementById('cache-view-modal');
+  const body  = document.getElementById('cache-view-body');
+  const meta  = document.getElementById('cache-view-meta');
+  modal.style.display = 'block';
+  body.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted)">Loading...</div>';
+  try {
+    const res  = await fetch('/api/admin/cache/recent/view');
+    const data = await res.json();
+    window._cacheViewData = data.channels;
+    meta.textContent = `${data.total} channels · snapshot at ${fmtTs(data.generatedAt)}`;
+    renderCacheView(data.channels);
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--red);padding:1rem">Failed to load cache</div>';
+  }
+}
+
+function filterCacheView() {
+  const q = (document.getElementById('cache-view-search')?.value || '').toLowerCase();
+  const entries = (window._cacheViewData || []).filter(c => !q || c.channelName.toLowerCase().includes(q));
+  renderCacheView(entries);
+}
+
+function renderCacheView(channels) {
+  const body = document.getElementById('cache-view-body');
+  if (!channels || channels.length === 0) {
+    body.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted)">No cached videos found</div>';
+    return;
+  }
+  body.innerHTML = channels.map(c => {
+    const age = c.cachedAt ? Math.round((Date.now() - c.cachedAt) / 60000) + 'm ago' : 'unknown';
+    const vids = (c.videos || []).map(v =>
+      `<div style="margin-top:0.3rem;padding:0.3rem 0.5rem;background:var(--surface2);border-radius:3px;font-size:0.75rem;">
+        <span style="color:var(--muted);font-family:monospace">${(v.id||'').slice(0,11)}</span>
+        <span style="margin-left:0.5rem">${(v.title||'').slice(0,60)}${(v.title||'').length>60?'…':''}</span>
+      </div>`
+    ).join('');
+    return `<div style="margin-bottom:0.75rem;padding:0.75rem;border:1px solid var(--border);border-radius:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.3rem;">
+        <div style="font-weight:600;font-size:0.85rem">${c.channelName}</div>
+        <div style="font-size:0.72rem;color:var(--muted)">${c.videoCount} video(s) · cached ${age} · ${c.group||''}</div>
+      </div>
+      ${vids}
+      ${c.videoCount > 3 ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:0.3rem">+ ${c.videoCount-3} more</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 // Channel validator
