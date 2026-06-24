@@ -1412,6 +1412,7 @@
     <span class="status-item" id="time-display"></span>
     <!-- Live Chat button injected here by showChatButton() — sits left of About -->
     <span id="chat-btn-slot" style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;flex-shrink:0;"></span>
+    <button type="button" class="about-btn" id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen">⛶ Fullscreen</button>
     <button type="button" class="about-btn" onclick="showAbout()">About</button>
   </div>
 
@@ -4058,6 +4059,20 @@ function createScrollArrows(scrollEl) {
 }
 
 // ═══════════════════════════════════════════
+// FULLSCREEN
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+document.addEventListener('fullscreenchange', () => {
+  const btn = document.getElementById('fullscreen-btn');
+  if (!btn) return;
+  btn.textContent = document.fullscreenElement ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
+});
+
 // ABOUT MODAL
 // ═══════════════════════════════════════════
 function showAbout() {
