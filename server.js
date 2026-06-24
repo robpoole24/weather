@@ -3132,11 +3132,11 @@ app.get('/api/admin/fetch-errors', (req, res) => {
 });
 
 // View recent videos cache without triggering a fetch
-app.get('/api/admin/cache/recent/view', requireAdminAuth, (req, res) => {
+app.get('/api/admin/cache/recent/view', (req, res) => {
   const summary = [];
   for (const [channelId, data] of Object.entries(cache.recentVideos)) {
     if (!data || !data.items) continue;
-    const ch = findChannelById(channelId);
+    const ch = getAllChannels().find(c => c.id === channelId);
     summary.push({
       channelId,
       channelName: ch ? ch.name : channelId,
