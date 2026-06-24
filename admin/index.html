@@ -213,7 +213,7 @@
         <div style="flex:1;min-width:180px;">
           <label>Daily Video Fetch Hour (EST, 0–23)</label>
           <input type="number" id="cfg-fetch-hour" min="0" max="23" placeholder="12"
-            style="margin-bottom:0.25rem;" />
+            style="margin-bottom:0.25rem;" oninput="updateFetchScheduleLabel()" />
           <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
             Hour in EST (0=midnight, 12=noon, 18=6pm) when recent videos are fetched.<br>
             Recommended: 12 (noon EST) — most forecasters have posted their daily forecast by then.<br>
@@ -434,7 +434,7 @@
       <div class="cache-row">
         <div class="cache-row-info">
           <div class="cache-row-title">Recent Videos</div>
-          <div class="cache-row-sub">Scheduled daily at 6pm EST — or fetch manually below</div>
+          <div class="cache-row-sub" id="recent-schedule-label">Scheduled daily at 12pm EST — or fetch manually below</div>
         </div>
         <div style="display:flex;align-items:center;gap:0.5rem">
           <div id="recent-cache-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted)">Loading...</div>
@@ -787,6 +787,7 @@ function renderAll() {
   document.getElementById('cfg-apikey').value = appData.config.apiKey || '';
   document.getElementById('cfg-live-interval').value = appData.config.liveCheckIntervalHours || 12;
   document.getElementById('cfg-fetch-hour').value = appData.config.recentFetchHourEST !== undefined ? appData.config.recentFetchHourEST : 12;
+  updateFetchScheduleLabel();
 
   // Show channel count in cost estimates
   const totalChannels = (appData.groups||[]).reduce((sum, g) => sum + (g.channels||[]).filter(c => c.hasLive && c.enabled !== false).length, 0);
@@ -1375,6 +1376,18 @@ function closeColModal() {
 }
 
 // ── Config ──
+function updateFetchScheduleLabel() {
+  const input = document.getElementById('cfg-fetch-hour');
+  const label = document.getElementById('recent-schedule-label');
+  if (!input || !label) return;
+  const hour = parseInt(input.value);
+  if (isNaN(hour) || hour < 0 || hour > 23) return;
+  const h12 = hour % 12 || 12;
+  const period = hour < 12 ? 'am' : 'pm';
+  const display = hour === 0 ? '12am (midnight)' : hour === 12 ? '12pm (noon)' : `${h12}${period}`;
+  label.textContent = `Scheduled daily at ${display} EST — or fetch manually below`;
+}
+
 async function saveConfig() {
   const liveInterval = parseInt(document.getElementById('cfg-live-interval').value) || 12;
   const fetchHour = parseInt(document.getElementById('cfg-fetch-hour').value);
@@ -1385,7 +1398,7 @@ async function saveConfig() {
     body: JSON.stringify({
       apiKey: document.getElementById('cfg-apikey').value,
       liveCheckIntervalHours: Math.min(24, Math.max(1, liveInterval)),
-      recentFetchHourEST: fetchHourValid ? fetchHour : 18,
+      recentFetchHourEST: fetchHourValid ? fetchHour : 12,
     })
   });
   showToast('Configuration saved — changes take effect on next scheduled run');
