@@ -2509,6 +2509,9 @@ function buildWSUrl(ver) {
   const s = wsAllSettings[ver];
   const p = new URLSearchParams();
   if (ver === '4000') {
+    // Use the plain key names (no -checkbox suffix) — the self-hosted WS4KP
+    // version uses these older-style params.  The current GitHub source uses
+    // -checkbox suffixes but that's a newer version than what's deployed.
     WS4000_DISPLAYS.forEach(d => p.set(d.key, s.displays[d.key] ? 'true' : 'false'));
     p.set('speed',            s.speed.toFixed(2));
     p.set('units',            'us');
