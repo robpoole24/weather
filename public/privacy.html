@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#050a0f">
-<title>Privacy Policy — Weather TV</title>
-<meta name="description" content="WeatherTV's privacy policy: we collect no personal data, no accounts, no tracking, and no ads — ever. Learn how Favorites, location, and notifications work entirely on your device.">
+<title>Privacy Policy & Terms of Use — Weather TV</title>
+<meta name="description" content="WeatherTV's privacy policy and terms of use: we collect no personal data, no accounts, no tracking, and no ads — ever.">
 <link rel="canonical" href="https://www.watchweathertv.com/privacy.html">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
@@ -36,7 +36,6 @@
     margin: 0 auto;
   }
 
-  /* ── HEADER ── */
   .site-header {
     display: flex;
     align-items: center;
@@ -70,7 +69,6 @@
 
   .back-link:hover { color: var(--accent); }
 
-  /* ── PAGE TITLE ── */
   h1 {
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 2rem;
@@ -88,7 +86,6 @@
     margin-bottom: 2rem;
   }
 
-  /* ── CALLOUT BOX ── */
   .callout {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -101,11 +98,37 @@
     color: var(--text);
   }
 
-  .callout strong {
-    color: var(--accent);
+  .callout strong { color: var(--accent); }
+
+  /* Chapter divider — separates Privacy Policy from Terms of Use */
+  .chapter-divider {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 3rem 0 2rem;
   }
 
-  /* ── SECTIONS ── */
+  .chapter-divider::before,
+  .chapter-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .chapter-divider h2 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: none;
+    padding: 0;
+    margin: 0;
+    white-space: nowrap;
+  }
+
   section {
     margin-bottom: 2rem;
   }
@@ -140,14 +163,9 @@
 
   ul li { margin-bottom: 0.3rem; }
 
-  a {
-    color: var(--accent);
-    text-decoration: none;
-  }
-
+  a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
-  /* ── CONTENT ADVISORY BOX ── */
   .advisory {
     background: var(--surface);
     border: 1px solid rgba(244,162,97,0.3);
@@ -161,7 +179,19 @@
 
   .advisory strong { color: var(--gold); }
 
-  /* ── FOOTER ── */
+  /* YouTube binding highlight — makes the ToS link visually prominent */
+  .yt-binding {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    font-weight: 500;
+  }
+
   .page-footer {
     margin-top: 3rem;
     padding-top: 1.5rem;
@@ -179,17 +209,17 @@
 <body>
 <div class="container">
 
-  <!-- Header -->
   <header class="site-header">
     <a href="/" class="wordmark">Weather<span>TV</span></a>
     <a href="/" class="back-link">← Back to App</a>
   </header>
 
-  <!-- Title -->
+  <!-- ═══════════════════════════════════════
+       PRIVACY POLICY
+  ════════════════════════════════════════ -->
   <h1>Privacy Policy</h1>
-  <div class="effective-date">Effective Date: June 2, 2026 &nbsp;·&nbsp; Altruistic Apps</div>
+  <div class="effective-date">Effective Date: June 29, 2026 &nbsp;·&nbsp; Altruistic Apps</div>
 
-  <!-- TL;DR callout -->
   <div class="callout">
     <strong>The short version:</strong> Weather TV does not collect, store, or sell any personal information about you. We don't track you, profile you, or share your data with anyone — ever. The only data that may ever be collected is anonymous, technical error information used solely to keep the app working properly.
   </div>
@@ -233,9 +263,37 @@
     <p>We do not have access to any data YouTube may collect through its player. We receive no user data from YouTube as a result of your viewing activity.</p>
   </section>
 
-  <!-- 5 -->
+  <!-- 5 — NEW: III.A.2b -->
   <section>
-    <h2>5. Favorites, Location & Notifications (On Your Device Only)</h2>
+    <h2>5. YouTube API Services</h2>
+    <p>WeatherTV uses the <strong>YouTube API Services</strong> to power its core functionality. Specifically, WeatherTV uses the YouTube Data API to:</p>
+    <ul>
+      <li>Detect when featured channels are broadcasting live streams</li>
+      <li>Retrieve recent video uploads from weather creators and storm chasers</li>
+      <li>Display channel and video metadata (titles, thumbnails, channel names)</li>
+    </ul>
+    <p>All video content plays directly from YouTube's infrastructure via the YouTube IFrame Player API — WeatherTV does not host, store, or re-encode any video.</p>
+    <p>Because WeatherTV uses the YouTube API Services, your use of WeatherTV is also subject to <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube's Terms of Service</a> and <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's Privacy Policy</a>. You can review and manage the permissions WeatherTV has at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</p>
+    <p>WeatherTV's server-side API calls retrieve only publicly available data (live status, recent videos). WeatherTV does not access any private YouTube account data, does not require users to sign in to Google, and does not store any YouTube user credentials or account information.</p>
+  </section>
+
+  <!-- 6 — NEW: III.A.2g -->
+  <section>
+    <h2>6. Cookies & Technologies Used by YouTube</h2>
+    <p>WeatherTV itself does not place advertising cookies, tracking pixels, or behavioral analytics technologies on your device. However, because WeatherTV embeds the YouTube IFrame Player to play live streams and recent videos, <strong>YouTube (Google LLC) may place, access, or recognize cookies and similar technologies on your device or browser</strong> when you interact with embedded video content.</p>
+    <p>These cookies and technologies are governed entirely by YouTube's and Google's own policies — not by Altruistic Apps. Their purposes may include:</p>
+    <ul>
+      <li>Maintaining your YouTube session and preferences</li>
+      <li>Measuring video playback and engagement for YouTube's analytics</li>
+      <li>Personalizing video recommendations on YouTube's own platform</li>
+      <li>Enabling advertising within YouTube's embedded player (note: WeatherTV itself serves no ads)</li>
+    </ul>
+    <p>You can manage or opt out of Google's use of cookies for advertising at <a href="https://adssettings.google.com" target="_blank" rel="noopener">adssettings.google.com</a>, and review Google's full cookie policy at <a href="https://policies.google.com/technologies/cookies" target="_blank" rel="noopener">policies.google.com/technologies/cookies</a>. WeatherTV has no access to, control over, or responsibility for the cookies or data collected by YouTube's embedded player.</p>
+  </section>
+
+  <!-- 7 -->
+  <section>
+    <h2>7. Favorites, Location & Notifications (On Your Device Only)</h2>
     <p>A few features in Weather TV use information from your device to make the app more useful. In every case, this information stays on your device — it is never sent to, stored on, or visible to our servers.</p>
     <ul>
       <li><strong>Favorites:</strong> Tapping the ♡ heart on a channel card saves that channel to a "Favorites" list using your browser's local storage. This list lives only in your browser and is never transmitted to us. Clearing your browser's cache or site data will erase it. If you'd like to save or transfer your favorites (for example, to a new device), the "Save / Share Link" button creates a link encoding your favorite channels, which only you can use to restore them.</li>
@@ -244,44 +302,112 @@
     </ul>
   </section>
 
-  <!-- 6 -->
+  <!-- 8 -->
   <section>
-    <h2>6. Children's Privacy</h2>
+    <h2>8. Children's Privacy</h2>
     <p>Weather TV is designed to be appropriate for all ages. We do not knowingly collect any personal information from children under the age of 13, or under the applicable age of digital consent in your region. Because we collect no personal data from any users at all, our practices are consistent with the Children's Online Privacy Protection Act (COPPA) and similar laws.</p>
     <p>If you are a parent or guardian and believe your child has somehow provided personal information through this app, please contact us at <a href="mailto:contact@altruisticapps.com">contact@altruisticapps.com</a> and we will investigate promptly.</p>
   </section>
 
-  <!-- 7 — Content Advisory -->
+  <!-- 9 -->
   <section>
-    <h2>7. Content Advisory for Parents</h2>
+    <h2>9. Content Advisory for Parents</h2>
     <div class="advisory">
       <p><strong>Weather TV is a live content platform.</strong> The overwhelming majority of content consists of professional weather forecasting and storm chasing, and is entirely family-friendly. However, because some channels broadcast live in real-time field conditions, there is a small possibility that a creator may use language some viewers could find objectionable — for example, in a moment of genuine shock or surprise during a dangerous weather event.</p>
       <p>This is not typical behavior on any of the featured channels, and based on extensive viewing, it is extremely rare. That said, parents of very young children should be aware that live broadcasts cannot be pre-screened or filtered in real time.</p>
     </div>
   </section>
 
-  <!-- 8 -->
-  <section>
-    <h2>8. Data Selling & Advertising</h2>
-    <p>We do not sell, rent, lease, or trade any user data — because we don't have any to sell. Weather TV contains no behavioral advertising, no tracking pixels, and no third-party ad networks operated by us. Any ads that appear within YouTube's embedded player are served by YouTube under their own policies and are not placed by Altruistic Apps.</p>
-  </section>
-
-  <!-- 9 -->
-  <section>
-    <h2>9. Data Security</h2>
-    <p>Because we do not collect personal information, there is no personal data for us to secure or that could be compromised in a breach. Our server infrastructure is used solely to serve the channel directory and manage live stream status updates.</p>
-  </section>
-
   <!-- 10 -->
   <section>
-    <h2>10. Changes to This Policy</h2>
-    <p>If we ever update this privacy policy, we will post the revised version here with an updated effective date. Our commitment to collecting no personal data will not change. Any material changes would also be communicated through the app.</p>
+    <h2>10. Data Selling & Advertising</h2>
+    <p>We do not sell, rent, lease, or trade any user data — because we don't have any to sell. Weather TV contains no behavioral advertising, no tracking pixels, and no third-party ad networks operated by us. Any ads that appear within YouTube's embedded player are served by YouTube under their own policies and are not placed by Altruistic Apps.</p>
   </section>
 
   <!-- 11 -->
   <section>
-    <h2>11. Contact Us</h2>
+    <h2>11. Data Security</h2>
+    <p>Because we do not collect personal information, there is no personal data for us to secure or that could be compromised in a breach. Our server infrastructure is used solely to serve the channel directory and manage live stream status updates.</p>
+  </section>
+
+  <!-- 12 -->
+  <section>
+    <h2>12. Changes to This Policy</h2>
+    <p>If we ever update this privacy policy, we will post the revised version here with an updated effective date. Our commitment to collecting no personal data will not change. Any material changes would also be communicated through the app.</p>
+  </section>
+
+  <!-- 13 -->
+  <section>
+    <h2>13. Contact Us</h2>
     <p>Questions, concerns, or feedback about this privacy policy or Weather TV in general are always welcome.</p>
+    <p><strong>Altruistic Apps</strong><br>
+    <a href="mailto:contact@altruisticapps.com">contact@altruisticapps.com</a></p>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       TERMS OF USE
+  ════════════════════════════════════════ -->
+  <div class="chapter-divider">
+    <h2>Terms of Use</h2>
+  </div>
+
+  <div class="effective-date">Effective Date: June 29, 2026 &nbsp;·&nbsp; Altruistic Apps</div>
+
+  <!-- T1 -->
+  <section>
+    <h2>T1. Acceptance of Terms</h2>
+    <p>By accessing or using Weather TV at <a href="https://www.watchweathertv.com">watchweathertv.com</a>, you agree to be bound by these Terms of Use and all applicable laws and regulations. If you do not agree with any of these terms, please discontinue use of the service. WeatherTV is provided free of charge by Altruistic Apps, a sole proprietorship operated in Greendale, Wisconsin.</p>
+  </section>
+
+  <!-- T2 — CRITICAL: III.A.1 compliance -->
+  <section>
+    <h2>T2. YouTube Terms of Service</h2>
+    <div class="yt-binding">
+      By using WeatherTV, you are also agreeing to be bound by the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms of Service</a>.
+    </div>
+    <p>WeatherTV uses the YouTube API Services to discover and display live streams, recent videos, and channel information from weather creators on YouTube. This means your use of WeatherTV is subject to YouTube's own terms and policies in addition to these Terms of Use.</p>
+    <p>YouTube's Terms of Service: <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">youtube.com/t/terms</a><br>
+    Google's Privacy Policy: <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">policies.google.com/privacy</a><br>
+    Manage Google permissions: <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a></p>
+    <p>WeatherTV is not affiliated with, endorsed by, or sponsored by YouTube or Google LLC.</p>
+  </section>
+
+  <!-- T3 -->
+  <section>
+    <h2>T3. Permitted Use</h2>
+    <p>WeatherTV is intended for personal, non-commercial use. You may use the service to watch live weather broadcasts, browse recent weather videos, track severe weather via the live radar, and explore WeatherStar 4000+ local forecast displays — all free of charge.</p>
+    <p>You may not use WeatherTV to scrape, aggregate, or redistribute its content or data in bulk, or to interfere with the service's operation or infrastructure.</p>
+  </section>
+
+  <!-- T4 -->
+  <section>
+    <h2>T4. Content & Third-Party Services</h2>
+    <p>WeatherTV aggregates publicly available content from YouTube channels. All video content is owned by and remains the property of its respective creators. WeatherTV does not host, store, or re-encode any video content — all streams and videos play directly from YouTube's infrastructure.</p>
+    <p>Live radar data is sourced from the National Weather Service (NWS) and related NOAA services. WeatherTV makes no warranties regarding the accuracy, completeness, or timeliness of radar or weather data, and it should not be used as the sole basis for safety decisions during severe weather.</p>
+  </section>
+
+  <!-- T5 -->
+  <section>
+    <h2>T5. No Warranties</h2>
+    <p>WeatherTV is provided "as is" without warranties of any kind, express or implied. Altruistic Apps does not warrant that the service will be uninterrupted, error-free, or free of harmful components. Your use of the service is at your own risk.</p>
+  </section>
+
+  <!-- T6 -->
+  <section>
+    <h2>T6. Limitation of Liability</h2>
+    <p>To the fullest extent permitted by applicable law, Altruistic Apps shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of or inability to use WeatherTV, including reliance on weather information displayed by the service.</p>
+  </section>
+
+  <!-- T7 -->
+  <section>
+    <h2>T7. Changes to These Terms</h2>
+    <p>We may update these Terms of Use from time to time. When we do, we will post the revised version here with an updated effective date. Continued use of WeatherTV after changes are posted constitutes your acceptance of the revised terms.</p>
+  </section>
+
+  <!-- T8 -->
+  <section>
+    <h2>T8. Contact</h2>
+    <p>Questions about these Terms of Use are welcome.</p>
     <p><strong>Altruistic Apps</strong><br>
     <a href="mailto:contact@altruisticapps.com">contact@altruisticapps.com</a></p>
   </section>
