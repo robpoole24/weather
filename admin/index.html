@@ -283,12 +283,29 @@
       </p>
 
       <!-- Add form -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
+      <!-- Source mode toggle -->
+      <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">
+        <button id="hl-mode-channel" class="btn btn-primary btn-sm" onclick="setHighlightMode('channel')" style="font-size:0.78rem;">From Our Channels</button>
+        <button id="hl-mode-external" class="btn btn-ghost btn-sm" onclick="setHighlightMode('external')" style="font-size:0.78rem;">External Video</button>
+      </div>
+
+      <!-- Channel mode -->
+      <div id="hl-form-channel" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.75rem;">
         <select id="highlight-channel-select" style="font-size:0.82rem;">
           <option value="">— Select a channel —</option>
         </select>
         <input id="highlight-video-input" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
       </div>
+
+      <!-- External mode -->
+      <div id="hl-form-external" style="display:none;gap:0.5rem;margin-bottom:0.75rem;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;">
+          <input id="highlight-ext-label" type="text" placeholder="Channel / source label (e.g. Midwest Safety)" style="font-size:0.82rem;">
+          <input id="highlight-ext-video" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
+        </div>
+        <p style="font-size:0.75rem;color:var(--muted);margin:0;">The label appears in the Highlights panel as the source name. Use whatever makes sense to viewers.</p>
+      </div>
+
       <div style="display:flex;gap:0.5rem;margin-bottom:1.25rem;">
         <button class="btn btn-primary btn-sm" onclick="addHighlight()">+ Add Highlight</button>
       </div>
@@ -2596,14 +2613,40 @@ function getHighlightChannelName(channelId) {
   return channelId;
 }
 
+let _highlightMode = 'channel'; // 'channel' | 'external'
+
+function setHighlightMode(mode) {
+  _highlightMode = mode;
+  const isExt = mode === 'external';
+  document.getElementById('hl-form-channel').style.display  = isExt ? 'none'  : 'grid';
+  document.getElementById('hl-form-external').style.display = isExt ? 'block' : 'none';
+  document.getElementById('hl-mode-channel').className  = isExt ? 'btn btn-ghost btn-sm'   : 'btn btn-primary btn-sm';
+  document.getElementById('hl-mode-external').className = isExt ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  document.getElementById('hl-mode-channel').style.fontSize  = '0.78rem';
+  document.getElementById('hl-mode-external').style.fontSize = '0.78rem';
+}
+
 async function addHighlight() {
-  const channelId = document.getElementById('highlight-channel-select').value.trim();
-  const videoId   = document.getElementById('highlight-video-input').value.trim();
-  if (!channelId || !videoId) {
-    showHighlightResult('⚠ Select a channel and enter a Video ID.', false);
-    return;
+  let channelId, videoId;
+
+  if (_highlightMode === 'external') {
+    channelId = document.getElementById('highlight-ext-label').value.trim();
+    videoId   = document.getElementById('highlight-ext-video').value.trim();
+    if (!channelId || !videoId) {
+      showHighlightResult('⚠ Enter a source label and a Video ID.', false);
+      return;
+    }
+  } else {
+    channelId = document.getElementById('highlight-channel-select').value.trim();
+    videoId   = document.getElementById('highlight-video-input').value.trim();
+    if (!channelId || !videoId) {
+      showHighlightResult('⚠ Select a channel and enter a Video ID.', false);
+      return;
+    }
   }
+
   // Auto-fetch title + thumbnail via oEmbed — free, zero quota cost
+  // Works for any public YouTube video regardless of channel
   let title = '', thumbnail = '';
   try {
     const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
@@ -2621,8 +2664,14 @@ async function addHighlight() {
   });
   const data = await res.json();
   if (data.ok) {
-    document.getElementById('highlight-video-input').value = '';
-    document.getElementById('highlight-channel-select').value = '';
+    // Clear whichever form was active
+    if (_highlightMode === 'external') {
+      document.getElementById('highlight-ext-label').value = '';
+      document.getElementById('highlight-ext-video').value = '';
+    } else {
+      document.getElementById('highlight-video-input').value = '';
+      document.getElementById('highlight-channel-select').value = '';
+    }
     showHighlightResult('✓ Highlight added.', true);
     await loadData();
   } else {
