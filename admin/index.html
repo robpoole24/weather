@@ -207,17 +207,27 @@
           <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
             0.25 = 15 min, 0.5 = 30 min, 1 = 1 hour. Recommended: 0.25.<br>
             WebSub handles real-time — this is the safety net poll.<br>
-            <strong style="color:var(--gold);">Cost: ~${channels} × 100 units per check.</strong>
+            <strong style="color:var(--gold);">Cost: ~${channels} × 1 unit per check (videos.list).</strong>
           </div>
         </div>
         <div style="flex:1;min-width:180px;">
-          <label>Daily Video Fetch Hour (EST, 0–23)</label>
+          <label>First Daily Video Fetch Hour (EST, 0–23)</label>
           <input type="number" id="cfg-fetch-hour" min="0" max="23" placeholder="12"
             style="margin-bottom:0.25rem;" oninput="updateFetchScheduleLabel()" />
           <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
-            Hour in EST (0=midnight, 12=noon, 18=6pm) when recent videos are fetched.<br>
-            Recommended: 12 (noon EST) — most forecasters have posted their daily forecast by then.<br>
-            <strong style="color:var(--gold);">Cost: ~${channels} × 100 units once daily.</strong>
+            Hour in EST (0=midnight, 12=noon, 18=6pm) for first daily fetch.<br>
+            Recommended: 12 (noon EST) — most forecasters have posted by then.<br>
+            <strong style="color:var(--gold);">Cost: ~${channels} × 1 unit per run (playlistItems.list).</strong>
+          </div>
+        </div>
+        <div style="flex:1;min-width:180px;">
+          <label>Second Daily Video Fetch Hour (EST, 0–23)</label>
+          <input type="number" id="cfg-fetch-hour2" min="0" max="23" placeholder="18"
+            style="margin-bottom:0.25rem;" oninput="updateFetchScheduleLabel()" />
+          <div style="font-size:0.72rem;color:var(--muted);line-height:1.4;">
+            Hour in EST for second daily fetch.<br>
+            Recommended: 18 (6pm EST) — catches afternoon storms and late-day forecasts.<br>
+            <strong style="color:var(--gold);">Same cost as first fetch — both are negligible on 60k quota.</strong>
           </div>
         </div>
       </div>
@@ -551,12 +561,12 @@
         <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">API Quota Usage Today</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
           <div>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);margin-bottom:0.35rem">Primary Key (Live Checks)</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);margin-bottom:0.35rem">Primary Key — All Operations</div>
             <div id="burn-primary-bar" style="background:var(--border);border-radius:4px;height:8px;margin-bottom:0.3rem"><div id="burn-primary-fill" style="background:var(--accent);height:100%;border-radius:4px;width:0%"></div></div>
-            <div id="burn-primary-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 10,000 units</div>
+            <div id="burn-primary-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 60,000 units</div>
           </div>
           <div>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);margin-bottom:0.35rem">Archive Key (Video Fetches)</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);margin-bottom:0.35rem">Archive Key — Emergency Standby</div>
             <div id="burn-archive-bar" style="background:var(--border);border-radius:4px;height:8px;margin-bottom:0.3rem"><div id="burn-archive-fill" style="background:var(--gold);height:100%;border-radius:4px;width:0%"></div></div>
             <div id="burn-archive-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 10,000 units</div>
           </div>
@@ -842,6 +852,7 @@ function renderAll() {
   document.getElementById('cfg-apikey').value = appData.config.apiKey || '';
   document.getElementById('cfg-live-interval').value = appData.config.liveCheckIntervalHours || 12;
   document.getElementById('cfg-fetch-hour').value = appData.config.recentFetchHourEST !== undefined ? appData.config.recentFetchHourEST : 12;
+  document.getElementById('cfg-fetch-hour2').value = appData.config.recentFetchHour2EST !== undefined ? appData.config.recentFetchHour2EST : 18;
   updateFetchScheduleLabel();
 
   // Show channel count in cost estimates
@@ -1432,21 +1443,31 @@ function closeColModal() {
 
 // ── Config ──
 function updateFetchScheduleLabel() {
-  const input = document.getElementById('cfg-fetch-hour');
+  const input1 = document.getElementById('cfg-fetch-hour');
+  const input2 = document.getElementById('cfg-fetch-hour2');
   const label = document.getElementById('recent-schedule-label');
-  if (!input || !label) return;
-  const hour = parseInt(input.value);
-  if (isNaN(hour) || hour < 0 || hour > 23) return;
-  const h12 = hour % 12 || 12;
-  const period = hour < 12 ? 'am' : 'pm';
-  const display = hour === 0 ? '12am (midnight)' : hour === 12 ? '12pm (noon)' : `${h12}${period}`;
-  label.textContent = `Scheduled daily at ${display} EST — or fetch manually below`;
+  if (!input1 || !label) return;
+  const fmt = h => {
+    if (isNaN(h) || h < 0 || h > 23) return '—';
+    const h12 = h % 12 || 12;
+    const period = h < 12 ? 'am' : 'pm';
+    return h === 0 ? '12am' : h === 12 ? '12pm' : `${h12}${period}`;
+  };
+  const h1 = parseInt(input1.value);
+  const h2 = input2 ? parseInt(input2.value) : NaN;
+  const t1 = fmt(h1);
+  const t2 = fmt(h2);
+  label.textContent = (!isNaN(h2) && h2 >= 0 && h2 <= 23)
+    ? `Scheduled twice daily at ${t1} and ${t2} EST — or fetch manually below`
+    : `Scheduled daily at ${t1} EST — or fetch manually below`;
 }
 
 async function saveConfig() {
   const liveInterval = parseInt(document.getElementById('cfg-live-interval').value) || 12;
   const fetchHour = parseInt(document.getElementById('cfg-fetch-hour').value);
   const fetchHourValid = !isNaN(fetchHour) && fetchHour >= 0 && fetchHour <= 23;
+  const fetchHour2 = parseInt(document.getElementById('cfg-fetch-hour2').value);
+  const fetchHour2Valid = !isNaN(fetchHour2) && fetchHour2 >= 0 && fetchHour2 <= 23;
 
   await fetch('/api/admin/config', {
     method:'PUT', headers:{'Content-Type':'application/json'},
@@ -1454,6 +1475,7 @@ async function saveConfig() {
       apiKey: document.getElementById('cfg-apikey').value,
       liveCheckIntervalHours: Math.min(24, Math.max(1, liveInterval)),
       recentFetchHourEST: fetchHourValid ? fetchHour : 12,
+      recentFetchHour2EST: fetchHour2Valid ? fetchHour2 : 18,
     })
   });
   showToast('Configuration saved — changes take effect on next scheduled run');
@@ -1690,8 +1712,8 @@ async function loadCacheStatus() {
     document.getElementById('ts-notification').textContent = fmtTs(data.liveStatuses.lastNotification);
     document.getElementById('ts-live').textContent = fmtTs(data.liveStatuses.lastChecked);
     document.getElementById('ts-fetch').textContent = fmtTs(data.recentVideos.lastFetch);
-    document.getElementById('ts-quota').textContent = (data.liveChecksToday || 0) + ' / ' + (data.liveCheckLimit || 40) + ' checks used today';
-    document.getElementById('ts-archivekey').textContent = data.archiveKeyConfigured ? '✓ Configured (dual-key mode)' : '✗ Not set — using primary key for all fetches';
+    document.getElementById('ts-quota').textContent = (data.liveChecksToday || 0) + ' / ' + (data.liveCheckLimit || 2000) + ' checks used today';
+    document.getElementById('ts-archivekey').textContent = data.archiveKeyConfigured ? '✓ Configured (emergency standby — not used today)' : '✗ Not set — primary key only';
     document.getElementById('ts-archivekey').style.color = data.archiveKeyConfigured ? 'var(--green)' : 'var(--muted)';
 
     if (data.quotaExceeded) {
@@ -1855,18 +1877,23 @@ async function loadSystemHealth() {
       document.getElementById('redis-used').textContent = redis.message || redis.error || 'Unavailable';
     }
 
-    // Quota burn bars
-    const pct = n => Math.min(100, Math.round((n / 10000) * 100));
-    const color = n => n > 8000 ? 'var(--red)' : n > 6000 ? 'var(--gold)' : 'var(--accent)';
+    // Quota burn bars — primary key is now 60,000 units/day; archive is 10,000 standby
+    const primaryLimit = (burn.primaryQuotaLimit) || 60000;
+    const archiveLimit = (burn.archiveQuotaLimit) || 10000;
+    const pctPrimary = n => Math.min(100, Math.round((n / primaryLimit) * 100));
+    const pctArchive = n => Math.min(100, Math.round((n / archiveLimit) * 100));
+    const color = (n, limit) => n > limit * 0.9 ? 'var(--red)' : n > limit * 0.7 ? 'var(--gold)' : 'var(--accent)';
 
-    document.getElementById('burn-primary-fill').style.width = pct(burn.primaryUnits) + '%';
-    document.getElementById('burn-primary-fill').style.background = color(burn.primaryUnits);
-    document.getElementById('burn-primary-text').textContent = burn.primaryUnits.toLocaleString() + ' / 10,000 units (' + pct(burn.primaryUnits) + '%)';
+    document.getElementById('burn-primary-fill').style.width = pctPrimary(burn.primaryUnits) + '%';
+    document.getElementById('burn-primary-fill').style.background = color(burn.primaryUnits, primaryLimit);
+    document.getElementById('burn-primary-text').textContent = burn.primaryUnits.toLocaleString() + ' / ' + primaryLimit.toLocaleString() + ' units (' + pctPrimary(burn.primaryUnits) + '%)';
 
     if (burn.archiveLimit > 0) {
-      document.getElementById('burn-archive-fill').style.width = pct(burn.archiveUnits) + '%';
-      document.getElementById('burn-archive-fill').style.background = color(burn.archiveUnits);
-      document.getElementById('burn-archive-text').textContent = burn.archiveUnits.toLocaleString() + ' / 10,000 units (' + pct(burn.archiveUnits) + '%)';
+      document.getElementById('burn-archive-fill').style.width = pctArchive(burn.archiveUnits) + '%';
+      document.getElementById('burn-archive-fill').style.background = color(burn.archiveUnits, archiveLimit);
+      const standbyNote = burn.archiveUnits === 0 ? ' — standby, unused today' : ' — ACTIVE (primary exceeded)';
+      document.getElementById('burn-archive-text').textContent = burn.archiveUnits.toLocaleString() + ' / ' + archiveLimit.toLocaleString() + ' units' + standbyNote;
+      document.getElementById('burn-archive-text').style.color = burn.archiveUnits > 0 ? 'var(--gold)' : 'var(--muted)';
     } else {
       document.getElementById('burn-archive-text').textContent = 'Archive key not configured';
       document.getElementById('burn-archive-text').style.color = 'var(--muted)';

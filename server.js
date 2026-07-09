@@ -172,7 +172,8 @@ function getDefaultData() {
       playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI',
       apiKey: process.env.YOUTUBE_API_KEY || '',
       liveCheckIntervalHours: 2,    // 2 hours between live polls — set to 0.25 after quota increase to 50k
-      recentFetchHourEST: 12,       // hour (0-23) in EST to fetch recent videos daily -- noon, after most forecasters post their daily forecast
+      recentFetchHourEST: 12,       // hour (0-23) in EST for first daily fetch -- noon, after most forecasters post their daily forecast
+      recentFetchHour2EST: 18,      // hour (0-23) in EST for second daily fetch -- 6pm, catches afternoon/evening storm content
     },
     groups: [
       {
@@ -732,12 +733,23 @@ app.get('/api/health', (req, res) => {
 const https = require('https');
 
 // ── Quota Guard ──
-// Split per-key: the primary key (YOUTUBE_API_KEY) handles WebSub live
-// confirmations (~0-500 units/day) and manual checks; the archive key
-// (YOUTUBE_API_KEY_2) handles the daily recent-videos fetch (up to ~100
-// units/channel). These pools are independent — the archive key running out
-// (likely on busy days with 130+ channels) must NOT also halt WebSub-based
-// live detection on the primary key, which is the safety-critical path.
+// Primary key (YOUTUBE_API_KEY): 60,000 units/day — handles all normal
+// operations: WebSub live confirmations, recent video fetches (via
+// playlistItems.list at 1 unit/channel), and manual checks.
+//
+// Archive key (YOUTUBE_API_KEY_2): 10,000 units/day — kept configured as
+// emergency standby only. Never used on a normal day. Activates automatically
+// if the primary key somehow hits its limit (e.g. an unusual spike in
+// WebSub confirmations or a manual admin fetch run on top of scheduled ones).
+//
+// Estimated normal daily usage on primary key:
+//   2x recent fetch × 146 channels × 1 unit = ~292 units
+//   WebSub confirmations (videos.list, 1 unit each, ~30/day) = ~30 units
+//   Total: ~320 units/day — well under 60,000 unit limit.
+//
+// These pools are independent — the archive key running out must NOT also
+// halt WebSub-based live detection on the primary key, which is the
+// safety-critical path.
 let primaryQuotaExceeded = false;
 let archiveQuotaExceeded = false;
 let primaryQuotaResetTimer = null;
@@ -2048,7 +2060,7 @@ function logFetchError(channelId, channelName, errorMsg) {
 // Cap raised to 500 checks/day = ~500 units max (vs old 40 × 100 = 4,000 units).
 // The 100-unit search fallback (no video ID) still counts against this limit.
 const quotaTracker = { date: "", liveChecks: 0 };
-const DAILY_LIVE_CHECK_LIMIT = 500;
+const DAILY_LIVE_CHECK_LIMIT = 2000; // videos.list at 1 unit each — 2,000 max/day uses ~2,000 of 60,000 available units
 
 function getLiveChecksToday() {
   const today = new Date().toISOString().split('T')[0];
@@ -2680,10 +2692,21 @@ setTimeout(subscribeAllChannels, 10000);
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER
-// Runs once daily at noon EST — fetches recent videos for all channels.
-// Costs 100 units per channel, once daily = ~5,300 units/day for 53 channels.
+// Runs twice daily (noon + 6pm EST) — fetches recent videos for all channels.
+// Uses playlistItems.list at 1 unit/channel (vs. search.list at 100 units).
+// At 146 channels: ~146 units per run × 2 runs = ~292 units/day on primary.
+// Archive key (YOUTUBE_API_KEY_2) activates only if primary quota is exceeded.
 // All users served from cache — zero additional quota per request.
 // ════════════════════════════════════════════
+
+// Derive a channel's uploads playlist ID from its channel ID.
+// YouTube uploads playlist is always 'UU' + channelId.slice(2)
+// e.g. UCxxxxxx → UUxxxxxx — no extra API call required.
+function getUploadsPlaylistId(channelId) {
+  if (!channelId || !channelId.startsWith('UC')) return null;
+  return 'UU' + channelId.slice(2);
+}
+
 async function fetchAllRecentVideos() {
   // Each key's quotaExceeded flag auto-clears via its own midnight-Pacific
   // timer (set in markQuotaExceeded). If BOTH keys are currently exhausted,
@@ -2696,10 +2719,6 @@ async function fetchAllRecentVideos() {
 
   const primaryKey = getApiKey();
   const archiveKey = getArchiveApiKey();
-  if (!archiveKey || archiveKey === 'YOUR_YOUTUBE_API_KEY') {
-    scheduleNextRecentFetch();
-    return;
-  }
 
   const allChannels = getAllChannels();
   if (allChannels.length === 0) return;
@@ -2745,42 +2764,68 @@ async function fetchAllRecentVideos() {
   let fetched = 0, skipped = 0;
   const fetchedIds = new Set();
 
-  // Split the fetch across both API keys -- alternate by position in
-  // priorityChannels (Tier 1 channels are first, so the highest-priority
-  // channels are evenly distributed across both keys' quota pools).
-  // At ~132 channels this is roughly 66 x 100 = 6,600 units per key,
-  // well under each key's 10,000 unit budget, with headroom to grow toward
-  // ~200 channels combined.
   for (let i = 0; i < priorityChannels.length; i++) {
     const ch = priorityChannels[i];
-    const isPrimary = i % 2 === 0;
-    const useKey = isPrimary ? primaryKey : archiveKey;
-    const keyExceeded = isPrimary ? primaryQuotaExceeded : archiveQuotaExceeded;
 
-    if (!useKey || useKey === 'YOUR_YOUTUBE_API_KEY' || keyExceeded) {
-      // This channel's assigned key is unavailable this cycle -- skip it,
-      // but keep going so channels assigned to the OTHER key still get fetched.
+    // Use primary key; fall back to archive key if primary is exhausted
+    let useKey = null;
+    let isPrimary = true;
+    if (!primaryQuotaExceeded && primaryKey && primaryKey !== 'YOUR_YOUTUBE_API_KEY') {
+      useKey = primaryKey;
+      isPrimary = true;
+    } else if (!archiveQuotaExceeded && archiveKey && archiveKey !== 'YOUR_YOUTUBE_API_KEY' && archiveKey !== primaryKey) {
+      useKey = archiveKey;
+      isPrimary = false;
+      if (i === 0) console.warn('[WeatherTV] Primary key exhausted — falling back to archive key for recent fetch');
+    }
+
+    if (!useKey) {
       skipped++;
       continue;
     }
 
+    // Use playlistItems.list (1 unit) via the channel's uploads playlist
+    // instead of search.list (100 units) — 100x more efficient.
+    const playlistId = getUploadsPlaylistId(ch.id);
+    if (!playlistId) {
+      skipped++;
+      console.warn('[WeatherTV] Cannot derive uploads playlist for ' + ch.id + ' — skipping');
+      continue;
+    }
+
     try {
-      const url = 'https://www.googleapis.com/youtube/v3/search?key=' + useKey +
-        '&channelId=' + ch.id + '&part=snippet&order=date&type=video&maxResults=10';
+      const url = 'https://www.googleapis.com/youtube/v3/playlistItems?key=' + useKey +
+        '&playlistId=' + playlistId + '&part=snippet&maxResults=10';
       const data = await ytFetch(url);
 
       if (checkQuotaError(data)) {
         markQuotaExceeded(isPrimary);
         skipped++;
-        console.warn('[WeatherTV] ' + (isPrimary ? 'Primary' : 'Archive') + ' key quota hit at channel ' + (i + 1) + '/' + priorityChannels.length + ' -- continuing with remaining key');
+        console.warn('[WeatherTV] ' + (isPrimary ? 'Primary' : 'Archive') + ' key quota hit at channel ' + (i + 1) + '/' + priorityChannels.length);
         continue;
       }
 
-      trackBurn(isPrimary, 100);
+      trackBurn(isPrimary, 1); // playlistItems.list costs 1 unit (vs. 100 for search.list)
 
-      const newItems = data.items || [];
+      const rawItems = data.items || [];
 
-      // Free live detection from snippet data
+      // Normalize playlistItems snippet to match the shape search.list returned,
+      // so downstream cache consumers (recent video panel, etc.) don't need changes.
+      // playlistItems snippet.resourceId.videoId → simulate id.videoId
+      const newItems = rawItems.map(item => ({
+        id: { videoId: item.snippet?.resourceId?.videoId || '' },
+        snippet: {
+          title: item.snippet?.title || '',
+          description: item.snippet?.description || '',
+          publishedAt: item.snippet?.publishedAt || '',
+          channelTitle: item.snippet?.channelTitle || '',
+          channelId: item.snippet?.channelId || ch.id,
+          liveBroadcastContent: item.snippet?.liveBroadcastContent || 'none',
+          thumbnails: item.snippet?.thumbnails || {},
+        },
+      }));
+
+      // Free live detection from snippet data (same as before)
       const liveItem = newItems.find(item => item.snippet && item.snippet.liveBroadcastContent === 'live');
       if (liveItem) {
         const videoId = liveItem.id && liveItem.id.videoId ? liveItem.id.videoId : null;
@@ -2813,11 +2858,11 @@ async function fetchAllRecentVideos() {
         fetched++;
         fetchedIds.add(ch.id);
       } else {
-        console.log('[WeatherTV] No videos found for ' + ch.id + ' -- may have wrong channel ID');
-        fetchedIds.add(ch.id); // attempted successfully (0 results) -- don't re-preserve a stale cache
+        console.log('[WeatherTV] No videos found for ' + ch.id + ' -- may have wrong channel ID or empty uploads playlist');
+        fetchedIds.add(ch.id);
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 100)); // lighter stagger since 1-unit calls are far cheaper
     } catch(e) {
       console.error('[WeatherTV] Fetch error for ' + ch.id + ':', e.message);
       logFetchError(ch.id, ch.name, e.message);
@@ -2827,10 +2872,7 @@ async function fetchAllRecentVideos() {
   cache.lastRecentFetch = Date.now();
   await rSet('wt:lastFetch', cache.lastRecentFetch);
 
-  // Preserve caches for any channel we didn't reach this cycle (whether
-  // skipped due to a key's quota limit or any other error) -- never let
-  // data expire due to quota cuts. With the two-key split, "skipped" channels
-  // are no longer a contiguous tail, so we track fetched IDs explicitly.
+  // Preserve caches for any channel we didn't reach this cycle
   for (const ch of priorityChannels) {
     if (!fetchedIds.has(ch.id)) {
       const cached = cache.recentVideos[ch.id];
@@ -2843,28 +2885,44 @@ async function fetchAllRecentVideos() {
   if (skipped > 0) {
     console.log('[WeatherTV] Fetch complete -- ' + fetched + '/' + priorityChannels.length + ' updated, ' + skipped + ' skipped (key quota), caches preserved');
   } else {
-    console.log('[WeatherTV] Fetch complete -- ' + fetched + '/' + priorityChannels.length + ' channels updated');
+    console.log('[WeatherTV] Fetch complete -- ' + fetched + '/' + priorityChannels.length + ' channels updated (~' + fetched + ' units used)');
   }
 
   scheduleNextRecentFetch();
 }
+function getSecondFetchHour() {
+  try {
+    const cfg = loadData().config;
+    if (cfg.recentFetchHour2EST !== undefined) return cfg.recentFetchHour2EST;
+  } catch(e) {}
+  return 18; // 6pm EST default -- catches afternoon/evening storm content and late daily forecasts
+}
+
 function scheduleNextRecentFetch() {
-  // Schedule for next fetch hour EST (default noon, configurable via admin)
-  const fetchHour = getRecentFetchHour();
+  const fetchHour1 = getRecentFetchHour();  // noon EST (default)
+  const fetchHour2 = getSecondFetchHour();  // 6pm EST (default)
+
   const now = new Date();
   const estNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const next = new Date(estNow);
-  next.setHours(fetchHour, 0, 0, 0);
 
-  // If the configured fetch hour has already passed today, schedule for tomorrow
-  if (estNow >= next) {
-    next.setDate(next.getDate() + 1);
+  // Build candidate times for today
+  const next1 = new Date(estNow); next1.setHours(fetchHour1, 0, 0, 0);
+  const next2 = new Date(estNow); next2.setHours(fetchHour2, 0, 0, 0);
+
+  // Find the next upcoming fetch time; if both have passed today, use noon tomorrow
+  let nextFetch = null;
+  if (estNow < next1) {
+    nextFetch = next1;
+  } else if (estNow < next2) {
+    nextFetch = next2;
+  } else {
+    nextFetch = new Date(next1);
+    nextFetch.setDate(nextFetch.getDate() + 1);
   }
 
-  // Convert back to UTC ms offset
-  const msUntilNext = next - estNow;
+  const msUntilNext = nextFetch - estNow;
   const minsUntilNext = Math.round(msUntilNext / 60000);
-  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (' + fetchHour + ':00 EST)');
+  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (' + nextFetch.getHours() + ':00 EST)');
   setTimeout(fetchAllRecentVideos, msUntilNext);
 }
 
@@ -3028,6 +3086,9 @@ app.get('/api/yt/quota-status', (req, res) => {
     liveChecksToday: getLiveChecksToday(),
     liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
     archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
+    archiveKeyRole: 'emergency-standby',
+    primaryQuotaLimit: 60000,
+    archiveQuotaLimit: 10000,
   });
 });
 
