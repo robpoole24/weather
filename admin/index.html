@@ -791,10 +791,14 @@ let colModalContext = null; // { groupId, channelId, colId or null }
 async function saveAll() {
   if (!appData) { showToast('⚠ No data to save'); return; }
   try {
+    // Exclude auto-populated / ephemeral fields that don't need to be saved:
+    //   knownChasers — 500KB+ of Spotter Network data, rebuilt automatically on server start
+    //   dismissedSuggestions — ephemeral UI state, not user channel data
+    const { knownChasers, dismissedSuggestions, ...saveData } = appData;
     const res = await fetch('/api/admin/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(appData)
+      body: JSON.stringify(saveData)
     });
     const result = await res.json();
     if (result.ok) {

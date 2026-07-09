@@ -456,6 +456,22 @@ app.post('/api/admin/playlists', (req, res) => {
   res.json({ ok: true });
 });
 
+// Admin — reorder playlists (must be before /:id to avoid Express matching 'reorder' as a param)
+app.put('/api/admin/playlists/reorder', (req, res) => {
+  const { id, direction } = req.body;
+  const data = loadData();
+  if (!data.playlists) return res.json({ ok: true });
+  const idx = data.playlists.findIndex(p => p.id === id);
+  if (idx === -1) return res.json({ ok: true });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= data.playlists.length) return res.json({ ok: true });
+  const tmp = data.playlists[idx];
+  data.playlists[idx] = data.playlists[newIdx];
+  data.playlists[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
 // Admin — update playlist
 app.put('/api/admin/playlists/:id', (req, res) => {
   const data = loadData();
@@ -472,22 +488,6 @@ app.delete('/api/admin/playlists/:id', (req, res) => {
   const data = loadData();
   if (!data.playlists) return res.json({ ok: true });
   data.playlists = data.playlists.filter(p => p.id !== req.params.id);
-  saveData(data);
-  res.json({ ok: true });
-});
-
-// Admin — reorder playlists
-app.put('/api/admin/playlists/reorder', (req, res) => {
-  const { id, direction } = req.body;
-  const data = loadData();
-  if (!data.playlists) return res.json({ ok: true });
-  const idx = data.playlists.findIndex(p => p.id === id);
-  if (idx === -1) return res.json({ ok: true });
-  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-  if (newIdx < 0 || newIdx >= data.playlists.length) return res.json({ ok: true });
-  const tmp = data.playlists[idx];
-  data.playlists[idx] = data.playlists[newIdx];
-  data.playlists[newIdx] = tmp;
   saveData(data);
   res.json({ ok: true });
 });
