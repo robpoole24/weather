@@ -1,7 +1,7 @@
-// WeatherTV Server — updated 2026-05-31 build.1780105000
+// WeatherTV Server — updated 2026-07-09T06:12:19Z build.1780105000
 const express = require('express');
+const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
 const crypto = require('crypto');
-const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const radar = require('./radar');
@@ -23,7 +23,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'channels.json');
 
-app.use(cors());
+applySecurityMiddleware(app);
 app.use(express.json({ limit: '5mb' })); // 5MB covers the full appData payload sent by saveAll()
 
 // ── WS4KP dynamic music playlist ──────────────────────────────────────────
