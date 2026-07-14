@@ -103,6 +103,8 @@ function securityHeaders(req, res, next) {
     "connect-src 'self'" +
       // Internal WeatherTV APIs
       " https://api.anthropic.com" +
+      // Travel forecast city data (domestic + international travel displays)
+      " https://api.open-meteo.com" +
       // NWS — forecasts, conditions, alerts, points, radar station lookup
       " https://api.weather.gov" +
       " https://forecast.weather.gov" +
