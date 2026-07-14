@@ -82,7 +82,7 @@ function makeRateLimiter({ windowMs = 60000, max = 100, message = 'Too many requ
 // If helmet is installed it will be used instead for broader coverage.
 function securityHeaders(req, res, next) {
   // Prevent clickjacking
-  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   // Prevent MIME sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');
   // XSS protection (legacy browsers)
@@ -101,7 +101,7 @@ function securityHeaders(req, res, next) {
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https: blob:",
     "connect-src 'self' https://api.anthropic.com https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
-    "frame-ancestors 'none'",
+    "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header
   res.removeHeader('X-Powered-By');
