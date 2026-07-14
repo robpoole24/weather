@@ -100,7 +100,22 @@ function securityHeaders(req, res, next) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https: blob:",
-    "connect-src 'self' https://api.anthropic.com https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
+    "connect-src 'self'" +
+      // Internal WeatherTV APIs
+      " https://api.anthropic.com" +
+      // NWS — forecasts, conditions, alerts, points, radar station lookup
+      " https://api.weather.gov" +
+      " https://forecast.weather.gov" +
+      // Radar imagery (WS4KP + WeatherTV radar panel)
+      " https://mesonet.agron.iastate.edu" +
+      " https://opengeo.ncep.noaa.gov" +
+      " https://mapservices.weather.noaa.gov" +
+      // SPC outlook data (WS4KP SPC display)
+      " https://www.spc.noaa.gov" +
+      // NWS Probabilistic Hazards (WS4KP)
+      " https://idpgis.ncep.noaa.gov" +
+      // Altruistic Apps / Aporia quote APIs
+      " https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
     "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header
