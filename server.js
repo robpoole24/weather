@@ -3786,6 +3786,8 @@ function startLightningRelay() {
         'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)',
         'Origin': 'https://www.blitzortung.org',
       },
+      // Blitzortung's cert on port 3000 may not pass strict validation
+      rejectUnauthorized: false,
     });
 
     _lightningWS.on('open', () => {
@@ -3821,15 +3823,15 @@ function startLightningRelay() {
       } catch(_) { /* ignore malformed messages */ }
     });
 
-    _lightningWS.on('close', () => {
+    _lightningWS.on('close', (code, reason) => {
       _lightningConnected = false;
-      const delay = 5000 + Math.random() * 5000; // 5-10s with jitter
-      console.log(`[Lightning] Disconnected — reconnecting in ${Math.round(delay / 1000)}s`);
+      const delay = 5000 + Math.random() * 5000;
+      console.log(`[Lightning] Disconnected (code=${code} reason=${reason}) — reconnecting to ${url} in ${Math.round(delay / 1000)}s`);
       setTimeout(connect, delay);
     });
 
     _lightningWS.on('error', e => {
-      console.warn('[Lightning] WS error:', e.message);
+      console.warn(`[Lightning] WS error on ${url}:`, e.message, e.code || '');
     });
   }
 
