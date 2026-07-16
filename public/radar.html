@@ -220,13 +220,13 @@
   #warning-scroll-wrap {
     flex: 1;
     overflow: hidden;
-    position: relative;
-    height: 100%;
+    display: flex;
+    align-items: center;
   }
   #warning-scroll-text {
-    /* Ticker: enters from right, scrolls left, exits left — pure CSS, GPU composited */
-    position: absolute;
-    top: 50%;
+    /* Seamless ticker loop: text is duplicated in JS so animating -50%
+       scrolls exactly one copy, then loops back to the identical start. */
+    display: inline-block;
     white-space: nowrap;
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 0.88rem;
@@ -235,13 +235,11 @@
     color: white;
     text-transform: uppercase;
     will-change: transform;
-    /* Start off the right edge of the viewport, slide fully left */
-    animation: weatherTicker 35s linear infinite;
-    transform: translateY(-50%);
+    animation: weatherTicker 40s linear infinite;
   }
   @keyframes weatherTicker {
-    from { transform: translateY(-50%) translateX(100vw); }
-    to   { transform: translateY(-50%) translateX(-100%); }
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
   }
   #warning-close {
     flex-shrink: 0;
@@ -1685,7 +1683,7 @@ async function renderAlertLayers() {
 
     // Check if user is inside this alert polygon
     if (userLat && userLng && !bannerDismissed) {
-      if (pointInPolygon(userLat, userLng, feature.geometry)) {
+      if (pointInPolygon(userLat, userLng, geom)) {
         activeBannerAlerts.push({
           event,
           headline: props.headline || '',
@@ -3805,6 +3803,9 @@ function goToMyLocation() {
     if (typeof resolveRadarSites === 'function') resolveRadarSites(lat, lng);
     setStatus(source === 'gps' ? 'Located via GPS' : `Located by IP — ${source}`);
     document.getElementById('location-btn').textContent = '📍 My Location';
+    // Re-evaluate banner now that we have a location — alerts may already be
+    // loaded but the banner was skipped because userLat/userLng were null
+    if (lastAlertsData) renderAlertLayers();
   };
 
   const onFail = (msg) => {
@@ -3862,6 +3863,8 @@ async function searchLocation(e) {
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
       const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
+      // Re-evaluate banner for new search location
+      if (lastAlertsData) renderAlertLayers();
 
       // Remove previous search marker
       if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
