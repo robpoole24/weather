@@ -3764,10 +3764,13 @@ app.use('/scripts', express.static(path.join(__dirname, 'public', 'weatherstar',
 // are ever hit by browsers. Rolling 10-minute buffer, max 10,000 strikes.
 // Attribution: Lightning data © Blitzortung.org and contributors (CC BY-SA 4.0)
 
-// Blitzortung server IDs — randomly selected per connection for load balancing.
-// Port 3000 is required; standard 443 doesn't work.
-// Source: https://github.com/SimonSchick/BlitzortungAPI
-const LIGHTNING_SERVER_IDS = [1, 5, 6, 7];
+// Blitzortung WebSocket relay — updated protocol (2024+):
+//   URL:       wss://ws{N}.blitzortung.org  (port 443, standard)
+//   Handshake: send {"a": 111} on open — without this, server sends nothing
+//   Encoding:  LZW-compressed — must decode before JSON.parse
+// Server IDs confirmed active: 1, 2, 7, 8
+// Source: https://www.gkbrk.com/blitzortung + https://www.limaps.org/live-data.html
+const LIGHTNING_SERVER_IDS = [1, 2, 7, 8];
 const LIGHTNING_MAX_AGE_MS = 10 * 60 * 1000;
 const LIGHTNING_MAX_STRIKES = 10000;
 
@@ -3775,10 +3778,32 @@ let _lightningBuffer = [];
 let _lightningConnected = false;
 let _lightningWS = null;
 
+// LZW decompression — Blitzortung obfuscates their WebSocket stream with this.
+// Ported from the Python decoder at https://www.gkbrk.com/blitzortung
+function blitzortungDecode(raw) {
+  const str = Buffer.isBuffer(raw) ? raw.toString() : String(raw);
+  if (!str.length) return null;
+  const d = [...str];
+  const e = {};
+  let c = d[0], f = c;
+  const g = [c];
+  const h = 256;
+  let o = h;
+  for (let i = 1; i < d.length; i++) {
+    const code = d[i].charCodeAt(0);
+    let a = code < h ? d[i] : (e[code] !== undefined ? e[code] : f + c);
+    g.push(a);
+    c = a[0];
+    e[o++] = f + c;
+    f = a;
+  }
+  return g.join('');
+}
+
 function startLightningRelay() {
   function connect() {
     const id = LIGHTNING_SERVER_IDS[Math.floor(Math.random() * LIGHTNING_SERVER_IDS.length)];
-    const url = `wss://ws${id}.blitzortung.org:3000/`;
+    const url = `wss://ws${id}.blitzortung.org/`;
     console.log(`[Lightning] Connecting to ${url}`);
 
     _lightningWS = new WebSocket(url, {
@@ -3786,33 +3811,29 @@ function startLightningRelay() {
         'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)',
         'Origin': 'https://www.blitzortung.org',
       },
-      // Blitzortung's cert on port 3000 may not pass strict validation
-      rejectUnauthorized: false,
     });
 
     _lightningWS.on('open', () => {
       _lightningConnected = true;
       console.log('[Lightning] Connected — streaming strikes');
-      // REQUIRED handshake: must send {"time":0} immediately or server
-      // never starts sending strike data (discovered from BlitzortungAPI source)
-      _lightningWS.send(JSON.stringify({ time: 0 }));
+      // Required handshake — server sends nothing until it receives this
+      _lightningWS.send(JSON.stringify({ a: 111 }));
     });
 
     _lightningWS.on('message', raw => {
       try {
-        const msg = JSON.parse(raw.toString());
+        const decoded = blitzortungDecode(raw);
+        if (!decoded) return;
+        const msg = JSON.parse(decoded);
         const now = Date.now();
 
-        // Each message is one strike: {time(ns), lat, lon, alt, pol, mds, mcg, sig, delay, region}
         if (msg.lat !== undefined && msg.lon !== undefined) {
           const lat = +msg.lat, lon = +msg.lon;
           if (!isNaN(lat) && !isNaN(lon)) {
             _lightningBuffer.push({ ts: now, lat, lon });
-
-            // Prune: keep last 10 minutes, cap at max strikes
             const cutoff = now - LIGHTNING_MAX_AGE_MS;
             if (_lightningBuffer.length > LIGHTNING_MAX_STRIKES ||
-                _lightningBuffer[0]?.ts < cutoff) {
+                (_lightningBuffer[0]?.ts ?? now) < cutoff) {
               _lightningBuffer = _lightningBuffer.filter(s => s.ts > cutoff);
               if (_lightningBuffer.length > LIGHTNING_MAX_STRIKES) {
                 _lightningBuffer = _lightningBuffer.slice(-LIGHTNING_MAX_STRIKES);
@@ -3820,13 +3841,13 @@ function startLightningRelay() {
             }
           }
         }
-      } catch(_) { /* ignore malformed messages */ }
+      } catch(e) { /* ignore malformed / non-strike messages */ }
     });
 
     _lightningWS.on('close', (code, reason) => {
       _lightningConnected = false;
       const delay = 5000 + Math.random() * 5000;
-      console.log(`[Lightning] Disconnected (code=${code} reason=${reason}) — reconnecting to ${url} in ${Math.round(delay / 1000)}s`);
+      console.log(`[Lightning] Disconnected (code=${code}) from ${url} — retrying in ${Math.round(delay / 1000)}s`);
       setTimeout(connect, delay);
     });
 
