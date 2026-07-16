@@ -97,12 +97,14 @@ function securityHeaders(req, res, next) {
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https: blob:",
     "connect-src 'self'" +
       // Internal WeatherTV APIs
       " https://api.anthropic.com" +
+      // cdnjs — source maps and fetch requests from cdnjs-hosted libraries (Leaflet, hls.js)
+      " https://cdnjs.cloudflare.com" +
       // Travel forecast city data (domestic + international travel displays)
       " https://api.open-meteo.com" +
       // NWS — forecasts, conditions, alerts, points, radar station lookup
