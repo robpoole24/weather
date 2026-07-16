@@ -96,13 +96,15 @@ function securityHeaders(req, res, next) {
   // Content Security Policy — allows our own assets + Railway CDN + Google Fonts
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com",
+    "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://www.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https: blob:",
     "connect-src 'self'" +
       // Internal WeatherTV APIs
       " https://api.anthropic.com" +
+      // Firebase SDK hosted on gstatic.com (dynamic import for push notifications)
+      " https://www.gstatic.com" +
       // cdnjs — source maps and fetch requests from cdnjs-hosted libraries (Leaflet, hls.js)
       " https://cdnjs.cloudflare.com" +
       // HMS Smoke + NIFC fire perimeters are server-proxied (/api/hms-smoke, /api/fire-perimeters)
