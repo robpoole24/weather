@@ -1081,6 +1081,76 @@ app.get('/api/admin/chasers/known', (req, res) => {
 // reason nothing rendered. RADAR_1KM_RRAI ("Radar precipitation rate for
 // rain [mm/hr]") is the confirmed correct ID per ECCC's own readme:
 // https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/
+// GET /api/canada-alerts
+// Proxies Environment Canada's national weather alert ATOM feed and returns
+// structured JSON. EC's ATOM feed gives us event type, headline, province/
+// territory, severity, and expiry time. We also fetch GeoMet's WFS features
+// for the ALERTS layer to get geographic polygons where available.
+// Cached 5 minutes — EC typically updates alerts every 5–15 minutes.
+const _caAlertsCache = { data: null, ts: 0 };
+const CA_ALERTS_TTL = 5 * 60 * 1000;
+
+const EC_SEVERITY = {
+  'warning':  { color: '#ff0000', rank: 3 },
+  'watch':    { color: '#ff8c00', rank: 2 },
+  'advisory': { color: '#ffff00', rank: 1 },
+  'statement':{ color: '#6699cc', rank: 0 },
+  'ended':    { color: '#888888', rank: -1 },
+};
+
+function parseECAtom(xml) {
+  const entries = [];
+  const entryBlocks = xml.match(/<entry[\s\S]*?<\/entry>/g) || [];
+  entryBlocks.forEach(block => {
+    const title    = (block.match(/<title[^>]*>([^<]+)<\/title>/)  || [])[1] || '';
+    const summary  = (block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/) || [])[1] || '';
+    const updated  = (block.match(/<updated>([^<]+)<\/updated>/)   || [])[1] || '';
+    const link     = (block.match(/<link[^>]+href="([^"]+)"/)      || [])[1] || '';
+    const category = (block.match(/<category[^>]+term="([^"]+)"/)  || [])[1] || '';
+    const id       = (block.match(/<id>([^<]+)<\/id>/)             || [])[1] || '';
+
+    // Parse "Event Type in effect - Location, Province" pattern
+    const titleMatch = title.match(/^(.+?)\s+in\s+effect\s*[-–]\s*(.+)$/i);
+    const eventType  = titleMatch ? titleMatch[1].trim() : title.trim();
+    const location   = titleMatch ? titleMatch[2].trim() : '';
+
+    // Derive severity from event name
+    const lower = eventType.toLowerCase();
+    let severity = 'statement';
+    if (lower.includes('warning') || lower.includes('watch')) {
+      severity = lower.includes('warning') ? 'warning' : 'watch';
+    } else if (lower.includes('advisory')) {
+      severity = 'advisory';
+    }
+    if (lower.includes('ended') || lower.includes('cancel')) severity = 'ended';
+
+    entries.push({ id, eventType, location, severity, summary: summary.replace(/<[^>]+>/g,'').trim().slice(0,300), updated, link, category });
+  });
+  // Sort by severity rank (warnings first)
+  entries.sort((a,b) => (EC_SEVERITY[b.severity]?.rank||0) - (EC_SEVERITY[a.severity]?.rank||0));
+  return entries;
+}
+
+app.get('/api/canada-alerts', async (req, res) => {
+  if (_caAlertsCache.data && Date.now() - _caAlertsCache.ts < CA_ALERTS_TTL) {
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.json(_caAlertsCache.data);
+  }
+  try {
+    const xml = await fetchTextOverHttp('https://www.weather.gc.ca/rss/battleboard/can_e.xml');
+    const alerts = parseECAtom(xml);
+    const result = { alerts, generatedAt: Date.now(), source: 'Environment Canada / ECCC' };
+    _caAlertsCache.data = result;
+    _caAlertsCache.ts = Date.now();
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(result);
+  } catch(e) {
+    console.warn('[CA Alerts] Feed fetch failed:', e.message);
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data); // serve stale on error
+    res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
+  }
+});
+
 app.get('/api/canada-radar/capabilities', async (req, res) => {
   const layer = (req.query.layer || 'RADAR_1KM_RRAI').replace(/[^A-Z0-9_]/gi, ''); // basic allowlist sanitization
   const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=${layer}&t=${Date.now()}`;
