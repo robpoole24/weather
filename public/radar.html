@@ -346,9 +346,6 @@
   .alert-scroll-fade {
     position:relative;
   }
-  /* AQI marker label */
-  .aqi-label { background:transparent!important; border:none!important; box-shadow:none!important;
-    font-size:0.62rem; font-weight:700; color:#000; padding:0!important; }
   /* Fire/Smoke/AQI legend section */
   .leg-section-head { font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
     letter-spacing:0.08em; text-transform:uppercase; margin:0.4rem 0 0.3rem;
@@ -812,11 +809,11 @@ const ALERT_STYLE = {
   'Dust Advisory':                      { color:'#d2b48c', fill:'#d2b48c', fillOpacity:0.15, weight:1   },
   'Special Marine Warning':             { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2,  weight:1   },
   'Special Weather Statement':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.1,  weight:1   },
-  'Air Quality Alert':                  { color:'#c97a1e', fill:'#c97a1e', fillOpacity:0.35, weight:1.5 },
-  'Dense Smoke Advisory':               { color:'#b05a00', fill:'#b05a00', fillOpacity:0.40, weight:2   },
-  'Smoke Advisory':                     { color:'#d49030', fill:'#d49030', fillOpacity:0.30, weight:1.5 },
-  'Air Stagnation Advisory':            { color:'#a0a000', fill:'#a0a000', fillOpacity:0.30, weight:1   },
-  'Hazardous Air Quality Warning':      { color:'#9b0000', fill:'#9b0000', fillOpacity:0.45, weight:2.5 },
+  'Air Quality Alert':                  { color:'#e8890a', fill:'#e8890a', fillOpacity:0.55, weight:2.5 },
+  'Dense Smoke Advisory':               { color:'#c05a00', fill:'#c05a00', fillOpacity:0.55, weight:2.5 },
+  'Smoke Advisory':                     { color:'#e09a30', fill:'#e09a30', fillOpacity:0.45, weight:2   },
+  'Air Stagnation Advisory':            { color:'#b8b800', fill:'#b8b800', fillOpacity:0.40, weight:1.5 },
+  'Hazardous Air Quality Warning':      { color:'#cc0000', fill:'#cc0000', fillOpacity:0.60, weight:3   },
   'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
 const DEFAULT_STYLE = { color:'#888888', fill:'#888888', fillOpacity:0.12, weight:1 };
@@ -1550,14 +1547,13 @@ async function loadAlerts() {
   const status = document.getElementById('alerts-status');
   status.textContent = 'Updating alerts...';
   try {
-    // Server-side proxy — one NWS request per minute regardless of user count.
-    // Proper User-Agent header, ETag conditional requests, stale-on-error fallback.
-    const res = await fetch('/api/nws-alerts');
-    if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
+    const res = await fetch(
+      'https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land',
+      { headers:{ 'Accept':'application/geo+json' } }
+    );
     lastAlertsData = await res.json();
     renderAlertLayers();
   } catch(e) {
-    console.warn('[Alerts] Load failed:', e.message);
     status.textContent = 'Alerts unavailable';
   }
 }
@@ -1654,7 +1650,7 @@ async function renderAlertLayers() {
     shownCount++;
 
     const s = ALERT_STYLE[event] || DEFAULT_STYLE;
-    const layer = L.geoJSON(feature.geometry, {
+    const layer = L.geoJSON(geom, {
       style:{ color:s.color, fillColor:s.fill, fillOpacity:s.fillOpacity, weight:s.weight, opacity:0.9 },
       onEachFeature: (feat, lyr) => {
         // Desktop hover highlight only — popups are handled by the combined
@@ -3361,17 +3357,30 @@ async function startAQI() {
   map.on('moveend.aqi', refreshAQI);
   updateFireAQLegend();
 }
+// Canvas renderer for AQI — a single <canvas> element instead of
+// hundreds of SVG elements. Eliminates the browser freeze on large datasets.
+const _aqiRenderer = L.canvas({ padding: 0.5 });
+
 async function refreshAQI() {
   if (!aqiLayer) return;
   const b = map.getBounds();
-  // Use bounding box so we load all stations visible in the current viewport
   const url = `/api/aqi?south=${b.getSouth().toFixed(4)}&west=${b.getWest().toFixed(4)}&north=${b.getNorth().toFixed(4)}&east=${b.getEast().toFixed(4)}`;
   try {
     const data = await (await fetch(url)).json();
     if (!aqiLayer) return;
     aqiLayer.clearLayers();
-    // Handle both /aq/observation/ (point) and /aq/data/ (bbox) response schemas
+
+    // Deduplicate: AirNow returns one row per pollutant per station (PM2.5 + Ozone
+    // appear as two separate rows at the same lat/lng). Keep highest AQI per location.
+    const byLocation = new Map();
     (Array.isArray(data)?data:[]).forEach(obs => {
+      if (!obs.Latitude||!obs.Longitude||obs.AQI==null) return;
+      const key = `${Number(obs.Latitude).toFixed(3)},${Number(obs.Longitude).toFixed(3)}`;
+      const existing = byLocation.get(key);
+      if (!existing || obs.AQI > existing.AQI) byLocation.set(key, obs);
+    });
+
+    byLocation.forEach(obs => {
       const lat   = obs.Latitude;
       const lng   = obs.Longitude;
       const aqi   = obs.AQI;
@@ -3379,19 +3388,28 @@ async function refreshAQI() {
       const area  = obs.ReportingArea || obs.SiteName || '';
       const st    = obs.StateCode || '';
       const cat   = obs.Category?.Name || '';
-      if (!lat||!lng||aqi==null) return;
       const color = aqiColor(aqi);
-      const mk = L.circleMarker([lat,lng],{radius:13,color:'rgba(255,255,255,0.7)',fillColor:color,fillOpacity:0.9,weight:1.5,interactive:true});
-      mk.bindTooltip(String(aqi),{permanent:true,direction:'center',className:'aqi-label'});
+
+      // DivIcon shows the AQI number without a separate tooltip DOM element.
+      // One element per marker vs two (circle + tooltip) = half the DOM size.
+      const textColor = aqi <= 100 ? '#000' : '#fff';
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="background:${color};border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:0.62rem;font-weight:700;color:${textColor};border:1.5px solid rgba(255,255,255,0.45);box-shadow:0 1px 3px rgba(0,0,0,0.5)">${aqi}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+      });
+      const mk = L.marker([lat, lng], { icon });
       mk.bindPopup(
         `<div class="alert-popup"><div class="ev" style="color:${color}">😷 AQI: ${aqi}</div>`+
-        `<div style="margin-top:4px;font-weight:600">${cat}</div>`+
+        `<div style="margin-top:4px;font-weight:600">${cat||aqiLabel(aqi)}</div>`+
         `<div style="margin-top:2px">${area}${st?', '+st:''}</div>`+
         `<div style="margin-top:2px;font-size:0.72rem;color:#7a9bb5">Primary pollutant: ${param}</div>`+
         `<div class="exp">AirNow / EPA · Updated hourly</div></div>`,{maxWidth:260});
       aqiLayer.addLayer(mk);
     });
-    console.log(`[AQI] Loaded ${(Array.isArray(data)?data:[]).length} observations`);
+
+    console.log(`[AQI] Rendered ${byLocation.size} stations (deduplicated from ${(Array.isArray(data)?data:[]).length} observations)`);
   } catch(e) { console.warn('[AQI]', e); }
 }
 function clearAQI() {
