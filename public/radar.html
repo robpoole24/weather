@@ -221,9 +221,12 @@
     flex: 1;
     overflow: hidden;
     position: relative;
+    height: 100%;
   }
   #warning-scroll-text {
-    display: inline-block;
+    /* Ticker: enters from right, scrolls left, exits left — pure CSS, GPU composited */
+    position: absolute;
+    top: 50%;
     white-space: nowrap;
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 0.88rem;
@@ -231,12 +234,14 @@
     letter-spacing: 0.06em;
     color: white;
     text-transform: uppercase;
-    animation: scrollText 30s linear infinite;
-    padding-left: 100%;
+    will-change: transform;
+    /* Start off the right edge of the viewport, slide fully left */
+    animation: weatherTicker 35s linear infinite;
+    transform: translateY(-50%);
   }
-  @keyframes scrollText {
-    0%   { transform: translateX(0); }
-    100% { transform: translateX(-200%); }
+  @keyframes weatherTicker {
+    from { transform: translateY(-50%) translateX(100vw); }
+    to   { transform: translateY(-50%) translateX(-100%); }
   }
   #warning-close {
     flex-shrink: 0;
@@ -1821,29 +1826,43 @@ function showBanner(alerts) {
   // Set banner color
   banner.style.setProperty('--banner-color', s.color);
 
-  // Set icon based on event type
-  if (top.event.includes('Tornado')) icon.textContent = '🌪️';
-  else if (top.event.includes('Thunder')) icon.textContent = '⛈️';
-  else if (top.event.includes('Flood')) icon.textContent = '🌊';
-  else if (top.event.includes('Wind')) icon.textContent = '💨';
-  else if (top.event.includes('Winter') || top.event.includes('Blizzard') || top.event.includes('Ice')) icon.textContent = '❄️';
-  else if (top.event.includes('Heat')) icon.textContent = '🌡️';
-  else if (top.event.includes('Fire')) icon.textContent = '🔥';
-  else icon.textContent = '⚠️';
+  // Icon — pick most specific match for the highest-priority alert
+  const ev = top.event;
+  if (ev.includes('Tornado'))                                icon.textContent = '🌪️';
+  else if (ev.includes('Thunder'))                           icon.textContent = '⛈️';
+  else if (ev.includes('Flood'))                             icon.textContent = '🌊';
+  else if (ev.includes('Wind'))                              icon.textContent = '💨';
+  else if (ev.includes('Winter')||ev.includes('Blizzard')||ev.includes('Ice')) icon.textContent = '❄️';
+  else if (ev.includes('Heat'))                              icon.textContent = '🌡️';
+  else if (ev.includes('Fire Weather'))                      icon.textContent = '🔥';
+  else if (ev.includes('Air Quality')||ev.includes('Smoke')||ev.includes('Stagnation')) icon.textContent = '😷';
+  else if (ev.includes('Dust'))                              icon.textContent = '🌫️';
+  else if (ev.includes('Fog'))                               icon.textContent = '🌁';
+  else                                                       icon.textContent = '⚠️';
 
-  // Build scroll text — all active alerts separated by bullets
+  // Build ticker text — all active alerts for user's area, separated by bullets
+  // Each item: EVENT TYPE · First affected county/zone — NWS headline
   const parts = alerts.map(a => {
-    // Pull NWS short description — use headline, fall back to event name
     const headline = a.headline || a.event;
     const area = a.areaDesc ? ` · ${a.areaDesc.split(';')[0].trim()}` : '';
     return `${a.event.toUpperCase()}${area} — ${headline}`;
   });
-  // Duplicate text so scroll feels continuous
-  const fullText = parts.join('   ●   ') + '   ●   ' + parts.join('   ●   ');
+  // Duplicate text so the loop is seamless — when the first copy exits left,
+  // the second copy is already scrolling in from the right
+  const fullText = parts.join('   ●   ') + '   ●   ●   ●   ' + parts.join('   ●   ');
   scrollText.textContent = fullText;
 
-  // Adjust scroll speed based on text length
-  const duration = Math.max(20, parts.join('').length * 0.12);
+  // Speed: scale with text length so short alerts don't crawl, long ones don't rush
+  // ~120 chars/s feels like a comfortable news ticker pace
+  const charCount = fullText.length;
+  const duration = Math.max(18, Math.round(charCount / 10));
+  
+  // Force animation restart so new text starts from the right immediately
+  // (without this, if the banner was already showing, the new text inherits
+  // the old animation's current position mid-scroll)
+  scrollText.style.animation = 'none';
+  scrollText.offsetWidth; // force browser reflow — flushes the style change
+  scrollText.style.animation = '';
   scrollText.style.animationDuration = duration + 's';
 
   banner.style.display = 'block';
