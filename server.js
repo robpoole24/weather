@@ -1082,13 +1082,13 @@ app.get('/api/admin/chasers/known', (req, res) => {
 // rain [mm/hr]") is the confirmed correct ID per ECCC's own readme:
 // https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/
 // GET /api/canada-alerts
-// Proxies Environment Canada's national weather alert ATOM feed and returns
-// structured JSON. EC's ATOM feed gives us event type, headline, province/
-// territory, severity, and expiry time. We also fetch GeoMet's WFS features
-// for the ALERTS layer to get geographic polygons where available.
-// Cached 5 minutes — EC typically updates alerts every 5–15 minutes.
-const _caAlertsCache = { data: null, ts: 0 };
-const CA_ALERTS_TTL = 5 * 60 * 1000;
+// Proxies Environment Canada's national weather alert ATOM feed.
+// Mirrors the NWS alerts proxy pattern: 60-second TTL, ETag conditional
+// requests, X-Cache headers, stale-on-error fallback, multiple URL fallbacks.
+// EC updates warnings within 1–2 minutes during active severe events, so we
+// match the same 60-second cadence we give US users via /api/nws-alerts.
+const _caAlertsCache = { data: null, ts: 0, etag: null };
+const CA_ALERTS_TTL = 60 * 1000; // 60 seconds — matches NWS urgency
 
 const EC_SEVERITY = {
   'warning':  { color: '#ff0000', rank: 3 },
@@ -1132,42 +1132,103 @@ function parseECAtom(xml) {
 }
 
 app.get('/api/canada-alerts', async (req, res) => {
-  if (_caAlertsCache.data && Date.now() - _caAlertsCache.ts < CA_ALERTS_TTL) {
-    res.set('Cache-Control', 'public, max-age=300');
+  const now = Date.now();
+
+  // Serve from cache if fresh
+  if (_caAlertsCache.data && now - _caAlertsCache.ts < CA_ALERTS_TTL) {
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.set('X-Cache', 'HIT');
+    res.set('X-Cache-Age', Math.round((now - _caAlertsCache.ts) / 1000) + 's');
     return res.json(_caAlertsCache.data);
   }
-  // EC has several URL patterns for their alert feeds — try each until one works
+
+  // EC ATOM feed URLs — try each in order until one returns valid entries
   const EC_ALERT_URLS = [
     'https://weather.gc.ca/rss/battleboard/can_e.xml',
     'https://www.weather.gc.ca/rss/battleboard/can_e.xml',
     'https://weather.gc.ca/en/warnings/rss/can_e.xml',
   ];
+
   let xml = null;
+  let newEtag = null;
+
   for (const feedUrl of EC_ALERT_URLS) {
     try {
-      const text = await fetchTextOverHttp(feedUrl);
-      if (text.includes('<entry') || text.includes('<item')) { xml = text; break; }
-      console.log(`[CA Alerts] ${feedUrl} returned no entries`);
+      // Use a lower-level request so we can read the ETag response header
+      const result = await new Promise((resolve, reject) => {
+        const opts = new URL(feedUrl);
+        const reqHeaders = {
+          'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com; contact@altruisticapps.com)',
+          'Accept': 'application/atom+xml, application/xml, text/xml',
+        };
+        // ETag conditional request — if EC returns 304, our cache is still valid
+        if (_caAlertsCache.etag) reqHeaders['If-None-Match'] = _caAlertsCache.etag;
+
+        require('https').get({
+          hostname: opts.hostname,
+          path: opts.pathname + opts.search,
+          headers: reqHeaders,
+        }, r => {
+          if (r.statusCode === 304) return resolve({ status: 304, body: null, etag: null });
+          if (r.statusCode !== 200) return resolve({ status: r.statusCode, body: null, etag: null });
+          const etag = r.headers.etag || null;
+          let body = '';
+          r.on('data', c => body += c);
+          r.on('end', () => resolve({ status: 200, body, etag }));
+        }).on('error', reject);
+      });
+
+      if (result.status === 304) {
+        // EC confirmed our cache is still current — just bump the timestamp
+        _caAlertsCache.ts = now;
+        res.set('Content-Type', 'application/json');
+        res.set('Cache-Control', 'public, max-age=60');
+        res.set('X-Cache', 'HIT-304');
+        return res.json(_caAlertsCache.data);
+      }
+
+      if (result.status === 200 && result.body &&
+          (result.body.includes('<entry') || result.body.includes('<item'))) {
+        xml = result.body;
+        newEtag = result.etag;
+        break;
+      }
+      console.log(`[CA Alerts] ${feedUrl} → ${result.status}, no entries`);
     } catch(e) {
       console.warn(`[CA Alerts] ${feedUrl} failed:`, e.message);
     }
   }
+
   if (!xml) {
-    console.warn('[CA Alerts] All EC feed URLs failed');
-    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
+    console.warn('[CA Alerts] All EC feed URLs failed or returned no entries');
+    if (_caAlertsCache.data) {
+      // Stale-on-error — keep showing last known alerts rather than going dark
+      res.set('Content-Type', 'application/json');
+      res.set('Cache-Control', 'public, max-age=30');
+      res.set('X-Cache', 'STALE');
+      return res.json(_caAlertsCache.data);
+    }
     return res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
   }
+
   try {
     const alerts = parseECAtom(xml);
-    console.log(`[CA Alerts] Parsed ${alerts.length} alerts from EC feed`);
-    const result = { alerts, generatedAt: Date.now(), source: 'Environment Canada / ECCC' };
+    console.log(`[CA Alerts] Fetched ${alerts.length} alerts from EC feed`);
+    const result = { alerts, generatedAt: now, source: 'Environment Canada / ECCC' };
     _caAlertsCache.data = result;
-    _caAlertsCache.ts = Date.now();
-    res.set('Cache-Control', 'public, max-age=300');
+    _caAlertsCache.ts = now;
+    if (newEtag) _caAlertsCache.etag = newEtag;
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.set('X-Cache', 'MISS');
     res.json(result);
   } catch(e) {
     console.warn('[CA Alerts] Parse failed:', e.message);
-    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
+    if (_caAlertsCache.data) {
+      res.set('X-Cache', 'STALE');
+      return res.json(_caAlertsCache.data);
+    }
     res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
   }
 });
@@ -1721,89 +1782,6 @@ app.get('/api/aqi', async (req, res) => {
   } catch(e) {
     console.error('[AQI] Proxy error:', e.message);
     res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
-  }
-});
-
-// GET /api/nws-alerts
-// Server-side proxy for the NWS active alerts feed.
-// Caching here means NWS sees one request per minute from Railway regardless
-// of how many concurrent users are on the radar page — protects NWS during
-// outbreak events and keeps latency low for users (Railway → NWS is fast).
-// Stale data is served on NWS errors so the map stays populated even if NWS
-// has a hiccup, which is common during major outbreaks when they're busiest.
-// TTL 60s — NWS updates alerts approximately every minute during active events.
-const _nwsAlertsCache = { data: null, ts: 0, etag: null };
-const NWS_ALERTS_TTL = 60 * 1000; // 60 seconds
-const NWS_ALERTS_URL = 'https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land';
-const NWS_UA = 'WeatherTV/1.0 (+https://watchweathertv.com; contact@altruisticapps.com)';
-
-app.get('/api/nws-alerts', async (req, res) => {
-  const now = Date.now();
-
-  // Serve cache if fresh
-  if (_nwsAlertsCache.data && now - _nwsAlertsCache.ts < NWS_ALERTS_TTL) {
-    res.set('Content-Type', 'application/geo+json');
-    res.set('Cache-Control', 'public, max-age=60');
-    res.set('X-Cache', 'HIT');
-    res.set('X-Cache-Age', Math.round((now - _nwsAlertsCache.ts) / 1000) + 's');
-    return res.send(_nwsAlertsCache.data);
-  }
-
-  try {
-    const headers = {
-      'Accept': 'application/geo+json',
-      'User-Agent': NWS_UA,
-    };
-    // Use ETag for conditional requests — NWS supports If-None-Match so we
-    // save bandwidth on unchanged responses (NWS returns 304 with no body).
-    if (_nwsAlertsCache.etag) headers['If-None-Match'] = _nwsAlertsCache.etag;
-
-    const text = await new Promise((resolve, reject) => {
-      const opts = new URL(NWS_ALERTS_URL);
-      const reqOptions = {
-        hostname: opts.hostname,
-        path: opts.pathname + opts.search,
-        headers,
-      };
-      require('https').get(reqOptions, res => {
-        // 304 Not Modified — cache is still valid, update timestamp only
-        if (res.statusCode === 304) {
-          _nwsAlertsCache.ts = Date.now();
-          return resolve(null);
-        }
-        if (res.statusCode !== 200) return reject(new Error(`NWS returned ${res.statusCode}`));
-        // Capture ETag for next conditional request
-        if (res.headers.etag) _nwsAlertsCache.etag = res.headers.etag;
-        let data = '';
-        res.on('data', c => data += c);
-        res.on('end', () => resolve(data));
-      }).on('error', reject);
-    });
-
-    if (text !== null) {
-      // Validate it's actually GeoJSON before caching
-      const parsed = JSON.parse(text);
-      if (!parsed.features) throw new Error('Unexpected NWS response shape');
-      _nwsAlertsCache.data = text;
-      _nwsAlertsCache.ts = Date.now();
-      console.log(`[NWS Alerts] Fetched ${parsed.features.length} active alerts`);
-    }
-
-    res.set('Content-Type', 'application/geo+json');
-    res.set('Cache-Control', 'public, max-age=60');
-    res.set('X-Cache', text === null ? 'HIT-304' : 'MISS');
-    res.send(_nwsAlertsCache.data);
-
-  } catch(e) {
-    console.warn('[NWS Alerts] Fetch failed:', e.message);
-    if (_nwsAlertsCache.data) {
-      // Serve stale — better than an empty map during NWS downtime
-      res.set('Content-Type', 'application/geo+json');
-      res.set('Cache-Control', 'public, max-age=30');
-      res.set('X-Cache', 'STALE');
-      return res.send(_nwsAlertsCache.data);
-    }
-    res.status(502).json({ error: 'NWS alerts unavailable', features: [] });
   }
 });
 
