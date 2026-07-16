@@ -1582,6 +1582,48 @@ app.get('/api/cameras/state/:code', async (req, res) => {
   }
 });
 
+// GET /api/aqi?lat=&lng=
+// Server-side proxy for AirNow API — keeps AIRNOW_KEY out of client JS.
+// Returns current AQI observations within 250 miles of the given lat/lng.
+// Cached 30 minutes (AirNow data updates hourly; 30min balances freshness
+// vs quota). Set AIRNOW_KEY in Railway environment variables.
+const _aqiCache = new Map();
+const AQI_TTL = 30 * 60 * 1000;
+
+app.get('/api/aqi', async (req, res) => {
+  const key = process.env.AIRNOW_KEY;
+  if (!key) return res.status(503).json({ error: 'AirNow API key not configured' });
+
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'lat and lng required' });
+
+  const cacheKey = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  const cached = _aqiCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < AQI_TTL) {
+    res.set('Cache-Control', 'public, max-age=1800');
+    return res.json(cached.data);
+  }
+
+  try {
+    const url = `https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json` +
+                `&latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&distance=250&API_KEY=${key}`;
+    const response = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } });
+    if (!response.ok) throw new Error(`AirNow returned ${response.status}`);
+    const data = await response.json();
+    _aqiCache.set(cacheKey, { data, ts: Date.now() });
+    if (_aqiCache.size > 50) {
+      const oldest = [..._aqiCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) _aqiCache.delete(oldest[0]);
+    }
+    res.set('Cache-Control', 'public, max-age=1800');
+    res.json(data);
+  } catch(e) {
+    console.error('[AQI] Proxy error:', e.message);
+    res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
+  }
+});
+
 // GET /api/camera-image?url=...
 // CORS proxy for camera image URLs — almost all DOT servers block direct
 // browser requests with missing CORS headers. We fetch server-side and

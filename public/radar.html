@@ -346,6 +346,13 @@
   .alert-scroll-fade {
     position:relative;
   }
+  /* AQI marker label */
+  .aqi-label { background:transparent!important; border:none!important; box-shadow:none!important;
+    font-size:0.62rem; font-weight:700; color:#000; padding:0!important; }
+  /* Fire/Smoke/AQI legend section */
+  .leg-section-head { font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
+    letter-spacing:0.08em; text-transform:uppercase; margin:0.4rem 0 0.3rem;
+    padding-top:0.35rem; border-top:1px solid var(--border); }
   .alert-scroll-fade::after {
     content:''; position:absolute; bottom:0; left:0; right:0; height:24px;
     background:linear-gradient(transparent, #1a2535);
@@ -673,6 +680,11 @@
     </div>
   </div>
 
+  <div class="lp-section">
+    <div class="lp-section-label">Fire &amp; Air Quality</div>
+    <div id="lp-fire"></div>
+  </div>
+
   <div class="lp-section" style="border-bottom:none;">
     <div class="lp-section-label">Models (forecast mode)</div>
     <label class="lp-select-label">Forecast model</label>
@@ -724,6 +736,29 @@
   <div class="leg-row"><div class="leg-sw" style="background:#c71585"></div>Excessive Heat Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff1493"></div>Red Flag Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#888888"></div>Advisory / Statement</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#8B4513"></div>Air Quality Alert</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#A0522D"></div>Dense Smoke Advisory</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#CD853F"></div>Smoke Advisory</div>
+  <div id="fire-aq-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
+    <div class="leg-section-head" style="color:#ff6a00;margin-top:0">Fire &amp; Air Quality</div>
+    <div id="fire-legend-rows" style="display:none">
+      <div class="leg-row"><div class="leg-sw" style="background:#ff4500"></div>Active Fire Perimeter</div>
+    </div>
+    <div id="smoke-legend-rows" style="display:none">
+      <div class="leg-row"><div class="leg-sw" style="background:#d4a857"></div>Light Smoke</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#c8773a"></div>Medium Smoke</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#8b3a3a"></div>Heavy Smoke</div>
+    </div>
+    <div id="aqi-legend-rows" style="display:none">
+      <div class="leg-section-head" style="color:#a3e635">Air Quality Index</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#00e400"></div>Good (0–50)</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Moderate (51–100)</span></div>
+      <div class="leg-row"><div class="leg-sw" style="background:#ff7e00"></div>USG (101–150)</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Unhealthy (151–200)</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#8f3f97"></div>Very Unhealthy (201–300)</div>
+      <div class="leg-row"><div class="leg-sw" style="background:#7e0023"></div>Hazardous (301+)</div>
+    </div>
+  </div>
   <div id="spc-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--gold);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">SPC Outlook</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>High Risk</div>
@@ -770,6 +805,11 @@ const ALERT_STYLE = {
   'Dust Advisory':                      { color:'#d2b48c', fill:'#d2b48c', fillOpacity:0.15, weight:1   },
   'Special Marine Warning':             { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2,  weight:1   },
   'Special Weather Statement':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.1,  weight:1   },
+  'Air Quality Alert':                  { color:'#8B4513', fill:'#8B4513', fillOpacity:0.2,  weight:1   },
+  'Dense Smoke Advisory':               { color:'#A0522D', fill:'#A0522D', fillOpacity:0.25, weight:1.5 },
+  'Smoke Advisory':                     { color:'#CD853F', fill:'#CD853F', fillOpacity:0.15, weight:1   },
+  'Air Stagnation Advisory':            { color:'#808000', fill:'#808000', fillOpacity:0.15, weight:1   },
+  'Hazardous Air Quality Warning':      { color:'#7e0023', fill:'#7e0023', fillOpacity:0.3,  weight:2   },
   'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
 const DEFAULT_STYLE = { color:'#888888', fill:'#888888', fillOpacity:0.12, weight:1 };
@@ -3058,6 +3098,155 @@ async function startLSR(){
 }
 function stopLSR(){ if (lsrLayer){ lsrLayer.clearLayers(); map.removeLayer(lsrLayer); lsrLayer=null; } }
 
+// ── NOAA HMS Smoke Plumes ─────────────────────────────────────────────────────
+// Hazard Mapping System smoke polygon GeoJSON, published daily by NOAA/NESDIS.
+// Densities: Light / Medium / Heavy. Falls back to yesterday if today not yet posted.
+let hmsSmokeLayer = null;
+async function startHMSSmoke() {
+  if (!hmsSmokeLayer) hmsSmokeLayer = L.layerGroup().addTo(map);
+  const smokeColors = { Light:'#d4a857', Medium:'#c8773a', Heavy:'#8b3a3a' };
+  const fillOp = { Light:0.22, Medium:0.38, Heavy:0.55 };
+  const tryDate = async (d) => {
+    const pad = n => String(n).padStart(2,'0');
+    const tag = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
+    const url = `https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/GeoJSON/hms_smoke${tag}.json`;
+    const res = await fetch(url); if (!res.ok) throw new Error(res.status);
+    return res.json();
+  };
+  let data;
+  try { data = await tryDate(new Date()); }
+  catch(_) {
+    try {
+      const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+      data = await tryDate(yesterday);
+    } catch(e) { console.warn('[HMS Smoke] No data available:', e); return; }
+  }
+  if (!hmsSmokeLayer) return; // cleared while loading
+  hmsSmokeLayer.clearLayers();
+  L.geoJSON(data, {
+    style: f => {
+      const d = f.properties?.Density || 'Light';
+      const c = smokeColors[d] || '#d4a857';
+      return { color:c, fillColor:c, fillOpacity:fillOp[d]||0.22, weight:1, interactive:true };
+    },
+    onEachFeature: (f, layer) => {
+      const d = f.properties?.Density || 'Unknown';
+      const c = smokeColors[d] || '#d4a857';
+      layer.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${c}">💨 Smoke Plume</div><div style="margin-top:4px">Density: <strong>${d}</strong></div><div class="exp">NOAA HMS Smoke · Updated daily</div></div>`,{maxWidth:220});
+    }
+  }).addTo(hmsSmokeLayer);
+  updateFireAQLegend();
+}
+function clearHMSSmoke() {
+  if (hmsSmokeLayer) { hmsSmokeLayer.clearLayers(); map.removeLayer(hmsSmokeLayer); hmsSmokeLayer=null; }
+  updateFireAQLegend();
+}
+
+// ── NIFC Active Fire Perimeters ───────────────────────────────────────────────
+// National Interagency Fire Center via ArcGIS REST — active fire boundaries.
+let firePerimLayer = null;
+async function startFirePerimeters() {
+  if (!firePerimLayer) firePerimLayer = L.layerGroup().addTo(map);
+  const url = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Active_Fires/FeatureServer/0/query'
+    + '?where=1%3D1&outFields=IncidentName,GISAcres,PercentContained,FireCause,POOState&geometryType=esriGeometryEnvelope&f=geojson';
+  try {
+    const data = await (await fetch(url)).json();
+    if (!firePerimLayer) return;
+    firePerimLayer.clearLayers();
+    const count = (data.features||[]).length;
+    if (!count) { console.log('[Fire] No active fire perimeters found'); return; }
+    L.geoJSON(data, {
+      style: { color:'#ff4500', fillColor:'#ff2200', fillOpacity:0.3, weight:2, dashArray:'4,3' },
+      onEachFeature: (f, layer) => {
+        const p = f.properties || {};
+        const acres = p.GISAcres ? Math.round(p.GISAcres).toLocaleString() : '—';
+        const pct   = p.PercentContained != null ? p.PercentContained + '%' : '—';
+        const state = p.POOState || '';
+        layer.bindPopup(
+          `<div class="alert-popup"><div class="ev" style="color:#ff4500">🔥 ${p.IncidentName||'Active Fire'}</div>`+
+          `<div style="margin-top:4px">Size: <strong>${acres} acres</strong></div>`+
+          `<div style="margin-top:2px">Contained: <strong>${pct}</strong></div>`+
+          (state ? `<div style="margin-top:2px">State: ${state}</div>` : '')+
+          `<div style="margin-top:2px;font-size:0.72rem;color:#7a9bb5">Cause: ${p.FireCause||'Unknown'}</div>`+
+          `<div class="exp">NIFC · IRWIN · Updated continuously</div></div>`,{maxWidth:260});
+      }
+    }).addTo(firePerimLayer);
+    console.log(`[Fire] Loaded ${count} active fire perimeters`);
+  } catch(e) { console.warn('[Fire Perimeters]', e); }
+  updateFireAQLegend();
+}
+function clearFirePerimeters() {
+  if (firePerimLayer) { firePerimLayer.clearLayers(); map.removeLayer(firePerimLayer); firePerimLayer=null; }
+  updateFireAQLegend();
+}
+
+// ── AirNow AQI Monitoring Stations ───────────────────────────────────────────
+// Plots AQI readings from EPA/AirNow monitoring stations as colored circle
+// markers. Color follows the standard AQI scale. Refreshes hourly.
+// Requires AIRNOW_KEY — set the constant near the top of this file.
+const AQI_SCALE = [
+  { max:50,  color:'#00e400', label:'Good'                        },
+  { max:100, color:'#ffff00', label:'Moderate'                    },
+  { max:150, color:'#ff7e00', label:'Unhealthy for Sensitive Groups'},
+  { max:200, color:'#ff0000', label:'Unhealthy'                   },
+  { max:300, color:'#8f3f97', label:'Very Unhealthy'              },
+  { max:500, color:'#7e0023', label:'Hazardous'                   },
+];
+function aqiColor(v) { for (const s of AQI_SCALE) if (v <= s.max) return s.color; return '#7e0023'; }
+function aqiLabel(v) { for (const s of AQI_SCALE) if (v <= s.max) return s.label; return 'Hazardous'; }
+
+let aqiLayer=null, aqiRefreshTimer=null;
+
+async function startAQI() {
+  if (!aqiLayer) aqiLayer = L.layerGroup().addTo(map);
+  await refreshAQI();
+  if (aqiRefreshTimer) clearInterval(aqiRefreshTimer);
+  aqiRefreshTimer = setInterval(refreshAQI, 60*60*1000);
+  // Also refresh when the map is panned to a new area
+  map.on('moveend.aqi', refreshAQI);
+  updateFireAQLegend();
+}
+async function refreshAQI() {
+  if (!aqiLayer) return;
+  const c = map.getCenter();
+  const url = `/api/aqi?lat=${c.lat.toFixed(4)}&lng=${c.lng.toFixed(4)}`;
+  try {
+    const data = await (await fetch(url)).json();
+    if (!aqiLayer) return;
+    aqiLayer.clearLayers();
+    (Array.isArray(data)?data:[]).forEach(obs => {
+      const {Latitude:lat,Longitude:lng,AQI:aqi,ParameterName:param,CategoryName:cat,ReportingArea:area,StateCode:st} = obs;
+      if (!lat||!lng||aqi==null) return;
+      const color = aqiColor(aqi);
+      const mk = L.circleMarker([lat,lng],{radius:13,color:'rgba(255,255,255,0.7)',fillColor:color,fillOpacity:0.9,weight:1.5,interactive:true});
+      mk.bindTooltip(String(aqi),{permanent:true,direction:'center',className:'aqi-label'});
+      mk.bindPopup(
+        `<div class="alert-popup"><div class="ev" style="color:${color}">😷 AQI: ${aqi}</div>`+
+        `<div style="margin-top:4px;font-weight:600">${cat}</div>`+
+        `<div style="margin-top:2px">${area}${st?', '+st:''}</div>`+
+        `<div style="margin-top:2px;font-size:0.72rem;color:#7a9bb5">Primary pollutant: ${param}</div>`+
+        `<div class="exp">AirNow / EPA · Updated hourly</div></div>`,{maxWidth:260});
+      aqiLayer.addLayer(mk);
+    });
+    console.log(`[AQI] Loaded ${(Array.isArray(data)?data:[]).length} observations`);
+  } catch(e) { console.warn('[AQI]', e); }
+}
+function clearAQI() {
+  if (aqiRefreshTimer) { clearInterval(aqiRefreshTimer); aqiRefreshTimer=null; }
+  map.off('moveend.aqi');
+  if (aqiLayer) { aqiLayer.clearLayers(); map.removeLayer(aqiLayer); aqiLayer=null; }
+  updateFireAQLegend();
+}
+
+// Update the fire/AQ legend section visibility based on active layers
+function updateFireAQLegend() {
+  const anyActive = overlayState['hms-smoke'] || overlayState['fire-perimeters'] || overlayState['aqi'];
+  const el = document.getElementById('fire-aq-legend'); if (el) el.style.display = anyActive ? '' : 'none';
+  const fr = document.getElementById('fire-legend-rows'); if (fr) fr.style.display = overlayState['fire-perimeters'] ? '' : 'none';
+  const sr = document.getElementById('smoke-legend-rows'); if (sr) sr.style.display = overlayState['hms-smoke'] ? '' : 'none';
+  const ar = document.getElementById('aqi-legend-rows'); if (ar) ar.style.display = overlayState['aqi'] ? '' : 'none';
+}
+
 // ── Live Storm Chasers (Spotter Network) ─────────────────────────────────────
 // Pulls our server's cached/parsed Spotter Network feed (see /api/chasers in
 // server.js) and plots every chaser as a dot. Every dot gets a name tag on
@@ -3282,10 +3471,15 @@ const CHASER_ITEMS=[
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
   {id:'chasers',ico:'🚗',name:'Live Storm Chasers',sub:'Spotter Network · live',def:false},
 ];
+const FIRE_ITEMS=[
+  {id:'hms-smoke',        ico:'💨',name:'Smoke Plumes',         sub:'NOAA HMS · light / medium / heavy density',   def:false},
+  {id:'fire-perimeters',  ico:'🔥',name:'Active Fire Perimeters',sub:'NIFC · IRWIN active fire boundaries',         def:false},
+  {id:'aqi',              ico:'😷',name:'Air Quality Index',     sub:'AirNow monitoring stations · requires key',   def:false},
+];
 const CAM_ITEMS=[
   {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS);
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -3316,6 +3510,9 @@ function applyOverlay(id,on){
     case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
     case 'cc':        if (on) showCC(); else clearCC(); break;
     case 'cameras':   if (on) startCameras(); else stopCameras(); break;
+    case 'hms-smoke':       if (on) startHMSSmoke(); else clearHMSSmoke(); break;
+    case 'fire-perimeters': if (on) startFirePerimeters(); else clearFirePerimeters(); break;
+    case 'aqi':             if (on) startAQI(); else clearAQI(); break;
     case 'banner':
       if (!on){ bannerDismissed=true; hideBanner(); }
       else { bannerDismissed=false; if (activeBannerAlerts.length) showBanner(activeBannerAlerts); }
@@ -3347,6 +3544,7 @@ function renderPanel(){
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-fire').innerHTML=FIRE_ITEMS.map(toggleRowHTML).join('');
   // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
   // OR CC is toggled on — these are independent now, so both are checked.
   const needsSite=(activePaint in SS_PRODUCTS)||overlayState['cc'];
