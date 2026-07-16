@@ -1081,14 +1081,52 @@ app.get('/api/admin/chasers/known', (req, res) => {
 // reason nothing rendered. RADAR_1KM_RRAI ("Radar precipitation rate for
 // rain [mm/hr]") is the confirmed correct ID per ECCC's own readme:
 // https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/
+// GET /api/firebase-config
+// Serves the PUBLIC Firebase web app config to the client.
+// These values identify the Firebase project but are NOT secret — they are
+// safe to expose to browsers (this is how Firebase is designed to work).
+// Store these in Railway env vars rather than hardcoding in index.html so
+// the source code doesn't need to change if the Firebase project changes.
+//
+// Required Railway env vars:
+//   FIREBASE_WEB_API_KEY         — Firebase Console → Project Settings → Web app → apiKey
+//   FIREBASE_MESSAGING_SENDER_ID — Firebase Console → Project Settings → Web app → messagingSenderId
+//   FIREBASE_APP_ID              — Firebase Console → Project Settings → Web app → appId
+//   FIREBASE_VAPID_KEY           — Firebase Console → Cloud Messaging → Web Push certificates → Key pair
+app.get('/api/firebase-config', (req, res) => {
+  const apiKey      = process.env.FIREBASE_WEB_API_KEY;
+  const senderId    = process.env.FIREBASE_MESSAGING_SENDER_ID;
+  const appId       = process.env.FIREBASE_APP_ID;
+  const vapidKey    = process.env.FIREBASE_VAPID_KEY;
+
+  // If none of the vars are set, return a signal the client can detect
+  if (!apiKey && !senderId && !appId && !vapidKey) {
+    return res.json({ configured: false });
+  }
+
+  res.set('Cache-Control', 'public, max-age=3600'); // config rarely changes
+  res.json({
+    configured: true,
+    config: {
+      apiKey:            apiKey            || '',
+      authDomain:        'weather-tv-radar.firebaseapp.com',
+      projectId:         'weather-tv-radar',
+      storageBucket:     'weather-tv-radar.firebasestorage.app',
+      messagingSenderId: senderId          || '',
+      appId:             appId             || '',
+    },
+    vapidKey: vapidKey || '',
+  });
+});
+
 // GET /api/canada-alerts
-// Proxies Environment Canada's national weather alert ATOM feed.
-// Mirrors the NWS alerts proxy pattern: 60-second TTL, ETag conditional
-// requests, X-Cache headers, stale-on-error fallback, multiple URL fallbacks.
-// EC updates warnings within 1–2 minutes during active severe events, so we
-// match the same 60-second cadence we give US users via /api/nws-alerts.
-const _caAlertsCache = { data: null, ts: 0, etag: null };
-const CA_ALERTS_TTL = 60 * 1000; // 60 seconds — matches NWS urgency
+// Proxies Environment Canada's national weather alert ATOM feed and returns
+// structured JSON. EC's ATOM feed gives us event type, headline, province/
+// territory, severity, and expiry time. We also fetch GeoMet's WFS features
+// for the ALERTS layer to get geographic polygons where available.
+// Cached 5 minutes — EC typically updates alerts every 5–15 minutes.
+const _caAlertsCache = { data: null, ts: 0 };
+const CA_ALERTS_TTL = 5 * 60 * 1000;
 
 const EC_SEVERITY = {
   'warning':  { color: '#ff0000', rank: 3 },
@@ -1132,103 +1170,42 @@ function parseECAtom(xml) {
 }
 
 app.get('/api/canada-alerts', async (req, res) => {
-  const now = Date.now();
-
-  // Serve from cache if fresh
-  if (_caAlertsCache.data && now - _caAlertsCache.ts < CA_ALERTS_TTL) {
-    res.set('Content-Type', 'application/json');
-    res.set('Cache-Control', 'public, max-age=60');
-    res.set('X-Cache', 'HIT');
-    res.set('X-Cache-Age', Math.round((now - _caAlertsCache.ts) / 1000) + 's');
+  if (_caAlertsCache.data && Date.now() - _caAlertsCache.ts < CA_ALERTS_TTL) {
+    res.set('Cache-Control', 'public, max-age=300');
     return res.json(_caAlertsCache.data);
   }
-
-  // EC ATOM feed URLs — try each in order until one returns valid entries
+  // EC has several URL patterns for their alert feeds — try each until one works
   const EC_ALERT_URLS = [
     'https://weather.gc.ca/rss/battleboard/can_e.xml',
     'https://www.weather.gc.ca/rss/battleboard/can_e.xml',
     'https://weather.gc.ca/en/warnings/rss/can_e.xml',
   ];
-
   let xml = null;
-  let newEtag = null;
-
   for (const feedUrl of EC_ALERT_URLS) {
     try {
-      // Use a lower-level request so we can read the ETag response header
-      const result = await new Promise((resolve, reject) => {
-        const opts = new URL(feedUrl);
-        const reqHeaders = {
-          'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com; contact@altruisticapps.com)',
-          'Accept': 'application/atom+xml, application/xml, text/xml',
-        };
-        // ETag conditional request — if EC returns 304, our cache is still valid
-        if (_caAlertsCache.etag) reqHeaders['If-None-Match'] = _caAlertsCache.etag;
-
-        require('https').get({
-          hostname: opts.hostname,
-          path: opts.pathname + opts.search,
-          headers: reqHeaders,
-        }, r => {
-          if (r.statusCode === 304) return resolve({ status: 304, body: null, etag: null });
-          if (r.statusCode !== 200) return resolve({ status: r.statusCode, body: null, etag: null });
-          const etag = r.headers.etag || null;
-          let body = '';
-          r.on('data', c => body += c);
-          r.on('end', () => resolve({ status: 200, body, etag }));
-        }).on('error', reject);
-      });
-
-      if (result.status === 304) {
-        // EC confirmed our cache is still current — just bump the timestamp
-        _caAlertsCache.ts = now;
-        res.set('Content-Type', 'application/json');
-        res.set('Cache-Control', 'public, max-age=60');
-        res.set('X-Cache', 'HIT-304');
-        return res.json(_caAlertsCache.data);
-      }
-
-      if (result.status === 200 && result.body &&
-          (result.body.includes('<entry') || result.body.includes('<item'))) {
-        xml = result.body;
-        newEtag = result.etag;
-        break;
-      }
-      console.log(`[CA Alerts] ${feedUrl} → ${result.status}, no entries`);
+      const text = await fetchTextOverHttp(feedUrl);
+      if (text.includes('<entry') || text.includes('<item')) { xml = text; break; }
+      console.log(`[CA Alerts] ${feedUrl} returned no entries`);
     } catch(e) {
       console.warn(`[CA Alerts] ${feedUrl} failed:`, e.message);
     }
   }
-
   if (!xml) {
-    console.warn('[CA Alerts] All EC feed URLs failed or returned no entries');
-    if (_caAlertsCache.data) {
-      // Stale-on-error — keep showing last known alerts rather than going dark
-      res.set('Content-Type', 'application/json');
-      res.set('Cache-Control', 'public, max-age=30');
-      res.set('X-Cache', 'STALE');
-      return res.json(_caAlertsCache.data);
-    }
+    console.warn('[CA Alerts] All EC feed URLs failed');
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
     return res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
   }
-
   try {
     const alerts = parseECAtom(xml);
-    console.log(`[CA Alerts] Fetched ${alerts.length} alerts from EC feed`);
-    const result = { alerts, generatedAt: now, source: 'Environment Canada / ECCC' };
+    console.log(`[CA Alerts] Parsed ${alerts.length} alerts from EC feed`);
+    const result = { alerts, generatedAt: Date.now(), source: 'Environment Canada / ECCC' };
     _caAlertsCache.data = result;
-    _caAlertsCache.ts = now;
-    if (newEtag) _caAlertsCache.etag = newEtag;
-    res.set('Content-Type', 'application/json');
-    res.set('Cache-Control', 'public, max-age=60');
-    res.set('X-Cache', 'MISS');
+    _caAlertsCache.ts = Date.now();
+    res.set('Cache-Control', 'public, max-age=300');
     res.json(result);
   } catch(e) {
     console.warn('[CA Alerts] Parse failed:', e.message);
-    if (_caAlertsCache.data) {
-      res.set('X-Cache', 'STALE');
-      return res.json(_caAlertsCache.data);
-    }
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
     res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
   }
 });

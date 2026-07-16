@@ -2834,6 +2834,8 @@ async function ws4kpGeocode() {
         ['4000', '3000'].forEach(v => {
           wsAllSettings[v].lat = parseFloat(pl.latitude);
           wsAllSettings[v].lon = parseFloat(pl.longitude);
+          // Register FCM token with NWS zone for the user's newly set location
+          initPushNotifications(parseFloat(pl.latitude), parseFloat(pl.longitude)).catch(() => {});
           wsAllSettings[v].location = loc;
         });
         saveWSSettings();
@@ -3939,10 +3941,124 @@ function updateLiveButton(channelId, isLive) {
 }
 
 // ═══════════════════════════════════════════
-// Register service worker for PWA
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+// Service Worker + FCM Push Notifications
+// ═══════════════════════════════════════════
+
+// ── Firebase web app config — fetched from server (Railway env vars) ──────────
+// Values are stored as Railway environment variables:
+//   FIREBASE_WEB_API_KEY, FIREBASE_MESSAGING_SENDER_ID,
+//   FIREBASE_APP_ID, FIREBASE_VAPID_KEY
+// The server serves them via GET /api/firebase-config.
+// These are PUBLIC values (safe to expose to browsers — Firebase design intent).
+let FIREBASE_CONFIG = null;
+let FIREBASE_VAPID_KEY = null;
+
+let _swRegistration  = null;  // shared SW registration
+let _fcmToken        = null;  // current FCM token
+let _pushLat         = null;  // lat at time of push registration
+let _pushLng         = null;  // lng at time of push registration
+
+async function loadFirebaseConfig() {
+  try {
+    const res = await fetch('/api/firebase-config');
+    const data = await res.json();
+    if (!data.configured) {
+      console.log('[Push] Firebase not configured in Railway env vars — push notifications disabled');
+      return false;
+    }
+    FIREBASE_CONFIG   = data.config;
+    FIREBASE_VAPID_KEY = data.vapidKey;
+    return true;
+  } catch(e) {
+    console.warn('[Push] Could not load Firebase config:', e.message);
+    return false;
+  }
 }
+
+// Register service worker — store registration for FCM token requests
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    _swRegistration = reg;
+    console.log('[SW] Registered:', reg.scope);
+  }).catch(e => console.warn('[SW] Registration failed:', e.message));
+}
+
+// ── Push notification permission + FCM token ──────────────────────────────────
+// Called after the user has set a location (we need lat/lng to register the
+// token with the right NWS zone on the server). Also called on first page load
+// if the user has already granted permission previously.
+async function initPushNotifications(lat, lng) {
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+  // Load config from server if not already fetched
+  if (!FIREBASE_CONFIG) {
+    const ok = await loadFirebaseConfig();
+    if (!ok) return;
+  }
+  if (!FIREBASE_CONFIG.apiKey || !FIREBASE_VAPID_KEY) {
+    console.warn('[Push] Firebase config incomplete — skipping push init');
+    return;
+  }
+  try {
+    // Dynamically import Firebase modules (no blocking script tag needed)
+    const [{ initializeApp, getApps }, { getMessaging, getToken }] = await Promise.all([
+      import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js'),
+      import('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js'),
+    ]);
+
+    const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+    const messaging = getMessaging(app);
+    const swReg = _swRegistration || await navigator.serviceWorker.ready;
+
+    // Request permission — only prompt if not already decided
+    const currentPerm = Notification.permission;
+    if (currentPerm === 'denied') return; // user explicitly blocked, don't nag
+    const permission = currentPerm === 'granted'
+      ? 'granted'
+      : await Notification.requestPermission();
+    if (permission !== 'granted') return;
+
+    // Get FCM token — identifies this browser instance to FCM
+    const token = await getToken(messaging, {
+      vapidKey: FIREBASE_VAPID_KEY,
+      serviceWorkerRegistration: swReg,
+    });
+    if (!token) { console.warn('[Push] No FCM token returned'); return; }
+
+    // Only re-register if token or location changed
+    if (token === _fcmToken && lat === _pushLat && lng === _pushLng) return;
+    _fcmToken = token;
+    _pushLat  = lat;
+    _pushLng  = lng;
+
+    const res = await fetch('/api/radar/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, lat, lng }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      console.log(`[Push] Registered for NWS zone ${data.zone} (${data.label})`);
+    }
+  } catch(e) {
+    console.warn('[Push] Init error:', e.message);
+  }
+}
+
+// Attempt push init on load in case permission was already granted from a prior visit
+window.addEventListener('load', () => {
+  // Pre-fetch Firebase config so it's ready when the user sets their location.
+  // Also attempts push init immediately if permission was already granted.
+  loadFirebaseConfig().then(ok => {
+    if (!ok) return;
+    if (Notification.permission === 'granted') {
+      navigator.serviceWorker.ready.then(() => {
+        const lat = wsAllSettings?.['4000']?.lat || wsAllSettings?.['3000']?.lat;
+        const lng = wsAllSettings?.['4000']?.lon || wsAllSettings?.['3000']?.lon;
+        if (lat && lng) initPushNotifications(lat, lng);
+      });
+    }
+  });
+});
 
 // UTILITIES
 // ═══════════════════════════════════════════
