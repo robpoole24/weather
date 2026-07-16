@@ -736,9 +736,9 @@
   <div class="leg-row"><div class="leg-sw" style="background:#c71585"></div>Excessive Heat Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff1493"></div>Red Flag Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#888888"></div>Advisory / Statement</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#8B4513"></div>Air Quality Alert</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#A0522D"></div>Dense Smoke Advisory</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#CD853F"></div>Smoke Advisory</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#c97a1e"></div>Air Quality Alert</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#b05a00"></div>Dense Smoke Advisory</div>
+  <div class="leg-row"><div class="leg-sw" style="background:#d49030"></div>Smoke Advisory</div>
   <div id="fire-aq-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div class="leg-section-head" style="color:#ff6a00;margin-top:0">Fire &amp; Air Quality</div>
     <div id="fire-legend-rows" style="display:none">
@@ -812,11 +812,11 @@ const ALERT_STYLE = {
   'Dust Advisory':                      { color:'#d2b48c', fill:'#d2b48c', fillOpacity:0.15, weight:1   },
   'Special Marine Warning':             { color:'#ffa500', fill:'#ffa500', fillOpacity:0.2,  weight:1   },
   'Special Weather Statement':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.1,  weight:1   },
-  'Air Quality Alert':                  { color:'#8B4513', fill:'#8B4513', fillOpacity:0.2,  weight:1   },
-  'Dense Smoke Advisory':               { color:'#A0522D', fill:'#A0522D', fillOpacity:0.25, weight:1.5 },
-  'Smoke Advisory':                     { color:'#CD853F', fill:'#CD853F', fillOpacity:0.15, weight:1   },
-  'Air Stagnation Advisory':            { color:'#808000', fill:'#808000', fillOpacity:0.15, weight:1   },
-  'Hazardous Air Quality Warning':      { color:'#7e0023', fill:'#7e0023', fillOpacity:0.3,  weight:2   },
+  'Air Quality Alert':                  { color:'#c97a1e', fill:'#c97a1e', fillOpacity:0.35, weight:1.5 },
+  'Dense Smoke Advisory':               { color:'#b05a00', fill:'#b05a00', fillOpacity:0.40, weight:2   },
+  'Smoke Advisory':                     { color:'#d49030', fill:'#d49030', fillOpacity:0.30, weight:1.5 },
+  'Air Stagnation Advisory':            { color:'#a0a000', fill:'#a0a000', fillOpacity:0.30, weight:1   },
+  'Hazardous Air Quality Warning':      { color:'#9b0000', fill:'#9b0000', fillOpacity:0.45, weight:2.5 },
   'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
 const DEFAULT_STYLE = { color:'#888888', fill:'#888888', fillOpacity:0.12, weight:1 };
@@ -1342,7 +1342,7 @@ async function loadSPC() {
       const dn = Number(props.dn) || Number(props.DN) || 0;
       const style = SPC_DN[dn] || SPC_DN[2];
 
-      const layer = L.geoJSON(feature.geometry, {
+      const layer = L.geoJSON(geom, {
         style:{
           color: style.border,
           fillColor: style.fill,
@@ -1571,7 +1571,50 @@ function alertPriorityRank(event) {
 // Rebuilds the alert polygon layers + banner from lastAlertsData, applying the
 // current enabledAlertTypes filter. Called after a fetch, or instantly when the
 // user toggles alert types in the filter panel (no re-fetch needed).
-function renderAlertLayers() {
+// ── NWS Zone Geometry Cache ───────────────────────────────────────────────────
+// Many NWS alert types (Air Quality, Dense Smoke, Heat Advisories, etc.) are
+// issued as zone-based alerts with geometry=null. Their area is defined by
+// county/forecast zone codes in properties.affectedZones. We fetch the actual
+// polygon boundaries for those zones from NWS and cache them for 24 hours
+// (zone boundaries never change day-to-day).
+const zoneGeomCache = new Map(); // zoneId → GeoJSON geometry
+
+async function prefetchZoneGeoms(affectedZoneUrls) {
+  if (!affectedZoneUrls || !affectedZoneUrls.length) return;
+  const ids = [...new Set(
+    affectedZoneUrls.map(u => u.split('/').pop()).filter(Boolean)
+  )];
+  const uncached = ids.filter(id => !zoneGeomCache.has(id));
+  if (!uncached.length) return;
+  // NWS supports ?id=X,Y,Z for batch zone lookup — avoids N separate requests
+  const batchSize = 50; // NWS URL length limit
+  for (let i = 0; i < uncached.length; i += batchSize) {
+    const batch = uncached.slice(i, i + batchSize);
+    try {
+      const url = `https://api.weather.gov/zones?id=${batch.join(',')}&limit=200`;
+      const data = await (await fetch(url, {headers:{Accept:'application/geo+json'}})).json();
+      (data.features || []).forEach(f => {
+        if (f.properties?.id && f.geometry) zoneGeomCache.set(f.properties.id, f.geometry);
+      });
+    } catch(e) { console.warn('[Zones] Batch fetch failed for', batch, e.message); }
+  }
+}
+
+function buildGeomFromZones(affectedZoneUrls) {
+  if (!affectedZoneUrls || !affectedZoneUrls.length) return null;
+  const ids = affectedZoneUrls.map(u => u.split('/').pop()).filter(Boolean);
+  const polygonRings = [];
+  ids.forEach(id => {
+    const g = zoneGeomCache.get(id);
+    if (!g) return;
+    if (g.type === 'Polygon')      polygonRings.push(...g.coordinates.map(r => [r]));
+    if (g.type === 'MultiPolygon') polygonRings.push(...g.coordinates);
+  });
+  if (!polygonRings.length) return null;
+  return { type: 'MultiPolygon', coordinates: polygonRings };
+}
+
+async function renderAlertLayers() {
   if (!lastAlertsData) return;
   const status = document.getElementById('alerts-status');
   const data = lastAlertsData;
@@ -1582,8 +1625,23 @@ function renderAlertLayers() {
   let count = 0;
   let shownCount = 0;
 
+  // Pre-populate zone geometry cache for all zone-based alerts in this batch.
+  // This is a single await before any rendering — the batch NWS zones API call
+  // replaces up to N individual zone requests with one per 50 zones.
+  const zoneOnlyFeatures = (data.features || []).filter(
+    f => !f.geometry && f.properties?.affectedZones?.length
+  );
+  if (zoneOnlyFeatures.length) {
+    const allZoneUrls = [...new Set(
+      zoneOnlyFeatures.flatMap(f => f.properties.affectedZones)
+    )];
+    await prefetchZoneGeoms(allZoneUrls);
+  }
+
   (data.features || []).forEach(feature => {
-    if (!feature.geometry) return;
+    // Use polygon from alert directly, or build one from NWS zone boundaries
+    const geom = feature.geometry || buildGeomFromZones(feature.properties?.affectedZones);
+    if (!geom) return;
     const props = feature.properties;
     const event = props.event || 'Advisory';
     count++;
@@ -1616,7 +1674,7 @@ function renderAlertLayers() {
     activeAlertFeatures.push({
       event, color: s.color, headline: props.headline || event,
       areaDesc: props.areaDesc || '', expires, fullText,
-      geometry: feature.geometry,
+      geometry: geom,
     });
 
     // Check if user is inside this alert polygon
