@@ -1136,17 +1136,38 @@ app.get('/api/canada-alerts', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=300');
     return res.json(_caAlertsCache.data);
   }
+  // EC has several URL patterns for their alert feeds — try each until one works
+  const EC_ALERT_URLS = [
+    'https://weather.gc.ca/rss/battleboard/can_e.xml',
+    'https://www.weather.gc.ca/rss/battleboard/can_e.xml',
+    'https://weather.gc.ca/en/warnings/rss/can_e.xml',
+  ];
+  let xml = null;
+  for (const feedUrl of EC_ALERT_URLS) {
+    try {
+      const text = await fetchTextOverHttp(feedUrl);
+      if (text.includes('<entry') || text.includes('<item')) { xml = text; break; }
+      console.log(`[CA Alerts] ${feedUrl} returned no entries`);
+    } catch(e) {
+      console.warn(`[CA Alerts] ${feedUrl} failed:`, e.message);
+    }
+  }
+  if (!xml) {
+    console.warn('[CA Alerts] All EC feed URLs failed');
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
+    return res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
+  }
   try {
-    const xml = await fetchTextOverHttp('https://www.weather.gc.ca/rss/battleboard/can_e.xml');
     const alerts = parseECAtom(xml);
+    console.log(`[CA Alerts] Parsed ${alerts.length} alerts from EC feed`);
     const result = { alerts, generatedAt: Date.now(), source: 'Environment Canada / ECCC' };
     _caAlertsCache.data = result;
     _caAlertsCache.ts = Date.now();
     res.set('Cache-Control', 'public, max-age=300');
     res.json(result);
   } catch(e) {
-    console.warn('[CA Alerts] Feed fetch failed:', e.message);
-    if (_caAlertsCache.data) return res.json(_caAlertsCache.data); // serve stale on error
+    console.warn('[CA Alerts] Parse failed:', e.message);
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
     res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
   }
 });
@@ -1725,6 +1746,11 @@ app.get('/api/hms-smoke', async (req, res) => {
   const url = `https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/GeoJSON/hms_smoke${date}.json`;
   try {
     const data = await fetchTextOverHttp(url);
+    // Validate it's actually JSON — NOAA returns HTML 404 pages for missing dates
+    // which would crash the client-side JSON.parse()
+    if (!data.trim().startsWith('{') && !data.trim().startsWith('[')) {
+      throw new Error(`Non-JSON response from NOAA (got: ${data.trim().slice(0,40)})`);
+    }
     _hmsSmokeCache.set(date, { data, ts: Date.now() });
     res.set('Content-Type', 'application/json');
     res.set('Cache-Control', 'public, max-age=21600');
@@ -1743,6 +1769,9 @@ const _fireCache = { data: null, ts: 0 };
 const FIRE_TTL = 30 * 60 * 1000;
 
 const NIFC_ENDPOINTS = [
+  // Confirmed correct NIFC service name (via NIFC Open Data / Data Basin)
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Current_WildlandFire_Perimeters/FeatureServer/0/query',
+  // Fallbacks in case NIFC renames the service
   'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query',
   'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Active_Fires/FeatureServer/0/query',
 ];

@@ -2032,7 +2032,7 @@ function ensureCAPanel() {
   const el = document.createElement('div');
   el.id = 'ca-alerts-panel';
   el.style.cssText = [
-    'position:absolute','bottom:42px','right:8px','z-index:450',
+    'position:absolute','bottom:42px','right:48px','z-index:450',
     'background:rgba(14,22,35,0.93)','border:1px solid #2a4a6a',
     'border-radius:6px','padding:0.6rem 0.75rem','max-width:280px',
     'max-height:340px','overflow-y:auto','font-size:0.75rem',
@@ -3214,13 +3214,19 @@ async function startHMSSmoke() {
     return res.json();
   };
   let data;
-  try { data = await tryDate(new Date()); }
-  catch(_) {
+  const now = new Date();
+  let loaded = false;
+  // HMS publishes once daily — try today and up to 3 days back since publication
+  // can be delayed or the proxy may return a valid 404 for a missing date
+  for (let daysBack = 0; daysBack <= 3; daysBack++) {
     try {
-      const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
-      data = await tryDate(yesterday);
-    } catch(e) { console.warn('[HMS Smoke] No data available:', e); return; }
+      const d = new Date(now); d.setDate(d.getDate() - daysBack);
+      data = await tryDate(d);
+      loaded = true;
+      break;
+    } catch(_) {}
   }
+  if (!loaded) { console.warn('[HMS Smoke] No data available for past 3 days'); return; }
   if (!hmsSmokeLayer) return; // cleared while loading
   hmsSmokeLayer.clearLayers();
   L.geoJSON(data, {
