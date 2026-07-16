@@ -38,25 +38,40 @@ function initFirebase() {
   }
 }
 
-// ── NWS Alert Priority & Icons ───────────────────────────────────────────────
-const ALERT_PRIORITY = {
-  'Tornado Warning':                    { priority: 1,  icon: '🌪️', color: '#ff0000' },
-  'Flash Flood Emergency':              { priority: 2,  icon: '🌊', color: '#00ff00' },
-  'Extreme Wind Warning':               { priority: 3,  icon: '💨', color: '#ff4500' },
-  'Severe Thunderstorm Warning':        { priority: 4,  icon: '⛈️',  color: '#ff8c00' },
-  'Flash Flood Warning':                { priority: 5,  icon: '🌊', color: '#00ff00' },
-  'Flood Warning':                      { priority: 6,  icon: '🌊', color: '#00ff00' },
-  'Tornado Watch':                      { priority: 7,  icon: '🌪️', color: '#ffff00' },
-  'Severe Thunderstorm Watch':          { priority: 8,  icon: '⛈️',  color: '#db8d00' },
-  'Flash Flood Watch':                  { priority: 9,  icon: '🌊', color: '#2e8b57' },
-  'Winter Storm Warning':               { priority: 10, icon: '❄️',  color: '#9370db' },
-  'Blizzard Warning':                   { priority: 11, icon: '❄️',  color: '#ff69b4' },
-  'Ice Storm Warning':                  { priority: 12, icon: '❄️',  color: '#8b008b' },
-  'High Wind Warning':                  { priority: 13, icon: '💨', color: '#daa520' },
-  'Excessive Heat Warning':             { priority: 14, icon: '🌡️', color: '#c71585' },
-  'Red Flag Warning':                   { priority: 15, icon: '🔥', color: '#ff1493' },
-  'Special Weather Statement':          { priority: 16, icon: '⚠️',  color: '#a0a0a0' },
+// ── NWS Alert Config ────────────────────────────────────────────────────────
+// ALWAYS_NOTIFY: sent regardless of user preferences (life-safety critical)
+// DEFAULT_ON:    enabled for all new registrations, user can disable
+// DEFAULT_OFF:   user must opt in (useful for specific groups e.g. asthmatics)
+const ALERT_META = {
+  'Tornado Warning':             { icon:'🌪️', color:'#ff0000', always:true  },
+  'Severe Thunderstorm Warning': { icon:'⛈️',  color:'#ff8c00', always:true  },
+  'Flash Flood Emergency':       { icon:'🌊', color:'#00ff00', always:true  },
+  'Extreme Wind Warning':        { icon:'💨', color:'#ff4500', always:true  },
+  'Tornado Watch':               { icon:'🌪️', color:'#ffff00', always:false, defaultOn:true  },
+  'Severe Thunderstorm Watch':   { icon:'⛈️',  color:'#db8d00', always:false, defaultOn:true  },
+  'Flash Flood Warning':         { icon:'🌊', color:'#00ff00', always:false, defaultOn:true  },
+  'Flood Warning':               { icon:'🌊', color:'#2e8b57', always:false, defaultOn:false },
+  'Flash Flood Watch':           { icon:'🌊', color:'#2e8b57', always:false, defaultOn:false },
+  'Winter Storm Warning':        { icon:'❄️',  color:'#9370db', always:false, defaultOn:false },
+  'Blizzard Warning':            { icon:'❄️',  color:'#ff69b4', always:false, defaultOn:false },
+  'Ice Storm Warning':           { icon:'❄️',  color:'#8b008b', always:false, defaultOn:false },
+  'High Wind Warning':           { icon:'💨', color:'#daa520', always:false, defaultOn:false },
+  'Excessive Heat Warning':      { icon:'🌡️', color:'#c71585', always:false, defaultOn:false },
+  'Red Flag Warning':            { icon:'🔥', color:'#ff1493', always:false, defaultOn:false },
+  'Air Quality Alert':           { icon:'😷', color:'#c97a1e', always:false, defaultOn:false },
+  'Dense Smoke Advisory':        { icon:'💨', color:'#b05a00', always:false, defaultOn:false },
+  'Special Weather Statement':   { icon:'⚠️',  color:'#a0a0a0', always:false, defaultOn:false },
 };
+
+// Build the default alert type list for new registrations
+const DEFAULT_ALERT_TYPES = Object.entries(ALERT_META)
+  .filter(([, m]) => m.always || m.defaultOn)
+  .map(([k]) => k);
+
+// Backward-compat alias used in older code paths
+const ALERT_PRIORITY = Object.fromEntries(
+  Object.entries(ALERT_META).map(([k, m], i) => [k, { priority: i+1, icon: m.icon, color: m.color }])
+);
 
 // ── Redis Key Helpers ────────────────────────────────────────────────────────
 // These use the rGet/rSet/rDel functions passed in from server.js
@@ -82,17 +97,49 @@ function init(redis) {
 // ── Token Registration ────────────────────────────────────────────────────────
 // zone: NWS zone string e.g. "WIZ066" (county zone) — obtained from NWS API
 // zoneId: human label e.g. "Milwaukee, WI"
-async function registerToken(token, zone, zoneId) {
+async function registerToken(token, zone, zoneId, alertTypes = null) {
   if (!redisClient || !token || !zone) return false;
   try {
     const key = FCM_TOKEN_PREFIX + token;
-    const data = JSON.stringify({ token, zone, zoneId: zoneId || zone, registeredAt: Date.now() });
+    // Preserve existing preferences if token re-registers (e.g. location update)
+    let existingPrefs = null;
+    try {
+      const existing = await redisClient.get(key);
+      if (existing) existingPrefs = JSON.parse(existing).alertTypes;
+    } catch(_) {}
+    const data = JSON.stringify({
+      token,
+      zone,
+      zoneId:       zoneId || zone,
+      registeredAt: Date.now(),
+      alertTypes:   alertTypes || existingPrefs || DEFAULT_ALERT_TYPES,
+    });
     await redisClient.set(key, data);
     await redisClient.sadd(FCM_TOKENS_INDEX, key);
     console.log(`[Radar] Token registered for zone ${zone}`);
     return true;
   } catch(e) {
     console.error('[Radar] Token register error:', e.message);
+    return false;
+  }
+}
+
+async function updateTokenPreferences(token, alertTypes) {
+  if (!redisClient || !token || !Array.isArray(alertTypes)) return false;
+  try {
+    const key = FCM_TOKEN_PREFIX + token;
+    const raw = await redisClient.get(key);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    // Always include the non-negotiable always-on alerts
+    const alwaysOn = Object.entries(ALERT_META).filter(([,m]) => m.always).map(([k]) => k);
+    const merged   = [...new Set([...alwaysOn, ...alertTypes])];
+    data.alertTypes = merged;
+    await redisClient.set(key, JSON.stringify(data));
+    console.log(`[Radar] Preferences updated for token (${merged.length} types enabled)`);
+    return true;
+  } catch(e) {
+    console.error('[Radar] Preference update error:', e.message);
     return false;
   }
 }
@@ -181,8 +228,8 @@ async function pollAlerts() {
       const alertId = props.id;
       const event = props.event || 'Advisory';
 
-      // Skip low-priority events that don't warrant push notifications
-      if (!ALERT_PRIORITY[event] || ALERT_PRIORITY[event].priority > 15) continue;
+      // Skip events not in our known alert meta (truly unknown types)
+      if (!ALERT_META[event]) continue;
 
       // Check if we've already sent this alert
       const sentKey = FCM_SENT_PREFIX + alertId;
@@ -197,22 +244,25 @@ async function pollAlerts() {
       const geocodeSAME = props.geocode?.SAME || [];
       const geocodeUGC  = props.geocode?.UGC  || [];
 
-      // Find tokens in affected zones
+      // Find tokens in affected zones whose preferences include this alert type
+      const meta = ALERT_META[event];
       const tokensToNotify = [];
       Object.entries(tokensByZone).forEach(([zone, zoneTokens]) => {
-        if (
-          affectedZoneIds.includes(zone) ||
-          geocodeUGC.includes(zone) ||
-          geocodeSAME.some(s => zone.includes(s.slice(-6)))
-        ) {
-          tokensToNotify.push(...zoneTokens);
-        }
+        const inZone = affectedZoneIds.includes(zone) ||
+                       geocodeUGC.includes(zone) ||
+                       geocodeSAME.some(s => zone.includes(s.slice(-6)));
+        if (!inZone) return;
+        zoneTokens.forEach(t => {
+          // Always-on alerts go to everyone; otherwise check user prefs
+          const prefs = t.alertTypes || DEFAULT_ALERT_TYPES;
+          if (meta.always || prefs.includes(event)) tokensToNotify.push(t);
+        });
       });
 
       if (!tokensToNotify.length) continue;
 
       // Send notifications
-      const info = ALERT_PRIORITY[event] || { icon: '⚠️', color: '#a0a0a0' };
+      const info = ALERT_META[event] || { icon: '⚠️', color: '#a0a0a0' };
       const headline = props.headline || event;
       const areaDesc = (props.areaDesc || '').split(';')[0].trim();
       const expires  = props.expires
@@ -326,16 +376,37 @@ function routes(app) {
     res.json({ success: true });
   });
 
-  // GET /api/radar/status
-  // Returns number of registered devices (admin use)
+  // GET /api/radar/status — admin overview
   app.get('/api/radar/status', async (req, res) => {
     const tokens = await getAllTokens();
     const byZone = {};
-    tokens.forEach(t => {
-      byZone[t.zone] = (byZone[t.zone] || 0) + 1;
-    });
+    tokens.forEach(t => { byZone[t.zone] = (byZone[t.zone] || 0) + 1; });
     res.json({ totalDevices: tokens.length, byZone });
+  });
+
+  // GET /api/radar/alert-types — available alert types with metadata
+  app.get('/api/radar/alert-types', (req, res) => {
+    const types = Object.entries(ALERT_META).map(([event, m]) => ({
+      event, icon: m.icon, color: m.color,
+      always: m.always, defaultOn: m.defaultOn || false,
+    }));
+    res.json({ types, defaults: DEFAULT_ALERT_TYPES });
+  });
+
+  // PUT /api/radar/preferences — update per-token alert type preferences
+  // Body: { token, alertTypes: ['Tornado Warning', ...] }
+  app.put('/api/radar/preferences', async (req, res) => {
+    const { token, alertTypes } = req.body;
+    if (!token || !Array.isArray(alertTypes)) {
+      return res.status(400).json({ error: 'token and alertTypes array required' });
+    }
+    const ok = await updateTokenPreferences(token, alertTypes);
+    if (ok) {
+      res.json({ success: true, alertTypes });
+    } else {
+      res.status(404).json({ error: 'Token not found — register first' });
+    }
   });
 }
 
-module.exports = { init, routes, registerToken, unregisterToken, lookupZone };
+module.exports = { init, routes, registerToken, unregisterToken, updateTokenPreferences, lookupZone, ALERT_META, DEFAULT_ALERT_TYPES };

@@ -4038,11 +4038,131 @@ async function initPushNotifications(lat, lng) {
     const data = await res.json();
     if (data.success) {
       console.log(`[Push] Registered for NWS zone ${data.zone} (${data.label})`);
+      // Update status bar
+      const notifEl = document.getElementById('notification-status');
+      if (notifEl) notifEl.textContent = `Notifications: ${data.label}`;
+      // Load and show notification preferences
+      loadNotificationPrefs(token);
     }
   } catch(e) {
     console.warn('[Push] Init error:', e.message);
   }
 }
+
+// ── Notification Preferences ─────────────────────────────────────────────────
+// Loads available alert types from server, shows a preferences panel so users
+// can opt in/out of specific alert categories for push notifications.
+let _pushToken = null; // stored after successful registration
+
+async function loadNotificationPrefs(token) {
+  _pushToken = token;
+  try {
+    const res = await fetch('/api/radar/alert-types');
+    const data = await res.json();
+    renderNotifPrefs(data.types, token);
+  } catch(e) { console.warn('[Push] Could not load alert types:', e.message); }
+}
+
+function renderNotifPrefs(types, token) {
+  let panel = document.getElementById('notif-prefs-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'notif-prefs-panel';
+    panel.style.cssText = [
+      'position:fixed','top:50%','left:50%',
+      'transform:translate(-50%,-50%)',
+      'background:var(--surface)','border:1px solid var(--border)',
+      'border-radius:10px','padding:1.25rem 1.5rem',
+      'z-index:9999','max-width:360px','width:90%',
+      'max-height:80vh','overflow-y:auto',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
+      'font-family:Barlow,sans-serif',
+    ].join(';');
+    document.body.appendChild(panel);
+  }
+
+  const groups = [
+    { label: '🔒 Always On',        types: types.filter(t => t.always) },
+    { label: '✅ Enabled by Default', types: types.filter(t => !t.always && t.defaultOn) },
+    { label: '➕ Optional',          types: types.filter(t => !t.always && !t.defaultOn) },
+  ];
+
+  const saved = JSON.parse(localStorage.getItem('push-alert-types') || 'null');
+
+  let html = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:1.1rem;font-weight:700;
+    color:var(--accent);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.75rem;
+    display:flex;justify-content:space-between;align-items:center">
+    🔔 Alert Notifications
+    <button onclick="document.getElementById('notif-prefs-panel').style.display='none'"
+      style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.1rem">✕</button>
+  </div>
+  <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem">
+    Choose which alerts send you a push notification. Always-on alerts cannot be disabled.
+  </p>`;
+
+  groups.forEach(group => {
+    if (!group.types.length) return;
+    html += `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;
+      font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);
+      margin:0.75rem 0 0.4rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem">
+      ${group.label}</div>`;
+    group.types.forEach(t => {
+      const checked = t.always || (saved ? saved.includes(t.event) : t.defaultOn);
+      const disabled = t.always ? 'disabled' : '';
+      html += `<label style="display:flex;align-items:center;gap:0.6rem;padding:0.3rem 0;
+        cursor:${t.always?'default':'pointer'};opacity:${t.always?'0.6':'1'}">
+        <input type="checkbox" data-event="${t.event}" ${checked?'checked':''} ${disabled}
+          style="accent-color:var(--accent);width:15px;height:15px;cursor:${t.always?'default':'pointer'}">
+        <span style="font-size:0.8rem">${t.icon} ${t.event}</span>
+      </label>`;
+    });
+  });
+
+  html += `<div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end">
+    <button onclick="saveNotifPrefs('${token}')"
+      style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;
+      letter-spacing:0.06em;text-transform:uppercase;background:var(--accent);color:#000;
+      border:none;border-radius:5px;padding:0.5rem 1rem;cursor:pointer">Save</button>
+  </div>`;
+
+  panel.innerHTML = html;
+  panel.style.display = '';
+}
+
+async function saveNotifPrefs(token) {
+  const panel = document.getElementById('notif-prefs-panel');
+  const checked = [...panel.querySelectorAll('input[data-event]:checked')]
+    .map(el => el.dataset.event);
+  localStorage.setItem('push-alert-types', JSON.stringify(checked));
+  try {
+    await fetch('/api/radar/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token || _pushToken, alertTypes: checked }),
+    });
+    panel.style.display = 'none';
+    const notifEl = document.getElementById('notification-status');
+    if (notifEl) {
+      const prev = notifEl.textContent;
+      notifEl.textContent = 'Saved ✓';
+      setTimeout(() => { notifEl.textContent = prev; }, 2000);
+    }
+  } catch(e) { console.warn('[Push] Could not save prefs:', e.message); }
+}
+
+// Show preferences panel if user clicks notification status
+document.addEventListener('DOMContentLoaded', () => {
+  const notifEl = document.getElementById('notification-status');
+  if (notifEl) {
+    notifEl.style.cursor = 'pointer';
+    notifEl.title = 'Click to manage notification preferences';
+    notifEl.addEventListener('click', () => {
+      if (_pushToken) {
+        loadNotificationPrefs(_pushToken);
+      }
+    });
+  }
+});
 
 // Attempt push init on load in case permission was already granted from a prior visit
 window.addEventListener('load', () => {

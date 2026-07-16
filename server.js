@@ -3896,6 +3896,10 @@ app.get('/weatherstar/images/*', (req, res) => {
 });
 
 // ── Serve index for all other routes ──
+// Mount radar push notification routes BEFORE the catch-all —
+// radar.js registers GET routes that would otherwise be swallowed by app.get('*')
+radar.routes(app);
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -3996,9 +4000,6 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`WeatherTV server running on port ${PORT}`);
   console.log(`App: http://localhost:${PORT}`);
   console.log(`Admin: http://localhost:${PORT}/admin`);
-
-  // Mount radar notification routes
-  radar.routes(app);
 
   // Init radar module with Redis client once server is up
   if (redis) {

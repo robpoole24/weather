@@ -708,6 +708,7 @@
     <div id="model-note" style="font-size:0.64rem;color:var(--muted);margin-top:0.4rem;line-height:1.5;"></div>
   </div>
 
+  </div><!-- /legend-body -->
   <div style="padding:0.75rem 0.6rem 0.5rem;border-top:1px solid var(--border);">
     <a href="https://www.altruisticapps.com/radar-guide.html" target="_blank" rel="noopener"
        style="display:flex;align-items:center;justify-content:center;gap:0.5rem;
@@ -737,6 +738,12 @@
 </div>
 
 <div id="radar-legend">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.35rem">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase">Legend</div>
+    <button id="legend-collapse-btn" onclick="toggleLegend()"
+      style="background:none;border:none;cursor:pointer;font-family:'Barlow Condensed',sans-serif;font-size:0.65rem;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase;padding:0;line-height:1">▲ Hide</button>
+  </div>
+  <div id="legend-body">
   <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.4rem">NWS Alerts</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
   <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
@@ -3619,6 +3626,24 @@ let _ltgLastFrame = -1;        // detect radar frame changes
 
 // Get the "current radar time" so lightning syncs with Past/Future animation.
 // Returns null during forecast mode (no historical lightning data for the future).
+function toggleLegend() {
+  const body = document.getElementById('legend-body');
+  const btn  = document.getElementById('legend-collapse-btn');
+  if (!body || !btn) return;
+  const minimized = body.style.display === 'none';
+  body.style.display = minimized ? '' : 'none';
+  btn.textContent = minimized ? '▲ Hide' : '▼ Show';
+  localStorage.setItem('legend-minimized', minimized ? 'false' : 'true');
+}
+(function restoreLegendState() {
+  if (localStorage.getItem('legend-minimized') === 'true') {
+    const body = document.getElementById('legend-body');
+    const btn  = document.getElementById('legend-collapse-btn');
+    if (body) body.style.display = 'none';
+    if (btn)  btn.textContent = '▼ Show';
+  }
+})();
+
 function getLtgRadarTime() {
   if (radarMode === 'forecast') return null;
   // FRAMES[0] = 55 min ago, FRAMES[last] = now
@@ -3679,7 +3704,8 @@ function renderLtgStrikes(features, radarTime) {
 
     const mk = L.marker([lat, lng], { icon, interactive: false, zIndexOffset: isNew ? 1000 : 0 });
 
-    if (isNew && !_ltgSeenIds.has(key)) {
+    const isVibNew = ageMs < 30000; // wider window for vibration
+    if (isVibNew && !_ltgSeenIds.has(key)) {
       newStrikes.push(key);
       // Wrap in a container so we can add the flash CSS class
       const wrapper = document.createElement('div');
@@ -3736,13 +3762,22 @@ async function startLightning() {
   if (_ltgPollTimer) clearInterval(_ltgPollTimer);
   _ltgPollTimer = setInterval(refreshLightning, 30000);
 
-  // Frame tracker — re-renders strikes without re-fetching when radar frame changes
+  // Frame + mode tracker — re-renders or clears when radar frame or mode changes
+  let _ltgLastMode = radarMode;
   if (_ltgFrameTimer) clearInterval(_ltgFrameTimer);
   _ltgFrameTimer = setInterval(() => {
     if (!_ltgLayer || !_ltgLastPollData) return;
-    if (currentFrame !== _ltgLastFrame) {
-      _ltgLastFrame = currentFrame;
-      renderLtgStrikes(_ltgLastPollData, getLtgRadarTime());
+    const modeChanged  = radarMode !== _ltgLastMode;
+    const frameChanged = currentFrame !== _ltgLastFrame;
+    if (!modeChanged && !frameChanged) return;
+    _ltgLastFrame = currentFrame;
+    _ltgLastMode  = radarMode;
+    const rt = getLtgRadarTime();
+    if (!rt) {
+      // Forecast mode — no historical lightning data, clear the layer
+      _ltgLayer.clearLayers();
+    } else {
+      renderLtgStrikes(_ltgLastPollData, rt);
     }
   }, 200);
 
@@ -3792,32 +3827,59 @@ async function updateFeelsLike(lat,lng){
 }
 
 const MODELS = {
-  hrrr: { label:'HRRR (live)', note:'High-Resolution Rapid Refresh · 15-min steps to +3h.', kind:'iem' },
-  rrfs: { label:'RRFS (Soon)', note:'Rapid Refresh Forecast System — coming soon. Becomes operational Aug 31, 2026; we are finalizing our renderer. Use HRRR for forecasts in the meantime.', kind:'sidecar' },
+  hrrr: {
+    label: 'HRRR — Short Range (0–3h)',
+    note:  'High-Resolution Rapid Refresh · 3km · Updates hourly · 15-min steps to +3h. Best for near-term storm timing. Forecast imagery is smoother than live radar — this is a property of all model products, not a rendering issue.',
+    kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
+    urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
+  },
+  nam: {
+    label: 'NAM — Extended Range (0–24h)',
+    note:  'North American Mesoscale · 12km · Updates 4× daily · 1-hour steps to +24h. Useful for day-ahead planning. Coarser resolution than HRRR — broad storm patterns, not individual cells.',
+    kind:  'iem', maxMins: 1440, stepMins: 60, maxNativeZoom: 7,
+    urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nam::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
+  },
+  rrfs: {
+    label: 'RRFS — Coming Aug 31',
+    note:  "Rapid Refresh Forecast System — HRRR's replacement with higher resolution and improved convective physics. Becomes operational August 31, 2026. We will activate it on that date. Use HRRR until then.",
+    kind:  'soon', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
+    urlFn: () => '',
+  },
 };
-let currentModel='hrrr';
-function buildForecastFrames(model){
-  forecastFrames.forEach(f=>{ if(map.hasLayer(f.layer)) map.removeLayer(f.layer); });
-  forecastFrames.length=0;
-  const steps=[]; for(let m=0;m<=180;m+=15) steps.push(m);
-  steps.forEach((mins,idx)=>{
-    const frameTime=new Date(Date.now()+mins*60000);
-    const label=frameTime.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    let url;
-    if (model==='rrfs'){ const fhour=Math.round(mins/60); url=`${WXTILES_BASE}/tiles/rrfs/${fhour}/{z}/{x}/{y}.png`; }
-    else { url=`https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`; }
-    const layer=L.tileLayer(url,{opacity:0,tileSize:256,zIndex:300+idx,crossOrigin:true});
-    if (idx === 0) layer.addTo(map); // only attach the first frame; rest load via preloadAllFrames
-    forecastFrames.push({layer,label,mins});
+let currentModel = 'hrrr';
+function buildForecastFrames(model) {
+  const cfg = MODELS[model] || MODELS.hrrr;
+  forecastFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
+  forecastFrames.length = 0;
+  if (cfg.kind === 'soon') return;
+  const steps = [];
+  for (let m = 0; m <= cfg.maxMins; m += cfg.stepMins) steps.push(m);
+  steps.forEach((mins, idx) => {
+    const frameTime = new Date(Date.now() + mins * 60000);
+    const label = frameTime.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    const url = cfg.urlFn(mins);
+    const layer = L.tileLayer(url, {
+      opacity: 0, tileSize: 256, zIndex: 300 + idx,
+      crossOrigin: true, maxNativeZoom: cfg.maxNativeZoom,
+    });
+    if (idx === 0) layer.addTo(map);
+    forecastFrames.push({ layer, label, mins });
   });
-  currentForecastFrame=0;
+  currentForecastFrame = 0;
 }
-function onModelChange(model){
-  currentModel=model;
-  document.getElementById('model-note').textContent=MODELS[model].note;
+function onModelChange(model) {
+  if (MODELS[model]?.kind === 'soon') {
+    document.getElementById('model-note').textContent = MODELS[model].note;
+    document.getElementById('model-select').value = currentModel; // revert UI
+    return;
+  }
+  currentModel = model;
+  document.getElementById('model-note').textContent = MODELS[model].note;
   buildForecastFrames(model);
-  if (radarMode==='forecast' && activePaint==='reflectivity'){
-    forecastFrames.forEach(f=>f.layer.setOpacity(0));
+  if (radarMode === 'forecast' && activePaint === 'reflectivity') {
+    // Clamp frame index to new frame count
+    if (currentForecastFrame >= forecastFrames.length) currentForecastFrame = 0;
+    forecastFrames.forEach(f => f.layer.setOpacity(0));
     ensureAttached(forecastFrames[currentForecastFrame].layer);
     forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
     updateForecastLabel();
@@ -3937,7 +3999,7 @@ function renderPanel(){
   _vr.style.display = overlayState['lightning'] ? '' : 'none';
   const _von = localStorage.getItem('ltg-vibration') !== 'off';
   _vr.innerHTML = `<input type="checkbox" id="ltg-vibe-cb" ${_von?'checked':''}
-    onchange="setLtgVibration(this.checked)"><label for="ltg-vibe-cb">📳 Vibrate on new strikes (mobile)</label>`;
+    onchange="setLtgVibration(this.checked)"><label for="ltg-vibe-cb">📳 Vibrate on new strikes (Android only)</label>`;
   const _ltgRow = document.getElementById('lp-chaser').querySelector('[data-id="lightning"]');
   if (_ltgRow) _ltgRow.insertAdjacentElement('afterend', _vr);
   document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
@@ -3960,11 +4022,13 @@ function resetLayers(){
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
   renderPanel();
 }
-(function initModelSelect(){
-  const sel=document.getElementById('model-select');
-  sel.innerHTML=Object.entries(MODELS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
-  sel.value=currentModel;
-  document.getElementById('model-note').textContent=MODELS[currentModel].note;
+(function initModelSelect() {
+  const sel = document.getElementById('model-select');
+  sel.innerHTML = Object.entries(MODELS).map(([k, v]) =>
+    `<option value="${k}" ${v.kind === 'soon' ? 'disabled' : ''}>${v.label}</option>`
+  ).join('');
+  sel.value = currentModel;
+  document.getElementById('model-note').textContent = MODELS[currentModel].note;
 })();
 // ── BETA BANNER ──────────────────────────────────────────────────────────────
 function dismissBeta() {
