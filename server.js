@@ -3758,6 +3758,118 @@ app.use('/scripts', express.static(path.join(__dirname, 'public', 'weatherstar',
 // (`/images/maps/radar/...`) instead of a relative one. Every other image
 // reference is relative (resolves correctly to /weatherstar/images/...).
 // This absolute path resolves to the site ROOT instead, hitting the
+// ── Lightning Strike Relay ─────────────────────────────────────────────────────
+// Maintains a single persistent WebSocket connection to lightningmaps.org
+// (Blitzortung network). Clients poll /api/lightning — no Blitzortung servers
+// are ever hit by browsers. Rolling 10-minute buffer, max 10,000 strikes.
+// Attribution: Lightning data © Blitzortung.org and contributors (CC BY-SA 4.0)
+
+const LIGHTNING_WS_URLS = [
+  'wss://ws.lightningmaps.org/',
+  'wss://ws2.lightningmaps.org/',
+];
+const LIGHTNING_MAX_AGE_MS = 10 * 60 * 1000;
+const LIGHTNING_MAX_STRIKES = 10000;
+
+let _lightningBuffer = [];
+let _lightningConnected = false;
+let _lightningWS = null;
+let _lightningUrlIdx = 0;
+
+function startLightningRelay() {
+  function connect() {
+    const url = LIGHTNING_WS_URLS[_lightningUrlIdx % LIGHTNING_WS_URLS.length];
+    console.log(`[Lightning] Connecting to ${url}`);
+
+    _lightningWS = new WebSocket(url, {
+      headers: {
+        'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)',
+        'Origin': 'https://www.lightningmaps.org',
+      },
+    });
+
+    _lightningWS.on('open', () => {
+      _lightningConnected = true;
+      _lightningUrlIdx = 0; // reset on success
+      console.log('[Lightning] Connected — streaming strikes');
+    });
+
+    _lightningWS.on('message', raw => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        const now = Date.now();
+        const add = (lat, lon) => {
+          if (lat == null || lon == null || isNaN(lat) || isNaN(lon)) return;
+          _lightningBuffer.push({ ts: now, lat: +lat, lon: +lon });
+        };
+
+        // Blitzortung sends strikes in several possible shapes —
+        // handle all of them defensively:
+        if (msg.lat !== undefined) {
+          // Single strike object
+          add(msg.lat, msg.lon);
+        } else if (Array.isArray(msg)) {
+          // Array of strike objects
+          msg.forEach(s => add(s.lat, s.lon));
+        } else if (msg.signals) {
+          // Compact array format: each element = [time_ns, lat*1e7, lon*1e7, ...]
+          (msg.signals || []).forEach(s => {
+            if (s.length >= 3) add(s[1] / 1e7, s[2] / 1e7);
+          });
+        } else if (msg.time !== undefined && msg.lat !== undefined) {
+          // Timestamped single strike
+          add(msg.lat, msg.lon);
+        }
+
+        // Prune buffer: keep last 10 minutes, cap at max strikes
+        const cutoff = now - LIGHTNING_MAX_AGE_MS;
+        _lightningBuffer = _lightningBuffer.filter(s => s.ts > cutoff);
+        if (_lightningBuffer.length > LIGHTNING_MAX_STRIKES) {
+          _lightningBuffer = _lightningBuffer.slice(-LIGHTNING_MAX_STRIKES);
+        }
+      } catch(_) { /* ignore malformed messages */ }
+    });
+
+    _lightningWS.on('close', () => {
+      _lightningConnected = false;
+      _lightningUrlIdx++;
+      const delay = Math.min(5000 * (1 + _lightningUrlIdx % 3), 30000);
+      console.log(`[Lightning] Disconnected — retrying in ${delay / 1000}s`);
+      setTimeout(connect, delay);
+    });
+
+    _lightningWS.on('error', e => {
+      console.warn('[Lightning] WS error:', e.message);
+    });
+  }
+
+  connect();
+}
+
+// Start relay immediately on server startup
+startLightningRelay();
+
+// GET /api/lightning — GeoJSON FeatureCollection of recent strikes
+// Each feature's `age` property (ms) drives the client-side fade animation.
+app.get('/api/lightning', (req, res) => {
+  const now = Date.now();
+  const cutoff = now - LIGHTNING_MAX_AGE_MS;
+  const strikes = _lightningBuffer.filter(s => s.ts > cutoff);
+
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    type: 'FeatureCollection',
+    connected: _lightningConnected,
+    count: strikes.length,
+    generatedAt: now,
+    features: strikes.map(s => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+      properties: { ts: s.ts, age: now - s.ts },
+    })),
+  });
+});
+
 // catch-all and returning index.html — hence the broken map tiles on the
 // Local Radar display. Map it directly to where the files actually live.
 app.use('/images/maps/radar', express.static(path.join(__dirname, 'public', 'weatherstar', 'images', 'maps', 'radar')));

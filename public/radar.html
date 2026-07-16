@@ -766,6 +766,13 @@
     <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Advisory</span></div>
     <div class="leg-row"><div class="leg-sw" style="background:#6699cc"></div>Statement</div>
   </div>
+  <div id="lightning-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#facc15;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">⚡ Lightning</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ff4444;border-radius:50%"></div>&lt; 30 seconds</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ff8c00;border-radius:50%"></div>30s – 2 min</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#facc15;border-radius:50%"></div>2 – 5 min</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#a3a300;border-radius:50%"></div>5 – 10 min</div>
+  </div>
   <div id="spc-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--gold);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">SPC Outlook</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>High Risk</div>
@@ -3583,6 +3590,57 @@ function startChasers() {
   if (!chaserPollTimer) chaserPollTimer = setInterval(refreshChasers, 45 * 1000);
 }
 
+// ── Lightning Strike Layer ────────────────────────────────────────────────────
+// Polls /api/lightning every 30 seconds. Age-coded: red(<30s), orange(30s-2m),
+// yellow(2-5m), faded(5-10m). Canvas renderer handles thousands of strikes.
+// Attribution: Lightning data © Blitzortung.org contributors (CC BY-SA 4.0)
+
+const _ltgRenderer = L.canvas({ padding: 0.5 });
+let _ltgLayer = null, _ltgTimer = null;
+
+function ltgStyle(ageMs) {
+  if (ageMs < 30000)  return { fill:'#ff4444', opacity:1.0,  r:4 };
+  if (ageMs < 120000) return { fill:'#ff8c00', opacity:0.85, r:3 };
+  if (ageMs < 300000) return { fill:'#facc15', opacity:0.65, r:2 };
+                      return { fill:'#a3a300', opacity:0.35, r:2 };
+}
+
+async function refreshLightning() {
+  if (!_ltgLayer) return;
+  try {
+    const data = await (await fetch('/api/lightning')).json();
+    if (!_ltgLayer) return;
+    _ltgLayer.clearLayers();
+    (data.features || []).forEach(f => {
+      const [lng, lat] = f.geometry.coordinates;
+      const s = ltgStyle(f.properties.age);
+      _ltgLayer.addLayer(L.circleMarker([lat, lng], {
+        renderer: _ltgRenderer, radius: s.r,
+        color: 'transparent', fillColor: s.fill, fillOpacity: s.opacity,
+        interactive: false,
+      }));
+    });
+    const leg = document.getElementById('lightning-legend');
+    if (leg) leg.style.display = overlayState['lightning'] ? '' : 'none';
+  } catch(e) { console.warn('[Lightning]', e.message); }
+}
+
+async function startLightning() {
+  if (!_ltgLayer) _ltgLayer = L.layerGroup().addTo(map);
+  await refreshLightning();
+  if (_ltgTimer) clearInterval(_ltgTimer);
+  _ltgTimer = setInterval(refreshLightning, 30000);
+  const leg = document.getElementById('lightning-legend');
+  if (leg) leg.style.display = '';
+}
+
+function stopLightning() {
+  if (_ltgTimer) { clearInterval(_ltgTimer); _ltgTimer = null; }
+  if (_ltgLayer) { _ltgLayer.clearLayers(); map.removeLayer(_ltgLayer); _ltgLayer = null; }
+  const leg = document.getElementById('lightning-legend');
+  if (leg) leg.style.display = 'none';
+}
+
 function stopChasers() {
   if (chaserPollTimer) { clearInterval(chaserPollTimer); chaserPollTimer = null; }
   if (chaserLayer) { chaserLayer.clearLayers(); map.removeLayer(chaserLayer); chaserLayer = null; }
@@ -3668,7 +3726,8 @@ const CHASER_ITEMS=[
   {id:'spc',ico:'🗺',name:'SPC Outlooks',sub:'Day 1 / 2 / 3',def:false},
   {id:'mcd',ico:'💬',name:'Mesoscale Discussions',sub:'Active MCDs',def:false},
   {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
-  {id:'chasers',ico:'🚗',name:'Live Storm Chasers',sub:'Spotter Network · live',def:false},
+  {id:'chasers',  ico:'🚗',name:'Live Storm Chasers',  sub:'Spotter Network · live',            def:false},
+  {id:'lightning',ico:'⚡', name:'Lightning Strikes',   sub:'Blitzortung · live · last 10 min',      def:false},
 ];
 const FIRE_ITEMS=[
   {id:'hms-smoke',        ico:'💨',name:'Smoke Plumes',         sub:'NOAA HMS · light / medium / heavy density',   def:false},
@@ -3705,6 +3764,7 @@ function applyOverlay(id,on){
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
+    case 'lightning': if (on) startLightning(); else stopLightning(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
     case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
     case 'ca-alerts': if (on) startCAAlerts(); else clearCAAlerts(); break;
