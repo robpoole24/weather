@@ -1550,13 +1550,14 @@ async function loadAlerts() {
   const status = document.getElementById('alerts-status');
   status.textContent = 'Updating alerts...';
   try {
-    const res = await fetch(
-      'https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land',
-      { headers:{ 'Accept':'application/geo+json' } }
-    );
+    // Server-side proxy — one NWS request per minute regardless of user count.
+    // Proper User-Agent header, ETag conditional requests, stale-on-error fallback.
+    const res = await fetch('/api/nws-alerts');
+    if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
     lastAlertsData = await res.json();
     renderAlertLayers();
   } catch(e) {
+    console.warn('[Alerts] Load failed:', e.message);
     status.textContent = 'Alerts unavailable';
   }
 }

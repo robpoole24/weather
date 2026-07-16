@@ -1724,6 +1724,89 @@ app.get('/api/aqi', async (req, res) => {
   }
 });
 
+// GET /api/nws-alerts
+// Server-side proxy for the NWS active alerts feed.
+// Caching here means NWS sees one request per minute from Railway regardless
+// of how many concurrent users are on the radar page — protects NWS during
+// outbreak events and keeps latency low for users (Railway → NWS is fast).
+// Stale data is served on NWS errors so the map stays populated even if NWS
+// has a hiccup, which is common during major outbreaks when they're busiest.
+// TTL 60s — NWS updates alerts approximately every minute during active events.
+const _nwsAlertsCache = { data: null, ts: 0, etag: null };
+const NWS_ALERTS_TTL = 60 * 1000; // 60 seconds
+const NWS_ALERTS_URL = 'https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land';
+const NWS_UA = 'WeatherTV/1.0 (+https://watchweathertv.com; contact@altruisticapps.com)';
+
+app.get('/api/nws-alerts', async (req, res) => {
+  const now = Date.now();
+
+  // Serve cache if fresh
+  if (_nwsAlertsCache.data && now - _nwsAlertsCache.ts < NWS_ALERTS_TTL) {
+    res.set('Content-Type', 'application/geo+json');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.set('X-Cache', 'HIT');
+    res.set('X-Cache-Age', Math.round((now - _nwsAlertsCache.ts) / 1000) + 's');
+    return res.send(_nwsAlertsCache.data);
+  }
+
+  try {
+    const headers = {
+      'Accept': 'application/geo+json',
+      'User-Agent': NWS_UA,
+    };
+    // Use ETag for conditional requests — NWS supports If-None-Match so we
+    // save bandwidth on unchanged responses (NWS returns 304 with no body).
+    if (_nwsAlertsCache.etag) headers['If-None-Match'] = _nwsAlertsCache.etag;
+
+    const text = await new Promise((resolve, reject) => {
+      const opts = new URL(NWS_ALERTS_URL);
+      const reqOptions = {
+        hostname: opts.hostname,
+        path: opts.pathname + opts.search,
+        headers,
+      };
+      require('https').get(reqOptions, res => {
+        // 304 Not Modified — cache is still valid, update timestamp only
+        if (res.statusCode === 304) {
+          _nwsAlertsCache.ts = Date.now();
+          return resolve(null);
+        }
+        if (res.statusCode !== 200) return reject(new Error(`NWS returned ${res.statusCode}`));
+        // Capture ETag for next conditional request
+        if (res.headers.etag) _nwsAlertsCache.etag = res.headers.etag;
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve(data));
+      }).on('error', reject);
+    });
+
+    if (text !== null) {
+      // Validate it's actually GeoJSON before caching
+      const parsed = JSON.parse(text);
+      if (!parsed.features) throw new Error('Unexpected NWS response shape');
+      _nwsAlertsCache.data = text;
+      _nwsAlertsCache.ts = Date.now();
+      console.log(`[NWS Alerts] Fetched ${parsed.features.length} active alerts`);
+    }
+
+    res.set('Content-Type', 'application/geo+json');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.set('X-Cache', text === null ? 'HIT-304' : 'MISS');
+    res.send(_nwsAlertsCache.data);
+
+  } catch(e) {
+    console.warn('[NWS Alerts] Fetch failed:', e.message);
+    if (_nwsAlertsCache.data) {
+      // Serve stale — better than an empty map during NWS downtime
+      res.set('Content-Type', 'application/geo+json');
+      res.set('Cache-Control', 'public, max-age=30');
+      res.set('X-Cache', 'STALE');
+      return res.send(_nwsAlertsCache.data);
+    }
+    res.status(502).json({ error: 'NWS alerts unavailable', features: [] });
+  }
+});
+
 // GET /api/hms-smoke
 // Proxies NOAA OSPO's current HMS smoke KML and converts it to GeoJSON.
 // NOAA does NOT publish a GeoJSON format — only KML, Shapefile, and GeoTiff.
