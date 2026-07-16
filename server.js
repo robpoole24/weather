@@ -1724,40 +1724,63 @@ app.get('/api/aqi', async (req, res) => {
   }
 });
 
-// GET /api/hms-smoke?date=YYYYMMDD
-// Proxies NOAA HMS smoke polygon GeoJSON — satepsanone.nesdis.noaa.gov does
-// not send CORS headers so browsers can't fetch it directly.
-// Cached 6 hours (HMS data is published once daily; 6h keeps it fresh for
-// users who leave the tab open overnight without hammering NOAA's server).
-const _hmsSmokeCache = new Map();
-const HMS_TTL = 6 * 60 * 60 * 1000;
+// GET /api/hms-smoke
+// Proxies NOAA OSPO's current HMS smoke KML and converts it to GeoJSON.
+// NOAA does NOT publish a GeoJSON format — only KML, Shapefile, and GeoTiff.
+// The OSPO KML at ospo.noaa.gov/data/land/fire/smoke.kml is a live-updating
+// file with today's smoke polygons. Cached 2 hours.
+const _hmsSmokeCache = { data: null, ts: 0 };
+const HMS_TTL = 2 * 60 * 60 * 1000;
+const HMS_KML_URL = 'https://www.ospo.noaa.gov/data/land/fire/smoke.kml';
+
+function parseHMSKML(kml) {
+  const features = [];
+  const blocks = kml.match(/<Placemark[\s\S]*?<\/Placemark>/g) || [];
+  blocks.forEach(block => {
+    // Density from styleUrl (#Smoke_Light / #Smoke_Medium / #Smoke_Heavy)
+    const styleUrl = (block.match(/<styleUrl>#?([^<]+)<\/styleUrl>/) || [])[1] || '';
+    let density = 'Light';
+    if (/medium/i.test(styleUrl)) density = 'Medium';
+    if (/heavy|thick/i.test(styleUrl)) density = 'Heavy';
+
+    // Parse outer ring coordinates
+    const coordsMatch = block.match(/<coordinates>([\s\S]*?)<\/coordinates>/);
+    if (!coordsMatch) return;
+    const ring = coordsMatch[1].trim().split(/\s+/)
+      .map(t => { const p = t.split(',').map(Number); return p; })
+      .filter(p => p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1]))
+      .map(p => [p[0], p[1]]);
+    if (ring.length < 3) return;
+
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Polygon', coordinates: [ring] },
+      properties: { Density: density },
+    });
+  });
+  return { type: 'FeatureCollection', features };
+}
 
 app.get('/api/hms-smoke', async (req, res) => {
-  const date = (req.query.date || '').replace(/[^0-9]/g, '').slice(0, 8);
-  if (date.length !== 8) return res.status(400).json({ error: 'date required (YYYYMMDD)' });
-
-  const cached = _hmsSmokeCache.get(date);
-  if (cached && Date.now() - cached.ts < HMS_TTL) {
+  if (_hmsSmokeCache.data && Date.now() - _hmsSmokeCache.ts < HMS_TTL) {
     res.set('Content-Type', 'application/json');
-    res.set('Cache-Control', 'public, max-age=21600');
-    return res.send(cached.data);
+    res.set('Cache-Control', 'public, max-age=7200');
+    return res.json(_hmsSmokeCache.data);
   }
-
-  const url = `https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/GeoJSON/hms_smoke${date}.json`;
   try {
-    const data = await fetchTextOverHttp(url);
-    // Validate it's actually JSON — NOAA returns HTML 404 pages for missing dates
-    // which would crash the client-side JSON.parse()
-    if (!data.trim().startsWith('{') && !data.trim().startsWith('[')) {
-      throw new Error(`Non-JSON response from NOAA (got: ${data.trim().slice(0,40)})`);
-    }
-    _hmsSmokeCache.set(date, { data, ts: Date.now() });
+    const kml = await fetchTextOverHttp(HMS_KML_URL);
+    if (!kml.includes('<Placemark')) throw new Error('No Placemark elements in KML response');
+    const geojson = parseHMSKML(kml);
+    _hmsSmokeCache.data = geojson;
+    _hmsSmokeCache.ts = Date.now();
+    console.log(`[HMS Smoke] Loaded ${geojson.features.length} smoke polygons from OSPO KML`);
     res.set('Content-Type', 'application/json');
-    res.set('Cache-Control', 'public, max-age=21600');
-    res.send(data);
+    res.set('Cache-Control', 'public, max-age=7200');
+    res.json(geojson);
   } catch(e) {
-    console.warn(`[HMS Smoke] Proxy failed for ${date}:`, e.message);
-    res.status(404).json({ error: 'HMS smoke data not available for this date' });
+    console.warn('[HMS Smoke] KML proxy failed:', e.message);
+    if (_hmsSmokeCache.data) return res.json(_hmsSmokeCache.data); // serve stale on error
+    res.status(502).json({ error: 'HMS smoke unavailable', type: 'FeatureCollection', features: [] });
   }
 });
 
@@ -1771,6 +1794,8 @@ const FIRE_TTL = 30 * 60 * 1000;
 const NIFC_ENDPOINTS = [
   // Confirmed correct NIFC service name (via NIFC Open Data / Data Basin)
   'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Current_WildlandFire_Perimeters/FeatureServer/0/query',
+  // YTD perimeters — wider dataset, includes fires from current year
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_YTD/FeatureServer/0/query',
   // Fallbacks in case NIFC renames the service
   'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query',
   'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Active_Fires/FeatureServer/0/query',
@@ -1784,28 +1809,33 @@ app.get('/api/fire-perimeters', async (req, res) => {
     return res.send(_fireCache.data);
   }
 
+  let bestResult = null;
   for (const base of NIFC_ENDPOINTS) {
     try {
       const data = await fetchTextOverHttp(base + NIFC_PARAMS);
       const parsed = JSON.parse(data);
-      if (parsed.features && parsed.features.length > 0) {
+      const count = (parsed.features || []).length;
+      console.log(`[Fire] ${base.split('/').slice(-3,-1).join('/')} → ${count} features`);
+      if (count > 0) {
         _fireCache.data = data;
         _fireCache.ts = Date.now();
         res.set('Content-Type', 'application/json');
         res.set('Cache-Control', 'public, max-age=1800');
         return res.send(data);
       }
-      console.log(`[Fire] ${base} returned 0 features — trying next endpoint`);
+      if (!bestResult) bestResult = data; // keep first valid (even if empty)
     } catch(e) {
-      console.warn(`[Fire] ${base} failed:`, e.message);
+      console.warn(`[Fire] ${base.split('/').slice(-3,-1).join('/')} failed:`, e.message);
     }
   }
 
-  // All endpoints failed or returned 0 features — return empty GeoJSON
-  console.warn('[Fire] All NIFC endpoints exhausted or no active fires');
-  const empty = JSON.stringify({ type:'FeatureCollection', features:[] });
+  // All endpoints returned 0 features or failed — send best result (empty GeoJSON)
+  console.warn('[Fire] No active fire perimeters found across all NIFC endpoints');
+  const empty = bestResult || JSON.stringify({ type:'FeatureCollection', features:[] });
+  _fireCache.data = empty;
+  _fireCache.ts = Date.now();
   res.set('Content-Type', 'application/json');
-  res.json({ type:'FeatureCollection', features:[] });
+  res.send(empty);
 });
 
 // GET /api/camera-image?url=...

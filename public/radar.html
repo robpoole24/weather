@@ -1581,23 +1581,27 @@ const zoneGeomCache = new Map(); // zoneId → GeoJSON geometry
 
 async function prefetchZoneGeoms(affectedZoneUrls) {
   if (!affectedZoneUrls || !affectedZoneUrls.length) return;
-  const ids = [...new Set(
-    affectedZoneUrls.map(u => u.split('/').pop()).filter(Boolean)
-  )];
-  const uncached = ids.filter(id => !zoneGeomCache.has(id));
+  // Use full zone URLs (type + id) for individual fetches — the single-zone
+  // endpoint is documented to always include geometry, unlike the batch endpoint.
+  const uncached = affectedZoneUrls.filter(url => {
+    const id = url.split('/').pop();
+    return id && !zoneGeomCache.has(id);
+  });
   if (!uncached.length) return;
-  // NWS supports ?id=X,Y,Z for batch zone lookup — avoids N separate requests
-  const batchSize = 50; // NWS URL length limit
-  for (let i = 0; i < uncached.length; i += batchSize) {
-    const batch = uncached.slice(i, i + batchSize);
-    try {
-      const url = `https://api.weather.gov/zones?id=${batch.join(',')}&limit=200`;
-      const data = await (await fetch(url, {headers:{Accept:'application/geo+json'}})).json();
-      (data.features || []).forEach(f => {
-        if (f.properties?.id && f.geometry) zoneGeomCache.set(f.properties.id, f.geometry);
-      });
-    } catch(e) { console.warn('[Zones] Batch fetch failed for', batch, e.message); }
+  // Fetch up to 10 concurrently to stay polite to NWS
+  const CONCURRENCY = 10;
+  for (let i = 0; i < uncached.length; i += CONCURRENCY) {
+    const batch = uncached.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async zoneUrl => {
+      const id = zoneUrl.split('/').pop();
+      try {
+        const data = await (await fetch(zoneUrl, {headers:{Accept:'application/geo+json'}})).json();
+        if (data.geometry) zoneGeomCache.set(id, data.geometry);
+      } catch(e) { /* zone not found — skip */ }
+    }));
   }
+  const loaded = affectedZoneUrls.filter(u => zoneGeomCache.has(u.split('/').pop())).length;
+  if (loaded) console.log(`[Zones] Fetched ${loaded}/${affectedZoneUrls.length} zone geometries`);
 }
 
 function buildGeomFromZones(affectedZoneUrls) {
@@ -3264,27 +3268,14 @@ async function startHMSSmoke() {
   if (!hmsSmokeLayer) hmsSmokeLayer = L.layerGroup().addTo(map);
   const smokeColors = { Light:'#d4a857', Medium:'#c8773a', Heavy:'#8b3a3a' };
   const fillOp = { Light:0.22, Medium:0.38, Heavy:0.55 };
-  const tryDate = async (d) => {
-    const pad = n => String(n).padStart(2,'0');
-    const tag = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
-    // Proxy through server — satepsanone.nesdis.noaa.gov blocks direct browser requests (no CORS headers)
-    const res = await fetch(`/api/hms-smoke?date=${tag}`); if (!res.ok) throw new Error(res.status);
-    return res.json();
-  };
+  // Server fetches OSPO's live HMS smoke KML and converts to GeoJSON.
+  // No date param needed — the OSPO endpoint always returns current-day smoke.
   let data;
-  const now = new Date();
-  let loaded = false;
-  // HMS publishes once daily — try today and up to 3 days back since publication
-  // can be delayed or the proxy may return a valid 404 for a missing date
-  for (let daysBack = 0; daysBack <= 3; daysBack++) {
-    try {
-      const d = new Date(now); d.setDate(d.getDate() - daysBack);
-      data = await tryDate(d);
-      loaded = true;
-      break;
-    } catch(_) {}
-  }
-  if (!loaded) { console.warn('[HMS Smoke] No data available for past 3 days'); return; }
+  try {
+    const res = await fetch('/api/hms-smoke');
+    if (!res.ok) throw new Error(res.status);
+    data = await res.json();
+  } catch(e) { console.warn('[HMS Smoke] No data available:', e.message); return; }
   if (!hmsSmokeLayer) return; // cleared while loading
   hmsSmokeLayer.clearLayers();
   L.geoJSON(data, {
