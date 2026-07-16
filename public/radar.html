@@ -350,6 +350,22 @@
     position:relative;
   }
   /* Fire/Smoke/AQI legend section */
+  /* ── Lightning bolt markers ── */
+  @keyframes ltgFlash {
+    0%  { transform:scale(0.5); filter:brightness(8) drop-shadow(0 0 10px #fff); opacity:0.2; }
+    15% { transform:scale(1.9); filter:brightness(5) drop-shadow(0 0 8px #fff);  opacity:1;   }
+    45% { transform:scale(1.1); filter:brightness(2) drop-shadow(0 0 4px #faff66); opacity:1; }
+    100%{ transform:scale(1);   filter:brightness(1) drop-shadow(0 0 2px #faff66); opacity:1; }
+  }
+  .ltg-flash { animation:ltgFlash 0.55s ease-out forwards; }
+  .ltg-vibe-row {
+    display:flex; align-items:center; gap:0.5rem;
+    padding:0.25rem 0.75rem 0.35rem 2.5rem;
+    font-size:0.73rem; color:var(--muted);
+  }
+  .ltg-vibe-row input[type=checkbox] { accent-color:var(--accent); cursor:pointer; }
+  .ltg-vibe-row label { cursor:pointer; user-select:none; }
+
   .leg-section-head { font-family:'Barlow Condensed',sans-serif; font-size:0.72rem;
     letter-spacing:0.08em; text-transform:uppercase; margin:0.4rem 0 0.3rem;
     padding-top:0.35rem; border-top:1px solid var(--border); }
@@ -3591,54 +3607,166 @@ function startChasers() {
 }
 
 // ── Lightning Strike Layer ────────────────────────────────────────────────────
-// Polls /api/lightning every 30 seconds. Age-coded: red(<30s), orange(30s-2m),
-// yellow(2-5m), faded(5-10m). Canvas renderer handles thousands of strikes.
+// SVG bolt DivIcons, age-coded with glow, entrance flash animation,
+// timeline-synced with radar past/future, mobile vibration on new strikes.
 // Attribution: Lightning data © Blitzortung.org contributors (CC BY-SA 4.0)
 
-const _ltgRenderer = L.canvas({ padding: 0.5 });
-let _ltgLayer = null, _ltgTimer = null;
+let _ltgLayer = null, _ltgPollTimer = null, _ltgFrameTimer = null;
+let _ltgLastPollData = null;   // last raw features from server
+let _ltgSeenIds = new Set();   // keys of strikes shown before (for new-strike detection)
+let _ltgLastVibe = 0;          // debounce vibration
+let _ltgLastFrame = -1;        // detect radar frame changes
 
-function ltgStyle(ageMs) {
-  if (ageMs < 30000)  return { fill:'#ff4444', opacity:1.0,  r:4 };
-  if (ageMs < 120000) return { fill:'#ff8c00', opacity:0.85, r:3 };
-  if (ageMs < 300000) return { fill:'#facc15', opacity:0.65, r:2 };
-                      return { fill:'#a3a300', opacity:0.35, r:2 };
+// Get the "current radar time" so lightning syncs with Past/Future animation.
+// Returns null during forecast mode (no historical lightning data for the future).
+function getLtgRadarTime() {
+  if (radarMode === 'forecast') return null;
+  // FRAMES[0] = 55 min ago, FRAMES[last] = now
+  const framesBack = (FRAMES.length - 1) - currentFrame;
+  return Date.now() - framesBack * 5 * 60 * 1000;
+}
+
+function ltgBolt(ageMs, radarTime) {
+  // Color and glow by age
+  let fill, glow, opacity, size;
+  if (ageMs < 10000)  { fill='#ffffff'; glow='rgba(255,255,255,0.95)'; opacity=1.0; size=15; }
+  else if (ageMs < 30000)  { fill='#faff88'; glow='rgba(250,255,100,0.85)'; opacity=1.0; size=13; }
+  else if (ageMs < 120000) { fill='#facc15'; glow='rgba(250,200,20,0.7)';  opacity=0.9; size=11; }
+  else if (ageMs < 300000) { fill='#ff8c00'; glow='rgba(255,140,0,0.55)';  opacity=0.65; size=9; }
+  else                     { fill='#a05000'; glow='rgba(160,80,0,0.3)';    opacity=0.3;  size=7; }
+
+  const svg = `<svg width="${size}" height="${Math.round(size*1.6)}" viewBox="0 0 10 16" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="6.5,0 1,8.5 4.5,8.5 3.5,16 9,7.5 5.5,7.5" fill="${fill}"/>
+  </svg>`;
+
+  return {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="filter:drop-shadow(0 0 3px ${glow}) drop-shadow(0 0 6px ${glow});opacity:${opacity}">${svg}</div>`,
+      iconSize: [size, Math.round(size*1.6)],
+      iconAnchor: [size/2, Math.round(size*1.6)/2],
+    }),
+    isNew: ageMs < 10000,
+  };
+}
+
+function renderLtgStrikes(features, radarTime) {
+  if (!_ltgLayer) return;
+  _ltgLayer.clearLayers();
+  if (!features || !features.length) return;
+
+  const now = Date.now();
+  const rt = radarTime || now;
+  const minTs = rt - 10 * 60 * 1000;
+  const bounds = map.getBounds().pad(0.1);
+  const newStrikes = [];
+
+  // Filter to radar time window + viewport, cap at 400 for DOM performance
+  let visible = features
+    .filter(f => {
+      const ts = f.properties.ts;
+      const [lng, lat] = f.geometry.coordinates;
+      return ts <= rt && ts >= minTs && bounds.contains([lat, lng]);
+    })
+    .sort((a, b) => b.properties.ts - a.properties.ts) // freshest first
+    .slice(0, 400);
+
+  visible.forEach(f => {
+    const [lng, lat] = f.geometry.coordinates;
+    const ageMs = rt - f.properties.ts;
+    const { icon, isNew } = ltgBolt(ageMs, rt);
+    const key = `${lat.toFixed(4)},${lng.toFixed(4)},${f.properties.ts}`;
+
+    const mk = L.marker([lat, lng], { icon, interactive: false, zIndexOffset: isNew ? 1000 : 0 });
+
+    if (isNew && !_ltgSeenIds.has(key)) {
+      newStrikes.push(key);
+      // Wrap in a container so we can add the flash CSS class
+      const wrapper = document.createElement('div');
+      wrapper.className = 'ltg-flash';
+      wrapper.appendChild(
+        (() => { const d = document.createElement('div');
+          d.style.cssText = `filter:drop-shadow(0 0 5px rgba(255,255,255,0.95))`;
+          d.innerHTML = icon.options.html; return d; })()
+      );
+      // Swap to flash icon
+      mk.setIcon(L.divIcon({
+        className: '',
+        html: `<div class="ltg-flash" style="filter:drop-shadow(0 0 5px rgba(255,255,255,0.9))">${icon.options.html}</div>`,
+        iconSize: icon.options.iconSize,
+        iconAnchor: icon.options.iconAnchor,
+      }));
+    }
+    _ltgLayer.addLayer(mk);
+  });
+
+  // Vibrate on new strikes — live mode only, not during playback/scrubbing
+  const isLiveMode = currentFrame === FRAMES.length - 1 && radarMode === 'past';
+  if (newStrikes.length && isLiveMode && !isPlaying) {
+    newStrikes.forEach(k => _ltgSeenIds.add(k));
+    const vibeOn = localStorage.getItem('ltg-vibration') !== 'off';
+    if (vibeOn && navigator.vibrate && (now - _ltgLastVibe > 800)) {
+      navigator.vibrate(80);
+      _ltgLastVibe = now;
+    }
+  }
 }
 
 async function refreshLightning() {
   if (!_ltgLayer) return;
   try {
-    const data = await (await fetch('/api/lightning')).json();
-    if (!_ltgLayer) return;
-    _ltgLayer.clearLayers();
-    (data.features || []).forEach(f => {
-      const [lng, lat] = f.geometry.coordinates;
-      const s = ltgStyle(f.properties.age);
-      _ltgLayer.addLayer(L.circleMarker([lat, lng], {
-        renderer: _ltgRenderer, radius: s.r,
-        color: 'transparent', fillColor: s.fill, fillOpacity: s.opacity,
-        interactive: false,
-      }));
-    });
+    const res = await fetch('/api/lightning');
+    const data = await res.json();
+    _ltgLastPollData = data.features || [];
+    const rt = getLtgRadarTime();
+    renderLtgStrikes(_ltgLastPollData, rt);
     const leg = document.getElementById('lightning-legend');
     if (leg) leg.style.display = overlayState['lightning'] ? '' : 'none';
   } catch(e) { console.warn('[Lightning]', e.message); }
 }
 
+function setLtgVibration(enabled) {
+  localStorage.setItem('ltg-vibration', enabled ? 'on' : 'off');
+}
+
 async function startLightning() {
   if (!_ltgLayer) _ltgLayer = L.layerGroup().addTo(map);
+  _ltgSeenIds.clear();
   await refreshLightning();
-  if (_ltgTimer) clearInterval(_ltgTimer);
-  _ltgTimer = setInterval(refreshLightning, 30000);
+  if (_ltgPollTimer) clearInterval(_ltgPollTimer);
+  _ltgPollTimer = setInterval(refreshLightning, 30000);
+
+  // Frame tracker — re-renders strikes without re-fetching when radar frame changes
+  if (_ltgFrameTimer) clearInterval(_ltgFrameTimer);
+  _ltgFrameTimer = setInterval(() => {
+    if (!_ltgLayer || !_ltgLastPollData) return;
+    if (currentFrame !== _ltgLastFrame) {
+      _ltgLastFrame = currentFrame;
+      renderLtgStrikes(_ltgLastPollData, getLtgRadarTime());
+    }
+  }, 200);
+
+  // Also re-render on map move (viewport filter changes)
+  map.on('moveend.lightning', () => {
+    if (_ltgLayer && _ltgLastPollData) renderLtgStrikes(_ltgLastPollData, getLtgRadarTime());
+  });
+
   const leg = document.getElementById('lightning-legend');
   if (leg) leg.style.display = '';
+  const vr = document.getElementById('ltg-vibe-row');
+  if (vr) vr.style.display = '';
 }
 
 function stopLightning() {
-  if (_ltgTimer) { clearInterval(_ltgTimer); _ltgTimer = null; }
+  if (_ltgPollTimer) { clearInterval(_ltgPollTimer); _ltgPollTimer = null; }
+  if (_ltgFrameTimer) { clearInterval(_ltgFrameTimer); _ltgFrameTimer = null; }
+  map.off('moveend.lightning');
   if (_ltgLayer) { _ltgLayer.clearLayers(); map.removeLayer(_ltgLayer); _ltgLayer = null; }
+  _ltgLastPollData = null; _ltgSeenIds.clear(); _ltgLastFrame = -1;
   const leg = document.getElementById('lightning-legend');
   if (leg) leg.style.display = 'none';
+  const vr = document.getElementById('ltg-vibe-row');
+  if (vr) vr.style.display = 'none';
 }
 
 function stopChasers() {
@@ -3803,6 +3931,15 @@ function renderPanel(){
   document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
+  // Vibration sub-row under the lightning toggle
+  const _vr = document.createElement('div');
+  _vr.className='ltg-vibe-row'; _vr.id='ltg-vibe-row';
+  _vr.style.display = overlayState['lightning'] ? '' : 'none';
+  const _von = localStorage.getItem('ltg-vibration') !== 'off';
+  _vr.innerHTML = `<input type="checkbox" id="ltg-vibe-cb" ${_von?'checked':''}
+    onchange="setLtgVibration(this.checked)"><label for="ltg-vibe-cb">📳 Vibrate on new strikes (mobile)</label>`;
+  const _ltgRow = document.getElementById('lp-chaser').querySelector('[data-id="lightning"]');
+  if (_ltgRow) _ltgRow.insertAdjacentElement('afterend', _vr);
   document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-fire').innerHTML=FIRE_ITEMS.map(toggleRowHTML).join('');
   // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
