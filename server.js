@@ -1664,11 +1664,18 @@ app.get('/api/aqi', async (req, res) => {
   const key = process.env.AIRNOW_KEY;
   if (!key) return res.status(503).json({ error: 'AirNow API key not configured' });
 
-  const lat = parseFloat(req.query.lat);
-  const lng = parseFloat(req.query.lng);
-  if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'lat and lng required' });
+  // Accept bounding box (preferred — covers the visible map area) or lat/lng fallback
+  const hasBbox = req.query.south && req.query.west && req.query.north && req.query.east;
+  const south = parseFloat(req.query.south), west  = parseFloat(req.query.west);
+  const north = parseFloat(req.query.north), east  = parseFloat(req.query.east);
+  const lat   = parseFloat(req.query.lat),   lng   = parseFloat(req.query.lng);
 
-  const cacheKey = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  if (hasBbox && [south,west,north,east].some(isNaN)) return res.status(400).json({ error: 'invalid bbox' });
+  if (!hasBbox && (isNaN(lat) || isNaN(lng))) return res.status(400).json({ error: 'lat/lng or bbox required' });
+
+  const cacheKey = hasBbox
+    ? `bbox:${south.toFixed(1)},${west.toFixed(1)},${north.toFixed(1)},${east.toFixed(1)}`
+    : `${lat.toFixed(2)},${lng.toFixed(2)}`;
   const cached = _aqiCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < AQI_TTL) {
     res.set('Cache-Control', 'public, max-age=1800');
@@ -1676,8 +1683,10 @@ app.get('/api/aqi', async (req, res) => {
   }
 
   try {
-    const url = `https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json` +
-                `&latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&distance=250&API_KEY=${key}`;
+    // Bounding box endpoint returns all stations within the viewport — much better for national view
+    const url = hasBbox
+      ? `https://www.airnowapi.org/aq/data/?parameters=PM25,OZONE&BBOX=${west.toFixed(4)},${south.toFixed(4)},${east.toFixed(4)},${north.toFixed(4)}&dataType=A&format=application/json&verbose=1&monitorType=0&includerawconcentrations=0&API_KEY=${key}`
+      : `https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json&latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&distance=250&API_KEY=${key}`;
     const response = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } });
     if (!response.ok) throw new Error(`AirNow returned ${response.status}`);
     const data = await response.json();
@@ -1692,6 +1701,82 @@ app.get('/api/aqi', async (req, res) => {
     console.error('[AQI] Proxy error:', e.message);
     res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
   }
+});
+
+// GET /api/hms-smoke?date=YYYYMMDD
+// Proxies NOAA HMS smoke polygon GeoJSON — satepsanone.nesdis.noaa.gov does
+// not send CORS headers so browsers can't fetch it directly.
+// Cached 6 hours (HMS data is published once daily; 6h keeps it fresh for
+// users who leave the tab open overnight without hammering NOAA's server).
+const _hmsSmokeCache = new Map();
+const HMS_TTL = 6 * 60 * 60 * 1000;
+
+app.get('/api/hms-smoke', async (req, res) => {
+  const date = (req.query.date || '').replace(/[^0-9]/g, '').slice(0, 8);
+  if (date.length !== 8) return res.status(400).json({ error: 'date required (YYYYMMDD)' });
+
+  const cached = _hmsSmokeCache.get(date);
+  if (cached && Date.now() - cached.ts < HMS_TTL) {
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=21600');
+    return res.send(cached.data);
+  }
+
+  const url = `https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/GeoJSON/hms_smoke${date}.json`;
+  try {
+    const data = await fetchTextOverHttp(url);
+    _hmsSmokeCache.set(date, { data, ts: Date.now() });
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=21600');
+    res.send(data);
+  } catch(e) {
+    console.warn(`[HMS Smoke] Proxy failed for ${date}:`, e.message);
+    res.status(404).json({ error: 'HMS smoke data not available for this date' });
+  }
+});
+
+// GET /api/fire-perimeters
+// Proxies NIFC active fire perimeter GeoJSON from WFIGS (Wildland Fire
+// Interagency Geospatial Services). Tries two known NIFC ArcGIS service
+// names since NIFC occasionally renames layers. Cached 30 minutes.
+const _fireCache = { data: null, ts: 0 };
+const FIRE_TTL = 30 * 60 * 1000;
+
+const NIFC_ENDPOINTS = [
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query',
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Active_Fires/FeatureServer/0/query',
+];
+const NIFC_PARAMS = '?where=1%3D1&outFields=IncidentName,GISAcres,PercentContained,FireCause,POOState,FeatureCategory&resultRecordCount=500&f=geojson';
+
+app.get('/api/fire-perimeters', async (req, res) => {
+  if (_fireCache.data && Date.now() - _fireCache.ts < FIRE_TTL) {
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=1800');
+    return res.send(_fireCache.data);
+  }
+
+  for (const base of NIFC_ENDPOINTS) {
+    try {
+      const data = await fetchTextOverHttp(base + NIFC_PARAMS);
+      const parsed = JSON.parse(data);
+      if (parsed.features && parsed.features.length > 0) {
+        _fireCache.data = data;
+        _fireCache.ts = Date.now();
+        res.set('Content-Type', 'application/json');
+        res.set('Cache-Control', 'public, max-age=1800');
+        return res.send(data);
+      }
+      console.log(`[Fire] ${base} returned 0 features — trying next endpoint`);
+    } catch(e) {
+      console.warn(`[Fire] ${base} failed:`, e.message);
+    }
+  }
+
+  // All endpoints failed or returned 0 features — return empty GeoJSON
+  console.warn('[Fire] All NIFC endpoints exhausted or no active fires');
+  const empty = JSON.stringify({ type:'FeatureCollection', features:[] });
+  res.set('Content-Type', 'application/json');
+  res.json({ type:'FeatureCollection', features:[] });
 });
 
 // GET /api/camera-image?url=...

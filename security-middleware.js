@@ -105,10 +105,8 @@ function securityHeaders(req, res, next) {
       " https://api.anthropic.com" +
       // cdnjs — source maps and fetch requests from cdnjs-hosted libraries (Leaflet, hls.js)
       " https://cdnjs.cloudflare.com" +
-      // NOAA HMS Smoke polygon GeoJSON (fire/smoke layers)
-      " https://satepsanone.nesdis.noaa.gov" +
-      // NIFC active fire perimeters (ArcGIS REST)
-      " https://services3.arcgis.com" +
+      // HMS Smoke + NIFC fire perimeters are server-proxied (/api/hms-smoke, /api/fire-perimeters)
+      // — no direct browser calls to satepsanone.nesdis.noaa.gov or services3.arcgis.com needed
       // AirNow is proxied through /api/aqi in server.js — no direct browser call needed
       // Travel forecast city data (domestic + international travel displays)
       " https://api.open-meteo.com" +

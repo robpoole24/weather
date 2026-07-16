@@ -2841,7 +2841,7 @@ function clearAllPaint(){
 }
 function setStatus(t){ const el=document.getElementById('alerts-status'); if(el) el.textContent=t; }
 function paintStatusText(member){
-  const names={ reflectivity:'Base Reflectivity', goes:'GOES Satellite', apptemp:'Apparent Temperature (feels-like)',
+  const names={ reflectivity:'Base Reflectivity', goes:'GOES Satellite', apptemp:'Feels Like',
     velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient',
     canada:'Canadian Radar (MSC GeoMet composite)' };
   return 'Showing: ' + (names[member]||member);
@@ -3209,8 +3209,8 @@ async function startHMSSmoke() {
   const tryDate = async (d) => {
     const pad = n => String(n).padStart(2,'0');
     const tag = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
-    const url = `https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/GeoJSON/hms_smoke${tag}.json`;
-    const res = await fetch(url); if (!res.ok) throw new Error(res.status);
+    // Proxy through server — satepsanone.nesdis.noaa.gov blocks direct browser requests (no CORS headers)
+    const res = await fetch(`/api/hms-smoke?date=${tag}`); if (!res.ok) throw new Error(res.status);
     return res.json();
   };
   let data;
@@ -3247,10 +3247,9 @@ function clearHMSSmoke() {
 let firePerimLayer = null;
 async function startFirePerimeters() {
   if (!firePerimLayer) firePerimLayer = L.layerGroup().addTo(map);
-  const url = 'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Active_Fires/FeatureServer/0/query'
-    + '?where=1%3D1&outFields=IncidentName,GISAcres,PercentContained,FireCause,POOState&geometryType=esriGeometryEnvelope&f=geojson';
+  // Proxy through server — NIFC ArcGIS may not send CORS headers consistently
   try {
-    const data = await (await fetch(url)).json();
+    const data = await (await fetch('/api/fire-perimeters')).json();
     if (!firePerimLayer) return;
     firePerimLayer.clearLayers();
     const count = (data.features||[]).length;
@@ -3308,14 +3307,22 @@ async function startAQI() {
 }
 async function refreshAQI() {
   if (!aqiLayer) return;
-  const c = map.getCenter();
-  const url = `/api/aqi?lat=${c.lat.toFixed(4)}&lng=${c.lng.toFixed(4)}`;
+  const b = map.getBounds();
+  // Use bounding box so we load all stations visible in the current viewport
+  const url = `/api/aqi?south=${b.getSouth().toFixed(4)}&west=${b.getWest().toFixed(4)}&north=${b.getNorth().toFixed(4)}&east=${b.getEast().toFixed(4)}`;
   try {
     const data = await (await fetch(url)).json();
     if (!aqiLayer) return;
     aqiLayer.clearLayers();
+    // Handle both /aq/observation/ (point) and /aq/data/ (bbox) response schemas
     (Array.isArray(data)?data:[]).forEach(obs => {
-      const {Latitude:lat,Longitude:lng,AQI:aqi,ParameterName:param,CategoryName:cat,ReportingArea:area,StateCode:st} = obs;
+      const lat   = obs.Latitude;
+      const lng   = obs.Longitude;
+      const aqi   = obs.AQI;
+      const param = obs.ParameterName || obs.Parameter || '';
+      const area  = obs.ReportingArea || obs.SiteName || '';
+      const st    = obs.StateCode || '';
+      const cat   = obs.Category?.Name || '';
       if (!lat||!lng||aqi==null) return;
       const color = aqiColor(aqi);
       const mk = L.circleMarker([lat,lng],{radius:13,color:'rgba(255,255,255,0.7)',fillColor:color,fillOpacity:0.9,weight:1.5,interactive:true});
@@ -3543,7 +3550,7 @@ function onModelChange(model){
 const BASEMAP_ITEMS=[
   {id:'reflectivity',ico:'🌧',name:'Base Reflectivity',sub:'National mosaic'},
   {id:'goes',ico:'🛰',name:'GOES Satellite',sub:'Infrared cloud imagery'},
-  {id:'apptemp',ico:'🌡',name:'Apparent Temperature',sub:'Wind chill / heat index'},
+  {id:'apptemp',ico:'🌡',name:'Feels Like',sub:'Wind chill / heat index'},
 ];
 const RADAR_ITEMS=[
   // Velocity, SRV, and Echo Tops remain pulled pending better animation
