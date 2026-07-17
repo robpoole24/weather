@@ -713,21 +713,6 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Surface Analysis</div>
-    <div id="lp-surface"></div>
-  </div>
-
-  <div class="lp-section">
-    <div class="lp-section-label">Precipitation</div>
-    <div id="lp-precip"></div>
-  </div>
-
-  <div class="lp-section">
-    <div class="lp-section-label">Tropical</div>
-    <div id="lp-tropical"></div>
-  </div>
-
-  <div class="lp-section">
     <div class="lp-section-label">Fire &amp; Air Quality</div>
     <div id="lp-fire"></div>
   </div>
@@ -794,8 +779,6 @@
   <div class="leg-row"><div class="leg-sw" style="background:#b05a00"></div>Dense Smoke Advisory</div>
   <div class="leg-row"><div class="leg-sw" style="background:#d49030"></div>Smoke Advisory</div>
 
-  <div id="river-gauge-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
-    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#2ec44a;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">📏 River Gauges</div>
     <div class="leg-row"><div class="leg-sw" style="background:#2ec44a;border-radius:50%"></div>No flooding</div>
     <div class="leg-row"><div class="leg-sw" style="background:#facc15;border-radius:50%"></div><span style="color:#ccc">Action stage</span></div>
     <div class="leg-row"><div class="leg-sw" style="background:#ff8c00;border-radius:50%"></div>Minor flood</div>
@@ -4185,30 +4168,8 @@ const CHASER_ITEMS=[
   {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
   {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
   {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
-  {id:'storm-cells',ico:'🎯',name:'Storm Cell Vectors',     sub:'IEM · movement direction & speed',def:false},
 ];
-const SURFACE_ITEMS=[
-  {id:'fronts',   ico:'🌦', name:'WPC Surface Analysis',       sub:'Fronts · pressure centers · NowCOAST',def:false},
-  {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC ERO · Day 1 flood risk',          def:false},
-];
-const PRECIP_ITEMS=[
-  {id:'qpe-1h',  ico:'💧', name:'1-Hour Rainfall (MRMS)',   sub:'Radar-estimated accumulation · past 1h', def:false},
-  {id:'qpe-24h', ico:'🌊', name:'24-Hour Rainfall (MRMS)',  sub:'Radar-estimated accumulation · past 24h',def:false},
-  {id:'river-gauges',ico:'📏',name:'River & Flood Gauges', sub:'NWS NWPS · flood stage status',          def:false},
-];
-const TROPICAL_ITEMS=[
-  {id:'nhc-atlantic', ico:'🌀', name:'Atlantic Tropical Storms',  sub:'NHC · active tracks · cones',   def:false},
-  {id:'nhc-pacific',  ico:'🌀', name:'Pacific Tropical Storms',   sub:'NHC · active tracks · cones',   def:false},
-];
-const FIRE_ITEMS=[
-  {id:'hms-smoke',        ico:'💨',name:'Smoke Plumes',         sub:'NOAA HMS · light / medium / heavy density',   def:false},
-  {id:'fire-perimeters',  ico:'🔥',name:'Active Fire Perimeters',sub:'NIFC · IRWIN active fire boundaries',         def:false},
-  {id:'aqi',              ico:'😷',name:'Air Quality Index',     sub:'AirNow monitoring stations · requires key',   def:false},
-];
-const CAM_ITEMS=[
-  {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
-];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -4241,14 +4202,6 @@ function applyOverlay(id,on){
     case 'ca-alerts': if (on) startCAAlerts(); else clearCAAlerts(); break;
     case 'cc':        if (on) showCC(); else clearCC(); break;
     case 'cameras':   if (on) startCameras(); else stopCameras(); break;
-    case 'storm-cells':    if (on) startStormCells(); else stopStormCells(); break;
-    case 'fronts':         if (on) startFronts(); else stopFronts(); break;
-    case 'ero':            if (on) startERO(); else stopERO(); break;
-    case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); break;
-    case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); break;
-    case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
-    case 'nhc-atlantic':   if (on) startNHC('atl'); else stopNHC('atl'); break;
-    case 'nhc-pacific':    if (on) startNHC('pac'); else stopNHC('pac'); break;
     case 'hms-smoke':      if (on) startHMSSmoke(); else clearHMSSmoke(); break;
     case 'fire-perimeters': if (on) startFirePerimeters(); else clearFirePerimeters(); break;
     case 'aqi':             if (on) startAQI(); else clearAQI(); break;
@@ -4293,9 +4246,6 @@ function renderPanel(){
   if (_ltgRow) _ltgRow.insertAdjacentElement('afterend', _vr);
   document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-fire').innerHTML=FIRE_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-surface').innerHTML=SURFACE_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-precip').innerHTML=PRECIP_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-tropical').innerHTML=TROPICAL_ITEMS.map(toggleRowHTML).join('');
   // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
   // OR CC is toggled on — these are independent now, so both are checked.
   const needsSite=(activePaint in SS_PRODUCTS)||overlayState['cc'];
