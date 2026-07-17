@@ -53,6 +53,7 @@
       this.status         = 'loading';
       this._totalScreens  = 0;
       this._data          = null;
+      this._weatherParams = null;
       this.checkbox       = null;
     }
 
@@ -101,10 +102,20 @@
       return label;
     }
 
-    async _load() {
+    // Called by WS4KP when user sets location — THIS is the correct trigger
+    // for data loading. weatherParameters contains { latLon:{lat,lon}, ... }.
+    getData(weatherParameters, reload) {
+      if (!this.isEnabled) { this.setStatus('disabled'); return false; }
+      this._weatherParams = weatherParameters;
+      this.setStatus('loading');
+      this._load(weatherParameters);
+      return true;
+    }
+
+    async _load(weatherParameters) {
       this.status = 'loading';
       try {
-        await this.fetchData();
+        await this.fetchData(weatherParameters);
         this._totalScreens = 1;
         this.status = 'loaded';
       } catch(e) {
@@ -253,8 +264,8 @@
   class AQIDisplay extends WTVDisplay {
     constructor() { super(13, 'aqi-ws', 'Air Quality', false); }
 
-    async fetchData() {
-      const ll = getLatLon();
+    async fetchData(wp) {
+      const ll = (wp && wp.latLon) ? wp.latLon : getLatLon();
       if (!ll) throw new Error('no location');
       const res = await fetch('/api/aqi?lat=' + ll.lat.toFixed(4) + '&lng=' + ll.lon.toFixed(4));
       const data = await res.json();
@@ -337,8 +348,8 @@
   class SmokeDisplay extends WTVDisplay {
     constructor() { super(14, 'smoke-ws', 'Smoke && Wildfire', false); }
 
-    async fetchData() {
-      const ll = getLatLon();
+    async fetchData(wp) {
+      const ll = (wp && wp.latLon) ? wp.latLon : getLatLon();
       if (!ll) throw new Error('no location');
       const [smokeRes, fireRes] = await Promise.allSettled([
         fetch('/api/hms-smoke').then(r => r.json()),
@@ -436,7 +447,7 @@
   class HurricaneDisplay extends WTVDisplay {
     constructor() { super(15, 'hurricane-ws', 'Tropical Storms', false); }
 
-    async fetchData() {
+    async fetchData(wp) {
       const res = await fetch('https://www.nhc.noaa.gov/CurrentStorms.json');
       const data = await res.json();
       this._data = data.activeStorms || [];
@@ -506,8 +517,8 @@
   class AstronomyDisplay extends WTVDisplay {
     constructor() { super(16, 'astronomy-ws', 'Astronomy', false); }
 
-    async fetchData() {
-      const ll = getLatLon();
+    async fetchData(wp) {
+      const ll = (wp && wp.latLon) ? wp.latLon : getLatLon();
       if (!ll || typeof SunCalc === 'undefined') throw new Error('no location or SunCalc');
       const now    = new Date();
       const sun    = SunCalc.getTimes(now, ll.lat, ll.lon);
