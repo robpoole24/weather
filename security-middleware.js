@@ -110,6 +110,16 @@ function securityHeaders(req, res, next) {
       // HMS Smoke + NIFC fire perimeters are server-proxied (/api/hms-smoke, /api/fire-perimeters)
       // — no direct browser calls to satepsanone.nesdis.noaa.gov or services3.arcgis.com needed
       // AirNow is proxied through /api/aqi in server.js — no direct browser call needed
+      // NowCOAST WMS (surface analysis, ERO, tropical) — tile requests go direct
+      " https://nowcoast.noaa.gov" +
+      // NWS National Water Prediction Service (river/flood gauges)
+      " https://api.water.noaa.gov" +
+      // USGS streamflow backup
+      " https://waterservices.usgs.gov" +
+      // NHC active storms JSON
+      " https://www.nhc.noaa.gov" +
+      // IEM storm attributes GeoJSON
+      " https://mesonet.agron.iastate.edu" +
       // Travel forecast city data (domestic + international travel displays)
       " https://api.open-meteo.com" +
       // NWS — forecasts, conditions, alerts, points, radar station lookup

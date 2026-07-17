@@ -639,6 +639,14 @@
   <div class="lp-section">
     <div class="lp-section-label">Base Map</div>
     <div id="lp-basemap"></div>
+    <div style="margin-top:0.55rem;display:flex;align-items:center;gap:0.5rem;">
+      <span style="font-size:0.68rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;
+        text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">Opacity</span>
+      <input type="range" id="radar-opacity-slider" min="20" max="100" value="85" step="5"
+        oninput="setRadarOpacity(this.value)"
+        style="flex:1;accent-color:var(--accent);height:3px;cursor:pointer;">
+      <span id="radar-opacity-val" style="font-size:0.68rem;color:var(--muted);width:2.2em;text-align:right">85%</span>
+    </div>
   </div>
 
   <div class="lp-section">
@@ -694,6 +702,21 @@
     <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-top:0.35rem;padding:0 0.1rem;">
       Coverage is built from free, publicly available DOT feeds. More states added as feeds are found.
     </div>
+  </div>
+
+  <div class="lp-section">
+    <div class="lp-section-label">Surface Analysis</div>
+    <div id="lp-surface"></div>
+  </div>
+
+  <div class="lp-section">
+    <div class="lp-section-label">Precipitation</div>
+    <div id="lp-precip"></div>
+  </div>
+
+  <div class="lp-section">
+    <div class="lp-section-label">Tropical</div>
+    <div id="lp-tropical"></div>
   </div>
 
   <div class="lp-section">
@@ -762,6 +785,15 @@
   <div class="leg-row"><div class="leg-sw" style="background:#c97a1e"></div>Air Quality Alert</div>
   <div class="leg-row"><div class="leg-sw" style="background:#b05a00"></div>Dense Smoke Advisory</div>
   <div class="leg-row"><div class="leg-sw" style="background:#d49030"></div>Smoke Advisory</div>
+
+  <div id="river-gauge-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#2ec44a;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">📏 River Gauges</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#2ec44a;border-radius:50%"></div>No flooding</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#facc15;border-radius:50%"></div><span style="color:#ccc">Action stage</span></div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ff8c00;border-radius:50%"></div>Minor flood</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#ff0000;border-radius:50%"></div>Moderate flood</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#9b0000;border-radius:50%"></div>Major flood</div>
+  </div>
   <div id="fire-aq-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div class="leg-section-head" style="color:#ff6a00;margin-top:0">Fire &amp; Air Quality</div>
     <div id="fire-legend-rows" style="display:none">
@@ -3804,6 +3836,233 @@ function stopLightning() {
   if (vr) vr.style.display = 'none';
 }
 
+// ── Radar Opacity ─────────────────────────────────────────────────────────────
+function setRadarOpacity(val) {
+  document.getElementById('radar-opacity-val').textContent = val + '%';
+  const opacity = val / 100;
+  // Apply to whichever base layer is currently active
+  if (activePaint === 'reflectivity' && reflectLayer) reflectLayer.setOpacity(opacity);
+  else if (activePaint === 'goes' && goesLayer) goesLayer.setOpacity(opacity);
+  else if (activePaint === 'apptemp' && apptempLayer) apptempLayer.setOpacity(opacity);
+  localStorage.setItem('radar-opacity', val);
+}
+// Restore saved opacity on load
+(function() {
+  const saved = localStorage.getItem('radar-opacity');
+  if (saved) {
+    const slider = document.getElementById('radar-opacity-slider');
+    if (slider) { slider.value = saved; setRadarOpacity(saved); }
+  }
+})();
+
+// ── Storm Cell Vectors ─────────────────────────────────────────────────────────
+// IEM NEXRAD storm attributes — shows each tracked storm cell as a marker
+// with a velocity vector (arrow) pointing in its direction of travel.
+let _stormCellLayer = null, _stormCellTimer = null;
+
+async function refreshStormCells() {
+  if (!_stormCellLayer) return;
+  try {
+    const b = map.getBounds().pad(0.2);
+    const data = await (await fetch(
+      `https://mesonet.agron.iastate.edu/geojson/nexrad_storms.py?`
+    )).json();
+    if (!_stormCellLayer) return;
+    _stormCellLayer.clearLayers();
+    (data.features || []).forEach(f => {
+      const p = f.properties, lat = f.geometry.coordinates[1], lng = f.geometry.coordinates[0];
+      if (!b.contains([lat, lng])) return;
+      const dbz = p.max_dbz || 0;
+      const color = dbz >= 65 ? '#ff00ff' : dbz >= 55 ? '#ff0000' : dbz >= 45 ? '#ff8c00' : '#ffff00';
+      const spd = p.storm_speed || 0, dir = p.storm_drct || 0;
+      // Vector endpoint 45 min ahead
+      const dist = spd * 0.75 * 1.852 / 111; // knots → deg lat
+      const endLat = lat + dist * Math.cos(dir * Math.PI / 180);
+      const endLng = lng + dist * Math.sin(dir * Math.PI / 180) / Math.cos(lat * Math.PI / 180);
+      // Draw arrow shaft
+      if (spd > 0) {
+        L.polyline([[lat, lng], [endLat, endLng]], { color, weight: 2.5, opacity: 0.9 }).addTo(_stormCellLayer);
+        L.circleMarker([endLat, endLng], { radius: 4, color, fillColor: color, fillOpacity: 1, weight: 0 }).addTo(_stormCellLayer);
+      }
+      const mk = L.circleMarker([lat, lng], { radius: 6, color, fillColor: color, fillOpacity: 0.85, weight: 2 });
+      mk.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${color}">🎯 Storm Cell</div>
+        <div style="margin-top:4px">Max dBZ: <strong>${dbz}</strong></div>
+        <div>Movement: <strong>${dir}° at ${spd} kt</strong></div>
+        ${p.tvs ? '<div style="color:#ff0000;margin-top:2px">⚠ TVS detected</div>' : ''}
+        ${p.meso ? '<div style="color:#ff8c00;margin-top:2px">⚠ Meso detected</div>' : ''}
+        <div class="exp">IEM NEXRAD Storm Attributes</div></div>`, { maxWidth: 240 });
+      _stormCellLayer.addLayer(mk);
+    });
+  } catch(e) { console.warn('[Storm Cells]', e.message); }
+}
+async function startStormCells() {
+  if (!_stormCellLayer) _stormCellLayer = L.layerGroup().addTo(map);
+  await refreshStormCells();
+  if (_stormCellTimer) clearInterval(_stormCellTimer);
+  _stormCellTimer = setInterval(refreshStormCells, 2 * 60 * 1000); // every 2 min
+  map.on('moveend.stormcells', refreshStormCells);
+}
+function stopStormCells() {
+  if (_stormCellTimer) { clearInterval(_stormCellTimer); _stormCellTimer = null; }
+  map.off('moveend.stormcells');
+  if (_stormCellLayer) { _stormCellLayer.clearLayers(); map.removeLayer(_stormCellLayer); _stormCellLayer = null; }
+}
+
+// ── WPC Surface Analysis (Fronts) ─────────────────────────────────────────────
+let _frontsLayer = null;
+function startFronts() {
+  if (_frontsLayer) return;
+  _frontsLayer = L.tileLayer.wms(
+    'https://nowcoast.noaa.gov/arcgis/services/nowcoast/analysis_meteohydro_sfc_synoptic_time1/MapServer/WMSServer',
+    { layers: '1', format: 'image/png', transparent: true, version: '1.3.0',
+      opacity: 0.85, zIndex: 420, attribution: 'WPC Surface Analysis: NOAA/NWS' }
+  ).addTo(map);
+}
+function stopFronts() {
+  if (_frontsLayer) { map.removeLayer(_frontsLayer); _frontsLayer = null; }
+}
+
+// ── WPC Excessive Rainfall Outlook ───────────────────────────────────────────
+let _eroLayer = null;
+function startERO() {
+  if (_eroLayer) return;
+  _eroLayer = L.tileLayer.wms(
+    'https://nowcoast.noaa.gov/arcgis/services/nowcoast/wwa_meteoceanhydro_sfc_heavy_rain_time1/MapServer/WMSServer',
+    { layers: '1', format: 'image/png', transparent: true, version: '1.3.0',
+      opacity: 0.7, zIndex: 418, attribution: 'WPC Excessive Rainfall Outlook: NOAA/NWS' }
+  ).addTo(map);
+}
+function stopERO() {
+  if (_eroLayer) { map.removeLayer(_eroLayer); _eroLayer = null; }
+}
+
+// ── MRMS QPE Precipitation Accumulation ──────────────────────────────────────
+const _qpeLayers = {};
+function startQPE(period) {
+  if (_qpeLayers[period]) return;
+  const product = period === '01H' ? 'RadarOnly_QPE_01H' : 'RadarOnly_QPE_24H';
+  _qpeLayers[period] = L.tileLayer(
+    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/mrms::${product}-0/{z}/{x}/{y}.png`,
+    { opacity: 0.75, maxNativeZoom: 8, zIndex: 415,
+      attribution: 'MRMS QPE: Iowa Environmental Mesonet / NOAA' }
+  ).addTo(map);
+}
+function stopQPE(period) {
+  if (_qpeLayers[period]) { map.removeLayer(_qpeLayers[period]); delete _qpeLayers[period]; }
+}
+
+// ── River & Flood Gauges ──────────────────────────────────────────────────────
+const GAUGE_COLORS = {
+  no_flooding: '#2ec44a', action: '#facc15',
+  minor: '#ff8c00',       moderate: '#ff0000', major: '#9b0000',
+};
+const GAUGE_LABELS = {
+  no_flooding: 'No Flooding',  action: 'Action Stage',
+  minor: 'Minor Flood',        moderate: 'Moderate Flood', major: 'Major Flood',
+};
+let _gaugeLayer = null, _gaugeTimer = null;
+
+async function refreshRiverGauges() {
+  if (!_gaugeLayer) return;
+  const b = map.getBounds();
+  try {
+    const url = `https://api.water.noaa.gov/nwps/v1/gauges?` +
+      `bbox=${b.getWest().toFixed(4)},${b.getSouth().toFixed(4)},` +
+      `${b.getEast().toFixed(4)},${b.getNorth().toFixed(4)}&count=200`;
+    const data = await (await fetch(url)).json();
+    if (!_gaugeLayer) return;
+    _gaugeLayer.clearLayers();
+    (data.gauges || []).forEach(g => {
+      const status = g.status?.toLowerCase().replace(' ', '_') || 'no_flooding';
+      const color = GAUGE_COLORS[status] || '#2ec44a';
+      const label = GAUGE_LABELS[status] || status;
+      const mk = L.circleMarker([g.latitude, g.longitude], {
+        radius: 7, color: 'rgba(0,0,0,0.4)', fillColor: color, fillOpacity: 0.95, weight: 1.5
+      });
+      mk.bindPopup(
+        `<div class="alert-popup"><div class="ev" style="color:${color}">📏 ${g.name || g.nwsId}</div>` +
+        `<div style="margin-top:4px">Status: <strong>${label}</strong></div>` +
+        `${g.observed?.primary?.value != null ? `<div>Stage: <strong>${g.observed.primary.value} ${g.observed.primary.unit || 'ft'}</strong></div>` : ''}` +
+        `${g.flood?.categories?.minor != null ? `<div style="font-size:0.73rem;color:var(--muted)">Minor flood: ${g.flood.categories.minor} ft</div>` : ''}` +
+        `<div class="exp">NWS NWPS · NWS ID: ${g.nwsId || '—'}</div></div>`, { maxWidth: 260 }
+      );
+      _gaugeLayer.addLayer(mk);
+    });
+  } catch(e) { console.warn('[River Gauges]', e.message); }
+}
+async function startRiverGauges() {
+  if (!_gaugeLayer) _gaugeLayer = L.layerGroup().addTo(map);
+  await refreshRiverGauges();
+  if (_gaugeTimer) clearInterval(_gaugeTimer);
+  _gaugeTimer = setInterval(refreshRiverGauges, 15 * 60 * 1000); // every 15 min
+  map.on('moveend.gauges', refreshRiverGauges);
+  const _gleg = document.getElementById('river-gauge-legend'); if (_gleg) _gleg.style.display = '';
+}
+function stopRiverGauges() {
+  if (_gaugeTimer) { clearInterval(_gaugeTimer); _gaugeTimer = null; }
+  map.off('moveend.gauges');
+  if (_gaugeLayer) { _gaugeLayer.clearLayers(); map.removeLayer(_gaugeLayer); _gaugeLayer = null; }
+  const _gleg2 = document.getElementById('river-gauge-legend'); if (_gleg2) _gleg2.style.display = 'none';
+}
+
+// ── NHC Tropical Storms ───────────────────────────────────────────────────────
+// Two layers: WMS tile overlay for tracks/cones + JSON advisory text panel
+const _nhcLayers = {}, _nhcPanels = {};
+
+async function startNHC(basin) {
+  // WMS tile layer from NowCOAST for tracks and cone of uncertainty
+  if (!_nhcLayers[basin]) {
+    const svc = basin === 'atl'
+      ? 'nhc_atl_cyclones_time1'
+      : 'nhc_epac_cpac_cyclones_time1';
+    _nhcLayers[basin] = L.tileLayer.wms(
+      `https://nowcoast.noaa.gov/arcgis/services/nowcoast/wwa_meteoceanhydro_tropicalcyclones_${svc === 'nhc_atl_cyclones_time1' ? 'time1' : 'time1'}/MapServer/WMSServer`,
+      { layers: '1,2,3,4', format: 'image/png', transparent: true,
+        version: '1.3.0', opacity: 0.85, zIndex: 425,
+        attribution: 'NHC Tropical Data: NOAA/NHC' }
+    ).addTo(map);
+  }
+  // Advisory text panel
+  await refreshNHCPanel(basin);
+}
+
+async function refreshNHCPanel(basin) {
+  try {
+    const data = await (await fetch('https://www.nhc.noaa.gov/CurrentStorms.json')).json();
+    const basinKey = basin === 'atl' ? 'atlantic' : 'eastern_pacific';
+    const storms = (data.activeStorms || []).filter(s =>
+      s.basin?.toLowerCase().includes(basin === 'atl' ? 'atl' : 'pac')
+    );
+    let panelEl = document.getElementById(`nhc-panel-${basin}`);
+    if (!panelEl) {
+      panelEl = document.createElement('div');
+      panelEl.id = `nhc-panel-${basin}`;
+      panelEl.style.cssText = 'position:absolute;top:52px;right:8px;z-index:450;' +
+        'background:rgba(14,22,35,0.92);border:1px solid rgba(0,180,216,0.3);' +
+        'border-radius:6px;padding:0.6rem 0.8rem;max-width:240px;font-size:0.75rem;' +
+        'font-family:Barlow,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,0.5)';
+      document.getElementById('map').appendChild(panelEl);
+    }
+    _nhcPanels[basin] = panelEl;
+    if (!storms.length) {
+      panelEl.innerHTML = `<div style="color:var(--muted)">🌀 No active ${basin === 'atl' ? 'Atlantic' : 'Pacific'} storms</div>`;
+    } else {
+      panelEl.innerHTML = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;
+        font-weight:700;color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.4rem">
+        🌀 ${basin === 'atl' ? 'Atlantic' : 'Pacific'} Storms</div>` +
+        storms.map(s => `<div style="margin-bottom:0.4rem;padding-bottom:0.4rem;border-bottom:1px solid rgba(255,255,255,0.08)">
+          <div style="font-weight:600">${s.name} (${s.classification || ''})</div>
+          <div style="color:var(--muted);font-size:0.7rem">Winds: ${s.maxWinds || '—'} kt · ${s.movementDir || ''} ${s.movementSpeed || '—'} kt</div>
+        </div>`).join('');
+    }
+  } catch(e) { console.warn('[NHC]', e.message); }
+}
+
+function stopNHC(basin) {
+  if (_nhcLayers[basin]) { map.removeLayer(_nhcLayers[basin]); delete _nhcLayers[basin]; }
+  if (_nhcPanels[basin]) { _nhcPanels[basin].remove(); delete _nhcPanels[basin]; }
+}
+
 function stopChasers() {
   if (chaserPollTimer) { clearInterval(chaserPollTimer); chaserPollTimer = null; }
   if (chaserLayer) { chaserLayer.clearLayers(); map.removeLayer(chaserLayer); chaserLayer = null; }
@@ -3892,14 +4151,11 @@ const BASEMAP_ITEMS=[
   {id:'apptemp',ico:'🌡',name:'Feels Like',sub:'Wind chill / heat index'},
 ];
 const RADAR_ITEMS=[
-  // Velocity, SRV, and Echo Tops remain pulled pending better animation
-  // infrastructure and memory resources — see scoping notes.
-  //
-  // CC moved OUT of this array (June 2026): as a radio-button "paint" it
-  // replaced base reflectivity entirely when selected, with no way to
-  // toggle it back off short of picking a different paint — both confusing
-  // since CC needs reflectivity visible underneath to know which storm
-  // you're even looking at. Now a toggleable overlay — see CC_ITEMS below.
+  // Single-site products — require selecting a nearby WSR-88D station.
+  // The site picker appears automatically when any of these are enabled.
+  {id:'echotops', ico:'🔝', name:'Echo Tops',               sub:'Max radar return altitude · single site', def:false},
+  {id:'velocity', ico:'💨', name:'Base Velocity',            sub:'Radial wind speed · single site',        def:false},
+  {id:'srv',      ico:'🌀', name:'Storm-Relative Velocity',  sub:'Storm-motion removed · single site',     def:false},
 ];
 const CC_ITEMS=[
   {id:'cc',ico:'💧',name:'Correlation Coefficient',sub:'Dual-pol · debris signature',def:false},
@@ -3913,11 +4169,25 @@ const ALERT_ITEMS=[
   {id:'banner',ico:'🔔',name:'Warning Banner',sub:'Scroll alert inside polygon',def:true},
 ];
 const CHASER_ITEMS=[
-  {id:'spc',ico:'🗺',name:'SPC Outlooks',sub:'Day 1 / 2 / 3',def:false},
-  {id:'mcd',ico:'💬',name:'Mesoscale Discussions',sub:'Active MCDs',def:false},
-  {id:'lsr',ico:'📍',name:'Storm Reports',sub:'Confirmed LSRs · 3h',def:false},
-  {id:'chasers',  ico:'🚗',name:'Live Storm Chasers',  sub:'Spotter Network · live',            def:false},
-  {id:'lightning',ico:'⚡', name:'Lightning Strikes',   sub:'Blitzortung · live · last 10 min',      def:false},
+  {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
+  {id:'mcd',       ico:'💬', name:'Mesoscale Discussions',  sub:'Active MCDs',                     def:false},
+  {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
+  {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
+  {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
+  {id:'storm-cells',ico:'🎯',name:'Storm Cell Vectors',     sub:'IEM · movement direction & speed',def:false},
+];
+const SURFACE_ITEMS=[
+  {id:'fronts',   ico:'🌦', name:'WPC Surface Analysis',       sub:'Fronts · pressure centers · NowCOAST',def:false},
+  {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC ERO · Day 1 flood risk',          def:false},
+];
+const PRECIP_ITEMS=[
+  {id:'qpe-1h',  ico:'💧', name:'1-Hour Rainfall (MRMS)',   sub:'Radar-estimated accumulation · past 1h', def:false},
+  {id:'qpe-24h', ico:'🌊', name:'24-Hour Rainfall (MRMS)',  sub:'Radar-estimated accumulation · past 24h',def:false},
+  {id:'river-gauges',ico:'📏',name:'River & Flood Gauges', sub:'NWS NWPS · flood stage status',          def:false},
+];
+const TROPICAL_ITEMS=[
+  {id:'nhc-atlantic', ico:'🌀', name:'Atlantic Tropical Storms',  sub:'NHC · active tracks · cones',   def:false},
+  {id:'nhc-pacific',  ico:'🌀', name:'Pacific Tropical Storms',   sub:'NHC · active tracks · cones',   def:false},
 ];
 const FIRE_ITEMS=[
   {id:'hms-smoke',        ico:'💨',name:'Smoke Plumes',         sub:'NOAA HMS · light / medium / heavy density',   def:false},
@@ -3927,7 +4197,7 @@ const FIRE_ITEMS=[
 const CAM_ITEMS=[
   {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS);
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -3960,7 +4230,15 @@ function applyOverlay(id,on){
     case 'ca-alerts': if (on) startCAAlerts(); else clearCAAlerts(); break;
     case 'cc':        if (on) showCC(); else clearCC(); break;
     case 'cameras':   if (on) startCameras(); else stopCameras(); break;
-    case 'hms-smoke':       if (on) startHMSSmoke(); else clearHMSSmoke(); break;
+    case 'storm-cells':    if (on) startStormCells(); else stopStormCells(); break;
+    case 'fronts':         if (on) startFronts(); else stopFronts(); break;
+    case 'ero':            if (on) startERO(); else stopERO(); break;
+    case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); break;
+    case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); break;
+    case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
+    case 'nhc-atlantic':   if (on) startNHC('atl'); else stopNHC('atl'); break;
+    case 'nhc-pacific':    if (on) startNHC('pac'); else stopNHC('pac'); break;
+    case 'hms-smoke':      if (on) startHMSSmoke(); else clearHMSSmoke(); break;
     case 'fire-perimeters': if (on) startFirePerimeters(); else clearFirePerimeters(); break;
     case 'aqi':             if (on) startAQI(); else clearAQI(); break;
     case 'banner':
@@ -4004,6 +4282,9 @@ function renderPanel(){
   if (_ltgRow) _ltgRow.insertAdjacentElement('afterend', _vr);
   document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-fire').innerHTML=FIRE_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-surface').innerHTML=SURFACE_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-precip').innerHTML=PRECIP_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-tropical').innerHTML=TROPICAL_ITEMS.map(toggleRowHTML).join('');
   // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
   // OR CC is toggled on — these are independent now, so both are checked.
   const needsSite=(activePaint in SS_PRODUCTS)||overlayState['cc'];
