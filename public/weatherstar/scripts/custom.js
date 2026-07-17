@@ -513,82 +513,86 @@
     }
   }
 
-  // ── 4. Astronomy Display ──────────────────────────────────────────────────────
-  class AstronomyDisplay extends WTVDisplay {
-    constructor() { super(16, 'astronomy-ws', 'Astronomy', false); }
+  // ── 4. UV & Outdoor Conditions Display ──────────────────────────────────────
+  // Shows UV index, cloud cover, visibility and outdoor advisories —
+  // none of which appear on the WS4KP Almanac screen.
+  class OutdoorDisplay extends WTVDisplay {
+    constructor() { super(16, 'astronomy-ws', 'UV & Outdoor', false); }
 
     async fetchData(wp) {
       const ll = (wp && wp.latLon) ? wp.latLon : getLatLon();
-      if (!ll || typeof SunCalc === 'undefined') throw new Error('no location or SunCalc');
-      const now    = new Date();
-      const sun    = SunCalc.getTimes(now, ll.lat, ll.lon);
-      const tmrw   = new Date(now); tmrw.setDate(tmrw.getDate() + 1);
-      const sun2   = SunCalc.getTimes(tmrw, ll.lat, ll.lon);
-      const moon   = SunCalc.getMoonTimes(now, ll.lat, ll.lon);
-      const moonIl = SunCalc.getMoonIllumination(now);
-      this._data = { sun, sun2, moon, moonIl, now, ll };
+      if (!ll) throw new Error('no location');
+      const url = 'https://api.open-meteo.com/v1/forecast'
+        + '?latitude=' + ll.lat.toFixed(4)
+        + '&longitude=' + ll.lon.toFixed(4)
+        + '&current=uv_index,cloud_cover,visibility,weather_code'
+        + '&hourly=uv_index&forecast_days=1&timezone=auto';
+      const data = await (await fetch(url)).json();
+      // Sun times for solar noon (not on Almanac)
+      let solarNoon = null;
+      if (typeof SunCalc !== 'undefined') {
+        const pos = SunCalc.getTimes(new Date(), ll.lat, ll.lon);
+        solarNoon = pos.solarNoon;
+      }
+      this._data = { current: data.current, hourly: data.hourly, solarNoon, ll };
     }
 
-    moonPhaseName(frac) {
-      if (frac < 0.03 || frac > 0.97) return 'New Moon';
-      if (frac < 0.22) return 'Waxing Crescent';
-      if (frac < 0.28) return 'First Quarter';
-      if (frac < 0.47) return 'Waxing Gibbous';
-      if (frac < 0.53) return 'Full Moon';
-      if (frac < 0.72) return 'Waning Gibbous';
-      if (frac < 0.78) return 'Last Quarter';
-      return 'Waning Crescent';
+    uvLabel(uv) {
+      if (uv < 3)  return { label:'Low',       color: WS.green  };
+      if (uv < 6)  return { label:'Moderate',   color: WS.amber  };
+      if (uv < 8)  return { label:'High',       color: WS.orange };
+      if (uv < 11) return { label:'Very High',  color: WS.red    };
+      return              { label:'Extreme',    color: '#ff00ff' };
     }
 
-    moonIcon(frac) {
-      if (frac < 0.05 || frac > 0.95) return '🌑';
-      if (frac < 0.25) return '🌒';
-      if (frac < 0.30) return '🌓';
-      if (frac < 0.50) return '🌔';
-      if (frac < 0.55) return '🌕';
-      if (frac < 0.75) return '🌖';
-      if (frac < 0.80) return '🌗';
-      return '🌘';
-    }
-
-    dayLength(rise, set) {
-      if (!rise || !set) return '—';
-      const mins = Math.round((set - rise) / 60000);
-      return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+    cloudDesc(pct) {
+      if (pct < 10) return 'Clear';
+      if (pct < 30) return 'Mostly Clear';
+      if (pct < 60) return 'Partly Cloudy';
+      if (pct < 85) return 'Mostly Cloudy';
+      return 'Overcast';
     }
 
     renderContent(el) {
       const d = this._data;
-      if (!d) { el.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center">Location required for astronomy data</div>'; return; }
+      if (!d || !d.current) {
+        el.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center">Location required for outdoor data</div>';
+        return;
+      }
+      const c  = d.current;
+      const uv = c.uv_index ?? 0;
+      const uvInfo = this.uvLabel(uv);
+      const cloud = c.cloud_cover ?? 0;
+      const vis = c.visibility != null ? (c.visibility / 1000).toFixed(1) + ' km' : '—';
 
-      const { sun, sun2, moon, moonIl } = d;
-      const phase = moonIl.phase;
-      const illum = Math.round(moonIl.fraction * 100);
+      // Peak UV today from hourly
+      let peakUV = uv;
+      if (d.hourly && d.hourly.uv_index) {
+        peakUV = Math.max(...d.hourly.uv_index);
+      }
+      const peakInfo = this.uvLabel(peakUV);
 
       let html = '';
+      html += WS.bigValue(uv.toFixed(1), 'UV Index — ' + uvInfo.label, uvInfo.color);
 
-      // Sun section
-      html += WS.heading('☀ SUN', WS.amber);
-      html += WS.row('Sunrise', sun.sunrise ? fmt12(sun.sunrise) : '—', WS.amber);
-      html += WS.row('Sunset',  sun.sunset  ? fmt12(sun.sunset)  : '—', WS.orange);
-      html += WS.row('Day Length', this.dayLength(sun.sunrise, sun.sunset), WS.white);
-      html += WS.row('Tomorrow Sunrise', sun2.sunrise ? fmt12(sun2.sunrise) : '—', WS.muted);
+      html += WS.heading('UV CONDITIONS', uvInfo.color);
+      html += WS.row('Current UV',  uv.toFixed(1),         uvInfo.color);
+      html += WS.row('Peak UV Today', peakUV.toFixed(1),   peakInfo.color);
+      if (d.solarNoon) html += WS.row('Solar Noon', fmt12(d.solarNoon), WS.amber);
 
-      // Moon section
-      html += WS.heading(this.moonIcon(phase) + ' MOON', '#c8d8f0');
-      html += WS.row('Phase', this.moonPhaseName(phase), '#c8d8f0');
-      html += WS.row('Illumination', illum + '%', illum > 50 ? WS.amber : WS.muted);
-      if (moon.rise) html += WS.row('Moonrise', fmt12(moon.rise), '#c8d8f0');
-      if (moon.set)  html += WS.row('Moonset',  fmt12(moon.set),  '#c8d8f0');
+      // Protection advice
+      const advice = uv < 3 ? 'No protection needed for most.'
+        : uv < 6  ? 'Wear sunscreen SPF 30+ when outdoors.'
+        : uv < 8  ? 'Reduce midday sun exposure. SPF 30+ required.'
+        : uv < 11 ? 'Minimize sun exposure 10am–4pm. SPF 50+ required.'
+        : 'Avoid sun exposure during peak hours.';
+      html += '<div class="wtv-alert-box" style="border-color:' + uvInfo.color + ';color:' + WS.white + ';font-size:0.75em;margin:6px 0">' + advice + '</div>';
 
-      // Dawn/dusk civil twilight
-      html += WS.heading('TWILIGHT', WS.muted);
-      html += WS.row('Civil Dawn',  sun.dawn  ? fmt12(sun.dawn)  : '—', WS.muted);
-      html += WS.row('Civil Dusk',  sun.dusk  ? fmt12(sun.dusk)  : '—', WS.muted);
-      html += WS.row('Nautical Dawn', sun.nauticalDawn ? fmt12(sun.nauticalDawn) : '—', WS.muted);
-      html += WS.row('Nautical Dusk', sun.nauticalDusk ? fmt12(sun.nauticalDusk) : '—', WS.muted);
+      html += WS.heading('SKY CONDITIONS', WS.white);
+      html += WS.row('Cloud Cover', cloud + '%  — ' + this.cloudDesc(cloud), WS.white);
+      html += WS.row('Visibility',  vis, WS.white);
 
-      html += WS.source('SunCalc · Data for ' + d.ll.lat.toFixed(2) + ', ' + d.ll.lon.toFixed(2));
+      html += WS.source('Open-Meteo · Updated hourly');
       el.innerHTML = html;
     }
   }
@@ -600,13 +604,28 @@
       setTimeout(registerWTVDisplays, 500);
       return;
     }
-    [
+    const displays = [
       new AQIDisplay(),
       new SmokeDisplay(),
       new HurricaneDisplay(),
-      new AstronomyDisplay(),
-    ].forEach(d => window.wtvRegisterDisplay(d));
-    console.log('[WTV] Custom displays registered: AQI, Smoke, Tropical, Astronomy');
+      new OutdoorDisplay(),
+    ];
+    displays.forEach(d => window.wtvRegisterDisplay(d));
+    console.log('[WTV] Custom displays registered: AQI, Smoke, Tropical, UV & Outdoor');
+
+    // WS4KP may have already called getData() on existing displays before our
+    // DOMContentLoaded handler fired — manually trigger it on our displays now
+    // so they load data immediately rather than waiting for the next location update.
+    const ll = getLatLon();
+    if (ll) {
+      const weatherParameters = { latLon: ll };
+      displays.forEach(d => {
+        if (d.isEnabled) {
+          console.log('[WTV] Triggering getData for:', d.name);
+          d.getData(weatherParameters);
+        }
+      });
+    }
   }
 
   if (document.readyState === 'loading') {
