@@ -81,8 +81,7 @@
         return false;
       }
 
-      // Start loading data now that display is enabled
-      this._load();
+      // Data loads via getData() when WS4KP provides location — NOT here
 
       const label = document.createElement('label');
       label.id = 'label-' + this.elemId;
@@ -94,7 +93,7 @@
         this.isEnabled = e.target.checked;
         window.localStorage.setItem('display-enabled: ' + this.elemId, this.isEnabled);
         if (!this.isEnabled) { this.status = 'disabled'; this._totalScreens = 0; }
-        else this._load();
+        else if (this._weatherParams) this.getData(this._weatherParams);
       });
       label.appendChild(cb);
       label.appendChild(document.createTextNode('\u00a0' + this.name));
@@ -448,9 +447,10 @@
     constructor() { super(15, 'hurricane-ws', 'Tropical Storms', false); }
 
     async fetchData(wp) {
-      const res = await fetch('https://www.nhc.noaa.gov/CurrentStorms.json');
+      // NHC blocks direct browser requests (no CORS headers) — use server proxy
+      const res = await fetch('/api/nhc-storms');
       const data = await res.json();
-      this._data = data.activeStorms || [];
+      this._data = data.activeStorms || data.storms || [];
     }
 
     catColor(winds) {

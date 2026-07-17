@@ -103,8 +103,10 @@ function securityHeaders(req, res, next) {
     "connect-src 'self'" +
       // Internal WeatherTV APIs
       " https://api.anthropic.com" +
-      // Firebase SDK hosted on gstatic.com (dynamic import for push notifications)
+      // Firebase SDK + installation service (required for FCM push token registration)
       " https://www.gstatic.com" +
+      " https://firebaseinstallations.googleapis.com" +
+      " https://fcmregistrations.googleapis.com" +
       // cdnjs — source maps and fetch requests from cdnjs-hosted libraries (Leaflet, hls.js)
       " https://cdnjs.cloudflare.com" +
       // HMS Smoke + NIFC fire perimeters are server-proxied (/api/hms-smoke, /api/fire-perimeters)

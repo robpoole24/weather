@@ -1119,6 +1119,32 @@ app.get('/api/firebase-config', (req, res) => {
   });
 });
 
+// GET /api/nhc-storms
+// Proxies NHC CurrentStorms.json — nhc.noaa.gov does not send CORS headers so
+// browsers (including the WeatherStar iframe) cannot fetch it directly.
+// Cached 10 minutes — storm positions update roughly every 3-6 hours.
+const _nhcCache = { data: null, ts: 0 };
+const NHC_TTL = 10 * 60 * 1000;
+
+app.get('/api/nhc-storms', async (req, res) => {
+  if (_nhcCache.data && Date.now() - _nhcCache.ts < NHC_TTL) {
+    res.set('Cache-Control', 'public, max-age=600');
+    return res.json(_nhcCache.data);
+  }
+  try {
+    const text = await fetchTextOverHttp('https://www.nhc.noaa.gov/CurrentStorms.json');
+    const data = JSON.parse(text);
+    _nhcCache.data = data;
+    _nhcCache.ts = Date.now();
+    res.set('Cache-Control', 'public, max-age=600');
+    res.json(data);
+  } catch(e) {
+    console.warn('[NHC] Proxy error:', e.message);
+    if (_nhcCache.data) return res.json(_nhcCache.data);
+    res.status(502).json({ activeStorms: [], error: 'NHC unavailable' });
+  }
+});
+
 // GET /api/canada-alerts
 // Proxies Environment Canada's national weather alert ATOM feed and returns
 // structured JSON. EC's ATOM feed gives us event type, headline, province/
