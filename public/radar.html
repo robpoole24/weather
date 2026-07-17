@@ -3828,20 +3828,20 @@ async function updateFeelsLike(lat,lng){
 
 const MODELS = {
   hrrr: {
-    label: 'HRRR — Short Range (0–3h)',
-    note:  'High-Resolution Rapid Refresh · 3km · Updates hourly · 15-min steps to +3h. Best for near-term storm timing. Forecast imagery is smoother than live radar — this is a property of all model products, not a rendering issue.',
+    label: 'HRRR — Simulated Reflectivity',
+    note:  'High-Resolution Rapid Refresh · 3km · Updates hourly · 15-min steps to +3h. Best for near-term storm timing. The only free forecast reflectivity tile source available — RRFS replaces it August 31, 2026 with improved resolution.',
     kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
     urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
   },
-  nam: {
-    label: 'NAM — Extended Range (0–24h)',
-    note:  'North American Mesoscale · 12km · Updates 4× daily · 1-hour steps to +24h. Useful for day-ahead planning. Coarser resolution than HRRR — broad storm patterns, not individual cells.',
-    kind:  'iem', maxMins: 1440, stepMins: 60, maxNativeZoom: 7,
-    urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nam::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
+  hrrrp: {
+    label: 'HRRR — Precipitation Type',
+    note:  'High-Resolution Rapid Refresh · Same HRRR model data, different color scheme. Color-codes precipitation by type: blue = rain, purple = freezing rain, green = snow, pink = ice pellets. Most useful for winter storms.',
+    kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
+    urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFP-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
   },
   rrfs: {
     label: 'RRFS — Coming Aug 31',
-    note:  "Rapid Refresh Forecast System — HRRR's replacement with higher resolution and improved convective physics. Becomes operational August 31, 2026. We will activate it on that date. Use HRRR until then.",
+    note:  "Rapid Refresh Forecast System — replaces both HRRR and NAM on August 31, 2026. Higher resolution, better convective physics, sharper storm representation. We will activate it on launch day. HRRR is the best available option until then.",
     kind:  'soon', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
     urlFn: () => '',
   },
