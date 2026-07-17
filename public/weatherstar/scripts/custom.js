@@ -1,1 +1,600 @@
-// WeatherTV deployment — no custom overrides
+// WeatherTV Custom WeatherStar Displays
+// Registers AQI, Smoke/Wildfire, Tropical Storms, and Astronomy screens
+// into the WS4KP rotation using the exposed wtvRegisterDisplay hook.
+// Requires: resources/suncalc.js (loaded before this file)
+// Data sources: WeatherTV's own server-side APIs + NHC public JSON
+
+(function() {
+  'use strict';
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  function getLatLon() {
+    try {
+      const raw = new URLSearchParams(window.location.search).get('latLon');
+      if (!raw) return null;
+      return JSON.parse(raw); // { lat, lon }
+    } catch(_) { return null; }
+  }
+
+  function fmt12(date) {
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // Point-in-polygon (ray casting)
+  function pointInPoly(lat, lng, geometry) {
+    if (!geometry) return false;
+    const polys = geometry.type === 'Polygon'
+      ? [geometry.coordinates]
+      : geometry.coordinates;
+    for (const poly of polys) {
+      const ring = poly[0];
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1];
+        const xj = ring[j][0], yj = ring[j][1];
+        if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi))
+          inside = !inside;
+      }
+      if (inside) return true;
+    }
+    return false;
+  }
+
+  // ── Base class for WTV custom displays ───────────────────────────────────────
+  // Implements the minimum WS4KP display interface so screens appear
+  // in the rotation and in the Selected Displays panel.
+  class WTVDisplay {
+    constructor(navId, elemId, name, defaultEnabled) {
+      this.navId          = navId;
+      this.elemId         = elemId;
+      this.name           = name;
+      this.defaultEnabled = defaultEnabled;
+      this.isEnabled      = false;
+      this.status         = 'loading';
+      this._totalScreens  = 0;
+      this._data          = null;
+      this.checkbox       = null;
+    }
+
+    get timing() {
+      return { totalScreens: this._totalScreens, screenIndex: -1 };
+    }
+
+    // Called by WS4KP's checkbox panel builder
+    generateCheckbox(defaultEnabled) {
+      const def = defaultEnabled !== undefined ? defaultEnabled : this.defaultEnabled;
+      const params  = new URLSearchParams(window.location.search);
+      const urlVal  = params.get(this.elemId) ?? params.get(this.elemId + '-checkbox');
+      let enabled;
+      if (urlVal !== null && urlVal !== undefined) {
+        enabled = (urlVal === 'true');
+      } else {
+        const lsVal = window.localStorage.getItem('display-enabled: ' + this.elemId);
+        enabled = lsVal !== null ? (lsVal === 'true') : Boolean(def);
+      }
+      this.isEnabled = enabled;
+      window.localStorage.setItem('display-enabled: ' + this.elemId, enabled);
+
+      if (!this.isEnabled) {
+        this.status = 'disabled';
+        return false;
+      }
+
+      // Start loading data now that display is enabled
+      this._load();
+
+      const label = document.createElement('label');
+      label.id = 'label-' + this.elemId;
+      const cb = document.createElement('input');
+      cb.type    = 'checkbox';
+      cb.id      = 'checkbox-' + this.elemId;
+      cb.checked = true;
+      cb.addEventListener('change', e => {
+        this.isEnabled = e.target.checked;
+        window.localStorage.setItem('display-enabled: ' + this.elemId, this.isEnabled);
+        if (!this.isEnabled) { this.status = 'disabled'; this._totalScreens = 0; }
+        else this._load();
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode('\u00a0' + this.name));
+      this.checkbox = label;
+      return label;
+    }
+
+    async _load() {
+      this.status = 'loading';
+      try {
+        await this.fetchData();
+        this._totalScreens = 1;
+        this.status = 'loaded';
+      } catch(e) {
+        console.warn('[WTV:' + this.name + '] load failed:', e.message);
+        this.status = 'failed';
+      }
+    }
+
+    // Override in subclasses
+    async fetchData() {}
+    renderContent(el) {}
+
+    // Called by WS4KP navigation when this display becomes active
+    showCanvas(cmd) {
+      const el = document.getElementById(this.elemId + '-html');
+      if (!el) return;
+      // Re-fetch on each show so data stays fresh
+      this._load().then(() => {
+        const contentEl = el.querySelector('.wtv-content');
+        if (contentEl) this.renderContent(contentEl);
+      });
+    }
+
+    setStatus(s) { this.status = s; }
+    sendNavDisplayMessage() {}
+    navNext() { return false; }
+    navPrev() { return false; }
+  }
+
+  // ── Shared WS4KP visual style helpers ────────────────────────────────────────
+  const WS = {
+    // Amber = WS4KP's primary data color
+    amber:  '#ffcc00',
+    white:  '#ffffff',
+    red:    '#ff4444',
+    orange: '#ff8c00',
+    green:  '#00cc44',
+    muted:  '#aaaacc',
+    bg:     'transparent',
+
+    // Render a simple data row: label + value
+    row(label, value, color) {
+      return '<div class="wtv-row">'
+        + '<span class="wtv-label">' + label + '</span>'
+        + '<span class="wtv-value" style="color:' + (color || WS.amber) + '">' + value + '</span>'
+        + '</div>';
+    },
+
+    // Render a section header
+    heading(text, color) {
+      return '<div class="wtv-heading" style="color:' + (color || WS.white) + '">' + text + '</div>';
+    },
+
+    bigValue(value, label, color) {
+      return '<div class="wtv-big">'
+        + '<div class="wtv-big-num" style="color:' + (color || WS.amber) + '">' + value + '</div>'
+        + '<div class="wtv-big-label">' + label + '</div>'
+        + '</div>';
+    },
+
+    // Source attribution line
+    source(text) {
+      return '<div class="wtv-source">' + text + '</div>';
+    },
+
+    css: `
+      .wtv-custom { padding:0; overflow:hidden; }
+      .wtv-content {
+        font-family: 'Star4000', Arial, sans-serif;
+        padding: 8px 16px;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        box-sizing: border-box;
+      }
+      .wtv-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 2px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        font-size: 1em;
+      }
+      .wtv-label { color: #aaaacc; font-size: 0.85em; }
+      .wtv-value { font-size: 1em; }
+      .wtv-heading {
+        font-family: 'Star4000 Large', 'Star4000', Arial, sans-serif;
+        font-size: 1.1em;
+        margin: 6px 0 2px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+      .wtv-big {
+        text-align: center;
+        margin: 8px 0;
+      }
+      .wtv-big-num {
+        font-family: 'Star4000 Large', 'Star4000', Arial, sans-serif;
+        font-size: 3em;
+        line-height: 1;
+      }
+      .wtv-big-label {
+        font-family: 'Star4000', Arial, sans-serif;
+        font-size: 0.9em;
+        color: #aaaacc;
+        margin-top: 2px;
+      }
+      .wtv-source {
+        margin-top: auto;
+        font-size: 0.65em;
+        color: #888899;
+        text-align: right;
+        padding-top: 4px;
+      }
+      .wtv-alert-box {
+        border: 2px solid;
+        padding: 6px 10px;
+        border-radius: 4px;
+        margin: 6px 0;
+        font-size: 0.85em;
+        line-height: 1.4;
+      }
+      .wtv-loc {
+        font-family: 'Star4000 Large', 'Star4000', Arial, sans-serif;
+        font-size: 1em;
+        color: #aaaacc;
+        margin-bottom: 4px;
+      }
+    `,
+  };
+
+  // Inject shared CSS once
+  const styleEl = document.createElement('style');
+  styleEl.textContent = WS.css;
+  document.head.appendChild(styleEl);
+
+  // ── 1. Air Quality Index Display ─────────────────────────────────────────────
+  class AQIDisplay extends WTVDisplay {
+    constructor() { super(13, 'aqi-ws', 'Air Quality', false); }
+
+    async fetchData() {
+      const ll = getLatLon();
+      if (!ll) throw new Error('no location');
+      const res = await fetch('/api/aqi?lat=' + ll.lat.toFixed(4) + '&lng=' + ll.lon.toFixed(4));
+      const data = await res.json();
+      // Deduplicate by location, keep highest AQI
+      const byLoc = new Map();
+      (Array.isArray(data) ? data : []).forEach(o => {
+        const key = (o.Latitude||0).toFixed(2) + ',' + (o.Longitude||0).toFixed(2);
+        if (!byLoc.has(key) || o.AQI > byLoc.get(key).AQI) byLoc.set(key, o);
+      });
+      // Sort by proximity to user location, take closest 3
+      const obs = [...byLoc.values()].sort((a, b) => {
+        const da = Math.hypot((a.Latitude||0)-ll.lat, (a.Longitude||0)-ll.lon);
+        const db = Math.hypot((b.Latitude||0)-ll.lat, (b.Longitude||0)-ll.lon);
+        return da - db;
+      });
+      this._data = obs.slice(0, 3);
+      if (!this._data.length) throw new Error('no observations');
+    }
+
+    aqiColor(aqi) {
+      if (aqi <= 50)  return '#00e400';
+      if (aqi <= 100) return '#ffff00';
+      if (aqi <= 150) return '#ff7e00';
+      if (aqi <= 200) return '#ff0000';
+      if (aqi <= 300) return '#8f3f97';
+      return '#7e0023';
+    }
+
+    aqiLabel(aqi) {
+      if (aqi <= 50)  return 'Good';
+      if (aqi <= 100) return 'Moderate';
+      if (aqi <= 150) return 'Unhealthy for Sensitive Groups';
+      if (aqi <= 200) return 'Unhealthy';
+      if (aqi <= 300) return 'Very Unhealthy';
+      return 'Hazardous';
+    }
+
+    renderContent(el) {
+      if (!this._data || !this._data.length) {
+        el.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center">No AQI data available for this location</div>';
+        return;
+      }
+      const top = this._data[0];
+      const aqi = top.AQI;
+      const color = this.aqiColor(aqi);
+      const cat = top.Category?.Name || this.aqiLabel(aqi);
+      const param = top.ParameterName || top.Parameter || '';
+      const area = top.ReportingArea || top.SiteName || '';
+      const state = top.StateCode || '';
+
+      const health = aqi <= 50 ? 'Air quality is satisfactory and poses little or no risk.'
+        : aqi <= 100 ? 'Unusually sensitive individuals should consider limiting prolonged outdoor activity.'
+        : aqi <= 150 ? 'Members of sensitive groups may experience health effects. The general public is less likely to be affected.'
+        : aqi <= 200 ? 'Everyone may begin to experience health effects. Sensitive groups may experience more serious effects.'
+        : aqi <= 300 ? 'Health alert: everyone may experience more serious health effects.'
+        : 'Health warning of emergency conditions — entire population more likely to be affected.';
+
+      let html = WS.bigValue(aqi, cat, color);
+      if (area) html += '<div class="wtv-loc">' + area + (state ? ', ' + state : '') + '</div>';
+      if (param) html += WS.row('Primary Pollutant', param, WS.white);
+
+      // Additional nearby stations
+      if (this._data.length > 1) {
+        html += WS.heading('Nearby Stations', WS.muted);
+        this._data.slice(1).forEach(o => {
+          const c2 = this.aqiColor(o.AQI);
+          const a2 = o.ReportingArea || o.SiteName || '';
+          html += WS.row(a2, 'AQI ' + o.AQI, c2);
+        });
+      }
+
+      html += '<div class="wtv-alert-box" style="border-color:' + color + ';color:' + WS.white + ';font-size:0.72em;margin-top:6px">'
+        + health + '</div>';
+      html += WS.source('AirNow / EPA · Updated hourly');
+      el.innerHTML = html;
+    }
+  }
+
+  // ── 2. Smoke & Wildfire Display ───────────────────────────────────────────────
+  class SmokeDisplay extends WTVDisplay {
+    constructor() { super(14, 'smoke-ws', 'Smoke && Wildfire', false); }
+
+    async fetchData() {
+      const ll = getLatLon();
+      if (!ll) throw new Error('no location');
+      const [smokeRes, fireRes] = await Promise.allSettled([
+        fetch('/api/hms-smoke').then(r => r.json()),
+        fetch('/api/fire-perimeters').then(r => r.json()),
+      ]);
+      const smoke = smokeRes.status === 'fulfilled' ? smokeRes.value : { features: [] };
+      const fires = fireRes.status  === 'fulfilled' ? fireRes.value  : { features: [] };
+
+      // Find smoke density at user location
+      let density = null;
+      for (const f of (smoke.features || [])) {
+        if (pointInPoly(ll.lat, ll.lon, f.geometry)) {
+          density = f.properties?.Density || 'Light';
+          break;
+        }
+      }
+
+      // Count smoke features by density
+      const counts = { Heavy: 0, Medium: 0, Light: 0 };
+      (smoke.features || []).forEach(f => {
+        const d = f.properties?.Density || 'Light';
+        counts[d] = (counts[d] || 0) + 1;
+      });
+
+      // Nearest fires
+      const nearFires = (fires.features || [])
+        .map(f => {
+          const coords = f.geometry?.coordinates;
+          if (!coords) return null;
+          // Approximate centroid from first ring
+          const ring = f.geometry.type === 'Polygon' ? coords[0] : coords[0]?.[0];
+          if (!ring || !ring.length) return null;
+          const cx = ring.reduce((s,c) => s+c[0], 0) / ring.length;
+          const cy = ring.reduce((s,c) => s+c[1], 0) / ring.length;
+          const dist = Math.hypot(cx - ll.lon, cy - ll.lat) * 69; // rough miles
+          return { ...f.properties, dist: Math.round(dist) };
+        })
+        .filter(Boolean)
+        .sort((a,b) => a.dist - b.dist)
+        .slice(0, 3);
+
+      this._data = { density, counts, nearFires, ll };
+    }
+
+    smokeColor(density) {
+      if (density === 'Heavy')  return '#8b3a3a';
+      if (density === 'Medium') return '#c8773a';
+      return '#d4a857';
+    }
+
+    renderContent(el) {
+      const d = this._data;
+      if (!d) { el.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center">No smoke data available</div>'; return; }
+
+      let html = '';
+      if (d.density) {
+        const color = this.smokeColor(d.density);
+        html += WS.bigValue(d.density.toUpperCase(), 'Smoke Density at Your Location', color);
+        const advice = d.density === 'Heavy'
+          ? 'Limit all outdoor activity. Wear N95 if going outside.'
+          : d.density === 'Medium'
+          ? 'Sensitive groups should limit outdoor exposure.'
+          : 'Air quality may be affected. Monitor for changes.';
+        html += '<div class="wtv-alert-box" style="border-color:' + color + ';color:' + WS.white + ';font-size:0.75em">' + advice + '</div>';
+      } else {
+        html += '<div class="wtv-big"><div class="wtv-big-num" style="color:' + WS.green + '">CLEAR</div>'
+          + '<div class="wtv-big-label">No smoke detected at your location</div></div>';
+      }
+
+      // National smoke summary
+      const total = (d.counts.Heavy || 0) + (d.counts.Medium || 0) + (d.counts.Light || 0);
+      if (total > 0) {
+        html += WS.heading('National Smoke Plumes Today', WS.muted);
+        if (d.counts.Heavy)  html += WS.row('Heavy',  d.counts.Heavy  + ' region' + (d.counts.Heavy  > 1 ? 's' : ''), '#8b3a3a');
+        if (d.counts.Medium) html += WS.row('Medium', d.counts.Medium + ' region' + (d.counts.Medium > 1 ? 's' : ''), '#c8773a');
+        if (d.counts.Light)  html += WS.row('Light',  d.counts.Light  + ' region' + (d.counts.Light  > 1 ? 's' : ''), '#d4a857');
+      }
+
+      // Nearest active fires
+      if (d.nearFires.length) {
+        html += WS.heading('Nearest Active Fires', WS.muted);
+        d.nearFires.forEach(f => {
+          const name = f.IncidentName || 'Active Fire';
+          const acres = f.GISAcres ? Math.round(f.GISAcres).toLocaleString() + ' ac' : '—';
+          html += WS.row(name + ' · ' + f.dist + ' mi', acres, WS.orange);
+        });
+      }
+
+      html += WS.source('NOAA HMS Smoke · NIFC WFIGS · Updated daily');
+      el.innerHTML = html;
+    }
+  }
+
+  // ── 3. Tropical Storms Display ────────────────────────────────────────────────
+  class HurricaneDisplay extends WTVDisplay {
+    constructor() { super(15, 'hurricane-ws', 'Tropical Storms', false); }
+
+    async fetchData() {
+      const res = await fetch('https://www.nhc.noaa.gov/CurrentStorms.json');
+      const data = await res.json();
+      this._data = data.activeStorms || [];
+    }
+
+    catColor(winds) {
+      const w = parseInt(winds) || 0;
+      if (w >= 137) return '#ff00ff'; // Cat 5
+      if (w >= 113) return '#ff4500'; // Cat 4
+      if (w >= 96)  return '#ff8c00'; // Cat 3
+      if (w >= 83)  return '#ffff00'; // Cat 2
+      if (w >= 64)  return '#00bfff'; // Cat 1
+      if (w >= 34)  return '#00cc44'; // TS
+      return WS.muted; // TD
+    }
+
+    catLabel(winds) {
+      const w = parseInt(winds) || 0;
+      if (w >= 137) return 'Cat 5 Hurricane';
+      if (w >= 113) return 'Cat 4 Hurricane';
+      if (w >= 96)  return 'Cat 3 Hurricane';
+      if (w >= 83)  return 'Cat 2 Hurricane';
+      if (w >= 64)  return 'Cat 1 Hurricane';
+      if (w >= 34)  return 'Tropical Storm';
+      return 'Tropical Depression';
+    }
+
+    renderContent(el) {
+      if (!this._data || !this._data.length) {
+        el.innerHTML = WS.bigValue('NONE', 'No Active Tropical Storms', WS.green)
+          + '<div style="color:#aaa;text-align:center;font-size:0.85em;margin-top:8px">'
+          + 'Atlantic &amp; Pacific basins are quiet.</div>'
+          + WS.source('NOAA / NHC');
+        return;
+      }
+
+      let html = WS.heading('Active Storms — ' + this._data.length + ' system' + (this._data.length > 1 ? 's' : ''), WS.white);
+
+      this._data.forEach(s => {
+        const winds = s.maxWinds || s.MaxWinds || '0';
+        const color = this.catColor(winds);
+        const type  = this.catLabel(winds);
+        const name  = s.name || s.Name || 'Storm';
+        const basin = s.basinId || s.BasinId || '';
+        const movement = s.movementDir && s.movementSpeed
+          ? s.movementDir + ' at ' + s.movementSpeed + ' kt'
+          : '—';
+        const pressure = s.minimumPressure ? s.minimumPressure + ' mb' : '—';
+
+        html += '<div style="margin:8px 0;padding:6px 8px;border-left:3px solid ' + color + '">';
+        html += '<div style="font-family:Star4000 Large,Star4000,Arial;font-size:1.1em;color:' + color + '">'
+          + name.toUpperCase() + '</div>';
+        html += '<div style="font-size:0.78em;color:' + WS.muted + '">' + type
+          + (basin ? ' · ' + basin.toUpperCase() : '') + '</div>';
+        html += WS.row('Max Winds', winds + ' kt', color);
+        html += WS.row('Movement', movement, WS.white);
+        html += WS.row('Pressure', pressure, WS.white);
+        html += '</div>';
+      });
+
+      html += WS.source('NOAA / National Hurricane Center');
+      el.innerHTML = html;
+    }
+  }
+
+  // ── 4. Astronomy Display ──────────────────────────────────────────────────────
+  class AstronomyDisplay extends WTVDisplay {
+    constructor() { super(16, 'astronomy-ws', 'Astronomy', false); }
+
+    async fetchData() {
+      const ll = getLatLon();
+      if (!ll || typeof SunCalc === 'undefined') throw new Error('no location or SunCalc');
+      const now    = new Date();
+      const sun    = SunCalc.getTimes(now, ll.lat, ll.lon);
+      const tmrw   = new Date(now); tmrw.setDate(tmrw.getDate() + 1);
+      const sun2   = SunCalc.getTimes(tmrw, ll.lat, ll.lon);
+      const moon   = SunCalc.getMoonTimes(now, ll.lat, ll.lon);
+      const moonIl = SunCalc.getMoonIllumination(now);
+      this._data = { sun, sun2, moon, moonIl, now, ll };
+    }
+
+    moonPhaseName(frac) {
+      if (frac < 0.03 || frac > 0.97) return 'New Moon';
+      if (frac < 0.22) return 'Waxing Crescent';
+      if (frac < 0.28) return 'First Quarter';
+      if (frac < 0.47) return 'Waxing Gibbous';
+      if (frac < 0.53) return 'Full Moon';
+      if (frac < 0.72) return 'Waning Gibbous';
+      if (frac < 0.78) return 'Last Quarter';
+      return 'Waning Crescent';
+    }
+
+    moonIcon(frac) {
+      if (frac < 0.05 || frac > 0.95) return '🌑';
+      if (frac < 0.25) return '🌒';
+      if (frac < 0.30) return '🌓';
+      if (frac < 0.50) return '🌔';
+      if (frac < 0.55) return '🌕';
+      if (frac < 0.75) return '🌖';
+      if (frac < 0.80) return '🌗';
+      return '🌘';
+    }
+
+    dayLength(rise, set) {
+      if (!rise || !set) return '—';
+      const mins = Math.round((set - rise) / 60000);
+      return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+    }
+
+    renderContent(el) {
+      const d = this._data;
+      if (!d) { el.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center">Location required for astronomy data</div>'; return; }
+
+      const { sun, sun2, moon, moonIl } = d;
+      const phase = moonIl.phase;
+      const illum = Math.round(moonIl.fraction * 100);
+
+      let html = '';
+
+      // Sun section
+      html += WS.heading('☀ SUN', WS.amber);
+      html += WS.row('Sunrise', sun.sunrise ? fmt12(sun.sunrise) : '—', WS.amber);
+      html += WS.row('Sunset',  sun.sunset  ? fmt12(sun.sunset)  : '—', WS.orange);
+      html += WS.row('Day Length', this.dayLength(sun.sunrise, sun.sunset), WS.white);
+      html += WS.row('Tomorrow Sunrise', sun2.sunrise ? fmt12(sun2.sunrise) : '—', WS.muted);
+
+      // Moon section
+      html += WS.heading(this.moonIcon(phase) + ' MOON', '#c8d8f0');
+      html += WS.row('Phase', this.moonPhaseName(phase), '#c8d8f0');
+      html += WS.row('Illumination', illum + '%', illum > 50 ? WS.amber : WS.muted);
+      if (moon.rise) html += WS.row('Moonrise', fmt12(moon.rise), '#c8d8f0');
+      if (moon.set)  html += WS.row('Moonset',  fmt12(moon.set),  '#c8d8f0');
+
+      // Dawn/dusk civil twilight
+      html += WS.heading('TWILIGHT', WS.muted);
+      html += WS.row('Civil Dawn',  sun.dawn  ? fmt12(sun.dawn)  : '—', WS.muted);
+      html += WS.row('Civil Dusk',  sun.dusk  ? fmt12(sun.dusk)  : '—', WS.muted);
+      html += WS.row('Nautical Dawn', sun.nauticalDawn ? fmt12(sun.nauticalDawn) : '—', WS.muted);
+      html += WS.row('Nautical Dusk', sun.nauticalDusk ? fmt12(sun.nauticalDusk) : '—', WS.muted);
+
+      html += WS.source('SunCalc · Data for ' + d.ll.lat.toFixed(2) + ', ' + d.ll.lon.toFixed(2));
+      el.innerHTML = html;
+    }
+  }
+
+  // ── Register displays after all WS4KP scripts have loaded ────────────────────
+  function registerWTVDisplays() {
+    if (typeof window.wtvRegisterDisplay !== 'function') {
+      console.warn('[WTV] wtvRegisterDisplay not available — retrying in 500ms');
+      setTimeout(registerWTVDisplays, 500);
+      return;
+    }
+    [
+      new AQIDisplay(),
+      new SmokeDisplay(),
+      new HurricaneDisplay(),
+      new AstronomyDisplay(),
+    ].forEach(d => window.wtvRegisterDisplay(d));
+    console.log('[WTV] Custom displays registered: AQI, Smoke, Tropical, Astronomy');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', registerWTVDisplays);
+  } else {
+    registerWTVDisplays();
+  }
+
+})();

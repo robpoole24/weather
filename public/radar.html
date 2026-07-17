@@ -653,7 +653,7 @@
     <div class="lp-section-label">Radar Options</div>
     <div id="lp-radaropts"></div>
     <div id="site-picker" style="display:none;">
-      <div id="site-message" style="font-size:0.68rem;color:var(--muted);margin-bottom:0.45rem;line-height:1.4;">
+      <div id="site-message" style="font-size:0.68rem;color:var(--muted);margin-bottom:0.45rem;line-height:1.4;min-height:2.5em">
         Tap a station below or allow location for auto-detection.
       </div>
       <label>📡 Radar station</label>
@@ -661,6 +661,14 @@
       <div id="site-auto-badge" style="display:none;font-size:0.62rem;color:var(--accent);margin-top:0.3rem;">
         ✓ Auto-detected from your location
       </div>
+      <button onclick="if(typeof userLat==='number'){resolveRadarSites(userLat,userLng,true);}"
+        style="margin-top:0.4rem;font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;
+          font-weight:700;letter-spacing:0.06em;text-transform:uppercase;background:none;
+          border:1px solid var(--accent);color:var(--accent);border-radius:3px;
+          padding:0.2rem 0.6rem;cursor:pointer;width:100%"
+        title="Re-detect nearest radar station from your current location">
+        ↻ Use My Location for This Station
+      </button>
     </div>
 
     <!-- Apparent Temperature mode toggle — shown only when apptemp is active -->
@@ -2993,25 +3001,28 @@ function activateSingleSiteProduct(member) {
   const msg = document.getElementById('site-message');
   const names = { velocity:'Base Velocity', srv:'Storm-Relative Velocity', echotops:'Echo Tops', cc:'Correlation Coefficient' };
   document.getElementById('site-picker').style.display = 'block';
-  // Click-to-select-site is currently CC-only (see the map click handler in
-  // showCC()) — Velocity/SRV/Echo Tops still require the dropdown, so the
-  // messaging shouldn't claim otherwise for those.
-  const clickHint = member === 'cc' ? 'Click the map or use the dropdown to change station.' : 'Use the dropdown to change station.';
-  if (currentSite) {
-    // Already have a site (from a prior product or a map click) — just
-    // make sure the picker reflects it and (re)trigger this product's load.
-    if (msg) msg.textContent = `${names[member]||member} is a single-radar product. ${clickHint}`;
-    return;
-  }
-  if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Showing your nearest station — ${clickHint.charAt(0).toLowerCase() + clickHint.slice(1)}`;
-  if (typeof userLat==='number' && typeof userLng==='number') {
+  const clickHint = member === 'cc'
+    ? 'Click the map to change station, or use the dropdown.'
+    : 'Use the dropdown to change station.';
+
+  if (typeof userLat === 'number' && typeof userLng === 'number') {
+    // User has set a location — always resolve to their actual nearest site.
+    // Don't short-circuit on currentSite because a previously-cached site
+    // may have come from a bad geolocation or a different location entirely.
+    if (msg) msg.textContent = `${names[member]||member} is a single-radar product. Showing your nearest station. ${clickHint}`;
     resolveRadarSites(userLat, userLng, true);
-  } else if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(pos => {
-      resolveRadarSites(pos.coords.latitude, pos.coords.longitude, true);
-    }, () => {
-      if (msg) msg.textContent = `${names[member]||member} is a single-radar product. ${member==='cc' ? 'Click the map or select' : 'Select'} a station below.`;
-    }, { timeout:6000 });
+  } else {
+    // No user location set — tell them to use My Location rather than
+    // guessing with IP geolocation (which is often hundreds of miles off
+    // for radar-site purposes and causes the wrong site to be selected).
+    if (currentSite) {
+      // Inherited site from a prior activation — use it but warn
+      if (msg) msg.textContent = `${names[member]||member}: using previously selected station. Use My Location button above for best accuracy.`;
+    } else {
+      if (msg) msg.innerHTML = `${names[member]||member} is a single-radar product. `
+        + `<strong style="color:var(--accent)">Use the My Location button (above) first</strong> `
+        + `to auto-select your nearest station, or pick one below.`;
+    }
   }
 }
 
@@ -4339,6 +4350,9 @@ function goToMyLocation() {
 
   const onSuccess = (lat, lng, source) => {
     userLat = lat; userLng = lng;
+    // Clear cached radar site so single-site products re-resolve
+    // to the correct station for this location on next activation
+    currentSite = null;
     map.flyTo([lat, lng], 8);
     updateViewButtons('local');
     if (typeof updateFeelsLike === 'function') updateFeelsLike(lat, lng);
