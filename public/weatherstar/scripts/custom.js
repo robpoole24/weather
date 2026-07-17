@@ -118,9 +118,16 @@
     renderContent(el) {}
 
     // Called by WS4KP navigation when this display becomes active
+    hideCanvas() {
+      // Called by WS4KP navigation when leaving this display
+      const el = document.getElementById(this.elemId + '-html');
+      if (el) el.style.display = 'none';
+    }
+
     showCanvas(cmd) {
       const el = document.getElementById(this.elemId + '-html');
       if (!el) return;
+      el.style.display = '';
       // Re-fetch on each show so data stays fresh
       this._load().then(() => {
         const contentEl = el.querySelector('.wtv-content');
