@@ -2457,6 +2457,10 @@ const WS4000_DISPLAYS = [
   { key:'travel-international',label:'🌍 International Travel',def:false },
   { key:'almanac',             label:'📚 Almanac',            def:false },
   { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
+  { key:'aqi-ws',              label:'😷 Air Quality',        def:false },
+  { key:'smoke-ws',            label:'💨 Smoke & Wildfire',   def:false },
+  { key:'hurricane-ws',        label:'🌀 Tropical Storms',    def:false },
+  { key:'astronomy-ws',        label:'☀ UV & Outdoor',        def:false },
   { key:'hazards',             label:'🚨 Hazards',            def:false },
 ];
 
@@ -2786,6 +2790,8 @@ function wsSwitchVersion() {
   saveWSSettings();
   wsIsLaunched = false;
   buildWSPanel();
+  // Auto-launch if a location is already set — no need to click Save separately
+  if (wsAllSettings[wsActiveVersion].lat) ws4kpLaunch();
 }
 
 function wsResetSettings() {
