@@ -3963,12 +3963,12 @@ function stopERO() {
 const _qpeLayers = {};
 function startQPE(period) {
   if (_qpeLayers[period]) return;
-  // NWS MRMS QPE ImageServer WMS — same server as NHC, stable
-  // rft_1hr / rft_24hr are the named raster functions on this ImageServer
-  const rft = period === '01H' ? 'rft_1hr' : 'rft_24hr';
+  // NWS MRMS QPE ImageServer WMS
+  // Layer names from GetCapabilities: mrms_qpe:rft_1hr, mrms_qpe:rft_24hr
+  const layer = period === '01H' ? 'mrms_qpe:rft_1hr' : 'mrms_qpe:rft_24hr';
   _qpeLayers[period] = L.tileLayer.wms(
     'https://mapservices.weather.noaa.gov/raster/services/obs/mrms_qpe/ImageServer/WMSServer',
-    { layers: '0', styles: rft, format: 'image/png', transparent: true,
+    { layers: layer, styles: 'default', format: 'image/png', transparent: true,
       version: '1.3.0', opacity: 0.75, zIndex: 415,
       attribution: 'MRMS QPE: NOAA/NWS' }
   ).addTo(map);
@@ -3999,13 +3999,18 @@ async function refreshRiverGauges() {
     const data = await (await fetch(url)).json();
     if (!_gaugeLayer) return;
     _gaugeLayer.clearLayers();
+    const zoom = map.getZoom();
+    // Zoomed out (z<8): only show elevated gauges — no-flood dots are too noisy at national scale
+    // Zoomed in (z>=8): show everything
+    const ELEVATED_STATUSES = new Set(['action','minor_flooding','moderate_flooding','major_flooding','record_flooding']);
     (data.gauges || []).forEach(g => {
       const rawStatus = (typeof g.status === 'object' ? (g.status?.current || '') : (g.status || ''));
       const status = rawStatus.toLowerCase().replace(/ /g, '_') || 'no_flooding';
+      if (zoom < 8 && !ELEVATED_STATUSES.has(status)) return;
       const color = GAUGE_COLORS[status] || '#2ec44a';
       const label = GAUGE_LABELS[status] || status;
       const mk = L.circleMarker([g.latitude, g.longitude], {
-        radius: 7, color: 'rgba(0,0,0,0.4)', fillColor: color, fillOpacity: 0.95, weight: 1.5
+        radius: zoom >= 8 ? 7 : 9, color: 'rgba(0,0,0,0.4)', fillColor: color, fillOpacity: 0.95, weight: 1.5
       });
       mk.bindPopup(
         `<div class="alert-popup"><div class="ev" style="color:${color}">📏 ${g.name || g.nwsId}</div>` +

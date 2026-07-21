@@ -57,7 +57,9 @@
 
     // Helper: write HTML into the content div
     _setContent(html) {
-      const el = document.getElementById(this.elemId + '-content');
+      // elemId is e.g. 'aqi-ws-html' — the content div is 'aqi-ws-content' (no '-html')
+      const baseId = this.elemId.replace(/-html$/, '');
+      const el = document.getElementById(baseId + '-content');
       if (el) el.innerHTML = html;
     }
 
@@ -446,9 +448,21 @@
 
     // If location is already set in URL params, WS4KP may have fired getData
     // before our displays were registered. Trigger it manually so they load.
+    // WS4KP encodes location as latLon={"lat":...,"lon":...} JSON param
+    // Also try separate lat/lon params as fallback
     const params = new URLSearchParams(window.location.search);
-    const lat = parseFloat(params.get('lat'));
-    const lon = parseFloat(params.get('lon') || params.get('lng'));
+    let lat = NaN, lon = NaN;
+    const latLonRaw = params.get('latLon');
+    if (latLonRaw) {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(latLonRaw));
+        lat = parseFloat(parsed.lat);
+        lon = parseFloat(parsed.lon);
+      } catch(e) {}
+    }
+    if (isNaN(lat)) lat = parseFloat(params.get('lat'));
+    if (isNaN(lon)) lon = parseFloat(params.get('lon') || params.get('lng'));
+
     if (!isNaN(lat) && !isNaN(lon)) {
       const weatherParameters = { latitude: lat, longitude: lon };
       displays.forEach(d => {
