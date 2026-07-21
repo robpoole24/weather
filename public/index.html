@@ -2790,7 +2790,17 @@ function wsSwitchVersion() {
   saveWSSettings();
   wsIsLaunched = false;
   buildWSPanel();
-  // Auto-launch if a location is already set — no need to click Save separately
+  // WS3000: netbymatt.com sets X-Frame-Options: sameorigin — cannot be iframed
+  // Open in new tab instead
+  if (wsActiveVersion === '3000') {
+    window.open('https://weatherstar3000.netbymatt.com/', '_blank');
+    // Switch back so UI doesn't get stuck on WS3000 panel
+    wsActiveVersion = '4000';
+    saveWSSettings();
+    buildWSPanel();
+    return;
+  }
+  // Auto-launch WS4000 if a location is already set
   if (wsAllSettings[wsActiveVersion].lat) ws4kpLaunch();
 }
 

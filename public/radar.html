@@ -3931,9 +3931,11 @@ function stopStormCells() {
 let _frontsLayer = null;
 function startFronts() {
   if (_frontsLayer) return;
+  // natl_fcst_wx_chart includes fronts, highs/lows, precip areas — updated 2x/day
+  // Same mapservices.weather.noaa.gov server as NHC (not NowCOAST which 503s)
   _frontsLayer = L.tileLayer.wms(
-    'https://nowcoast.noaa.gov/arcgis/services/nowcoast/analysis_meteohydro_sfc_synoptic_time1/MapServer/WMSServer',
-    { layers: '1', format: 'image/png', transparent: true, version: '1.3.0',
+    'https://mapservices.weather.noaa.gov/vector/services/outlooks/natl_fcst_wx_chart/MapServer/WMSServer',
+    { layers: '5,6,7,8,9,10', format: 'image/png', transparent: true, version: '1.3.0',
       opacity: 0.85, zIndex: 420, attribution: 'WPC Surface Analysis: NOAA/NWS' }
   ).addTo(map);
 }
@@ -3945,10 +3947,12 @@ function stopFronts() {
 let _eroLayer = null;
 function startERO() {
   if (_eroLayer) return;
+  // WPC QPF (quantitative precip forecast) — Day 1 through Day 3
+  // mapservices.weather.noaa.gov/vector is stable, not NowCOAST
   _eroLayer = L.tileLayer.wms(
-    'https://nowcoast.noaa.gov/arcgis/services/nowcoast/wwa_meteoceanhydro_sfc_heavy_rain_time1/MapServer/WMSServer',
+    'https://mapservices.weather.noaa.gov/vector/services/precip/wpc_qpf/MapServer/WMSServer',
     { layers: '1', format: 'image/png', transparent: true, version: '1.3.0',
-      opacity: 0.7, zIndex: 418, attribution: 'WPC Excessive Rainfall Outlook: NOAA/NWS' }
+      opacity: 0.7, zIndex: 418, attribution: 'WPC QPF: NOAA/NWS' }
   ).addTo(map);
 }
 function stopERO() {
@@ -3959,11 +3963,14 @@ function stopERO() {
 const _qpeLayers = {};
 function startQPE(period) {
   if (_qpeLayers[period]) return;
-  const product = period === '01H' ? 'RadarOnly_QPE_01H' : 'RadarOnly_QPE_24H';
-  _qpeLayers[period] = L.tileLayer(
-    `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/mrms::${product}-0/{z}/{x}/{y}.png`,
-    { opacity: 0.75, maxNativeZoom: 8, zIndex: 415,
-      attribution: 'MRMS QPE: Iowa Environmental Mesonet / NOAA' }
+  // NWS MRMS QPE ImageServer WMS — same server as NHC, stable
+  // rft_1hr / rft_24hr are the named raster functions on this ImageServer
+  const rft = period === '01H' ? 'rft_1hr' : 'rft_24hr';
+  _qpeLayers[period] = L.tileLayer.wms(
+    'https://mapservices.weather.noaa.gov/raster/services/obs/mrms_qpe/ImageServer/WMSServer',
+    { layers: '0', styles: rft, format: 'image/png', transparent: true,
+      version: '1.3.0', opacity: 0.75, zIndex: 415,
+      attribution: 'MRMS QPE: NOAA/NWS' }
   ).addTo(map);
 }
 function stopQPE(period) {
@@ -3985,10 +3992,10 @@ async function refreshRiverGauges() {
   if (!_gaugeLayer) return;
   const b = map.getBounds();
   try {
-    const url = `https://api.water.noaa.gov/nwps/v1/gauges?` +
-      `bbox.xmin=${b.getWest().toFixed(4)}&bbox.ymin=${b.getSouth().toFixed(4)}` +
-      `&bbox.xmax=${b.getEast().toFixed(4)}&bbox.ymax=${b.getNorth().toFixed(4)}` +
-      `&srid=EPSG_4326&count=200`;
+    // NWPS API doesn't send CORS headers — must go through server proxy
+    const url = `/api/river-gauges?` +
+      `xmin=${b.getWest().toFixed(4)}&ymin=${b.getSouth().toFixed(4)}` +
+      `&xmax=${b.getEast().toFixed(4)}&ymax=${b.getNorth().toFixed(4)}`;
     const data = await (await fetch(url)).json();
     if (!_gaugeLayer) return;
     _gaugeLayer.clearLayers();

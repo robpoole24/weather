@@ -1145,6 +1145,44 @@ app.get('/api/nhc-storms', async (req, res) => {
   }
 });
 
+// GET /api/river-gauges?xmin=&ymin=&xmax=&ymax=
+// Proxies NOAA NWPS gauge API — api.water.noaa.gov does not send CORS headers.
+// Cached 5 minutes per bbox (gauges update every 15 min).
+const _gaugeCache = new Map();
+const GAUGE_TTL = 5 * 60 * 1000;
+
+app.get('/api/river-gauges', async (req, res) => {
+  const { xmin, ymin, xmax, ymax } = req.query;
+  if (!xmin || !ymin || !xmax || !ymax) {
+    return res.status(400).json({ error: 'Missing bbox params: xmin, ymin, xmax, ymax' });
+  }
+  const key = [xmin, ymin, xmax, ymax].map(v => parseFloat(v).toFixed(2)).join(',');
+  const cached = _gaugeCache.get(key);
+  if (cached && Date.now() - cached.ts < GAUGE_TTL) {
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.json(cached.data);
+  }
+  try {
+    const url = `https://api.water.noaa.gov/nwps/v1/gauges?` +
+      `bbox.xmin=${xmin}&bbox.ymin=${ymin}&bbox.xmax=${xmax}&bbox.ymax=${ymax}` +
+      `&srid=EPSG_4326&count=200`;
+    const text = await fetchTextOverHttp(url);
+    const data = JSON.parse(text);
+    _gaugeCache.set(key, { data, ts: Date.now() });
+    if (_gaugeCache.size > 50) {
+      const oldest = [..._gaugeCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      _gaugeCache.delete(oldest[0]);
+    }
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(data);
+  } catch(e) {
+    console.warn('[River Gauges] Proxy error:', e.message);
+    const stale = _gaugeCache.get(key);
+    if (stale) return res.json(stale.data);
+    res.status(502).json({ gauges: [], error: 'NWPS unavailable' });
+  }
+});
+
 // GET /api/canada-alerts
 // Proxies Environment Canada's national weather alert ATOM feed and returns
 // structured JSON. EC's ATOM feed gives us event type, headline, province/
