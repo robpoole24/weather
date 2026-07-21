@@ -2457,10 +2457,6 @@ const WS4000_DISPLAYS = [
   { key:'travel-international',label:'🌍 International Travel',def:false },
   { key:'almanac',             label:'📚 Almanac',            def:false },
   { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
-  { key:'aqi-ws',              label:'😷 Air Quality',        def:false },
-  { key:'smoke-ws',            label:'💨 Smoke & Wildfire',   def:false },
-  { key:'hurricane-ws',        label:'🌀 Tropical Storms',    def:false },
-  { key:'astronomy-ws',        label:'☀ UV & Outdoor',        def:false },
   { key:'hazards',             label:'🚨 Hazards',            def:false },
 ];
 
@@ -2533,7 +2529,7 @@ function buildWSUrl(ver) {
     WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
     p.set('settings-speed-select',  s.speed.toFixed(2));
     p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
-    p.set('settings-kiosk-checkbox','true');
+    p.set('settings-kiosk-checkbox','false'); // kiosk=true causes double-scaling in iframe
   }
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
@@ -3009,37 +3005,17 @@ function loadIframe(src, label, isLive) {
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
 
-  // For self-hosted WS3000: inject CSS to scale content to fill the iframe
+  // For self-hosted WS3000: hide UI chrome only, let WS3000 handle its own scaling
   if (isWS3000) {
     newFrame.addEventListener('load', () => {
       try {
         const doc = newFrame.contentDocument || newFrame.contentWindow?.document;
         if (!doc) return;
         const style = doc.createElement('style');
-        style.textContent = `
-          html, body { width:100% !important; height:100% !important; margin:0 !important; padding:0 !important; overflow:hidden !important; }
-          #divTwc { transform-origin: top left !important; }
-          #divTwcBottom { display:none !important; }
-          .info, .heading, #enabledDisplays, #settings, #divInfo, #share-link, #share-link-copied, #share-link-instructions { display:none !important; }
-          #divQuery { display:none !important; }
-        `;
+        style.textContent =
+          '#share-link, #share-link-copied, #share-link-instructions, #divInfo { display:none !important; }' +
+          '#divTwcBottom { display:none !important; }';
         doc.head.appendChild(style);
-        // Scale divTwc to fill the iframe
-        const scaleWS3000 = () => {
-          const twc = doc.getElementById('divTwc');
-          if (!twc) return;
-          const iw = newFrame.offsetWidth || window.innerWidth;
-          const ih = newFrame.offsetHeight || window.innerHeight;
-          const baseW = doc.getElementById('container')?.offsetWidth || 854;
-          const baseH = (doc.getElementById('container')?.offsetHeight || 0) +
-                        (doc.getElementById('divTwcBottom')?.offsetHeight || 0) || 480;
-          const scale = Math.min(iw / baseW, ih / 480);
-          twc.style.transform = 'scale(' + scale + ')';
-          twc.style.transformOrigin = 'top left';
-          twc.style.width = baseW + 'px';
-        };
-        scaleWS3000();
-        newFrame.contentWindow.addEventListener('resize', scaleWS3000);
       } catch(e) { /* cross-origin guard */ }
     });
   }
