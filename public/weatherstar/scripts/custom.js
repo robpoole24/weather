@@ -28,12 +28,13 @@
     // REQUIRED — WS4KP calls this when navigating away from this display.
     // Must exist or WS4KP throws and breaks navigation for all displays.
     hideCanvas() {
-      if (this.elem) this.elem.style.display = 'none';
+      if (this.elem) this.elem.classList.remove('show');
     }
 
     // Show this display and render current data.
+    // WS4KP controls visibility via the 'show' CSS class, not display:none/block
     showCanvas(cmd) {
-      if (this.elem) this.elem.style.display = '';
+      if (this.elem) this.elem.classList.add('show');
       if (this._data) this._render(this._data);
     }
 
