@@ -2440,7 +2440,7 @@ const WTV_WS4KP_URL = '/weatherstar';
 
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
-  '3000': 'https://weatherstar3000.netbymatt.com/',
+  '3000': '/weatherstar3000/',
 };
 
 // WS4000 displays — plain param names (no -checkbox suffix)
@@ -2790,16 +2790,7 @@ function wsSwitchVersion() {
   saveWSSettings();
   wsIsLaunched = false;
   buildWSPanel();
-  // WS3000: netbymatt.com sets X-Frame-Options: sameorigin — cannot be iframed
-  // Open in new tab instead
-  if (wsActiveVersion === '3000') {
-    window.open('https://weatherstar3000.netbymatt.com/', '_blank');
-    // Switch back so UI doesn't get stuck on WS3000 panel
-    wsActiveVersion = '4000';
-    saveWSSettings();
-    buildWSPanel();
-    return;
-  }
+
   // Auto-launch WS4000 if a location is already set
   if (wsAllSettings[wsActiveVersion].lat) ws4kpLaunch();
 }
@@ -2967,9 +2958,8 @@ function loadIframe(src, label, isLive) {
 
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com')
-    || src.includes('weatherstar3000.netbymatt.com')
     || src.startsWith('/weatherstar');
-  const isWS3000 = src.includes('weatherstar3000.netbymatt.com');
+  const isWS3000 = src.includes('/weatherstar3000');
 
   if (isWeatherStar) {
     frame.style.marginTop = '0';
