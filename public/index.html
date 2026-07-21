@@ -3034,7 +3034,7 @@ function loadIframe(src, label, isLive) {
           const baseH = (doc.getElementById('container')?.offsetHeight || 0) +
                         (doc.getElementById('divTwcBottom')?.offsetHeight || 0) || 480;
           const scale = Math.min(iw / baseW, ih / 480);
-          twc.style.transform = \`scale(\${scale})\`;
+          twc.style.transform = 'scale(' + scale + ')';
           twc.style.transformOrigin = 'top left';
           twc.style.width = baseW + 'px';
         };
