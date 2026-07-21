@@ -843,6 +843,25 @@
     <div class="leg-row"><div class="leg-sw" style="background:#ffaa00"></div>Enhanced Risk</div>
     <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Slight Risk</span></div>
     <div class="leg-row"><div class="leg-sw" style="background:#99ff99"></div>Marginal Risk</div>
+  </div>
+  <div id="qpe-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#00b4d8;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">🌧 Rainfall Accumulation</div>
+    <div id="qpe-1h-label" style="display:none;font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">1-Hour QPE (inches)</div>
+    <div id="qpe-24h-label" style="display:none;font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">24-Hour QPE (inches)</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#04e9e7"></div>&lt; 0.10"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#019ff4"></div>0.10 – 0.25"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#0300f4"></div>0.25 – 0.50"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#02fd02"></div>0.50 – 0.75"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#01c501"></div>0.75 – 1.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#008e00"></div>1.00 – 1.50"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#fdf802"></div>1.50 – 2.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#e5bc00"></div>2.00 – 2.50"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#fd9500"></div>2.50 – 3.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#fd0000"></div>3.00 – 4.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#d40000"></div>4.00 – 5.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#bc0000"></div>5.00 – 6.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#f800fd"></div>6.00 – 8.00"</div>
+    <div class="leg-row"><div class="leg-sw" style="background:#9854c6"></div>&gt; 8.00"</div>
     <div class="leg-row"><div class="leg-sw" style="background:#c8c8c8"></div>General Thunder</div>
   </div>
 </div>
@@ -3976,6 +3995,16 @@ function startQPE(period) {
 function stopQPE(period) {
   if (_qpeLayers[period]) { map.removeLayer(_qpeLayers[period]); delete _qpeLayers[period]; }
 }
+function updateQPELegend() {
+  const has1h = !!_qpeLayers['01H'];
+  const has24h = !!_qpeLayers['24H'];
+  const leg = document.getElementById('qpe-legend');
+  const l1 = document.getElementById('qpe-1h-label');
+  const l24 = document.getElementById('qpe-24h-label');
+  if (leg) leg.style.display = (has1h || has24h) ? '' : 'none';
+  if (l1) l1.style.display = has1h ? '' : 'none';
+  if (l24) l24.style.display = has24h ? '' : 'none';
+}
 
 // ── River & Flood Gauges ──────────────────────────────────────────────────────
 const GAUGE_COLORS = {
@@ -4479,8 +4508,8 @@ function applyOverlay(id,on){
     case 'storm-cells':    if (on) startStormCells(); else stopStormCells(); break;
     case 'fronts':         if (on) startFronts(); else stopFronts(); break;
     case 'ero':            if (on) startERO(); else stopERO(); break;
-    case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); break;
-    case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); break;
+    case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); updateQPELegend(); break;
+    case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
     case 'nhc-atlantic':   if (on) startNHC('atl'); else stopNHC('atl'); break;
     case 'nhc-pacific':    if (on) startNHC('pac'); else stopNHC('pac'); break;

@@ -2973,22 +2973,14 @@ function loadIframe(src, label, isLive) {
     frame.style.transform = '';
     frame.style.zoom = '';
 
-    if (isWS3000) {
-      // WS3000 renders in 4:3 — center it in the 16:9 player with pillarboxing
-      wrapper.style.display = 'flex';
-      wrapper.style.alignItems = 'center';
-      wrapper.style.justifyContent = 'center';
-      frame.style.width = 'auto';
-      frame.style.aspectRatio = '4 / 3';
-      frame.style.height = '100%';
-    } else {
-      // WS4000 fills the full player area
-      wrapper.style.display = '';
-      wrapper.style.alignItems = '';
-      wrapper.style.justifyContent = '';
-      frame.style.width = '100%';
-      frame.style.aspectRatio = '';
-    }
+    // Both WS3000 and WS4000 fill the full 16:9 player area
+    // WS3000 is all text so stretching is fine and preferred
+    wrapper.style.display = '';
+    wrapper.style.alignItems = '';
+    wrapper.style.justifyContent = '';
+    frame.style.width = '100%';
+    frame.style.aspectRatio = '';
+    frame.style.height = '100%';
   } else {
     frame.style.marginTop = '0';
     frame.style.height = '100%';
@@ -3008,21 +3000,49 @@ function loadIframe(src, label, isLive) {
   newFrame.allow = frame.allow;
   newFrame.allowFullscreen = true;
   newFrame.style.cssText = frame.style.cssText;
-  // WS3000 needs auto width + 4:3 aspect ratio to center in the 16:9 player
-  // WS4000 and everything else fills the full area
-  if (isWS3000) {
-    newFrame.style.width = 'auto';
-    newFrame.style.height = '100%';
-    newFrame.style.aspectRatio = '4 / 3';
-  } else {
-    newFrame.style.width = '100%';
-    newFrame.style.height = '100%';
-    newFrame.style.aspectRatio = '';
-  }
+  // Both WS3000 and WS4000 fill the full 16:9 player area
+  newFrame.style.width = '100%';
+  newFrame.style.height = '100%';
+  newFrame.style.aspectRatio = '';
   newFrame.style.border = 'none';
   newFrame.style.display = 'block';
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
+
+  // For self-hosted WS3000: inject CSS to scale content to fill the iframe
+  if (isWS3000) {
+    newFrame.addEventListener('load', () => {
+      try {
+        const doc = newFrame.contentDocument || newFrame.contentWindow?.document;
+        if (!doc) return;
+        const style = doc.createElement('style');
+        style.textContent = `
+          html, body { width:100% !important; height:100% !important; margin:0 !important; padding:0 !important; overflow:hidden !important; }
+          #divTwc { transform-origin: top left !important; }
+          #divTwcBottom { display:none !important; }
+          .info, .heading, #enabledDisplays, #settings, #divInfo, #share-link, #share-link-copied, #share-link-instructions { display:none !important; }
+          #divQuery { display:none !important; }
+        `;
+        doc.head.appendChild(style);
+        // Scale divTwc to fill the iframe
+        const scaleWS3000 = () => {
+          const twc = doc.getElementById('divTwc');
+          if (!twc) return;
+          const iw = newFrame.offsetWidth || window.innerWidth;
+          const ih = newFrame.offsetHeight || window.innerHeight;
+          const baseW = doc.getElementById('container')?.offsetWidth || 854;
+          const baseH = (doc.getElementById('container')?.offsetHeight || 0) +
+                        (doc.getElementById('divTwcBottom')?.offsetHeight || 0) || 480;
+          const scale = Math.min(iw / baseW, ih / 480);
+          twc.style.transform = \`scale(\${scale})\`;
+          twc.style.transformOrigin = 'top left';
+          twc.style.width = baseW + 'px';
+        };
+        scaleWS3000();
+        newFrame.contentWindow.addEventListener('resize', scaleWS3000);
+      } catch(e) { /* cross-origin guard */ }
+    });
+  }
 
   const badge = document.getElementById('live-badge');
   const labelEl = document.getElementById('channel-label');
