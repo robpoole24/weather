@@ -1833,7 +1833,7 @@ app.get('/api/aqi', async (req, res) => {
 // file with today's smoke polygons. Cached 2 hours.
 const _hmsSmokeCache = { data: null, ts: 0 };
 const HMS_TTL = 2 * 60 * 60 * 1000;
-const HMS_KML_URL = 'https://www.ospo.noaa.gov/data/land/fire/smoke.kml';
+const HMS_KML_URL = 'https://www.ospo.noaa.gov/Products/land/hms/data/latest_smoke_final.kml';
 
 function parseHMSKML(kml) {
   const features = [];
