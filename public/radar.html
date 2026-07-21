@@ -3986,8 +3986,9 @@ async function refreshRiverGauges() {
   const b = map.getBounds();
   try {
     const url = `https://api.water.noaa.gov/nwps/v1/gauges?` +
-      `bbox=${b.getWest().toFixed(4)},${b.getSouth().toFixed(4)},` +
-      `${b.getEast().toFixed(4)},${b.getNorth().toFixed(4)}&count=200`;
+      `bbox.xmin=${b.getWest().toFixed(4)}&bbox.ymin=${b.getSouth().toFixed(4)}` +
+      `&bbox.xmax=${b.getEast().toFixed(4)}&bbox.ymax=${b.getNorth().toFixed(4)}` +
+      `&srid=EPSG_4326&count=200`;
     const data = await (await fetch(url)).json();
     if (!_gaugeLayer) return;
     _gaugeLayer.clearLayers();
