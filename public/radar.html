@@ -3884,16 +3884,16 @@ async function refreshStormCells() {
   try {
     const b = map.getBounds().pad(0.2);
     const data = await (await fetch(
-      `https://mesonet.agron.iastate.edu/geojson/nexrad_storms.py`
+      `https://mesonet.agron.iastate.edu/geojson/nexrad_attr.py`
     )).json();
     if (!_stormCellLayer) return;
     _stormCellLayer.clearLayers();
     (data.features || []).forEach(f => {
       const p = f.properties, lat = f.geometry.coordinates[1], lng = f.geometry.coordinates[0];
       if (!b.contains([lat, lng])) return;
-      const dbz = p.max_dbz || 0;
+      const dbz = p.MAX_DBZ || p.max_dbz || 0;
       const color = dbz >= 65 ? '#ff00ff' : dbz >= 55 ? '#ff0000' : dbz >= 45 ? '#ff8c00' : '#ffff00';
-      const spd = p.storm_speed || 0, dir = p.storm_drct || 0;
+      const spd = p.SKNT || p.storm_speed || 0, dir = p.DRCT || p.storm_drct || 0;
       // Vector endpoint 45 min ahead
       const dist = spd * 0.75 * 1.852 / 111; // knots → deg lat
       const endLat = lat + dist * Math.cos(dir * Math.PI / 180);
@@ -3907,8 +3907,8 @@ async function refreshStormCells() {
       mk.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${color}">🎯 Storm Cell</div>
         <div style="margin-top:4px">Max dBZ: <strong>${dbz}</strong></div>
         <div>Movement: <strong>${dir}° at ${spd} kt</strong></div>
-        ${p.tvs ? '<div style="color:#ff0000;margin-top:2px">⚠ TVS detected</div>' : ''}
-        ${p.meso ? '<div style="color:#ff8c00;margin-top:2px">⚠ Meso detected</div>' : ''}
+        ${(p.TVS||p.tvs) ? '<div style="color:#ff0000;margin-top:2px">⚠ TVS detected</div>' : ''}
+        ${(p.MESO||p.meso) ? '<div style="color:#ff8c00;margin-top:2px">⚠ Meso detected</div>' : ''}
         <div class="exp">IEM NEXRAD Storm Attributes</div></div>`, { maxWidth: 240 });
       _stormCellLayer.addLayer(mk);
     });
@@ -3993,7 +3993,8 @@ async function refreshRiverGauges() {
     if (!_gaugeLayer) return;
     _gaugeLayer.clearLayers();
     (data.gauges || []).forEach(g => {
-      const status = g.status?.toLowerCase().replace(' ', '_') || 'no_flooding';
+      const rawStatus = (typeof g.status === 'object' ? (g.status?.current || '') : (g.status || ''));
+      const status = rawStatus.toLowerCase().replace(/ /g, '_') || 'no_flooding';
       const color = GAUGE_COLORS[status] || '#2ec44a';
       const label = GAUGE_LABELS[status] || status;
       const mk = L.circleMarker([g.latitude, g.longitude], {
@@ -4027,7 +4028,7 @@ function stopRiverGauges() {
 
 // ── NHC Tropical Storms ───────────────────────────────────────────────────────
 // Two layers: WMS tile overlay for tracks/cones + JSON advisory text panel
-const _nhcLayers = {}, _nhcPanels = {};
+const _nhcLayers = {}, _nhcPanels = {}, _nhcTrackLayers = {};
 
 // ── NHC Tropical Storm layer IDs on mapservices.weather.noaa.gov ─────────────
 // Storm slots per basin. Layer IDs are fixed — the service always uses the same
@@ -4151,6 +4152,56 @@ async function refreshNHCPanel(basin) {
 
     const basinLabel = basin === 'atl' ? 'Atlantic' : 'Pacific';
 
+    // ── Draw forecast tracks on map ──────────────────────────────────────────
+    if (_nhcTrackLayers[basin]) { map.removeLayer(_nhcTrackLayers[basin]); delete _nhcTrackLayers[basin]; }
+    if (activeStorms.length) {
+      const trackGroup = L.layerGroup().addTo(map);
+      _nhcTrackLayers[basin] = trackGroup;
+      activeStorms.forEach(storm => {
+        const all = storm.points;
+        if (!all.length) return;
+        // Colored line segments between each advisory point
+        for (let i = 0; i < all.length - 1; i++) {
+          const a = all[i], b2 = all[i + 1];
+          if (a.lat == null || b2.lat == null) continue;
+          L.polyline([[a.lat, a.lon], [b2.lat, b2.lon]], {
+            color: nhcCatColor(a.ssnum || 0, a.tcdvlp || ''), weight: 3, opacity: 0.85
+          }).addTo(trackGroup);
+        }
+        // Category-colored dots at each forecast point
+        all.forEach(pt => {
+          if (pt.lat == null) return;
+          const isCurrent = (pt.tau || 0) === 0;
+          const col = nhcCatColor(pt.ssnum || 0, pt.tcdvlp || '');
+          const lbl = nhcCatLabel(pt.ssnum || 0, pt.tcdvlp || '');
+          const mk = L.circleMarker([pt.lat, pt.lon], {
+            radius: isCurrent ? 9 : 6, color: '#000', weight: isCurrent ? 2 : 1,
+            fillColor: col, fillOpacity: isCurrent ? 1 : 0.85, zIndexOffset: isCurrent ? 100 : 0
+          });
+          mk.bindPopup(
+            `<div class="alert-popup"><div class="ev" style="color:${col}">🌀 ${storm.name}</div>` +
+            `<div style="margin-top:4px"><strong style="color:${col}">${lbl}</strong> · ${Math.round(pt.maxwind || 0)} kt winds</div>` +
+            `<div style="font-size:0.73rem;color:var(--muted)">${pt.fldatelbl || pt.datelbl || ''}</div></div>`,
+            { maxWidth: 220 }
+          );
+          trackGroup.addLayer(mk);
+        });
+        // Storm name label at current position
+        const cur = all[0];
+        if (cur?.lat != null) {
+          window[`_nhcPos_${storm.name.replace(/[^a-z0-9]/gi,'')}`] = cur;
+          L.marker([cur.lat, cur.lon], {
+            icon: L.divIcon({
+              className: '',
+              html: `<div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.72rem;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000;white-space:nowrap;margin-left:12px;margin-top:-6px">${storm.name}</div>`,
+              iconSize: [120, 20], iconAnchor: [0, 10]
+            }),
+            interactive: false, zIndexOffset: 200
+          }).addTo(trackGroup);
+        }
+      });
+    }
+
     if (!activeStorms.length) {
       panelEl.innerHTML = `
         <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;font-weight:700;
@@ -4190,7 +4241,10 @@ async function refreshNHCPanel(basin) {
         <div style="margin-bottom:0.75rem;padding-bottom:0.65rem;border-bottom:1px solid rgba(0,180,216,0.15)">
           <div style="display:flex;align-items:baseline;gap:0.45rem;margin-bottom:0.25rem">
             <span style="font-family:'Barlow Condensed',sans-serif;font-size:1rem;font-weight:700;
-              color:${curColor}">${storm.name}</span>
+              color:${curColor};cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px"
+              title="Click to fly to storm"
+              onclick="(()=>{const pt=window._nhcCurrentPos_${storm.name.replace(/[^a-zA-Z0-9]/g,'')};if(pt)map.flyTo([pt.lat,pt.lon],5,{duration:1.5});})()">
+              ${storm.name}</span>
             <span style="font-size:0.72rem;color:${curColor};font-weight:600">${curLabel}</span>
           </div>
           <div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.1rem">${storm.tcdvlp}</div>
@@ -4240,6 +4294,7 @@ function compassDir(deg) {
 
 function stopNHC(basin) {
   if (_nhcLayers[basin]) { map.removeLayer(_nhcLayers[basin]); delete _nhcLayers[basin]; }
+  if (_nhcTrackLayers[basin]) { map.removeLayer(_nhcTrackLayers[basin]); delete _nhcTrackLayers[basin]; }
   if (_nhcPanels[basin]) { _nhcPanels[basin].remove(); delete _nhcPanels[basin]; }
 }
 
