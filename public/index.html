@@ -109,18 +109,19 @@
     display: block;
   }
 
-  /* WS3000: constrain to 16:9 box, centered, so kiosk mode scales correctly */
+  /* WS3000: center in the player using absolute positioning */
   #video-wrapper.ws3000-active {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: relative;
     background: #000;
   }
   #video-wrapper.ws3000-active #video-frame {
-    flex: 0 0 auto;
-    aspect-ratio: 16 / 9;
-    width: auto;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-50%);
     height: 100%;
+    width: auto;
+    aspect-ratio: 16 / 9;
     max-width: 100%;
   }
 
