@@ -109,6 +109,20 @@
     display: block;
   }
 
+  /* WS3000: constrain to 16:9 box so kiosk mode scales to the right size */
+  #video-wrapper.ws3000-active {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+  }
+  #video-wrapper.ws3000-active #video-frame {
+    width: 100%;
+    height: 100%;
+    max-width: calc(100vh * 16 / 9);
+    max-height: calc(100vw * 9 / 16);
+  }
+
   #video-placeholder {
     width: 100%;
     height: 100%;
@@ -2529,7 +2543,7 @@ function buildWSUrl(ver) {
     WS3000_DISPLAYS.forEach(d => p.set(d.key + '-checkbox', s.displays[d.key] ? 'true' : 'false'));
     p.set('settings-speed-select',  s.speed.toFixed(2));
     p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
-    p.set('settings-kiosk-checkbox','false'); // kiosk=true causes double-scaling in iframe
+    p.set('settings-kiosk-checkbox','true');
   }
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
@@ -3003,9 +3017,13 @@ function loadIframe(src, label, isLive) {
   newFrame.style.border = 'none';
   newFrame.style.display = 'block';
   frame.parentNode.replaceChild(newFrame, frame);
+  // Toggle WS3000 sizing class on the wrapper
+  const vw = document.getElementById('video-wrapper');
+  if (vw) vw.classList.toggle('ws3000-active', isWS3000);
+
   newFrame.src = src;
 
-  // For self-hosted WS3000: hide UI chrome only, let WS3000 handle its own scaling
+  // For self-hosted WS3000: hide UI chrome (location bar, links, checkboxes)
   if (isWS3000) {
     newFrame.addEventListener('load', () => {
       try {
@@ -3013,7 +3031,8 @@ function loadIframe(src, label, isLive) {
         if (!doc) return;
         const style = doc.createElement('style');
         style.textContent =
-          '#share-link, #share-link-copied, #share-link-instructions, #divInfo { display:none !important; }' +
+          '#divQuery, .info, .heading, #enabledDisplays, #settings, #divInfo,' +
+          '#share-link, #share-link-copied, #share-link-instructions { display:none !important; }' +
           '#divTwcBottom { display:none !important; }';
         doc.head.appendChild(style);
       } catch(e) { /* cross-origin guard */ }
