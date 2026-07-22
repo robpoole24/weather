@@ -116,13 +116,8 @@
   }
   #video-wrapper.ws3000-active #video-frame {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translateX(-50%) translateY(-50%);
-    height: 100%;
-    width: auto;
-    aspect-ratio: 16 / 9;
-    max-width: 100%;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
   }
 
   #video-placeholder {
@@ -3022,6 +3017,33 @@ function loadIframe(src, label, isLive) {
   // Toggle WS3000 sizing class on the wrapper
   const vw = document.getElementById('video-wrapper');
   if (vw) vw.classList.toggle('ws3000-active', isWS3000);
+
+  // For WS3000: size and center the iframe to a 16:9 box within the wrapper
+  function applyWS3000Size() {
+    if (!vw) return;
+    const pw = vw.offsetWidth, ph = vw.offsetHeight;
+    // Calculate largest 16:9 box that fits
+    let iw, ih;
+    if (pw / ph > 16 / 9) {
+      ih = ph; iw = Math.round(ph * 16 / 9);
+    } else {
+      iw = pw; ih = Math.round(pw * 9 / 16);
+    }
+    newFrame.style.width  = iw + 'px';
+    newFrame.style.height = ih + 'px';
+    newFrame.style.top    = Math.round((ph - ih) / 2) + 'px';
+    newFrame.style.left   = Math.round((pw - iw) / 2) + 'px';
+  }
+  if (isWS3000) {
+    applyWS3000Size();
+    window._ws3000ResizeHandler = applyWS3000Size;
+    window.addEventListener('resize', applyWS3000Size);
+  } else {
+    if (window._ws3000ResizeHandler) {
+      window.removeEventListener('resize', window._ws3000ResizeHandler);
+      delete window._ws3000ResizeHandler;
+    }
+  }
 
   newFrame.src = src;
 
