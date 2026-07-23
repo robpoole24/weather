@@ -1500,8 +1500,13 @@ function _parseIBI511(raw, sourceId, dot) {
     // The static Url field points to the platform's SPA page — not usable
     // as a direct image. ImageUrl is populated by some states but not all.
     // Construct the snapshot URL from the view Id when base URL is available.
+    // Include the API key in the snapshot URL — Idaho and similar ibi511
+    // states that don't return ImageUrl directly need it for GetCctvImage.
+    const key = (dot?.envKey && process.env[dot.envKey]) ? process.env[dot.envKey] : null;
     const imageUrl = view.ImageUrl
-      || (baseUrl && view.Id ? `${baseUrl}/Cctv/GetCctvImage?viewId=${view.Id}` : null);
+      || (baseUrl && view.Id
+        ? `${baseUrl}/Cctv/GetCctvImage?viewId=${view.Id}${key ? '&key=' + encodeURIComponent(key) : ''}`
+        : null);
     cameras.push({
       id: `${sourceId}-${cam.Id}`,
       name: cam.Location || cam.Roadway || 'Traffic Camera',
