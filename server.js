@@ -1307,7 +1307,7 @@ app.get('/api/canada-radar/capabilities', async (req, res) => {
 // images via /api/camera-image?url=... which pipes them back with the
 // right CORS headers. Cached 25s so a 30-second refresh cycle stays fresh.
 
-const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/master/cameras/USA.json';
+const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/v1/cameras/USA.json';
 let _otcCache = null;       // parsed flat array of cameras
 let _otcCacheTime = 0;
 const OTC_TTL = 60 * 60 * 1000; // 60 min — static file, rarely changes
