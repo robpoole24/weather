@@ -1494,7 +1494,12 @@ function _parseIBI511(raw, sourceId, dot) {
     // enabled one; fall back to the first view if all are disabled.
     const views = Array.isArray(cam.Views) ? cam.Views : [];
     const view = views.find(v => v.Status === 'Enabled') || views[0];
+    // Skip entirely if the only available view is disabled — requesting
+    // images for disabled views returns a redirect to /notfound which
+    // would crash the proxy on relative-URL redirect handling (now fixed,
+    // but no point loading cameras we know have no live feed).
     if (!view) continue;
+    if (view.Status === 'Disabled' && !views.some(v => v.Status === 'Enabled')) continue;
     const videoUrl = view.VideoUrl || null;
     // IBI511 platforms expose snapshots at GetCctvImage?viewId={Id}.
     // The static Url field points to the platform's SPA page — not usable
@@ -1986,9 +1991,14 @@ app.get('/api/camera-image', async (req, res) => {
       const options = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } };
       mod.get(rawUrl, options, r => {
         if (r.statusCode === 301 || r.statusCode === 302) {
-          // Follow one redirect — DOTs love redirecting image URLs
-          const loc = r.headers.location;
-          if (!loc) return reject(new Error('redirect with no location'));
+          // Follow one redirect — DOTs love redirecting image URLs.
+          // Resolve relative redirects (e.g. /notfound) against the
+          // original URL so http.get() doesn't crash on a bare path.
+          const rawLoc = r.headers.location;
+          if (!rawLoc) return reject(new Error('redirect with no location'));
+          let loc;
+          try { loc = rawLoc.startsWith('http') ? rawLoc : new URL(rawLoc, rawUrl).href; }
+          catch(_) { return reject(new Error('unresolvable redirect: ' + rawLoc)); }
           const mod2 = loc.startsWith('https') ? require('https') : require('http');
           mod2.get(loc, options, r2 => {
             const chunks = [];
