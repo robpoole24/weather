@@ -1478,22 +1478,30 @@ const _stateDOTCache = new Map();
 
 // Standard IBI Group / Skyline 511 platform parser.
 // Used by WI and confirmed identical on AZ, GA, LA, and most US state DOTs.
-function _parseIBI511(raw, sourceId) {
+function _parseIBI511(raw, sourceId, dot) {
   if (!Array.isArray(raw)) return [];
+  // Derive the base URL (e.g. https://511.idaho.gov) from the configured
+  // API URL so we can build the GetCctvImage snapshot endpoint.
+  // Falls back gracefully if dot isn't passed (backward-compatible).
+  let baseUrl = '';
+  try { if (dot?.url) baseUrl = new URL(dot.url).origin; } catch(_) {}
+
   const cameras = [];
   for (const cam of raw) {
     const lat = parseFloat(cam.Latitude), lng = parseFloat(cam.Longitude);
     if (!isFinite(lat) || !isFinite(lng)) continue;
-    // Each camera can have multiple Views (different angles). Grab the first
-    // enabled one. Prefer VideoUrl (HLS) over the static Url (webpage link).
+    // Each camera can have multiple Views (different angles). Prefer an
+    // enabled one; fall back to the first view if all are disabled.
     const views = Array.isArray(cam.Views) ? cam.Views : [];
     const view = views.find(v => v.Status === 'Enabled') || views[0];
     if (!view) continue;
     const videoUrl = view.VideoUrl || null;
-    // The static Url on IBI platforms points to a webpage, not a direct image —
-    // not useful for our image-stream player, so we leave imageUrl null unless
-    // the view has a direct image URL (some states add one).
-    const imageUrl = view.ImageUrl || null;
+    // IBI511 platforms expose snapshots at GetCctvImage?viewId={Id}.
+    // The static Url field points to the platform's SPA page — not usable
+    // as a direct image. ImageUrl is populated by some states but not all.
+    // Construct the snapshot URL from the view Id when base URL is available.
+    const imageUrl = view.ImageUrl
+      || (baseUrl && view.Id ? `${baseUrl}/Cctv/GetCctvImage?viewId=${view.Id}` : null);
     cameras.push({
       id: `${sourceId}-${cam.Id}`,
       name: cam.Location || cam.Roadway || 'Traffic Camera',
@@ -1602,7 +1610,7 @@ async function _loadStateDOT(dot) {
   try {
     const text = await fetchTextOverHttp(url);
     const raw = JSON.parse(text);
-    cameras = dot.parse(raw, dot.id);
+    cameras = dot.parse(raw, dot.id, dot);
     console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`);
   } catch (e) {
     console.warn(`[Cameras] ${dot.label} failed:`, e.message);
