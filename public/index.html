@@ -347,12 +347,16 @@
   .nav-btn:active { border-color: var(--accent); color: var(--accent); }
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
 
-  /* Panels */
+  /* Panels — collapsed by default, slide up when group is selected */
   #panels {
-    flex: 1;
     overflow: hidden;
     position: relative;
-    min-height: 0;
+    max-height: 0;
+    transition: max-height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-shrink: 0;
+  }
+  #panels.panels-open {
+    max-height: 240px; /* enough for one row of channel cards on any device */
   }
 
   .panel {
@@ -1353,7 +1357,7 @@
   <div id="panels" role="region" aria-label="Channel list">
 
     <!-- Hint shown in bar when no group is selected -->
-    <div id="panel-hint">↑ Select a group above to begin</div>
+    <div id="panel-hint">Select a group above to see channels</div>
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
 
@@ -1600,6 +1604,7 @@ const WEATHER_APPS_DEFAULT = [
 // STATE
 // ═══════════════════════════════════════════
 let activePanel = null;
+let panelsOpen = false; // channel list visible
 let liveStatuses = {};
 let currentChannel = null;
 
@@ -1717,6 +1722,18 @@ function buildChannelPanels() {
 // PANEL NAVIGATION
 // ═══════════════════════════════════════════
 function showPanel(name, e) {
+  // Non-channel panels (radar, weatherstar, playlist, apps) bypass
+  // the collapse/expand logic — they take over the full content area.
+  const FULL_PANELS = ['radar', 'weatherstar', 'playlist', 'apps'];
+  const isChannelPanel = !FULL_PANELS.includes(name);
+
+  // Toggle: clicking the active group button collapses the channel list
+  if (isChannelPanel && panelsOpen && activePanel === name) {
+    _setPanelsOpen(false);
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    return; // leave panel content intact so re-opening is instant
+  }
+
   // Update nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
@@ -1734,7 +1751,6 @@ function showPanel(name, e) {
     document.body.classList.remove('radar-expanded');
   }
 
-
   // Hide ALL panels including live-now-panel (reset inline styles too)
   document.querySelectorAll('.panel').forEach(p => {
     p.classList.remove('active');
@@ -1748,6 +1764,9 @@ function showPanel(name, e) {
     panel.classList.add('active');
   }
   activePanel = name;
+
+  // Open the channel list area for channel-type panels
+  if (isChannelPanel) _setPanelsOpen(true);
 
   // Close any recent overlay
   closeRecentOverlay();
@@ -1783,7 +1802,21 @@ function closePanel(name) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   activePanel = null;
+  panelsOpen = false;
+  _setPanelsOpen(false);
   closeRecentOverlay();
+}
+
+// Open or close the channel list area with a smooth slide
+function _setPanelsOpen(open) {
+  panelsOpen = open;
+  const el = document.getElementById('panels');
+  if (!el) return;
+  if (open) {
+    el.classList.add('panels-open');
+  } else {
+    el.classList.remove('panels-open');
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -3108,6 +3141,7 @@ function clearVideo() {
 }
 
 async function playLive(ch) {
+  _setPanelsOpen(false); // collapse channel list so video gets full space
   closeRecentOverlay();
   closeLiveChat();
 
@@ -3261,6 +3295,7 @@ function closeLiveChat() {
 }
 
 function playVideo(videoId, title) {
+  _setPanelsOpen(false); // collapse channel list on video play
   const url = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
   loadIframe(url, title, false);
   closeRecentOverlay();
