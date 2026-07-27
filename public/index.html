@@ -165,7 +165,7 @@
      in the stylesheet and would otherwise win the cascade */
   @media (max-width: 767px) {
     body { height: 100dvh !important; }
-    #video-area { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
+    #video-area { flex: 1 !important; max-height: none !important; }
     #control-bar { flex: 0 0 auto !important; }
     /* Compact nav — shrink buttons to give the channel panel more vertical room */
     #main-nav { padding: 0.15rem 0.4rem !important; gap: 0.2rem !important; }
@@ -197,7 +197,7 @@
     body { height: 100dvh; }
 
     /* Video 50% height, control bar gets rest */
-    #video-area { flex: 0 0 50dvh; max-height: 50dvh; }
+    #video-area { flex: 1; max-height: none; }
     #control-bar { flex: 0 0 auto; }
 
     /* Hide radar rings — too tall */
@@ -349,8 +349,11 @@
   /* When channel panel is open: restore original flex ratios */
   #control-bar.panels-active { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
   #video-area.panels-active  { flex: 4 !important; }
-  @media (max-height: 600px), (orientation: portrait) and (max-width: 768px) {
+  @media (max-width: 767px) {
     #video-area.panels-active { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
+  }
+  @media (orientation: landscape) and (max-height: 500px) {
+    #video-area.panels-active { flex: 0 0 50dvh !important; max-height: 50dvh !important; }
   }
 
   /* Panels — collapsed by default, slide up when group is selected */
