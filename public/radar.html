@@ -1077,7 +1077,7 @@ map.on('popupopen', function(e) {
 document.getElementById('btn-mcd').style.display = '';
 updateZoomIndicator();
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
   attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
   subdomains:'abcd', maxZoom:19
 }).addTo(map);
@@ -1133,6 +1133,25 @@ let radarVisible = true;
 let isPlaying = false;
 let playTimer = null;
 let userLat = null, userLng = null;
+let userZone = null;    // NWS forecast zone code e.g. "WIZ063"
+let userCounty = null;  // NWS county zone code e.g. "WIC079"
+
+// Fetch user's NWS zone and county codes from the points API.
+// These are the authoritative zone codes NWS uses when issuing alerts —
+// checking them is more reliable than polygon intersection at county edges.
+async function fetchUserZone(lat, lng) {
+  try {
+    const data = await (await fetch(
+      `https://api.weather.gov/points/${lat.toFixed(4)},${lng.toFixed(4)}`,
+      { headers: { 'Accept': 'application/geo+json' } }
+    )).json();
+    const p = data.properties || {};
+    if (p.forecastZone) userZone   = p.forecastZone.split('/').pop();
+    if (p.county)       userCounty = p.county.split('/').pop();
+    console.log(`[Alerts] Zone=${userZone} County=${userCounty}`);
+    if (lastAlertsData) renderAlertLayers(); // re-check banner with zone info
+  } catch(e) { console.warn('[Alerts] Zone lookup failed:', e.message); }
+}
 let alertsVisible = true;
 let alertsLayer = L.layerGroup().addTo(map);
 let radarMode = 'past'; // 'past' or 'forecast'
@@ -1782,7 +1801,13 @@ async function renderAlertLayers() {
     // Check if user is inside this alert polygon
     if (userLat && userLng && !bannerDismissed) {
       const inPoly = geom ? pointInPolygon(userLat, userLng, geom) : false;
-      if (inPoly) {
+      // Zone-based check: if user's NWS forecast zone or county code appears
+      // in the alert's UGC geocode list, they're in the warned area regardless
+      // of polygon geometry (catches county-boundary edge cases).
+      const ugc = s.properties.geocode?.UGC || [];
+      const inZone = (userZone   && ugc.includes(userZone))
+                  || (userCounty && ugc.includes(userCounty));
+      if (inPoly || inZone) {
         activeBannerAlerts.push({
           event,
           headline: props.headline || '',
@@ -4686,9 +4711,8 @@ function goToMyLocation() {
 
   const onSuccess = (lat, lng, source) => {
     userLat = lat; userLng = lng;
-    // Clear cached radar site so single-site products re-resolve
-    // to the correct station for this location on next activation
     currentSite = null;
+    fetchUserZone(lat, lng); // get zone codes for reliable banner triggering
     map.flyTo([lat, lng], 8);
     updateViewButtons('local');
     if (typeof updateFeelsLike === 'function') updateFeelsLike(lat, lng);
@@ -4899,6 +4923,7 @@ if (navigator.geolocation) {
       userLat = pos.coords.latitude; userLng = pos.coords.longitude;
       map.setView([userLat, userLng], 8);
       updateViewButtons('local');
+      fetchUserZone(userLat, userLng);
       loadAlerts();
       registerFcmToken(); // register now that we have location
       requestNotificationPermission(); // ask for browser notification permission

@@ -1791,9 +1791,10 @@ async function _loadWindy(stateCode) {
           id:        'windy-' + w.webcamId,
           name:      w.title || 'Webcam',
           lat, lng,
-          imageUrl:  w.image?.current?.preview || null,
+          imageUrl:  w.images?.current?.preview || w.image?.current?.preview || null,
           videoUrl:  null,
-          playerUrl: w.player?.day?.embed || null,
+          playerUrl: w.player?.day?.embed
+                     || (w.webcamId ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}` : null),
           windyId:   w.webcamId,
           direction: null,
           source:    'windy',
