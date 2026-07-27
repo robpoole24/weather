@@ -1773,7 +1773,7 @@ async function _loadWindy(stateCode) {
     try {
       const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
       const data = JSON.parse(text);
-      const batch = (data.webcams || []);
+      const batch = data.webcams || data.data || []; // V3 returns {data:[...]}, V2 {webcams:[...]}
       if (!batch.length) break; // no more results
 
       batch.forEach(w => {

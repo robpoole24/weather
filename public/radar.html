@@ -713,7 +713,7 @@
       <div id="cam-state-status" style="font-size:0.66rem;color:var(--muted);margin-top:0.35rem;line-height:1.5;min-height:1.2em;"></div>
     </div>
     <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-top:0.35rem;padding:0 0.1rem;">
-      Coverage is built from free, publicly available DOT feeds. More states added as feeds are found.
+      Camera data from state DOT feeds, <a href="https://www.windy.com/webcams" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Windy.com</a>, and open-source contributors. Coverage expanding.
     </div>
   </div>
 
@@ -2554,9 +2554,12 @@ async function onCamStateChange(code) {
       ], { padding: [40, 40], maxZoom: 9 });
     }
 
-    const srcLabels = { dot:'DOT traffic', otc:'public feeds', windy:'Windy webcams', road511:'Road511' };
+    const namedSrc = { otc:'open feeds', windy:'Windy.com', road511:'Road511' };
     const src = Object.entries(data.sources || {})
-      .map(([s,n]) => `${n} ${srcLabels[s] || s}`).join(', ');
+      .map(([s,n]) => {
+        const label = namedSrc[s] || (s.length === 2 ? s.toUpperCase() + ' DOT' : s);
+        return n + ' ' + label;
+      }).join(' · ');
     if (status) status.textContent = `${data.total} cameras · ${src || 'loaded'}`;
 
   } catch (e) {
