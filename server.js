@@ -1307,7 +1307,7 @@ app.get('/api/canada-radar/capabilities', async (req, res) => {
 // images via /api/camera-image?url=... which pipes them back with the
 // right CORS headers. Cached 25s so a 30-second refresh cycle stays fresh.
 
-const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/master/cameras/USA.json';
+const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/v1/cameras/USA.json';
 let _otcCache = null;       // parsed flat array of cameras
 let _otcCacheTime = 0;
 const OTC_TTL = 60 * 60 * 1000; // 60 min — static file, rarely changes
@@ -1478,22 +1478,25 @@ const _stateDOTCache = new Map();
 
 // Standard IBI Group / Skyline 511 platform parser.
 // Used by WI and confirmed identical on AZ, GA, LA, and most US state DOTs.
-function _parseIBI511(raw, sourceId) {
+function _parseIBI511(raw, sourceId, dot) {
   if (!Array.isArray(raw)) return [];
+  let baseUrl = '';
+  try { if (dot?.url) baseUrl = new URL(dot.url).origin; } catch(_) {}
   const cameras = [];
   for (const cam of raw) {
     const lat = parseFloat(cam.Latitude), lng = parseFloat(cam.Longitude);
     if (!isFinite(lat) || !isFinite(lng)) continue;
-    // Each camera can have multiple Views (different angles). Grab the first
-    // enabled one. Prefer VideoUrl (HLS) over the static Url (webpage link).
     const views = Array.isArray(cam.Views) ? cam.Views : [];
     const view = views.find(v => v.Status === 'Enabled') || views[0];
     if (!view) continue;
+    // Skip cameras where ALL views are disabled — their images redirect to /notfound
+    if (view.Status === 'Disabled' && !views.some(v => v.Status === 'Enabled')) continue;
     const videoUrl = view.VideoUrl || null;
-    // The static Url on IBI platforms points to a webpage, not a direct image —
-    // not useful for our image-stream player, so we leave imageUrl null unless
-    // the view has a direct image URL (some states add one).
-    const imageUrl = view.ImageUrl || null;
+    const key = (dot?.envKey && process.env[dot.envKey]) ? process.env[dot.envKey] : null;
+    const imageUrl = view.ImageUrl
+      || (baseUrl && view.Id
+        ? `${baseUrl}/Cctv/GetCctvImage?viewId=${view.Id}${key ? '&key=' + encodeURIComponent(key) : ''}`
+        : null);
     cameras.push({
       id: `${sourceId}-${cam.Id}`,
       name: cam.Location || cam.Roadway || 'Traffic Camera',
@@ -1602,7 +1605,7 @@ async function _loadStateDOT(dot) {
   try {
     const text = await fetchTextOverHttp(url);
     const raw = JSON.parse(text);
-    cameras = dot.parse(raw, dot.id);
+    cameras = dot.parse(raw, dot.id, dot);
     console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`);
   } catch (e) {
     console.warn(`[Cameras] ${dot.label} failed:`, e.message);
@@ -1941,16 +1944,12 @@ app.get('/api/fire-perimeters', async (req, res) => {
 });
 
 // GET /api/camera-hls?url=...
-// HLS stream proxy — HLS.js makes XHR requests to fetch M3U8 playlists and
-// .ts segments. Those requests trigger the connect-src CSP if the DOT domain
-// isn't whitelisted. By proxying through this endpoint all HLS requests are
-// same-origin (/api/camera-hls?url=...) and never touch connect-src.
-//
-// M3U8 playlists are rewritten so every segment URL points back here.
-// TS segments are passed through as binary. Both are lightly cached.
+// HLS stream proxy — routes M3U8 and .ts segment requests through our server
+// so HLS.js XHR calls stay same-origin and never trigger connect-src CSP.
+// M3U8 playlists are rewritten to route all segment URLs through this proxy.
 const _hlsCache = new Map();
-const HLS_M3U8_TTL = 4 * 1000;   // 4s — playlists update every few seconds
-const HLS_SEG_TTL  = 30 * 1000;  // 30s — segments are immutable once written
+const HLS_M3U8_TTL = 4 * 1000;
+const HLS_SEG_TTL  = 30 * 1000;
 
 function _isPrivateHost(hostname) {
   return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
@@ -1958,9 +1957,9 @@ function _isPrivateHost(hostname) {
 
 function _fetchBinary(url) {
   return new Promise((resolve, reject) => {
-    let parsedForFetch;
-    try { parsedForFetch = new URL(url); } catch(e) { return reject(e); }
-    const mod = parsedForFetch.protocol === 'https:' ? require('https') : require('http');
+    let p;
+    try { p = new URL(url); } catch(e) { return reject(e); }
+    const mod = p.protocol === 'https:' ? require('https') : require('http');
     const opts = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } };
     mod.get(url, opts, r => {
       if (r.statusCode === 301 || r.statusCode === 302) {
@@ -1968,7 +1967,7 @@ function _fetchBinary(url) {
         if (!rawLoc) return reject(new Error('redirect with no location'));
         let loc;
         try { loc = rawLoc.startsWith('http') ? rawLoc : new URL(rawLoc, url).href; }
-        catch(_) { return reject(new Error('unresolvable redirect')); }
+        catch(_) { return reject(new Error('bad redirect')); }
         return _fetchBinary(loc).then(resolve, reject);
       }
       const chunks = [];
@@ -1982,7 +1981,6 @@ function _fetchBinary(url) {
 app.get('/api/camera-hls', async (req, res) => {
   const rawUrl = (req.query.url || '').trim();
   if (!rawUrl) return res.status(400).send('url required');
-
   let parsedUrl;
   try { parsedUrl = new URL(rawUrl); } catch { return res.status(400).send('invalid url'); }
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) return res.status(400).send('http/https only');
@@ -1990,7 +1988,6 @@ app.get('/api/camera-hls', async (req, res) => {
 
   const isM3U8 = rawUrl.includes('.m3u8') || rawUrl.includes('playlist');
   const ttl = isM3U8 ? HLS_M3U8_TTL : HLS_SEG_TTL;
-
   const cached = _hlsCache.get(rawUrl);
   if (cached && Date.now() - cached.ts < ttl) {
     res.set('Content-Type', cached.ct);
@@ -2001,22 +1998,15 @@ app.get('/api/camera-hls', async (req, res) => {
 
   try {
     const { buf, ct, status } = await _fetchBinary(rawUrl);
-    if (status && status >= 400) {
-      return res.status(status).send('upstream ' + status);
-    }
+    if (status && status >= 400) return res.status(status).send('upstream ' + status);
 
-    let outBuf = buf;
-    let outCt  = ct;
-
+    let outBuf = buf, outCt = ct;
     if (isM3U8) {
-      // Rewrite M3U8 so all segment/playlist URLs route through this proxy.
-      // Relative URLs are resolved against the base URL of the M3U8.
       const baseUrl = rawUrl.substring(0, rawUrl.lastIndexOf('/') + 1);
       const text = buf.toString('utf8');
       const rewritten = text.split('\n').map(line => {
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) return line; // keep directives as-is
-        // Resolve relative URLs
+        if (!trimmed || trimmed.startsWith('#')) return line;
         let absUrl;
         try { absUrl = trimmed.startsWith('http') ? trimmed : new URL(trimmed, baseUrl).href; }
         catch(_) { return line; }
@@ -2025,17 +2015,13 @@ app.get('/api/camera-hls', async (req, res) => {
       outBuf = Buffer.from(rewritten, 'utf8');
       outCt  = 'application/vnd.apple.mpegurl';
     } else {
-      // TS segment — content-type is video/MP2T or similar
       if (!outCt || outCt.includes('text/html')) outCt = 'video/MP2T';
     }
 
     _hlsCache.set(rawUrl, { buf: outBuf, ct: outCt, ts: Date.now() });
     if (_hlsCache.size > 500) {
-      // Prune oldest entries
-      const oldest = [..._hlsCache.entries()].sort((a,b) => a[1].ts - b[1].ts).slice(0, 100);
-      oldest.forEach(([k]) => _hlsCache.delete(k));
+      [..._hlsCache.entries()].sort((a,b) => a[1].ts - b[1].ts).slice(0, 100).forEach(([k]) => _hlsCache.delete(k));
     }
-
     res.set('Content-Type', outCt);
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Cache-Control', isM3U8 ? 'no-cache' : 'public, max-age=30');
@@ -2079,9 +2065,11 @@ app.get('/api/camera-image', async (req, res) => {
       const options = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } };
       mod.get(rawUrl, options, r => {
         if (r.statusCode === 301 || r.statusCode === 302) {
-          // Follow one redirect — DOTs love redirecting image URLs
-          const loc = r.headers.location;
-          if (!loc) return reject(new Error('redirect with no location'));
+          const rawLoc = r.headers.location;
+          if (!rawLoc) return reject(new Error('redirect with no location'));
+          let loc;
+          try { loc = rawLoc.startsWith('http') ? rawLoc : new URL(rawLoc, rawUrl).href; }
+          catch(_) { return reject(new Error('unresolvable redirect: ' + rawLoc)); }
           const mod2 = loc.startsWith('https') ? require('https') : require('http');
           mod2.get(loc, options, r2 => {
             const chunks = [];
