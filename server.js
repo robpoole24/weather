@@ -1798,7 +1798,7 @@ async function _loadWindy(stateCode) {
       // Diagnostic: log first 200 chars so Railway logs show auth/format issues
       if (page === 0) console.log(`[Cameras] Windy ${stateCode} raw:`, text.slice(0, 200));
       const data = JSON.parse(text);
-      const batch = data.webcams || data.data || []; // V3 returns {data:[...]}, V2 {webcams:[...]}
+      const batch = data.webcams || data.data || []; // V3 returns {webcams:[...]}, V2 also {webcams:[...]}
       if (!batch.length) break; // no more results
       // Diagnostic: log first webcam object so we can verify V3 field names (webcamId, player shape, etc.)
       if (page === 0 && batch.length > 0) {
@@ -1816,11 +1816,10 @@ async function _loadWindy(stateCode) {
           lat, lng,
           imageUrl:  w.images?.current?.preview || w.image?.current?.preview || null,
           videoUrl:  null,
-          // Always construct from webcamId — API's player.day.embed returns
-          // a broken V2 /we_player/ URL that 404s. The V3 embed URL works reliably.
-          playerUrl: w.webcamId
-                     ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}`
-                     : null,
+          // V3 player is a flat object of embed URL strings keyed by timespan.
+          // Use player.day directly — it's the correct working embed URL.
+          // Do NOT construct from webcamId alone (bare /player/{id} returns 404).
+          playerUrl: w.player?.day || null,
           windyId:   w.webcamId,
           direction: null,
           source:    'windy',
