@@ -1772,6 +1772,8 @@ async function _loadWindy(stateCode) {
       + `&limit=50&offset=${page * 50}`;
     try {
       const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+      // Diagnostic: log first 200 chars so Railway logs show auth/format issues
+      if (page === 0) console.log(`[Cameras] Windy ${stateCode} raw:`, text.slice(0, 200));
       const data = JSON.parse(text);
       const batch = data.webcams || data.data || []; // V3 returns {data:[...]}, V2 {webcams:[...]}
       if (!batch.length) break; // no more results
