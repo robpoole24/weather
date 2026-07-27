@@ -1705,6 +1705,83 @@ async function _loadRoad511(bbox) {
   return cameras;
 }
 
+
+// ── Windy Webcams Integration ─────────────────────────────────────────────────
+// Approximate bounding boxes [N, W, S, E] for all 50 states + DC.
+// Used to query Windy's bounding-box API when a user selects a state.
+const STATE_BBOX = {
+  AL:[35.0,-88.5,30.1,-84.8], AK:[71.5,-168.0,54.5,-130.0],
+  AZ:[37.0,-114.8,31.3,-109.0], AR:[36.5,-94.6,33.0,-89.6],
+  CA:[42.0,-124.5,32.5,-114.1], CO:[41.0,-109.1,36.9,-102.0],
+  CT:[42.1,-73.7,40.9,-71.8],  DE:[39.8,-75.8,38.4,-75.0],
+  FL:[31.0,-87.6,24.4,-80.0],  GA:[35.0,-85.6,30.4,-80.8],
+  HI:[22.2,-160.2,18.9,-154.8],ID:[49.0,-117.2,41.9,-111.0],
+  IL:[42.5,-91.5,36.9,-87.0],  IN:[41.8,-88.1,37.8,-84.7],
+  IA:[43.5,-96.6,40.4,-90.1],  KS:[40.0,-102.1,36.9,-94.6],
+  KY:[39.1,-89.6,36.5,-81.9],  LA:[33.0,-94.0,28.9,-88.8],
+  ME:[47.5,-71.1,43.0,-66.9],  MD:[39.7,-79.5,37.9,-75.0],
+  MA:[42.9,-73.5,41.2,-69.9],  MI:[48.3,-90.4,41.7,-82.4],
+  MN:[49.4,-97.2,43.5,-89.5],  MS:[35.0,-91.7,30.2,-88.1],
+  MO:[40.6,-95.8,35.9,-89.1],  MT:[49.0,-116.0,44.4,-104.0],
+  NE:[43.0,-104.1,40.0,-95.3], NV:[42.0,-120.0,35.0,-114.0],
+  NH:[45.3,-72.6,42.7,-70.6],  NJ:[41.4,-75.6,38.9,-73.9],
+  NM:[37.0,-109.1,31.3,-103.0],NY:[45.0,-79.8,40.5,-71.9],
+  NC:[36.6,-84.3,33.8,-75.5],  ND:[49.0,-104.1,45.9,-96.6],
+  OH:[42.3,-84.8,38.4,-80.5],  OK:[37.0,-103.0,33.6,-94.4],
+  OR:[46.3,-124.6,41.9,-116.5],PA:[42.3,-80.5,39.7,-74.7],
+  RI:[42.0,-71.9,41.1,-71.1],  SC:[35.2,-83.4,32.0,-78.5],
+  SD:[45.9,-104.1,42.5,-96.4], TN:[36.7,-90.3,34.9,-81.6],
+  TX:[36.5,-106.6,25.8,-93.5], UT:[42.0,-114.1,36.9,-109.0],
+  VT:[45.0,-73.4,42.7,-71.5],  VA:[39.5,-83.7,36.5,-75.2],
+  WA:[49.0,-124.7,45.5,-116.9],WV:[40.6,-82.6,37.2,-77.7],
+  WI:[47.1,-92.9,42.5,-86.8],  WY:[45.0,-111.1,40.9,-104.0],
+  DC:[39.0,-77.1,38.8,-77.0],
+};
+
+const _windyCache = new Map();
+const WINDY_TTL = 12 * 60 * 1000; // 12 min — images expire at 15 min
+
+async function _loadWindy(stateCode) {
+  const key = process.env.WINDY_WEBCAM_KEY;
+  if (!key) return [];
+
+  const cached = _windyCache.get(stateCode);
+  if (cached && Date.now() - cached.ts < WINDY_TTL) return cached.cameras;
+
+  const bbox = STATE_BBOX[stateCode];
+  if (!bbox) return [];
+  const [N, W, S, E] = bbox;
+
+  const url = `https://api.windy.com/webcams/api/v3/webcams`
+    + `?boundingBox=${N},${W},${S},${E}`
+    + `&include=location,images,player&limit=50&status=active`;
+
+  try {
+    const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+    const data = JSON.parse(text);
+    const cameras = (data.webcams || []).map(w => ({
+      id:        `windy-${w.webcamId}`,
+      name:      w.title || 'Webcam',
+      lat:       w.location?.latitude,
+      lng:       w.location?.longitude,
+      imageUrl:  w.image?.current?.preview || null,
+      videoUrl:  null,
+      playerUrl: w.player?.day?.embed || null,
+      windyId:   w.webcamId,
+      direction: null,
+      source:    'windy',
+      state:     stateCode,
+    })).filter(c => isFinite(c.lat) && isFinite(c.lng));
+
+    _windyCache.set(stateCode, { cameras, ts: Date.now() });
+    console.log(`[Cameras] Windy ${stateCode}: ${cameras.length} webcams`);
+    return cameras;
+  } catch(e) {
+    console.warn(`[Cameras] Windy ${stateCode} failed:`, e.message);
+    return [];
+  }
+}
+
 // GET /api/cameras/coverage
 // Returns which state codes have camera data available (used by the client
 // to build the state dropdown and mark states as covered vs. unavailable).
@@ -1729,6 +1806,12 @@ app.get('/api/cameras/coverage', async (req, res) => {
   });
 
   res.set('Cache-Control', 'public, max-age=300'); // 5 min — coverage rarely changes
+  // If Windy key is configured, all 50 states have webcam coverage
+  // (Windy is global — every state has at least some cameras indexed)
+  if (process.env.WINDY_WEBCAM_KEY) {
+    Object.keys(STATE_BBOX).forEach(s => covered.add(s));
+  }
+
   res.json({ covered: [...covered].sort() });
 });
 
@@ -1747,17 +1830,20 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Find the STATE_DOTS entry for this state, if we have one
     const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
 
-    const [otcAll, stateDOT] = await Promise.all([
+    const [otcAll, stateDOT, windyCams] = await Promise.all([
       _loadOTC().catch(() => []),
       dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
+      _loadWindy(code).catch(() => []),
     ]);
 
     // Filter OTC to this state
     const otcForState = otcAll.filter(c => c.state === code);
 
-    // Merge: STATE_DOTS is authoritative, OTC fills gaps. Deduplicate at 100m.
+    // Merge priority: STATE_DOTS (traffic) → OTC → Windy (scenic/weather).
+    // Deduplicate at 100m so we don't show two cameras from different sources
+    // that are essentially at the same location.
     const merged = [...stateDOT];
-    for (const cam of otcForState) {
+    for (const cam of [...otcForState, ...windyCams]) {
       const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
       if (!tooClose) merged.push(cam);
     }

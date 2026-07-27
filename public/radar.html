@@ -273,6 +273,11 @@
   .chaser-tag::before { border-top-color:#111820 !important; }
 
   /* ── Traffic Camera dots ───────────────────────────────────────────────── */
+  /* Windy webcams get a teal dot to distinguish from orange DOT traffic cameras */
+  .cam-dot.cam-dot-windy {
+    background: #00b4d8;
+    box-shadow: 0 0 4px rgba(0,180,216,0.7);
+  }
   .cam-dot {
     width:10px; height:10px; border-radius:50%;
     background:#f97316; border:2px solid rgba(255,255,255,0.7);
@@ -1617,7 +1622,11 @@ setInterval(() => { if (spcVisible) loadSPC(); if (mcdVisible) loadMCD(); }, 600
 // ── ALERTS ───────────────────────────────────────────────────────────────────
 function toggleAlerts() {
   alertsVisible = !alertsVisible;
+  overlayState['alerts'] = alertsVisible;  // keep overlay state in sync
   document.getElementById('btn-alerts').className = 'tb-btn' + (alertsVisible ? ' warn-on' : '');
+  // Sync the panel toggle active class so top button and panel stay in step
+  const panelRow = document.querySelector('#lp-alerts [data-id="alerts"]');
+  if (panelRow) panelRow.classList.toggle('active', alertsVisible);
   if (alertsVisible) { map.addLayer(alertsLayer); loadAlerts(); }
   else map.removeLayer(alertsLayer);
 }
@@ -2525,7 +2534,7 @@ async function onCamStateChange(code) {
 
     for (const cam of data.cameras) {
       const el = document.createElement('div');
-      el.className = 'cam-dot';
+      el.className = cam.source === 'windy' ? 'cam-dot cam-dot-windy' : 'cam-dot';
       const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
       const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
       mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
@@ -2545,9 +2554,10 @@ async function onCamStateChange(code) {
       ], { padding: [40, 40], maxZoom: 9 });
     }
 
+    const srcLabels = { dot:'DOT traffic', otc:'public feeds', windy:'Windy webcams', road511:'Road511' };
     const src = Object.entries(data.sources || {})
-      .map(([s,n]) => `${n} from ${s.toUpperCase()}`).join(', ');
-    if (status) status.textContent = `${data.total} cameras loaded${src ? ' · ' + src : ''}`;
+      .map(([s,n]) => `${n} ${srcLabels[s] || s}`).join(', ');
+    if (status) status.textContent = `${data.total} cameras · ${src || 'loaded'}`;
 
   } catch (e) {
     console.warn('[Cameras] State load failed:', e);
@@ -2593,7 +2603,20 @@ function openCameraOverlay(cam) {
   _stopCameraMedia();
   body.innerHTML = '<div id="camera-overlay-status">Loading…</div>';
 
-  if (cam.videoUrl) {
+  if (cam.playerUrl) {
+    // Windy webcam — show their timelapse iframe player.
+    // Free tier requires linking back to windy.com (attribution built into player).
+    const iframe = document.createElement('iframe');
+    iframe.src = cam.playerUrl;
+    iframe.allow = 'autoplay; fullscreen';
+    iframe.style.cssText = 'width:100%;height:250px;border:none;background:#000;display:block;';
+    body.innerHTML = '';
+    body.appendChild(iframe);
+    footer.innerHTML = `Live webcam · <a href="https://www.windy.com/webcams/${cam.windyId}"
+      target="_blank" rel="noopener"
+      style="color:var(--accent);text-decoration:none">View on Windy.com ↗</a>`;
+
+  } else if (cam.videoUrl) {
     const video = document.createElement('video');
     video.autoplay = true; video.muted = true; video.controls = true; video.playsInline = true;
     video.style.cssText = 'width:100%;display:block;max-height:280px;background:#000;';
