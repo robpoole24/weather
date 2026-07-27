@@ -94,7 +94,7 @@
 
   /* ── TOP: VIDEO AREA ── */
   #video-area {
-    flex: 1;
+    flex: 4;
     min-height: 0;
     position: relative;
     background: #000;
@@ -107,17 +107,6 @@
     height: 100%;
     border: none;
     display: block;
-  }
-
-  /* WS3000: center in the player using absolute positioning */
-  #video-wrapper.ws3000-active {
-    position: relative;
-    background: #000;
-  }
-  #video-wrapper.ws3000-active #video-frame {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
   }
 
   #video-placeholder {
@@ -165,8 +154,8 @@
      in the stylesheet and would otherwise win the cascade */
   @media (max-width: 767px) {
     body { height: 100dvh !important; }
-    #video-area { flex: 1 !important; max-height: none !important; }
-    #control-bar { flex: 0 0 auto !important; }
+    #video-area { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
+    #control-bar { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
     /* Compact nav — shrink buttons to give the channel panel more vertical room */
     #main-nav { padding: 0.15rem 0.4rem !important; gap: 0.2rem !important; }
     .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
@@ -197,8 +186,8 @@
     body { height: 100dvh; }
 
     /* Video 50% height, control bar gets rest */
-    #video-area { flex: 1; max-height: none; }
-    #control-bar { flex: 0 0 auto; }
+    #video-area { flex: 0 0 50dvh; max-height: 50dvh; }
+    #control-bar { flex: 1; min-height: 0; overflow: hidden; }
 
     /* Hide radar rings — too tall */
     .radar-ring { display: none; }
@@ -297,7 +286,8 @@
 
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
-    flex: 0 0 auto;
+    flex: 1;
+    min-height: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
     display: flex;
@@ -346,26 +336,12 @@
   .nav-btn:active { border-color: var(--accent); color: var(--accent); }
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
 
-  /* When channel panel is open: restore original flex ratios */
-  #control-bar.panels-active { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
-  #video-area.panels-active  { flex: 4 !important; }
-  @media (max-width: 767px) {
-    #video-area.panels-active { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
-  }
-  @media (orientation: landscape) and (max-height: 500px) {
-    #video-area.panels-active { flex: 0 0 50dvh !important; max-height: 50dvh !important; }
-  }
-
-  /* Panels — collapsed by default, slide up when group is selected */
+  /* Panels */
   #panels {
+    flex: 1;
     overflow: hidden;
     position: relative;
-    max-height: 0;
-    transition: max-height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
-    flex-shrink: 0;
-  }
-  #panels.panels-open {
-    max-height: 240px; /* enough for one row of channel cards on any device */
+    min-height: 0;
   }
 
   .panel {
@@ -1366,7 +1342,7 @@
   <div id="panels" role="region" aria-label="Channel list">
 
     <!-- Hint shown in bar when no group is selected -->
-    <div id="panel-hint">Select a group above to see channels</div>
+    <div id="panel-hint">↑ Select a group above to begin</div>
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
 
@@ -1601,7 +1577,7 @@ let CHANNELS = {}; // { groupId: channels[] } for quick lookup
 // WEATHER_APPS is loaded from the server at init — see loadGroupsFromServer()
 // Fallback defaults used if server load fails
 const WEATHER_APPS_DEFAULT = [
-  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    web: 'https://www.weatherfront.app',           ios: 'https://apps.apple.com/us/app/weatherfront-radar-models/id6739154126',           iosSoon: false, android: null,                                                                                       androidSoon: true  },
+  { name: 'WeatherFront',        img: 'images/weatherfront.webp',    web: 'https://www.weatherfront.app',           ios: 'https://apps.apple.com/us/app/weatherfront-radar-models/id6739154126',           iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weatherfront.app',                     androidSoon: false },
   { name: 'Weather Wise',        img: 'images/weather-wise.webp',    web: 'https://www.weatherwiseapp.com',         ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise', androidSoon: false },
   { name: 'Radar Omega',         img: 'images/radar-omega.webp',     web: 'https://www.radaromega.com',             ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',         iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping', androidSoon: false },
   { name: 'Windy',               img: 'images/windy.webp',           web: 'https://www.windy.com',                  ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',             iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.windyty.android',                  androidSoon: false },
@@ -1613,7 +1589,6 @@ const WEATHER_APPS_DEFAULT = [
 // STATE
 // ═══════════════════════════════════════════
 let activePanel = null;
-let panelsOpen = false; // channel list visible
 let liveStatuses = {};
 let currentChannel = null;
 
@@ -1731,18 +1706,6 @@ function buildChannelPanels() {
 // PANEL NAVIGATION
 // ═══════════════════════════════════════════
 function showPanel(name, e) {
-  // Non-channel panels (radar, weatherstar, playlist, apps) bypass
-  // the collapse/expand logic — they take over the full content area.
-  const FULL_PANELS = ['radar', 'weatherstar', 'playlist', 'apps'];
-  const isChannelPanel = !FULL_PANELS.includes(name);
-
-  // Toggle: clicking the active group button collapses the channel list
-  if (isChannelPanel && panelsOpen && activePanel === name) {
-    _setPanelsOpen(false);
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    return; // leave panel content intact so re-opening is instant
-  }
-
   // Update nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
@@ -1760,6 +1723,7 @@ function showPanel(name, e) {
     document.body.classList.remove('radar-expanded');
   }
 
+
   // Hide ALL panels including live-now-panel (reset inline styles too)
   document.querySelectorAll('.panel').forEach(p => {
     p.classList.remove('active');
@@ -1773,9 +1737,6 @@ function showPanel(name, e) {
     panel.classList.add('active');
   }
   activePanel = name;
-
-  // Open the channel list area for channel-type panels
-  if (isChannelPanel) _setPanelsOpen(true);
 
   // Close any recent overlay
   closeRecentOverlay();
@@ -1811,29 +1772,7 @@ function closePanel(name) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   activePanel = null;
-  panelsOpen = false;
-  _setPanelsOpen(false);
   closeRecentOverlay();
-}
-
-// Open or close the channel list area.
-// Uses CSS class toggling (more reliable than inline style overrides)
-// to shrink/expand the control-bar and let the video area fill freed space.
-function _setPanelsOpen(open) {
-  panelsOpen = open;
-  const panelsEl   = document.getElementById('panels');
-  const controlBar = document.getElementById('control-bar');
-  const videoArea  = document.getElementById('video-area');
-  if (!panelsEl) return;
-  if (open) {
-    panelsEl.classList.add('panels-open');
-    controlBar?.classList.add('panels-active');
-    videoArea?.classList.add('panels-active');
-  } else {
-    panelsEl.classList.remove('panels-open');
-    controlBar?.classList.remove('panels-active');
-    videoArea?.classList.remove('panels-active');
-  }
 }
 
 // ═══════════════════════════════════════════
@@ -2085,7 +2024,7 @@ function updateFavoritesBtnVisibility() {
   btn.style.display = hasFavs ? 'inline-flex' : 'none';
   if (!hasFavs && activePanel === 'favorites') {
     // No favorites left — switch away so we're not stuck on an empty panel
-    if (GROUPS.length > 0) { showPanel(GROUPS[0].id, null); _setPanelsOpen(false); }
+    if (GROUPS.length > 0) showPanel(GROUPS[0].id, null);
   }
 }
 
@@ -2501,7 +2440,7 @@ const WTV_WS4KP_URL = '/weatherstar';
 
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
-  '3000': '/weatherstar3000/',
+  '3000': 'https://weatherstar3000.netbymatt.com/',
 };
 
 // WS4000 displays — plain param names (no -checkbox suffix)
@@ -2847,9 +2786,6 @@ function wsSwitchVersion() {
   saveWSSettings();
   wsIsLaunched = false;
   buildWSPanel();
-
-  // Auto-launch WS4000 if a location is already set
-  if (wsAllSettings[wsActiveVersion].lat) ws4kpLaunch();
 }
 
 function wsResetSettings() {
@@ -3015,8 +2951,9 @@ function loadIframe(src, label, isLive) {
 
 
   const isWeatherStar = src.includes('weatherstar.netbymatt.com')
+    || src.includes('weatherstar3000.netbymatt.com')
     || src.startsWith('/weatherstar');
-  const isWS3000 = src.includes('/weatherstar3000');
+  const isWS3000 = src.includes('weatherstar3000.netbymatt.com');
 
   if (isWeatherStar) {
     frame.style.marginTop = '0';
@@ -3030,14 +2967,22 @@ function loadIframe(src, label, isLive) {
     frame.style.transform = '';
     frame.style.zoom = '';
 
-    // Both WS3000 and WS4000 fill the full 16:9 player area
-    // WS3000 is all text so stretching is fine and preferred
-    wrapper.style.display = '';
-    wrapper.style.alignItems = '';
-    wrapper.style.justifyContent = '';
-    frame.style.width = '100%';
-    frame.style.aspectRatio = '';
-    frame.style.height = '100%';
+    if (isWS3000) {
+      // WS3000 renders in 4:3 — center it in the 16:9 player with pillarboxing
+      wrapper.style.display = 'flex';
+      wrapper.style.alignItems = 'center';
+      wrapper.style.justifyContent = 'center';
+      frame.style.width = 'auto';
+      frame.style.aspectRatio = '4 / 3';
+      frame.style.height = '100%';
+    } else {
+      // WS4000 fills the full player area
+      wrapper.style.display = '';
+      wrapper.style.alignItems = '';
+      wrapper.style.justifyContent = '';
+      frame.style.width = '100%';
+      frame.style.aspectRatio = '';
+    }
   } else {
     frame.style.marginTop = '0';
     frame.style.height = '100%';
@@ -3057,61 +3002,21 @@ function loadIframe(src, label, isLive) {
   newFrame.allow = frame.allow;
   newFrame.allowFullscreen = true;
   newFrame.style.cssText = frame.style.cssText;
-  // Both WS3000 and WS4000 fill the full 16:9 player area
-  newFrame.style.width = '100%';
-  newFrame.style.height = '100%';
-  newFrame.style.aspectRatio = '';
+  // WS3000 needs auto width + 4:3 aspect ratio to center in the 16:9 player
+  // WS4000 and everything else fills the full area
+  if (isWS3000) {
+    newFrame.style.width = 'auto';
+    newFrame.style.height = '100%';
+    newFrame.style.aspectRatio = '4 / 3';
+  } else {
+    newFrame.style.width = '100%';
+    newFrame.style.height = '100%';
+    newFrame.style.aspectRatio = '';
+  }
   newFrame.style.border = 'none';
   newFrame.style.display = 'block';
   frame.parentNode.replaceChild(newFrame, frame);
-  // Toggle WS3000 sizing class on the wrapper
-  const vw = document.getElementById('video-wrapper');
-  if (vw) vw.classList.toggle('ws3000-active', isWS3000);
-
-  // For WS3000: size and center the iframe to a 16:9 box within the wrapper
-  function applyWS3000Size() {
-    if (!vw) return;
-    const pw = vw.offsetWidth, ph = vw.offsetHeight;
-    // Calculate largest 16:9 box that fits
-    let iw, ih;
-    if (pw / ph > 16 / 9) {
-      ih = ph; iw = Math.round(ph * 16 / 9);
-    } else {
-      iw = pw; ih = Math.round(pw * 9 / 16);
-    }
-    newFrame.style.width  = iw + 'px';
-    newFrame.style.height = ih + 'px';
-    newFrame.style.top    = Math.round((ph - ih) / 2) + 'px';
-    newFrame.style.left   = Math.round((pw - iw) / 2) + 'px';
-  }
-  if (isWS3000) {
-    applyWS3000Size();
-    window._ws3000ResizeHandler = applyWS3000Size;
-    window.addEventListener('resize', applyWS3000Size);
-  } else {
-    if (window._ws3000ResizeHandler) {
-      window.removeEventListener('resize', window._ws3000ResizeHandler);
-      delete window._ws3000ResizeHandler;
-    }
-  }
-
   newFrame.src = src;
-
-  // For self-hosted WS3000: hide UI chrome (location bar, links, checkboxes)
-  if (isWS3000) {
-    newFrame.addEventListener('load', () => {
-      try {
-        const doc = newFrame.contentDocument || newFrame.contentWindow?.document;
-        if (!doc) return;
-        const style = doc.createElement('style');
-        style.textContent =
-          '#divQuery, .info, .heading, #enabledDisplays, #settings, #divInfo,' +
-          '#share-link, #share-link-copied, #share-link-instructions { display:none !important; }' +
-          '#divTwcBottom { display:none !important; }';
-        doc.head.appendChild(style);
-      } catch(e) { /* cross-origin guard */ }
-    });
-  }
 
   const badge = document.getElementById('live-badge');
   const labelEl = document.getElementById('channel-label');
@@ -3158,7 +3063,6 @@ function clearVideo() {
 }
 
 async function playLive(ch) {
-  _setPanelsOpen(false); // collapse channel list so video gets full space
   closeRecentOverlay();
   closeLiveChat();
 
@@ -3312,7 +3216,6 @@ function closeLiveChat() {
 }
 
 function playVideo(videoId, title) {
-  _setPanelsOpen(false); // collapse channel list on video play
   const url = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
   loadIframe(url, title, false);
   closeRecentOverlay();
@@ -3614,7 +3517,7 @@ function updateHighlightsBtn(hasHighlights) {
 // Listen for minimize message from radar iframe
 window.addEventListener('message', (e) => {
   if (e.data && e.data.action === 'minimizeRadar') {
-    showPanel('storm-chasers'); _setPanelsOpen(false);
+    showPanel('storm-chasers');
   }
 });
 
@@ -3998,7 +3901,7 @@ async function checkAllLiveStatuses() {
         liveNowBtn.style.display = 'none';
         if (activePanel === 'live-now') {
           // Switch to first group panel if live-now closes
-          if (GROUPS.length > 0) { showPanel(GROUPS[0].id, null); _setPanelsOpen(false); }
+          if (GROUPS.length > 0) showPanel(GROUPS[0].id, null);
         }
       }
     }

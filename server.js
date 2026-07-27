@@ -1307,7 +1307,7 @@ app.get('/api/canada-radar/capabilities', async (req, res) => {
 // images via /api/camera-image?url=... which pipes them back with the
 // right CORS headers. Cached 25s so a 30-second refresh cycle stays fresh.
 
-const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/v1/cameras/USA.json';
+const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/master/cameras/USA.json';
 let _otcCache = null;       // parsed flat array of cameras
 let _otcCacheTime = 0;
 const OTC_TTL = 60 * 60 * 1000; // 60 min — static file, rarely changes
@@ -1644,25 +1644,44 @@ async function _loadOTC() {
   const text = await fetchTextOverHttp(OTC_JSON_URL);
   const raw = JSON.parse(text);
   const cameras = [];
-  for (const [stateName, counties] of Object.entries(raw)) {
-    const stateCode = OTC_STATE_CODES[stateName] || null;
-    for (const countyArr of Object.values(counties)) {
-      if (!Array.isArray(countyArr)) continue;
-      for (const cam of countyArr) {
-        const lat = parseFloat(cam.latitude), lng = parseFloat(cam.longitude);
-        if (!isFinite(lat) || !isFinite(lng)) continue;
-        if (Math.abs(lat) < 1 && Math.abs(lng) < 1) continue;
-        const isHLS = cam.format === 'M3U8' || cam.format === 'M3U9';
-        cameras.push({
-          id: 'otc-' + cameras.length,
-          name: cam.description || 'Traffic Camera',
-          lat, lng,
-          imageUrl: isHLS ? null : (cam.url || null),
-          videoUrl: isHLS ? (cam.url || null) : null,
-          direction: cam.direction || null,
-          source: 'otc',
-          state: stateCode,
-        });
+
+  // OTC has two known schemas:
+  // v1/old master: { "Wisconsin": { "county": [{latitude, longitude, url, ...}] } }
+  // new master: may be a flat array or restructured — handle gracefully
+  const addCam = (cam, stateCode) => {
+    // Support both old field names (latitude/longitude) and new (lat/lng or location.*)
+    const lat = parseFloat(cam.latitude ?? cam.lat ?? cam.location?.latitude);
+    const lng = parseFloat(cam.longitude ?? cam.lng ?? cam.location?.longitude);
+    const url = cam.url ?? cam.imageUrl ?? cam.image_url ?? null;
+    if (!isFinite(lat) || !isFinite(lng)) return;
+    if (Math.abs(lat) < 1 && Math.abs(lng) < 1) return;
+    if (!url) return; // skip cameras with no feed URL
+    const isHLS = (cam.format ?? '').toUpperCase().includes('M3U');
+    cameras.push({
+      id: 'otc-' + cameras.length,
+      name: cam.description ?? cam.name ?? cam.title ?? 'Traffic Camera',
+      lat, lng,
+      imageUrl: isHLS ? null : url,
+      videoUrl: isHLS ? url : null,
+      direction: cam.direction ?? null,
+      source: 'otc',
+      state: stateCode,
+    });
+  };
+
+  if (Array.isArray(raw)) {
+    // Flat array schema
+    raw.forEach(cam => addCam(cam, OTC_STATE_CODES[cam.state] || cam.state || null));
+  } else if (typeof raw === 'object') {
+    // Nested state→county schema (original format)
+    for (const [stateName, counties] of Object.entries(raw)) {
+      const stateCode = OTC_STATE_CODES[stateName] || null;
+      if (Array.isArray(counties)) {
+        counties.forEach(cam => addCam(cam, stateCode));
+      } else if (typeof counties === 'object') {
+        for (const countyArr of Object.values(counties)) {
+          if (Array.isArray(countyArr)) countyArr.forEach(cam => addCam(cam, stateCode));
+        }
       }
     }
   }
