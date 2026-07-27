@@ -96,6 +96,7 @@ function securityHeaders(req, res, next) {
   // Content Security Policy — allows our own assets + Railway CDN + Google Fonts
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
+    "media-src 'self' blob:;",
     "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://www.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' https://fonts.gstatic.com",
@@ -123,7 +124,7 @@ function securityHeaders(req, res, next) {
       // IEM storm attributes GeoJSON
       " https://mesonet.agron.iastate.edu" +
       // Travel forecast city data (domestic + international travel displays)
-      " https://api.open-meteo.com https://geocoding-api.open-meteo.com" +
+      " https://api.open-meteo.com" +
       // NWS — forecasts, conditions, alerts, points, radar station lookup
       " https://api.weather.gov" +
       " https://forecast.weather.gov" +
@@ -138,7 +139,7 @@ function securityHeaders(req, res, next) {
       // Altruistic Apps / Aporia quote APIs
       " https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
     // frame-src: allow YouTube and Twitch video embeds
-    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://weatherstar3000.netbymatt.com",
+    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv",
     "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header
