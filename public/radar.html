@@ -1781,7 +1781,9 @@ async function renderAlertLayers() {
 
     // Check if user is inside this alert polygon
     if (userLat && userLng && !bannerDismissed) {
-      if (pointInPolygon(userLat, userLng, geom)) {
+      const inPoly = geom ? pointInPolygon(userLat, userLng, geom) : false;
+      console.log(`[Banner] ${event}: geom=${geom?.type || 'null'} inPoly=${inPoly}`);
+      if (inPoly) {
         activeBannerAlerts.push({
           event,
           headline: props.headline || '',
