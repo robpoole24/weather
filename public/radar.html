@@ -2600,9 +2600,13 @@ function openCameraOverlay(cam) {
     body.innerHTML = '';
     body.appendChild(video);
 
+    // Route HLS through our server-side proxy so HLS.js XHR requests stay
+    // same-origin and never trigger the connect-src CSP restriction.
+    const proxiedUrl = `/api/camera-hls?url=${encodeURIComponent(cam.videoUrl)}`;
+
     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
       hlsPlayer = new Hls({ maxBufferLength:10, maxMaxBufferLength:20 });
-      hlsPlayer.loadSource(cam.videoUrl);
+      hlsPlayer.loadSource(proxiedUrl);
       hlsPlayer.attachMedia(video);
       hlsPlayer.on(Hls.Events.ERROR, (evt, data) => {
         if (data.fatal) {
@@ -2630,22 +2634,63 @@ function openCameraOverlay(cam) {
 }
 
 function _startImageStream(cam, body) {
+  body.innerHTML = '';
+
+  // Loading spinner while first frame fetches
+  const statusEl = document.createElement('div');
+  statusEl.id = 'camera-overlay-status';
+  statusEl.textContent = 'Loading…';
+  body.appendChild(statusEl);
+
   const img = document.createElement('img');
   img.alt = cam.name;
-  img.style.cssText = 'width:100%;display:block;max-height:280px;object-fit:cover;';
-  img.onerror = () => {
-    img.style.display = 'none';
-    body.innerHTML += '<div id="camera-overlay-status">Image unavailable</div>';
+  img.style.cssText = 'width:100%;display:block;max-height:280px;object-fit:cover;display:none;';
+
+  let errorCount = 0;
+  const MAX_RETRIES = 2;
+
+  img.onload = () => {
+    // Image loaded successfully — hide spinner, show image
+    statusEl.style.display = 'none';
+    img.style.display = 'block';
+    errorCount = 0;
   };
-  body.innerHTML = '';
+
+  img.onerror = () => {
+    errorCount++;
+    if (errorCount <= MAX_RETRIES) {
+      // Retry with a short delay before showing failure
+      statusEl.style.display = '';
+      statusEl.textContent = `Retrying… (${errorCount}/${MAX_RETRIES})`;
+      setTimeout(() => {
+        if (camActiveCamId === cam.id) loadFrame();
+      }, 1500 * errorCount);
+    } else {
+      // All retries exhausted — show message with retry button
+      img.style.display = 'none';
+      statusEl.style.display = '';
+      statusEl.innerHTML = 'Image unavailable'
+        + ' <button onclick="errorCount=0;loadFrame();" style="'
+        + 'margin-left:8px;font-family:Barlow Condensed,sans-serif;font-size:0.7rem;'
+        + 'font-weight:700;letter-spacing:0.06em;text-transform:uppercase;'
+        + 'background:none;border:1px solid var(--accent);color:var(--accent);'
+        + 'border-radius:3px;padding:2px 8px;cursor:pointer;">↻ Retry</button>';
+    }
+  };
+
   body.appendChild(img);
 
   function loadFrame() {
+    statusEl.style.display = errorCount === 0 ? '' : 'none';
     img.src = `/api/camera-image?url=${encodeURIComponent(cam.imageUrl)}&_t=${Date.now()}`;
   }
+
   loadFrame();
   if (camImgRefresh) clearInterval(camImgRefresh);
-  camImgRefresh = setInterval(loadFrame, CAM_IMG_REFRESH_MS);
+  camImgRefresh = setInterval(() => {
+    errorCount = 0; // reset error count on scheduled refresh
+    loadFrame();
+  }, CAM_IMG_REFRESH_MS);
 }
 
 function _stopCameraMedia() {
