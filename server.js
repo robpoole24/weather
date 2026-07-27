@@ -1763,7 +1763,7 @@ async function _loadWindy(stateCode) {
   // Distance from center to corner in km (approximate)
   const latKm = Math.abs(N - S) * 111;
   const lngKm = Math.abs(E - W) * 111 * Math.cos(centerLat * Math.PI / 180);
-  const radiusKm = Math.ceil(Math.sqrt((latKm/2)**2 + (lngKm/2)**2));
+  const radiusKm = Math.min(250, Math.ceil(Math.sqrt((latKm/2)**2 + (lngKm/2)**2))); // Windy max = 250km
 
   // Fetch multiple pages to get good coverage — free tier allows up to
   // offset 1000, so up to 4 pages of 50 gives 200 cameras per state.
