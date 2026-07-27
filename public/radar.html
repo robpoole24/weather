@@ -1804,7 +1804,7 @@ async function renderAlertLayers() {
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
       // of polygon geometry (catches county-boundary edge cases).
-      const ugc = s.properties.geocode?.UGC || [];
+      const ugc = s.properties?.geocode?.UGC || [];
       const inZone = (userZone   && ugc.includes(userZone))
                   || (userCounty && ugc.includes(userCounty));
       if (inPoly || inZone) {

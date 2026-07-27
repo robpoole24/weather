@@ -1793,8 +1793,11 @@ async function _loadWindy(stateCode) {
           lat, lng,
           imageUrl:  w.images?.current?.preview || w.image?.current?.preview || null,
           videoUrl:  null,
-          playerUrl: w.player?.day?.embed
-                     || (w.webcamId ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}` : null),
+          // Always construct from webcamId — API's player.day.embed returns
+          // a broken V2 /we_player/ URL that 404s. The V3 embed URL works reliably.
+          playerUrl: w.webcamId
+                     ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}`
+                     : null,
           windyId:   w.webcamId,
           direction: null,
           source:    'windy',
