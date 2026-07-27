@@ -1782,7 +1782,6 @@ async function renderAlertLayers() {
     // Check if user is inside this alert polygon
     if (userLat && userLng && !bannerDismissed) {
       const inPoly = geom ? pointInPolygon(userLat, userLng, geom) : false;
-      console.log(`[Banner] ${event}: geom=${geom?.type || 'null'} inPoly=${inPoly}`);
       if (inPoly) {
         activeBannerAlerts.push({
           event,
@@ -4678,7 +4677,7 @@ OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
 
 updateAlertTypeBadge();
 loadAlerts();
-setInterval(loadAlerts, 120000);
+setInterval(loadAlerts, 30000); // 30s — match server cache for near-real-time warnings
 
 // ── GEOLOCATION ──────────────────────────────────────────────────────────────
 function goToMyLocation() {

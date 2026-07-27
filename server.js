@@ -1743,10 +1743,14 @@ const WINDY_TTL = 12 * 60 * 1000; // 12 min — images expire at 15 min
 
 async function _loadWindy(stateCode) {
   const key = process.env.WINDY_WEBCAM_KEY;
-  if (!key) return [];
+  if (!key) { console.log('[Cameras] Windy skipped — WINDY_WEBCAM_KEY not set'); return []; }
 
   const cached = _windyCache.get(stateCode);
-  if (cached && Date.now() - cached.ts < WINDY_TTL) return cached.cameras;
+  if (cached && Date.now() - cached.ts < WINDY_TTL) {
+    console.log(`[Cameras] Windy ${stateCode}: serving ${cached.cameras.length} from cache`);
+    return cached.cameras;
+  }
+  console.log(`[Cameras] Windy ${stateCode}: fetching fresh data...`);
 
   const bbox = STATE_BBOX[stateCode];
   if (!bbox) return [];
