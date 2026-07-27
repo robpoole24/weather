@@ -94,7 +94,7 @@
 
   /* ── TOP: VIDEO AREA ── */
   #video-area {
-    flex: 4;
+    flex: 1;
     min-height: 0;
     position: relative;
     background: #000;
@@ -166,7 +166,7 @@
   @media (max-width: 767px) {
     body { height: 100dvh !important; }
     #video-area { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
-    #control-bar { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
+    #control-bar { flex: 0 0 auto !important; }
     /* Compact nav — shrink buttons to give the channel panel more vertical room */
     #main-nav { padding: 0.15rem 0.4rem !important; gap: 0.2rem !important; }
     .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
@@ -198,7 +198,7 @@
 
     /* Video 50% height, control bar gets rest */
     #video-area { flex: 0 0 50dvh; max-height: 50dvh; }
-    #control-bar { flex: 1; min-height: 0; overflow: hidden; }
+    #control-bar { flex: 0 0 auto; }
 
     /* Hide radar rings — too tall */
     .radar-ring { display: none; }
@@ -297,8 +297,7 @@
 
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
-    flex: 1;
-    min-height: 0;
+    flex: 0 0 auto;
     background: var(--surface);
     border-top: 1px solid var(--border);
     display: flex;
@@ -346,6 +345,13 @@
   .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
   .nav-btn:active { border-color: var(--accent); color: var(--accent); }
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
+
+  /* When channel panel is open: restore original flex ratios */
+  #control-bar.panels-active { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
+  #video-area.panels-active  { flex: 4 !important; }
+  @media (max-height: 600px), (orientation: portrait) and (max-width: 768px) {
+    #video-area.panels-active { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
+  }
 
   /* Panels — collapsed by default, slide up when group is selected */
   #panels {
@@ -1808,27 +1814,22 @@ function closePanel(name) {
 }
 
 // Open or close the channel list area.
-// Also toggles the control-bar flex so the video area expands when channels
-// are hidden — the key fix for mobile screen space.
+// Uses CSS class toggling (more reliable than inline style overrides)
+// to shrink/expand the control-bar and let the video area fill freed space.
 function _setPanelsOpen(open) {
   panelsOpen = open;
-  const panelsEl  = document.getElementById('panels');
+  const panelsEl   = document.getElementById('panels');
   const controlBar = document.getElementById('control-bar');
   const videoArea  = document.getElementById('video-area');
   if (!panelsEl) return;
   if (open) {
     panelsEl.classList.add('panels-open');
-    // Restore CSS-driven flex values (remove inline overrides)
-    if (controlBar) controlBar.style.removeProperty('flex');
-    if (videoArea)  videoArea.style.removeProperty('flex');
+    controlBar?.classList.add('panels-active');
+    videoArea?.classList.add('panels-active');
   } else {
     panelsEl.classList.remove('panels-open');
-    // Shrink control-bar to intrinsic height (nav + status bar only)
-    // so the video area expands to fill the freed space.
-    // setProperty with 'important' overrides the mobile media query's
-    // flex: 0 0 55dvh !important on video-area.
-    if (controlBar) controlBar.style.setProperty('flex', '0 0 auto', 'important');
-    if (videoArea)  videoArea.style.setProperty('flex', '1', 'important');
+    controlBar?.classList.remove('panels-active');
+    videoArea?.classList.remove('panels-active');
   }
 }
 
