@@ -3008,12 +3008,15 @@ async function websubSubscribe(channelId) {
     const req = https.request(opts, res => {
       const now = Date.now();
       const status = res.statusCode >= 200 && res.statusCode < 300 ? 'active' : 'failed';
+      const expiresAt = now + WEBSUB_LEASE * 1000;
       websubLeases[channelId] = {
         subscribedAt: now,
-        expiresAt: now + WEBSUB_LEASE * 1000,
+        expiresAt,
         status,
         statusCode: res.statusCode,
       };
+      // Persist expiry so restarts don't re-subscribe still-valid channels
+      if (status === 'active') rSet('wt:ws:' + channelId, String(expiresAt));
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
         const ch = getAllChannels().find(c => c.id === channelId);
@@ -3078,9 +3081,40 @@ async function subscribeAllChannels() {
   }
 
   const channels = getLiveChannels();
-  console.log('[WebSub] Subscribing ' + channels.length + ' channels...');
+  const RENEW_WINDOW = 24 * 60 * 60 * 1000; // re-subscribe if expiring within 24h
+  const now = Date.now();
 
+  // Check Redis for existing valid subscriptions — skip channels that don't
+  // need re-subscribing. This makes restarts after recent deploys near-instant
+  // instead of blocking for 60+ seconds re-subscribing every channel.
+  const toSubscribe = [];
+  let skipped = 0;
   for (const ch of channels) {
+    try {
+      const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
+      if (stored) {
+        const expiresAt = parseInt(stored, 10);
+        if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
+          // Still valid for >24h — mark as active without hitting the hub
+          websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
+          skipped++;
+          continue;
+        }
+      }
+    } catch(_) { /* Redis unavailable — subscribe to be safe */ }
+    toSubscribe.push(ch);
+  }
+
+  if (toSubscribe.length === 0) {
+    cache.websubActive = true;
+    rSet('wt:websubActive', true);
+    console.log(`[WebSub] All ${channels.length} subscriptions still valid — skipped hub calls`);
+    return;
+  }
+
+  console.log(`[WebSub] Subscribing ${toSubscribe.length}/${channels.length} channels (${skipped} still valid)...`);
+
+  for (const ch of toSubscribe) {
     try {
       await websubSubscribe(ch.id);
       await new Promise(r => setTimeout(r, 500));
@@ -3091,7 +3125,7 @@ async function subscribeAllChannels() {
 
   cache.websubActive = true;
   rSet('wt:websubActive', true);
-  console.log('[WebSub] All channels subscribed — push notifications active');
+  console.log('[WebSub] Subscription refresh complete — push notifications active');
 }
 
 // WebSub verification handshake — YouTube calls this to confirm subscription
