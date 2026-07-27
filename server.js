@@ -1752,34 +1752,58 @@ async function _loadWindy(stateCode) {
   if (!bbox) return [];
   const [N, W, S, E] = bbox;
 
-  const url = `https://api.windy.com/webcams/api/v3/webcams`
-    + `?boundingBox=${N},${W},${S},${E}`
-    + `&include=location,images,player&limit=50&status=active`;
+  // Windy V3 uses nearby={lat},{lon},{radius_km} — NOT boundingBox.
+  // Calculate center point and radius from the state's bounding box.
+  const centerLat = (N + S) / 2;
+  const centerLng = (W + E) / 2;
+  // Distance from center to corner in km (approximate)
+  const latKm = Math.abs(N - S) * 111;
+  const lngKm = Math.abs(E - W) * 111 * Math.cos(centerLat * Math.PI / 180);
+  const radiusKm = Math.ceil(Math.sqrt((latKm/2)**2 + (lngKm/2)**2));
 
-  try {
-    const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
-    const data = JSON.parse(text);
-    const cameras = (data.webcams || []).map(w => ({
-      id:        `windy-${w.webcamId}`,
-      name:      w.title || 'Webcam',
-      lat:       w.location?.latitude,
-      lng:       w.location?.longitude,
-      imageUrl:  w.image?.current?.preview || null,
-      videoUrl:  null,
-      playerUrl: w.player?.day?.embed || null,
-      windyId:   w.webcamId,
-      direction: null,
-      source:    'windy',
-      state:     stateCode,
-    })).filter(c => isFinite(c.lat) && isFinite(c.lng));
+  // Fetch multiple pages to get good coverage — free tier allows up to
+  // offset 1000, so up to 4 pages of 50 gives 200 cameras per state.
+  const allCameras = [];
+  const pages = 4;
+  for (let page = 0; page < pages; page++) {
+    const url = `https://api.windy.com/webcams/api/v3/webcams`
+      + `?nearby=${centerLat.toFixed(4)},${centerLng.toFixed(4)},${radiusKm}`
+      + `&include=location,images,player`
+      + `&limit=50&offset=${page * 50}`;
+    try {
+      const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+      const data = JSON.parse(text);
+      const batch = (data.webcams || []);
+      if (!batch.length) break; // no more results
 
-    _windyCache.set(stateCode, { cameras, ts: Date.now() });
-    console.log(`[Cameras] Windy ${stateCode}: ${cameras.length} webcams`);
-    return cameras;
-  } catch(e) {
-    console.warn(`[Cameras] Windy ${stateCode} failed:`, e.message);
-    return [];
+      batch.forEach(w => {
+        const lat = w.location?.latitude, lng = w.location?.longitude;
+        if (!isFinite(lat) || !isFinite(lng)) return;
+        // Filter to state bounding box so we don't spill into neighbours
+        if (lat < S || lat > N || lng < W || lng > E) return;
+        allCameras.push({
+          id:        'windy-' + w.webcamId,
+          name:      w.title || 'Webcam',
+          lat, lng,
+          imageUrl:  w.image?.current?.preview || null,
+          videoUrl:  null,
+          playerUrl: w.player?.day?.embed || null,
+          windyId:   w.webcamId,
+          direction: null,
+          source:    'windy',
+          state:     stateCode,
+        });
+      });
+      if (batch.length < 50) break; // last page
+    } catch(e) {
+      console.warn(`[Cameras] Windy ${stateCode} page ${page} failed:`, e.message);
+      break;
+    }
   }
+
+  _windyCache.set(stateCode, { cameras: allCameras, ts: Date.now() });
+  console.log(`[Cameras] Windy ${stateCode}: ${allCameras.length} webcams`);
+  return allCameras;
 }
 
 // GET /api/cameras/coverage
