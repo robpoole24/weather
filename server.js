@@ -1800,6 +1800,10 @@ async function _loadWindy(stateCode) {
       const data = JSON.parse(text);
       const batch = data.webcams || data.data || []; // V3 returns {data:[...]}, V2 {webcams:[...]}
       if (!batch.length) break; // no more results
+      // Diagnostic: log first webcam object so we can verify V3 field names (webcamId, player shape, etc.)
+      if (page === 0 && batch.length > 0) {
+        console.log(`[Cameras] Windy ${stateCode} first webcam:`, JSON.stringify(batch[0]));
+      }
 
       batch.forEach(w => {
         const lat = w.location?.latitude, lng = w.location?.longitude;
