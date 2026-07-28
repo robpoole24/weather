@@ -2078,12 +2078,13 @@ app.get('/api/forecast', async (req, res) => {
       + 'precipitation_sum,snowfall_sum,precipitation_hours,'
       + 'precipitation_probability_max,'
       + 'wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant'
-      + '&forecast_days=7&models=best_match';
+      + '&forecast_days=7';
 
     const omText = await fetchTextOverHttp(omUrl);
     const om = JSON.parse(omText);
     console.log(`[Forecast] Open-Meteo response keys: ${Object.keys(om).join(', ')}`);
-    console.log(`[Forecast] current fields: ${JSON.stringify(om.current).slice(0, 200)}`);
+    if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
+    console.log(`[Forecast] current.temperature_2m: ${om.current?.temperature_2m}`);
 
     // ── NWS narrative (US only — skip gracefully outside coverage) ──────────
     let nwsNarrative = null;
