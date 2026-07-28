@@ -2308,29 +2308,29 @@ function pointInPolygon(lat, lng, geometry) {
 const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 
 // ── GOES SATELLITE ANIMATION ─────────────────────────────────────────────────
-// 9 frames at 10-min intervals, ~80 minutes of history.
-// Same opacity-swap technique as NEXRAD: all WMS layers exist simultaneously,
-// only the active frame is visible. Tiles stay cached across frame switches
-// so animation is smooth with no flash.
+// 24 frames at 30-min intervals = 12 hours of history.
+// Same opacity-swap technique as NEXRAD radar animation.
 //
-// IEM WMS TIME format: 2026-07-28T18:00:00Z
-// Layer: conus_ch13 (IR clean window — best for day+night cloud detail)
+// Uses IEM tile CACHE (not WMS TIME= parameter). The tile cache is the same
+// system that serves NEXRAD and is reliable for all historical times:
+//   /cache/tile.py/1.0.0/goes_east_conus_ch13-{YYYYMMDDHHII}/{z}/{x}/{y}.png
+// WMS TIME= is unreliable — IEM returns blank tiles for any time it doesn't
+// have pre-cached, causing gaps (e.g. 1pm–8pm) in the animation.
 
-const GOES_FRAME_COUNT  = 24;            // frames (30-min steps = 12hr history)
+const GOES_FRAME_COUNT  = 24;              // frames (30-min steps = 12hr history)
 const GOES_INTERVAL_MS  = 30 * 60 * 1000; // 30 min between frames
 const GOES_SPEED_MS     = 150;             // ms per frame during playback
 const GOES_HOLD_MS      = 2000;            // hold on latest frame before looping
 const GOES_BASE_OPACITY = 0.85;
 
-let goesFrames      = [];  // [{ time: Date, label: string, layer: L.TileLayer.WMS }]
-let goesFrameIdx    = 0;
-let goesPlaying     = false;
-let goesPlayTimer   = null;
+let goesFrames       = [];  // [{ time: Date, label: string, layer: L.TileLayer }]
+let goesFrameIdx     = 0;
+let goesPlaying      = false;
+let goesPlayTimer    = null;
 let goesRefreshTimer = null;
-let goesPreloadGen  = 0;
-let goesBuilt       = false;
+let goesPreloadGen   = 0;
+let goesBuilt        = false;
 
-// Build a UTC time string rounded down to the nearest 10-min boundary
 function goesSnap(date) {
   const d = new Date(date);
   d.setUTCSeconds(0, 0);
@@ -2339,42 +2339,44 @@ function goesSnap(date) {
   return d;
 }
 
-function goesTimeStr(date) {
-  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+// IEM tile cache timestamp format: YYYYMMDDHHII (UTC, zero-padded)
+function goesTileTs(date) {
+  const p = n => String(n).padStart(2, '0');
+  return '' + date.getUTCFullYear()
+    + p(date.getUTCMonth() + 1)
+    + p(date.getUTCDate())
+    + p(date.getUTCHours())
+    + p(date.getUTCMinutes());
 }
 
 function goesLabel(date) {
-  // Local time, same style as radar frame labels
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function buildGoesFrames() {
-  // Destroy previous layers
   goesFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
   goesFrames = [];
 
   const latest = goesSnap(new Date());
   for (let i = GOES_FRAME_COUNT - 1; i >= 0; i--) {
-    const t = new Date(latest.getTime() - i * GOES_INTERVAL_MS);
-    const layer = L.tileLayer.wms(
-      'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
+    const t  = new Date(latest.getTime() - i * GOES_INTERVAL_MS);
+    const ts = goesTileTs(t);
+    const layer = L.tileLayer(
+      `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes_east_conus_ch13-${ts}/{z}/{x}/{y}.png`,
       {
-        layers: 'conus_ch13',
-        format: 'image/png',
-        transparent: true,
         opacity: 0,
         zIndex: 90 + i,
         attribution: i === 0 ? 'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' : '',
-        TIME: goesTimeStr(t),
         tileSize: 256,
         keepBuffer: 1,
         updateWhenIdle: true,
         updateWhenZooming: false,
+        maxNativeZoom: 8,
       }
     );
     goesFrames.push({ time: t, label: goesLabel(t), layer });
   }
-  goesFrameIdx = goesFrames.length - 1; // start on latest
+  goesFrameIdx = goesFrames.length - 1;
   goesBuilt = true;
 }
 
