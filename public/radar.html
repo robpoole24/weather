@@ -5270,7 +5270,9 @@ function renderForecast(data) {
     row.innerHTML =
       `<div class="fp-day-main">`
     + `  <div class="fp-day-name">${isToday ? 'Today' : dayNames[dt.getDay()]}</div>`
-    + `  <div class="fp-day-svg">${wmoSVG(dCode, true, 28)}</div>`
+    + `  <div class="fp-day-svg">${nwsDay?.icon
+        ? `<img src="${nwsDay.icon.replace(/\?size=\w+/,'?size=small')}" width="28" height="28" style="object-fit:contain" alt="">`
+        : wmoSVG(dCode, true, 28)}</div>`
     + `  <div class="fp-day-desc">${nwsDay?.short || wmoLabel(dCode)}</div>`
     + `  <div class="fp-day-temps"><span class="fp-day-hi" style="color:${tempColor(hi)}">${hi!=null?Math.round(hi)+'°':'—'}</span><span class="fp-day-lo">/${lo!=null?Math.round(lo)+'°':'—'}</span></div>`
     + `</div>`
