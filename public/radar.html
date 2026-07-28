@@ -5675,60 +5675,62 @@ async function searchLocation(e) {
   if (!q) return;
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=json&limit=1`,
-      { headers:{'Accept-Language':'en'} }
-    );
-    const data = await res.json();
-    if (data && data.length > 0) {
-      userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
-      const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
-
-      // Smooth pan + zoom to searched location
-      map.flyTo([userLat, userLng], 8, { duration: 1.2 });
-
-      // Remove previous search marker
-      if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
-
-      // Add pin marker
-      searchMarker = L.marker([userLat, userLng], {
-        icon: L.divIcon({
-          className: '',
-          html: `<div style="
-            width:14px; height:14px; border-radius:50%;
-            background:#f4a261; border:2px solid #fff;
-            box-shadow:0 0 8px rgba(244,162,97,0.8);
-            margin-top:-7px; margin-left:-7px;
-          "></div>`,
-          iconSize: [14, 14],
-          iconAnchor: [7, 7],
-        })
-      }).addTo(map);
-      searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
-
-      document.getElementById('alerts-status').textContent = placeName;
-      document.getElementById('zip-input').value = '';
-      updateViewButtons('local');
-
-      // Reset zone codes and banner state for the new location so we don't
-      // carry over stale zone data or a previously-dismissed banner.
-      userZone = null;
-      userCounty = null;
-      bannerDismissed = false;
-
-      // Fetch NWS zone for the new location first, THEN re-evaluate alerts.
-      // This ensures zone-based matching (e.g. Severe Thunderstorm Watch) works
-      // correctly — without this, renderAlertLayers runs with the old zone codes.
-      await fetchUserZone(userLat, userLng);
-
-      // fetchUserZone already calls renderAlertLayers if lastAlertsData exists.
-      // Call it unconditionally here as a safety net in case the zone lookup
-      // failed silently — we still want the polygon-containment check to run.
-      if (lastAlertsData) renderAlertLayers();
-
-    } else {
+    // Route through our server proxy (/api/geocode → Open-Meteo geocoding).
+    // Calling Nominatim directly from the browser requires a valid contact
+    // User-Agent per their ToS — browsers don't send one and get silently
+    // empty results. Open-Meteo geocoding has no such requirement.
+    const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+    const geo = await res.json();
+    if (!res.ok || !geo.lat) {
       document.getElementById('alerts-status').textContent = 'Not found';
+      return;
     }
+
+    userLat = geo.lat; userLng = geo.lon;
+    const placeName = geo.name;
+
+    // Smooth pan + zoom to searched location
+    map.flyTo([userLat, userLng], 8, { duration: 1.2 });
+
+    // Remove previous search marker
+    if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+
+    // Add pin marker
+    searchMarker = L.marker([userLat, userLng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="
+          width:14px; height:14px; border-radius:50%;
+          background:#f4a261; border:2px solid #fff;
+          box-shadow:0 0 8px rgba(244,162,97,0.8);
+          margin-top:-7px; margin-left:-7px;
+        "></div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      })
+    }).addTo(map);
+    searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
+
+    document.getElementById('alerts-status').textContent = placeName;
+    document.getElementById('zip-input').value = '';
+    updateViewButtons('local');
+
+    // Reset zone codes and banner state for the new location so we don't
+    // carry over stale zone data or a previously-dismissed banner.
+    userZone = null;
+    userCounty = null;
+    bannerDismissed = false;
+
+    // Fetch NWS zone for the new location first, THEN re-evaluate alerts.
+    // This ensures zone-based matching (e.g. Severe Thunderstorm Watch) works
+    // correctly — without this, renderAlertLayers runs with the old zone codes.
+    await fetchUserZone(userLat, userLng);
+
+    // fetchUserZone already calls renderAlertLayers if lastAlertsData exists.
+    // Call it unconditionally here as a safety net in case the zone lookup
+    // failed silently — we still want the polygon-containment check to run.
+    if (lastAlertsData) renderAlertLayers();
+
   } catch {
     document.getElementById('alerts-status').textContent = 'Search unavailable';
   }
