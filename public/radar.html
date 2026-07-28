@@ -2316,10 +2316,10 @@ const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 // IEM WMS TIME format: 2026-07-28T18:00:00Z
 // Layer: conus_ch13 (IR clean window — best for day+night cloud detail)
 
-const GOES_FRAME_COUNT  = 12;   // frames (15-min steps = 3hr history)
-const GOES_INTERVAL_MS  = 15 * 60 * 1000; // 15 min between frames
-const GOES_SPEED_MS     = 120;  // ms per frame during playback
-const GOES_HOLD_MS      = 1800; // hold on latest frame before looping
+const GOES_FRAME_COUNT  = 24;            // frames (30-min steps = 12hr history)
+const GOES_INTERVAL_MS  = 30 * 60 * 1000; // 30 min between frames
+const GOES_SPEED_MS     = 150;             // ms per frame during playback
+const GOES_HOLD_MS      = 2000;            // hold on latest frame before looping
 const GOES_BASE_OPACITY = 0.85;
 
 let goesFrames      = [];  // [{ time: Date, label: string, layer: L.TileLayer.WMS }]
@@ -2334,7 +2334,8 @@ let goesBuilt       = false;
 function goesSnap(date) {
   const d = new Date(date);
   d.setUTCSeconds(0, 0);
-  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10);
+  const intervalMins = GOES_INTERVAL_MS / 60000;
+  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / intervalMins) * intervalMins);
   return d;
 }
 
@@ -2440,13 +2441,13 @@ function goesPreloadAll() {
   // Also watch the active frame (already attached)
   goesFrames[goesFrameIdx]?.layer.on('tileload', onTileLoad);
 
-  // Safety net — enable play after 12s regardless
+  // Safety net — enable play after 20s regardless (24 WMS frames take longer)
   setTimeout(() => {
     if (myGen !== goesPreloadChain) return;
     if (statusEl) statusEl.textContent = '';
     if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
     goesFrames.forEach(f => f.layer.off('tileload', onTileLoad));
-  }, 12000);
+  }, 20000);
 }
 
 function goesShowFrame(idx) {
