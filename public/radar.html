@@ -4822,68 +4822,120 @@ async function fetchForecastData({ lat, lon }) {
 }
 
 // ── Weather SVG icons ─────────────────────────────────────────────────────────
+// ── Weather SVG icon generator ───────────────────────────────────────────────
+// Fixed coordinate system: all elements use absolute coords, no transform hacks.
+// viewBox is always "0 0 40 40" internally, then scaled by CSS width/height.
 function wmoSVG(code, isDay, size) {
-  size = size || 40;
-  const c = size / 2;
-  const sun = () => {
+  // We always draw in a 40x40 space and let CSS scale it.
+  // Caller passes size for the element but we use a fixed viewBox.
+  const S = 40, cx = 20, cy = 20;
+
+  // ── Primitives ────────────────────────────────────────────────────────────
+  function sunShape(x, y, r) {
+    // Sun disc + 8 rays
     const rays = [0,45,90,135,180,225,270,315].map(a => {
-      const r = a * Math.PI / 180;
-      const x1 = c + size*0.28*Math.cos(r), y1 = c + size*0.28*Math.sin(r);
-      const x2 = c + size*0.40*Math.cos(r), y2 = c + size*0.40*Math.sin(r);
-      return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#f59e0b" stroke-width="${(size*0.07).toFixed(1)}" stroke-linecap="round"/>`;
+      const rad = a * Math.PI / 180;
+      const x1 = x + (r+3)*Math.cos(rad), y1 = y + (r+3)*Math.sin(rad);
+      const x2 = x + (r+6)*Math.cos(rad), y2 = y + (r+6)*Math.sin(rad);
+      return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round"/>`;
     }).join('');
-    return `<circle cx="${c}" cy="${c}" r="${(size*0.22).toFixed(1)}" fill="#fbbf24"/>${rays}`;
-  };
-  const moon = () =>
-    `<path d="M${c+size*0.06} ${c-size*0.28} a${size*0.26} ${size*0.26} 0 1 1 0 ${size*0.56} a${size*0.2} ${size*0.2} 0 0 0 0-${size*0.56}z" fill="#94a3b8"/>`;
-  const cloud = (dx, dy, sc, col) => {
-    dx=dx||0; dy=dy||0; sc=sc||1; col=col||'#94a3b8';
-    const r = size*0.25*sc, r2 = size*0.17*sc, r3 = size*0.15*sc;
-    const cx2 = c+dx, cy2 = c+dy;
-    return `<ellipse cx="${cx2}" cy="${cy2}" rx="${r.toFixed(1)}" ry="${(size*0.18*sc).toFixed(1)}" fill="${col}"/>` +
-      `<ellipse cx="${(cx2-r2).toFixed(1)}" cy="${(cy2+size*0.06*sc).toFixed(1)}" rx="${r2.toFixed(1)}" ry="${r3.toFixed(1)}" fill="${col}"/>` +
-      `<ellipse cx="${(cx2+r2).toFixed(1)}" cy="${(cy2+size*0.06*sc).toFixed(1)}" rx="${r2.toFixed(1)}" ry="${r3.toFixed(1)}" fill="${col}"/>` +
-      `<rect x="${(cx2-r).toFixed(1)}" y="${(cy2+size*0.04*sc).toFixed(1)}" width="${(r*2).toFixed(1)}" height="${(size*0.16*sc).toFixed(1)}" fill="${col}"/>`;
-  };
-  const rain = (n, dx, dy) => {
-    const drops = [];
-    for (let i = 0; i < (n||3); i++) {
-      const ox = (i - (n-1)/2) * size*0.12;
-      drops.push(`<line x1="${(c+(dx||0)+ox).toFixed(1)}" y1="${(c+(dy||0)+size*0.18).toFixed(1)}" x2="${(c+(dx||0)+ox-size*0.04).toFixed(1)}" y2="${(c+(dy||0)+size*0.34).toFixed(1)}" stroke="#60a5fa" stroke-width="${(size*0.055).toFixed(1)}" stroke-linecap="round"/>`);
+    return `<circle cx="${x}" cy="${y}" r="${r}" fill="#fbbf24"/>${rays}`;
+  }
+
+  function moonShape(x, y, r) {
+    // Crescent: large disc minus offset disc
+    const ox = r * 0.45;
+    return `<circle cx="${x}" cy="${y}" r="${r}" fill="#94a3b8"/>` +
+           `<circle cx="${x+ox}" cy="${y-ox*0.3}" r="${r*0.75}" fill="#0f172a"/>`;
+  }
+
+  function cloudShape(x, y, w, col) {
+    // Cloud centred at x,y with approximate width w
+    col = col || '#94a3b8';
+    const h = w * 0.55, r1 = w*0.28, r2 = w*0.22, r3 = w*0.18;
+    return `<ellipse cx="${x}" cy="${y}" rx="${r1}" ry="${h*0.5}" fill="${col}"/>` +
+           `<ellipse cx="${(x-r1*0.55).toFixed(1)}" cy="${(y+h*0.15).toFixed(1)}" rx="${r2}" ry="${h*0.4}" fill="${col}"/>` +
+           `<ellipse cx="${(x+r1*0.55).toFixed(1)}" cy="${(y+h*0.15).toFixed(1)}" rx="${r3}" ry="${h*0.35}" fill="${col}"/>` +
+           `<rect x="${(x-r1).toFixed(1)}" y="${y.toFixed(1)}" width="${(r1*2).toFixed(1)}" height="${(h*0.55).toFixed(1)}" fill="${col}"/>`;
+  }
+
+  function rainDrops(x, y, n, col) {
+    col = col || '#60a5fa';
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const ox = (i - (n-1)/2) * 5;
+      out.push(`<line x1="${(x+ox).toFixed(1)}" y1="${(y).toFixed(1)}" x2="${(x+ox-1.5).toFixed(1)}" y2="${(y+6).toFixed(1)}" stroke="${col}" stroke-width="2" stroke-linecap="round"/>`);
     }
-    return drops.join('');
-  };
-  const snow = (n, dx, dy) => {
-    const flakes = [];
-    for (let i = 0; i < (n||3); i++) {
-      const ox = (i - (n-1)/2) * size*0.13;
-      flakes.push(`<circle cx="${(c+(dx||0)+ox).toFixed(1)}" cy="${(c+(dy||0)+size*0.28).toFixed(1)}" r="${(size*0.05).toFixed(1)}" fill="#bae6fd"/>`);
-      flakes.push(`<line x1="${(c+(dx||0)+ox).toFixed(1)}" y1="${(c+(dy||0)+size*0.21).toFixed(1)}" x2="${(c+(dx||0)+ox).toFixed(1)}" y2="${(c+(dy||0)+size*0.35).toFixed(1)}" stroke="#bae6fd" stroke-width="${(size*0.04).toFixed(1)}" stroke-linecap="round"/>`);
+    return out.join('');
+  }
+
+  function snowDots(x, y, n) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const ox = (i - (n-1)/2) * 5;
+      out.push(`<circle cx="${(x+ox).toFixed(1)}" cy="${(y+3).toFixed(1)}" r="2" fill="#bae6fd"/>`);
+      out.push(`<line x1="${(x+ox).toFixed(1)}" y1="${(y-2).toFixed(1)}" x2="${(x+ox).toFixed(1)}" y2="${(y+8).toFixed(1)}" stroke="#bae6fd" stroke-width="1.5" stroke-linecap="round"/>`);
     }
-    return flakes.join('');
-  };
-  const bolt = () =>
-    `<polygon points="${(c-size*0.07).toFixed(1)},${(c-size*0.06).toFixed(1)} ${(c+size*0.1).toFixed(1)},${(c-size*0.32).toFixed(1)} ${(c+size*0.01).toFixed(1)},${(c-size*0.01).toFixed(1)} ${(c+size*0.14).toFixed(1)},${(c+size*0.32).toFixed(1)} ${(c-size*0.07).toFixed(1)},${(c-size*0.06).toFixed(1)}" fill="#facc15"/>`;
-  const fog = () =>
-    [0.08,0.18,0.28].map((yo,i)=>
-      `<line x1="${(c-size*0.35).toFixed(1)}" y1="${(c+size*(yo-0.08)).toFixed(1)}" x2="${(c+size*0.35).toFixed(1)}" y2="${(c+size*(yo-0.08)).toFixed(1)}" stroke="#94a3b8" stroke-width="${(size*0.055).toFixed(1)}" stroke-linecap="round" opacity="${0.5+i*0.18}"/>`
+    return out.join('');
+  }
+
+  function boltShape(x, y) {
+    return `<polygon points="${x-3},${y+2} ${x+4},${y-12} ${x},${y-2} ${x+5},${y+12} ${x-3},${y+2}" fill="#facc15"/>`;
+  }
+
+  function fogLines(y0) {
+    return [0,7,14].map((dy, i) =>
+      `<line x1="4" y1="${y0+dy}" x2="36" y2="${y0+dy}" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" opacity="${0.5+i*0.2}"/>`
     ).join('');
+  }
 
+  // ── Composition ───────────────────────────────────────────────────────────
   let body = '';
-  if (code === 0)       body = isDay ? sun() : moon();
-  else if (code <= 2)   body = isDay
-    ? `<g transform="translate(${-size*0.1},${-size*0.1}) scale(0.62)">${sun()}</g>` + cloud(size*0.06,size*0.04,0.88,'#94a3b8')
-    : `<g transform="translate(${-size*0.11},${-size*0.1}) scale(0.58)">${moon()}</g>` + cloud(size*0.07,size*0.04,0.88,'#64748b');
-  else if (code === 3)  body = cloud(0,0,1,'#6b7280');
-  else if (code <= 49)  body = fog();
-  else if (code <= 55)  body = cloud(0,-size*0.05,0.9) + rain(2,0,0);
-  else if (code <= 65)  body = cloud(0,-size*0.05,0.9) + rain(3,0,0);
-  else if (code <= 77)  body = cloud(0,-size*0.06,0.9) + snow(3,0,0);
-  else if (code <= 82)  body = (isDay ? `<g transform="translate(${-size*0.1},${-size*0.12}) scale(0.5)">${sun()}</g>` : '') + cloud(size*0.06,0,0.82) + rain(3,-size*0.02,0);
-  else if (code <= 84)  body = cloud(0,-size*0.06,0.9) + snow(3,0,0);
-  else                  body = cloud(0,-size*0.1,0.88,'#4b5563') + rain(2,-size*0.04,-size*0.02) + bolt();
 
-  return `<svg viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;overflow:visible">${body}</svg>`;
+  if (code === 0) {
+    // Clear
+    body = isDay ? sunShape(cx, cy, 9) : moonShape(cx, cy, 10);
+  } else if (code <= 2) {
+    // Partly cloudy — small sun/moon top-left, cloud bottom-right
+    if (isDay) {
+      body = sunShape(14, 14, 7) + cloudShape(24, 26, 22, '#94a3b8');
+    } else {
+      body = moonShape(13, 13, 7) + cloudShape(24, 26, 22, '#64748b');
+    }
+  } else if (code === 3) {
+    // Overcast
+    body = cloudShape(cx, cy, 30, '#6b7280');
+  } else if (code <= 49) {
+    // Fog / mist / haze
+    body = fogLines(13);
+  } else if (code <= 55) {
+    // Drizzle
+    body = cloudShape(cx, 16, 28) + rainDrops(cx, 28, 2);
+  } else if (code <= 65) {
+    // Rain
+    body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 3);
+  } else if (code <= 67) {
+    // Freezing rain
+    body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 2, '#93c5fd') + snowDots(cx+3, 30, 1);
+  } else if (code <= 77) {
+    // Snow
+    body = cloudShape(cx, 15, 28) + snowDots(cx, 29, 3);
+  } else if (code <= 82) {
+    // Rain showers
+    if (isDay) body = sunShape(12, 12, 6);
+    body += cloudShape(24, 23, 22) + rainDrops(21, 32, 3);
+  } else if (code <= 86) {
+    // Snow showers
+    body = cloudShape(cx, 15, 28) + snowDots(cx, 29, 3);
+  } else if (code <= 99) {
+    // Thunderstorm
+    body = cloudShape(cx, 13, 28, '#4b5563') + rainDrops(cx-4, 27, 2) + boltShape(cx+5, 28);
+  } else {
+    body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 2);
+  }
+
+  const sz = size || 40;
+  return `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" style="overflow:visible;display:block">${body}</svg>`;
 }
 
 function wmoLabel(code) {
@@ -5052,25 +5104,93 @@ function renderForecast(data) {
     hourlyEl.appendChild(card);
   }
 
-  // Sparkline
+  // Sparkline with day labels, tick marks, and interactive dots
   const svg = document.getElementById('fp-temp-chart');
   if (chartT.length > 1) {
-    const W = 300, H = 52, pad = 5;
+    const W = 300, H = 44, pad = 5, labelH = 14;
+    const totalH = H + labelH;
+    svg.setAttribute('viewBox', `0 0 ${W} ${totalH}`);
+
     const allV = [...chartT, ...chartF].filter(v => isFinite(v));
     const minV = Math.min(...allV) - 3, maxV = Math.max(...allV) + 3;
     const xS = i => pad + (i / (chartT.length - 1)) * (W - pad*2);
-    const yS = v => H - pad - ((v - minV) / (maxV - minV + 0.001)) * (H - pad*2);
+    const yS = v => labelH + H - pad - ((v - minV) / (maxV - minV + 0.001)) * (H - pad*2);
     const toPath = arr => arr.map((v,i) => `${i===0?'M':'L'}${xS(i).toFixed(1)},${yS(v).toFixed(1)}`).join(' ');
     const tPath = toPath(chartT);
-    const fill = `${tPath} L${xS(chartT.length-1).toFixed(1)},${H} L${pad},${H} Z`;
-    svg.innerHTML =
-      `<defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">`
-      + `<stop offset="0%" stop-color="#00b4d8" stop-opacity="0.4"/>`
+    const fill = `${tPath} L${xS(chartT.length-1).toFixed(1)},${labelH+H} L${pad},${labelH+H} Z`;
+
+    // Find day boundaries within our 25-hour window
+    const dayLines = [];
+    const slotTimes = Array.from({length: chartT.length}, (_,i) => {
+      const idx = startIdx + i;
+      return h.time?.[idx] ? new Date(h.time[idx]) : null;
+    });
+    let lastDay = slotTimes[0]?.getDate();
+    slotTimes.forEach((t, i) => {
+      if (!t) return;
+      if (i > 0 && t.getDate() !== lastDay) {
+        lastDay = t.getDate();
+        const x = xS(i).toFixed(1);
+        dayLines.push({ x, label: t.toLocaleDateString([],{weekday:'short'}) });
+      }
+    });
+
+    let inner =
+      `<defs><linearGradient id="tg2" x1="0" y1="0" x2="0" y2="1">`
+      + `<stop offset="0%" stop-color="#00b4d8" stop-opacity="0.35"/>`
       + `<stop offset="100%" stop-color="#00b4d8" stop-opacity="0"/>`
-      + `</linearGradient></defs>`
-      + `<path d="${fill}" fill="url(#tg)"/>`
-      + `<path d="${tPath}" stroke="#00b4d8" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
-      + `<path d="${toPath(chartF)}" stroke="#60a5fa" stroke-width="1.5" fill="none" stroke-dasharray="4,3" opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>`;
+      + `</linearGradient></defs>`;
+
+    // Day boundary lines + labels
+    dayLines.forEach(dl => {
+      inner += `<line x1="${dl.x}" y1="${labelH}" x2="${dl.x}" y2="${labelH+H}" stroke="rgba(255,255,255,0.12)" stroke-width="1" stroke-dasharray="2,2"/>`;
+      inner += `<text x="${parseFloat(dl.x)+3}" y="${labelH-3}" font-size="7" fill="#64748b" font-family="sans-serif">${dl.label}</text>`;
+    });
+    // "Now" label at left
+    inner += `<text x="${pad}" y="${labelH-3}" font-size="7" fill="#00b4d8" font-family="sans-serif">Now</text>`;
+
+    // Area fill + lines
+    inner += `<path d="${fill}" fill="url(#tg2)"/>`;
+    inner += `<path d="${tPath}" stroke="#00b4d8" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+    inner += `<path d="${toPath(chartF)}" stroke="#60a5fa" stroke-width="1.5" fill="none" stroke-dasharray="4,3" opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+    // Interactive dots on temp line — show tooltip on hover
+    const tooltipId = 'fp-chart-tip';
+    chartT.forEach((v, i) => {
+      if (v == null) return;
+      const x = xS(i), y = yS(v);
+      const feels = chartF[i];
+      const t = slotTimes[i];
+      const label = i === 0 ? 'Now' : t?.toLocaleTimeString([],{hour:'numeric'}) || '';
+      const tip = `${label}: ${Math.round(v)}°${feels != null ? ' / FL '+Math.round(feels)+'°' : ''}`;
+      inner += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#00b4d8" opacity="0" style="cursor:pointer"
+        onmouseenter="document.getElementById('${tooltipId}').style.display='block';document.getElementById('${tooltipId}').textContent='${tip.replace(/'/g,'&#39;')}'"
+        onmouseleave="document.getElementById('${tooltipId}').style.display='none'"
+        ontouchstart="document.getElementById('${tooltipId}').style.display='block';document.getElementById('${tooltipId}').textContent='${tip.replace(/'/g,'&#39;')}';setTimeout(()=>document.getElementById('${tooltipId}').style.display='none',2000)"/>`;
+      // Visible dot every 3 hours
+      if (i % 3 === 0) {
+        inner += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#00b4d8" pointer-events="none"/>`;
+      }
+    });
+
+    svg.innerHTML = inner;
+
+    // Tooltip element (reuse or create)
+    let tip = document.getElementById(tooltipId);
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = tooltipId;
+      tip.style.cssText = 'display:none;position:absolute;background:rgba(10,14,20,0.95);color:#e2e8f0;font-size:0.68rem;font-family:Barlow Condensed,sans-serif;padding:3px 8px;border-radius:4px;border:1px solid rgba(0,180,216,0.4);pointer-events:none;white-space:nowrap;z-index:100;transform:translateY(-100%);margin-top:-4px;';
+      svg.parentElement.style.position = 'relative';
+      svg.parentElement.appendChild(tip);
+    }
+
+    // Position tooltip near mouse on mousemove
+    svg.onmousemove = (e) => {
+      const r = svg.getBoundingClientRect();
+      tip.style.left = Math.min(e.clientX - r.left, r.width - 120) + 'px';
+      tip.style.top  = (e.clientY - r.top) + 'px';
+    };
   }
   document.getElementById('fp-hourly-wrap').style.display = 'block';
 
