@@ -1488,26 +1488,40 @@ function preloadAllFrames() {
   frameLayers.forEach((l, i) => { if (i !== currentFrame) queue.push(l); });
   forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame) queue.push(f.layer); });
 
+  const statusEl = document.getElementById('preload-status');
+
   let idx = 0;
   function next() {
-    if (myGen !== preloadGen) return; // superseded by a newer view change
-    const el = document.getElementById('preload-status');
-    if (idx >= queue.length) { if (el) el.textContent = ''; return; }
+    if (myGen !== preloadGen) { if (statusEl) statusEl.textContent = ''; return; }
+    if (idx >= queue.length) { if (statusEl) statusEl.textContent = ''; return; }
+
     const layer = queue[idx];
-    if (map.hasLayer(layer)) { idx++; return next(); }
+
+    // Already attached — tiles are loaded or loading, skip immediately
+    if (map.hasLayer(layer)) { idx++; setTimeout(next, 20); return; }
+
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      layer.off('load', finish);
+      layer.off('load error', finish);
       idx++;
-      if (el) el.textContent = idx < queue.length ? `Caching ${Math.round((idx/queue.length)*100)}%` : '';
+      // Don't show percentage — it's misleading when frames skip or cache hits vary.
+      // Just clear when complete.
+      if (statusEl) statusEl.textContent = idx < queue.length ? '⬡ caching…' : '';
       setTimeout(next, 80);
     };
+
+    // Attach listener BEFORE addTo — prevents the race where cached tiles fire
+    // 'load' synchronously during addTo before the listener is registered.
+    layer.once('load', finish);
+    layer.once('error', finish); // don't stall on tile errors either
     layer.setOpacity(0);
-    layer.on('load', finish);
     layer.addTo(map);
-    setTimeout(finish, 2500); // safety net if 'load' never fires
+
+    // Safety net: WMS tiles can be slow (server renders on demand).
+    // 6s gives enough time for a cold IEM render without stalling indefinitely.
+    setTimeout(() => { if (!done) finish(); }, 6000);
   }
   next();
 }
@@ -2323,10 +2337,10 @@ const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 // IEM WMS TIME format: 2026-07-28T18:00:00Z
 // Layer: conus_ch13 (IR clean window — best for day+night cloud detail)
 
-const GOES_FRAME_COUNT  = 9;    // frames (10-min steps = 80 min history)
-const GOES_INTERVAL_MS  = 10 * 60 * 1000; // 10 min between frames
-const GOES_SPEED_MS     = 150;  // ms per frame during playback
-const GOES_HOLD_MS      = 1500; // hold on latest frame before looping
+const GOES_FRAME_COUNT  = 12;   // frames (15-min steps = 3hr history)
+const GOES_INTERVAL_MS  = 15 * 60 * 1000; // 15 min between frames
+const GOES_SPEED_MS     = 120;  // ms per frame during playback
+const GOES_HOLD_MS      = 1800; // hold on latest frame before looping
 const GOES_BASE_OPACITY = 0.85;
 
 let goesFrames      = [];  // [{ time: Date, label: string, layer: L.TileLayer.WMS }]
@@ -2403,18 +2417,20 @@ function goesPreloadAll() {
     if (myGen !== goesPreloadChain) return;
     if (idx >= queue.length) return;
     const f = queue[idx];
-    if (map.hasLayer(f.layer)) { idx++; return next(); }
+    if (map.hasLayer(f.layer)) { idx++; setTimeout(next, 20); return; }
     let done = false;
     const finish = () => {
       if (done) return; done = true;
-      f.layer.off('load', finish);
+      f.layer.off('load error', finish);
       idx++;
       setTimeout(next, 100);
     };
+    // Attach before addTo to avoid race with cached tiles
+    f.layer.once('load', finish);
+    f.layer.once('error', finish);
     f.layer.setOpacity(0);
-    f.layer.on('load', finish);
     f.layer.addTo(map);
-    setTimeout(finish, 3000);
+    setTimeout(() => { if (!done) finish(); }, 6000);
   }
   next();
 }
@@ -2477,7 +2493,7 @@ function goesTogglePlay() {
 // Rebuild frames every 10 min so the loop stays current without a page reload
 function goesScheduleRefresh() {
   clearTimeout(goesRefreshTimer);
-  const msToNextTen = GOES_INTERVAL_MS - (Date.now() % GOES_INTERVAL_MS);
+  const msToNextInterval = GOES_INTERVAL_MS - (Date.now() % GOES_INTERVAL_MS);
   goesRefreshTimer = setTimeout(() => {
     if (activePaint === 'goes') {
       const wasPlaying = goesPlaying;
@@ -2490,7 +2506,7 @@ function goesScheduleRefresh() {
       buildGoesFrames();
     }
     goesScheduleRefresh();
-  }, msToNextTen + 90000); // wait 90s past the boundary for IEM to ingest
+  }, msToNextInterval + 90000); // wait 90s past the boundary for IEM to ingest
 }
 
 function goesStopAll() {
@@ -2837,9 +2853,9 @@ function clearSS() {
   ssActiveKey = null;
 }
 
-// Sequentially attach each SS frame, waiting for one to load (or a 2.5s
-// timeout) before starting the next — exactly mirrors preloadAllFrames()
-// above. Once all are loaded, starts the oldest→newest animation loop.
+// Sequentially attach each SS frame, waiting for one to load (or a 6s
+// timeout) before starting the next — exactly mirrors preloadAllFrames().
+// Once all are loaded, starts the oldest→newest animation loop.
 function preloadSSFrames(myGen) {
   let idx = 0;
   function next() {
@@ -2850,14 +2866,16 @@ function preloadSSFrames(myGen) {
     const finish = () => {
       if (done) return;
       done = true;
-      layer.off('load', finish);
+      layer.off('load error', finish);
       idx++;
       setTimeout(next, 60);
     };
+    // Attach before addTo to avoid race with cached tiles firing load synchronously
+    layer.once('load', finish);
+    layer.once('error', finish);
     layer.setOpacity(0);
-    layer.on('load', finish);
     layer.addTo(map);
-    setTimeout(finish, 2500); // safety net if 'load' never fires
+    setTimeout(() => { if (!done) finish(); }, 6000);
   }
   next();
 }
