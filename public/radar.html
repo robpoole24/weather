@@ -1484,42 +1484,25 @@ let preloadGen = 0;
 
 function preloadAllFrames() {
   const myGen = ++preloadGen;
-  const queue = [];
-  frameLayers.forEach((l, i) => { if (i !== currentFrame) queue.push(l); });
-  forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame) queue.push(f.layer); });
-
   const statusEl = document.getElementById('preload-status');
 
-  let idx = 0;
-  function next() {
-    if (myGen !== preloadGen) { if (statusEl) statusEl.textContent = ''; return; }
-    if (idx >= queue.length) { if (statusEl) statusEl.textContent = ''; return; }
+  // Attach all inactive frames at once with opacity:0.
+  // The browser throttles concurrent requests naturally (6 per host in Chrome).
+  // Event-based sequencing is unreliable: Leaflet fires 'load' immediately on
+  // opacity:0 layers because there are no visible tiles to wait for.
+  const queue = [];
+  frameLayers.forEach((l, i) => { if (i !== currentFrame && !map.hasLayer(l)) queue.push(l); });
+  forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame && !map.hasLayer(f.layer)) queue.push(f.layer); });
 
-    const layer = queue[idx];
+  if (!queue.length) { if (statusEl) statusEl.textContent = ''; return; }
 
-    // Already attached — already loaded, skip immediately
-    if (map.hasLayer(layer)) { idx++; setTimeout(next, 20); return; }
+  if (statusEl) statusEl.textContent = '⬡ caching…';
+  queue.forEach(l => { l.setOpacity(0); if (!map.hasLayer(l)) l.addTo(map); });
 
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      layer.off('load', finish);
-      idx++;
-      if (statusEl) statusEl.textContent = idx < queue.length ? '⬡ caching…' : '';
-      setTimeout(next, 80);
-    };
-
-    // Attach 'load' listener BEFORE addTo so we don't miss it if tiles are
-    // already cached and Leaflet fires synchronously during addTo.
-    layer.on('load', finish);
-    layer.setOpacity(0);
-    layer.addTo(map);
-
-    // Safety net for slow/failed tiles — 6s for WMS cold renders
-    setTimeout(() => { if (!done) finish(); }, 6000);
-  }
-  next();
+  // Clear the status after a reasonable buffer — no event needed
+  setTimeout(() => {
+    if (myGen === preloadGen && statusEl) statusEl.textContent = '';
+  }, 4000);
 }
 
 // Detach all inactive layers the instant a pan/zoom begins — prevents the
@@ -2406,27 +2389,64 @@ function goesEnsureAttached(layer) {
 let goesPreloadChain = 0;
 function goesPreloadAll() {
   const myGen = ++goesPreloadChain;
-  const current = goesFrames[goesFrameIdx];
-  const queue = goesFrames.filter(f => f !== current);
-  let idx = 0;
-  function next() {
+  const statusEl = document.getElementById('preload-status');
+  const playBtn  = document.getElementById('btn-play');
+
+  // Disable play until tiles are loaded — otherwise animation advances labels
+  // with no visible map change because WMS tiles haven't rendered yet.
+  if (playBtn) { playBtn.disabled = true; playBtn.style.opacity = '0.4'; }
+  if (statusEl) statusEl.textContent = '🛰 loading satellite…';
+
+  // Count how many frames have at least one tile loaded.
+  // We use 'tileload' (per-tile) not 'load' (all-tiles) because 'load'
+  // fires immediately on opacity:0 layers in Leaflet 1.9.4.
+  const total = goesFrames.length;
+  let loadedFrames = 0;
+  const seenFrames = new Set();
+
+  function onTileLoad() {
     if (myGen !== goesPreloadChain) return;
-    if (idx >= queue.length) return;
-    const f = queue[idx];
-    if (map.hasLayer(f.layer)) { idx++; setTimeout(next, 20); return; }
-    let done = false;
-    const finish = () => {
-      if (done) return; done = true;
-      f.layer.off('load', finish);
-      idx++;
-      setTimeout(next, 100);
-    };
-    f.layer.on('load', finish);
-    f.layer.setOpacity(0);
-    f.layer.addTo(map);
-    setTimeout(() => { if (!done) finish(); }, 6000);
+    // Find which frame this layer belongs to and count it once
+    goesFrames.forEach((f, i) => {
+      if (seenFrames.has(i)) return;
+      if (map.hasLayer(f.layer)) {
+        // Check if this layer has any loaded tiles by looking at _tiles
+        const tiles = f.layer._tiles || {};
+        const hasLoaded = Object.values(tiles).some(t => t.loaded);
+        if (hasLoaded) {
+          seenFrames.add(i);
+          loadedFrames++;
+          if (statusEl && loadedFrames < total) {
+            statusEl.textContent = `🛰 ${loadedFrames}/${total} frames`;
+          }
+          if (loadedFrames >= total) {
+            if (statusEl) statusEl.textContent = '';
+            if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
+            // Clean up listeners
+            goesFrames.forEach(f => f.layer.off('tileload', onTileLoad));
+          }
+        }
+      }
+    });
   }
-  next();
+
+  // Attach tileload listener to every frame, then add all to map
+  goesFrames.forEach((f, i) => {
+    if (i === goesFrameIdx) return; // active frame already attached
+    f.layer.on('tileload', onTileLoad);
+    f.layer.setOpacity(0);
+    if (!map.hasLayer(f.layer)) f.layer.addTo(map);
+  });
+  // Also watch the active frame (already attached)
+  goesFrames[goesFrameIdx]?.layer.on('tileload', onTileLoad);
+
+  // Safety net — enable play after 12s regardless
+  setTimeout(() => {
+    if (myGen !== goesPreloadChain) return;
+    if (statusEl) statusEl.textContent = '';
+    if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
+    goesFrames.forEach(f => f.layer.off('tileload', onTileLoad));
+  }, 12000);
 }
 
 function goesShowFrame(idx) {
@@ -2528,6 +2548,12 @@ function goesActivate() {
 function goesDeactivate() {
   goesStopAll();
   clearTimeout(goesRefreshTimer);
+  ++goesPreloadChain; // cancel any in-flight preload
+  // Re-enable play button (may have been disabled during satellite tile loading)
+  const playBtn = document.getElementById('btn-play');
+  if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
+  const statusEl = document.getElementById('preload-status');
+  if (statusEl) statusEl.textContent = '';
   // Restore mode bar for radar
   const modeBar = document.getElementById('mode-bar');
   const modeDivider = modeBar?.nextElementSibling;
@@ -2850,24 +2876,19 @@ function clearSS() {
 // Sequentially attach each SS frame, waiting for one to load (or a 6s
 // timeout) before starting the next — exactly mirrors preloadAllFrames().
 // Once all are loaded, starts the oldest→newest animation loop.
+// Sequentially attach SS frames with a fixed delay between each.
+// Starts animation once all frames are attached.
+// Fixed delays are more reliable than load-event detection on opacity:0 layers.
 function preloadSSFrames(myGen) {
   let idx = 0;
   function next() {
     if (myGen !== ssPreloadGen) return;
     if (idx >= ssLayers.length) { startSSAnimation(); return; }
     const layer = ssLayers[idx];
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      layer.off('load', finish);
-      idx++;
-      setTimeout(next, 60);
-    };
-    layer.on('load', finish);
     layer.setOpacity(0);
-    layer.addTo(map);
-    setTimeout(() => { if (!done) finish(); }, 6000);
+    if (!map.hasLayer(layer)) layer.addTo(map);
+    idx++;
+    setTimeout(next, 300); // 300ms per frame — enough for tile requests to queue up
   }
   next();
 }
