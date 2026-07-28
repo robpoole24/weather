@@ -114,6 +114,8 @@ function securityHeaders(req, res, next) {
       // HMS Smoke + NIFC fire perimeters are server-proxied (/api/hms-smoke, /api/fire-perimeters)
       // — no direct browser calls to satepsanone.nesdis.noaa.gov or services3.arcgis.com needed
       // AirNow is proxied through /api/aqi in server.js — no direct browser call needed
+      // NASA GIBS — GOES-East satellite imagery tiles (WMTS, used by GOES animation)
+      " https://gibs.earthdata.nasa.gov" +
       // NowCOAST WMS (surface analysis, ERO, tropical) — tile requests go direct
       " https://nowcoast.noaa.gov" +
       // NWS National Water Prediction Service (river/flood gauges)
