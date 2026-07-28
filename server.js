@@ -2056,7 +2056,7 @@ app.get('/api/forecast', async (req, res) => {
 
   try {
     // ── Open-Meteo GFS/HRRR ─────────────────────────────────────────────────
-    const omUrl = 'https://api.open-meteo.com/v1/gfs'
+    const omUrl = 'https://api.open-meteo.com/v1/forecast'
       + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
       + '&timezone=auto'
       + '&temperature_unit=fahrenheit'
