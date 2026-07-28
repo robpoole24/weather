@@ -459,6 +459,121 @@
   #feelslike-pill .fl-label { font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); }
   #feelslike-pill .fl-val { font-size:1.05rem; font-weight:700; color:var(--text); }
 
+  /* ══ CAMERA SOURCE TOGGLES ══ */
+  .lp-toggle-label { position:relative; display:inline-block; width:36px; height:20px; flex-shrink:0; cursor:pointer; }
+  .lp-toggle-label input { opacity:0; width:0; height:0; position:absolute; }
+  .lp-toggle-track { position:absolute; inset:0; background:var(--border); border-radius:20px; transition:background 0.2s; }
+  .lp-toggle-label input:checked + .lp-toggle-track { background:var(--accent); }
+  .lp-toggle-track::after { content:''; position:absolute; left:3px; top:3px; width:14px; height:14px; border-radius:50%; background:#fff; transition:transform 0.2s; }
+  .lp-toggle-label input:checked + .lp-toggle-track::after { transform:translateX(16px); }
+
+  /* ══ FORECAST FAB ══ */
+  #forecast-fab {
+    position:absolute; top:9px; left:130px; z-index:1200;
+    background:var(--surface2); border:1px solid var(--border);
+    color:var(--text); font-family:'Barlow Condensed',sans-serif;
+    font-size:0.78rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+    padding:0.42rem 0.75rem; border-radius:6px; cursor:pointer;
+    display:flex; align-items:center; gap:0.4rem;
+    transition:border-color 0.15s, background 0.15s;
+  }
+  #forecast-fab:hover { border-color:var(--accent); background:rgba(0,180,216,0.08); }
+  #forecast-fab.active { border-color:var(--accent); background:rgba(0,180,216,0.15); color:var(--accent); }
+  @media(max-width:600px){ #forecast-fab { left:110px; font-size:0.72rem; padding:0.38rem 0.6rem; } }
+
+  /* ══ FORECAST PANEL ══ */
+  #forecast-backdrop {
+    display:none; position:fixed; inset:0; z-index:1249;
+    background:rgba(0,0,0,0.4);
+  }
+  #forecast-panel {
+    display:none; position:fixed; top:0; right:0; z-index:1250;
+    width:340px; max-width:100vw; height:100dvh;
+    background:var(--bg); border-left:1px solid var(--border);
+    flex-direction:column; overflow:hidden;
+    box-shadow:-4px 0 24px rgba(0,0,0,0.5);
+  }
+  #forecast-panel.open { display:flex; }
+  #forecast-backdrop.open { display:block; }
+
+  .fp-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0.65rem 0.75rem 0.55rem;
+    border-bottom:1px solid var(--border); flex-shrink:0;
+  }
+  .fp-title { font-family:'Barlow Condensed',sans-serif; font-size:0.95rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); }
+
+  .fp-search { display:flex; gap:0.4rem; padding:0.6rem 0.75rem 0.3rem; flex-shrink:0; }
+  .fp-zip { flex:1; background:var(--surface2); border:1px solid var(--border); color:var(--text); font-family:'Barlow',sans-serif; font-size:0.82rem; padding:0.38rem 0.5rem; border-radius:4px; outline:none; }
+  .fp-zip:focus { border-color:var(--accent); }
+  .fp-go { background:var(--accent); color:#000; font-family:'Barlow Condensed',sans-serif; font-size:0.78rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; border:none; border-radius:4px; padding:0.38rem 0.75rem; cursor:pointer; }
+  .fp-loc-name { padding:0 0.75rem 0.4rem; font-size:0.68rem; color:var(--muted); font-family:'Barlow Condensed',sans-serif; letter-spacing:0.04em; min-height:1.1em; }
+
+  #fp-content { flex:1; overflow-y:auto; padding:0 0.75rem 1rem; }
+  .fp-msg { font-size:0.78rem; color:var(--muted); padding:1.5rem 0; text-align:center; line-height:1.6; }
+  .fp-err { color:#f87171; }
+  .fp-section-label { font-family:'Barlow Condensed',sans-serif; font-size:0.72rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); margin:1rem 0 0.5rem; border-bottom:1px solid var(--border); padding-bottom:0.3rem; }
+
+  /* Current conditions */
+  .fp-current-grid { display:flex; gap:0.75rem; align-items:flex-start; }
+  .fp-big-temp { font-family:'Barlow Condensed',sans-serif; font-size:3.8rem; font-weight:700; line-height:1; color:var(--text); white-space:nowrap; }
+  .fp-unit { font-size:1.8rem; font-weight:400; color:var(--muted); }
+  .fp-current-details { flex:1; display:flex; flex-direction:column; gap:0.22rem; }
+  .fp-condition-text { font-size:0.82rem; color:var(--text); margin-bottom:0.25rem; font-weight:600; }
+  .fp-detail-row { font-size:0.74rem; color:var(--muted); display:flex; gap:0.4rem; align-items:center; }
+  .fp-detail-row strong { color:var(--text); }
+  .fp-detail-icon { width:1.1em; text-align:center; flex-shrink:0; }
+
+  /* Hourly scroll */
+  .fp-hourly-scroll { display:flex; gap:0.5rem; overflow-x:auto; padding-bottom:0.5rem; scrollbar-width:thin; }
+  .fp-hour-card {
+    flex-shrink:0; width:62px; background:var(--surface2); border:1px solid var(--border);
+    border-radius:8px; padding:0.45rem 0.3rem; text-align:center;
+    display:flex; flex-direction:column; gap:0.2rem; align-items:center;
+  }
+  .fp-hour-card.now { border-color:var(--accent); background:rgba(0,180,216,0.08); }
+  .fp-h-time { font-family:'Barlow Condensed',sans-serif; font-size:0.65rem; color:var(--muted); letter-spacing:0.04em; text-transform:uppercase; }
+  .fp-h-icon { font-size:1.3rem; line-height:1; }
+  .fp-h-temp { font-size:0.85rem; font-weight:700; color:var(--text); font-family:'Barlow Condensed',sans-serif; }
+  .fp-h-feels { font-size:0.65rem; color:var(--muted); }
+  .fp-h-precip { font-size:0.65rem; color:#60a5fa; }
+  .fp-h-wind { font-size:0.62rem; color:var(--muted); }
+
+  /* Daily list */
+  .fp-daily-list { display:flex; flex-direction:column; gap:0.35rem; }
+  .fp-day-row {
+    display:grid; grid-template-columns:2.8rem 1.4rem 1fr auto auto;
+    align-items:center; gap:0.5rem;
+    background:var(--surface2); border:1px solid var(--border);
+    border-radius:7px; padding:0.45rem 0.6rem; cursor:pointer;
+    transition:border-color 0.15s;
+  }
+  .fp-day-row:hover { border-color:var(--accent); }
+  .fp-day-row.today { border-color:var(--accent); background:rgba(0,180,216,0.06); }
+  .fp-day-name { font-family:'Barlow Condensed',sans-serif; font-size:0.74rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text); }
+  .fp-day-icon { font-size:1.1rem; text-align:center; }
+  .fp-day-desc { font-size:0.7rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .fp-day-hi { font-family:'Barlow Condensed',sans-serif; font-size:0.88rem; font-weight:700; color:var(--text); }
+  .fp-day-lo { font-family:'Barlow Condensed',sans-serif; font-size:0.88rem; color:var(--muted); }
+  .fp-day-detail { display:none; grid-column:1/-1; font-size:0.7rem; color:var(--muted); line-height:1.6; border-top:1px solid var(--border); padding-top:0.4rem; margin-top:0.1rem; }
+  .fp-day-detail.open { display:block; }
+  .fp-day-detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.15rem 0.6rem; }
+
+  /* Storm indicators */
+  .fp-storm-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.4rem; }
+  .fp-storm-card { background:rgba(249,115,22,0.08); border:1px solid rgba(249,115,22,0.3); border-radius:7px; padding:0.5rem 0.6rem; }
+  .fp-storm-val { font-family:'Barlow Condensed',sans-serif; font-size:1.2rem; font-weight:700; color:#f97316; }
+  .fp-storm-label { font-size:0.65rem; color:var(--muted); margin-top:0.1rem; }
+
+  /* NWS narrative */
+  .fp-nws-list { display:flex; flex-direction:column; gap:0.35rem; }
+  .fp-nws-row { background:var(--surface2); border:1px solid var(--border); border-radius:7px; padding:0.5rem 0.6rem; cursor:pointer; }
+  .fp-nws-row:hover { border-color:var(--accent); }
+  .fp-nws-name { font-family:'Barlow Condensed',sans-serif; font-size:0.74rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text); margin-bottom:0.2rem; }
+  .fp-nws-short { font-size:0.72rem; color:var(--muted); }
+  .fp-nws-detail { display:none; font-size:0.7rem; color:var(--muted); line-height:1.6; border-top:1px solid var(--border); padding-top:0.4rem; margin-top:0.35rem; }
+  .fp-nws-detail.open { display:block; }
+
   /* ══ LIGHTNING STRIKE FLASH ══ */
   .ltg-strike { width:10px; height:10px; margin-top:-5px; margin-left:-5px; border-radius:50%; background:#fff4c2; box-shadow:0 0 6px 2px rgba(255,238,140,0.9); pointer-events:none; }
   .ltg-strike.fresh { animation:ltgBloom 0.6s ease-out; }
@@ -631,6 +746,77 @@
 <!-- ══ LAYER PANEL (left) ══ -->
 <button id="layers-fab" onclick="toggleLayerPanel()" aria-label="Layers"><span style="font-size:0.95rem;">☰</span> Layers</button>
 <div id="feelslike-pill"><span class="fl-label">Feels like</span><span class="fl-val" id="fl-val">—</span></div>
+<button id="forecast-fab" onclick="toggleForecastPanel()" aria-label="Forecast" title="Weather Forecast">🌡 Forecast</button>
+<div id="forecast-backdrop" onclick="toggleForecastPanel(false)"></div>
+
+<!-- ══ FORECAST PANEL ══ -->
+<div id="forecast-panel" aria-label="Weather forecast">
+  <div class="fp-head">
+    <span class="fp-title">Weather Forecast</span>
+    <button class="lp-head-btn" onclick="toggleForecastPanel(false)">✕</button>
+  </div>
+
+  <!-- Location input -->
+  <div class="fp-search">
+    <input type="text" id="fp-zip-input" class="fp-zip" placeholder="ZIP code or city name…" maxlength="60"
+      onkeydown="if(event.key==='Enter')loadForecast()">
+    <button class="fp-go" onclick="loadForecast()">Go</button>
+  </div>
+  <div id="fp-location-name" class="fp-loc-name"></div>
+
+  <!-- Content area — loading / error / data -->
+  <div id="fp-content">
+    <div id="fp-placeholder" class="fp-msg">Enter a location above or allow location access for your local forecast.</div>
+    <div id="fp-loading"  class="fp-msg" style="display:none;">⏳ Loading forecast…</div>
+    <div id="fp-error"    class="fp-msg fp-err" style="display:none;"></div>
+
+    <!-- Current conditions -->
+    <div id="fp-current" style="display:none;">
+      <div class="fp-section-label">Current Conditions</div>
+      <div class="fp-current-grid">
+        <div class="fp-big-temp">
+          <span id="fp-temp">—</span>
+          <span class="fp-unit">°F</span>
+        </div>
+        <div class="fp-current-details">
+          <div id="fp-condition" class="fp-condition-text">—</div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">🌡</span> Feels like <strong id="fp-feels">—</strong></div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">💧</span> Humidity <strong id="fp-humidity">—</strong></div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">🌬</span> Wind <strong id="fp-wind">—</strong></div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">👁</span> Visibility <strong id="fp-visibility">—</strong></div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">☁</span> Cloud cover <strong id="fp-clouds">—</strong></div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">🌡</span> Dew point <strong id="fp-dewpoint">—</strong></div>
+          <div class="fp-detail-row"><span class="fp-detail-icon">🔵</span> Pressure <strong id="fp-pressure">—</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hourly scroll -->
+    <div id="fp-hourly-wrap" style="display:none;">
+      <div class="fp-section-label">Hourly (24h)</div>
+      <div id="fp-hourly" class="fp-hourly-scroll"></div>
+    </div>
+
+    <!-- 7-day daily -->
+    <div id="fp-daily-wrap" style="display:none;">
+      <div class="fp-section-label">7-Day Forecast</div>
+      <div id="fp-daily" class="fp-daily-list"></div>
+    </div>
+
+    <!-- Storm indicators — only shown when CAPE > 500 -->
+    <div id="fp-storm-wrap" style="display:none;">
+      <div class="fp-section-label" style="color:#f97316;">⚡ Storm Indicators</div>
+      <div id="fp-storm-grid" class="fp-storm-grid"></div>
+    </div>
+
+    <!-- NWS narrative -->
+    <div id="fp-nws-wrap" style="display:none;">
+      <div class="fp-section-label">NWS Forecast Text</div>
+      <div id="fp-nws-list" class="fp-nws-list"></div>
+    </div>
+  </div>
+</div>
+
 <div id="layer-backdrop" onclick="toggleLayerPanel(false)"></div>
 <div id="layer-panel" aria-label="Layer controls">
   <div class="lp-head">
@@ -703,17 +889,35 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Traffic Cameras</div>
+    <div class="lp-section-label">Webcams</div>
+
+    <!-- Live DOT Cameras -->
     <div id="lp-cameras"></div>
     <div id="lp-cameras-state" style="display:none;margin-top:0.5rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
+        <span style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);">🟠 Live DOT Cams</span>
+        <label class="lp-toggle-label" title="Toggle live DOT traffic cameras">
+          <input type="checkbox" id="cam-dot-toggle" checked onchange="onCamSourceToggle()">
+          <span class="lp-toggle-track"></span>
+        </label>
+      </div>
+      <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-bottom:0.5rem;">Live traffic cameras from state DOT feeds. Images refresh every 5–30 seconds.</div>
+
+      <!-- Windy Timelapse Cameras -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
+        <span style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);">🔵 Windy Timelapse</span>
+        <label class="lp-toggle-label" title="Toggle Windy timelapse webcams">
+          <input type="checkbox" id="cam-windy-toggle" checked onchange="onCamSourceToggle()">
+          <span class="lp-toggle-track"></span>
+        </label>
+      </div>
+      <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-bottom:0.5rem;">Scenic &amp; weather webcams from <a href="https://www.windy.com/webcams" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Windy.com</a>. Timelapse player — not a live feed.</div>
+
       <label class="lp-select-label">Select a state to load cameras</label>
       <select id="cam-state-select" class="lp-select" onchange="onCamStateChange(this.value)">
         <option value="">— Pick a state —</option>
       </select>
       <div id="cam-state-status" style="font-size:0.66rem;color:var(--muted);margin-top:0.35rem;line-height:1.5;min-height:1.2em;"></div>
-    </div>
-    <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-top:0.35rem;padding:0 0.1rem;">
-      Camera data from state DOT feeds, <a href="https://www.windy.com/webcams" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Windy.com</a>, and open-source contributors. Coverage expanding.
     </div>
   </div>
 
@@ -2558,14 +2762,24 @@ async function onCamStateChange(code) {
       return;
     }
 
+    const showDot   = document.getElementById('cam-dot-toggle')?.checked !== false;
+    const showWindy = document.getElementById('cam-windy-toggle')?.checked !== false;
+
     for (const cam of data.cameras) {
       const el = document.createElement('div');
       el.className = cam.source === 'windy' ? 'cam-dot cam-dot-windy' : 'cam-dot';
       const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
       const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
       mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
-      mk.on('click', () => openCameraOverlay(cam));
+      const handler = () => openCameraOverlay(cam);
+      mk._wtCam = cam;
+      mk._wtClickHandler = handler;
+      const isDot   = cam.source === 'dot' || cam.source === 'otc';
+      const isWindy = cam.source === 'windy';
+      const visible = (isDot && showDot) || (isWindy && showWindy) || (!isDot && !isWindy);
+      if (visible) mk.on('click', handler);
       mk.addTo(camLayer);
+      if (!visible) { const mkEl = mk.getElement?.(); if (mkEl) mkEl.style.display = 'none'; }
       mk._camData = cam;
       camMarkers[cam.id] = mk;
     }
@@ -4442,20 +4656,294 @@ function stopChasers() {
   chaserMarkers = {};
 }
 
-async function updateFeelsLike(lat,lng){
-  if (!lat||!lng) return;
+// ── Feels Like pill (map overlay) ────────────────────────────────────────────
+// Pulled from /api/forecast so both the pill and the forecast panel share
+// one server call. The pill shows apparent_temperature from Open-Meteo current.
+async function updateFeelsLike(lat, lng) {
+  if (!lat || !lng) return;
   try {
-    const pts=await (await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lng.toFixed(4)}`,{headers:{'Accept':'application/geo+json'}})).json();
-    const stns=await (await fetch(pts.properties.observationStations,{headers:{'Accept':'application/geo+json'}})).json();
-    const first=stns.features?.[0]?.id; if(!first) return;
-    const obs=await (await fetch(`${first}/observations/latest`,{headers:{'Accept':'application/geo+json'}})).json();
-    const pr=obs.properties||{};
-    let feels=pr.heatIndex?.value ?? pr.windChill?.value ?? pr.temperature?.value;
-    if (feels===null||feels===undefined) return;
-    const f=Math.round(feels*9/5+32);
-    document.getElementById('fl-val').textContent=f+'°F';
-    document.getElementById('feelslike-pill').style.display='flex';
-  } catch(e){}
+    const data = await fetchForecastData({ lat, lon: lng });
+    if (!data?.current) return;
+    const f = Math.round(data.current.apparent_temperature ?? data.current.temperature_2m);
+    document.getElementById('fl-val').textContent = f + '°F';
+    document.getElementById('feelslike-pill').style.display = 'flex';
+    // If forecast panel is open and showing user location, refresh it too
+    if (_forecastPanelOpen && _forecastAutoLoaded) renderForecast(data);
+  } catch(e) {}
+}
+
+// ── Forecast Panel ────────────────────────────────────────────────────────────
+let _forecastPanelOpen = false;
+let _forecastAutoLoaded = false; // true when panel data came from user location
+let _forecastData = null;
+
+function toggleForecastPanel(force) {
+  const open = typeof force === 'boolean' ? force : !_forecastPanelOpen;
+  _forecastPanelOpen = open;
+  document.getElementById('forecast-panel').classList.toggle('open', open);
+  document.getElementById('forecast-backdrop').classList.toggle('open', open);
+  document.getElementById('forecast-fab').classList.toggle('active', open);
+  // Auto-load user location forecast on first open
+  if (open && !_forecastData && typeof userLat === 'number') {
+    _forecastAutoLoaded = true;
+    loadForecast({ lat: userLat, lon: userLng });
+  }
+}
+
+async function loadForecast(coords) {
+  const zipInput = document.getElementById('fp-zip-input');
+  let params;
+
+  if (coords) {
+    params = `lat=${coords.lat.toFixed(4)}&lon=${coords.lon.toFixed(4)}`;
+  } else {
+    const val = zipInput?.value?.trim();
+    if (!val) return;
+    _forecastAutoLoaded = false;
+    params = `zip=${encodeURIComponent(val)}`;
+  }
+
+  document.getElementById('fp-placeholder').style.display = 'none';
+  document.getElementById('fp-loading').style.display = 'block';
+  document.getElementById('fp-error').style.display = 'none';
+  document.getElementById('fp-current').style.display = 'none';
+  document.getElementById('fp-hourly-wrap').style.display = 'none';
+  document.getElementById('fp-daily-wrap').style.display = 'none';
+  document.getElementById('fp-storm-wrap').style.display = 'none';
+  document.getElementById('fp-nws-wrap').style.display = 'none';
+
+  try {
+    const resp = await fetch(`/api/forecast?${params}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    _forecastData = data;
+    document.getElementById('fp-loading').style.display = 'none';
+    renderForecast(data);
+  } catch(e) {
+    document.getElementById('fp-loading').style.display = 'none';
+    const errEl = document.getElementById('fp-error');
+    errEl.textContent = `Could not load forecast: ${e.message}`;
+    errEl.style.display = 'block';
+  }
+}
+
+async function fetchForecastData({ lat, lon }) {
+  const resp = await fetch(`/api/forecast?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+// WMO weather code → emoji + label
+function wmoIcon(code, isDay = true) {
+  if (code === 0)  return { icon: isDay ? '☀️' : '🌙', label: 'Clear' };
+  if (code <= 2)   return { icon: isDay ? '⛅' : '🌤', label: 'Partly cloudy' };
+  if (code === 3)  return { icon: '☁️', label: 'Overcast' };
+  if (code <= 49)  return { icon: '🌫', label: 'Fog' };
+  if (code <= 55)  return { icon: '🌦', label: 'Drizzle' };
+  if (code <= 65)  return { icon: '🌧', label: 'Rain' };
+  if (code <= 77)  return { icon: '❄️', label: 'Snow' };
+  if (code <= 82)  return { icon: '🌧', label: 'Showers' };
+  if (code <= 84)  return { icon: '🌨', label: 'Snow showers' };
+  if (code <= 94)  return { icon: '⛈', label: 'Thunderstorm' };
+  return { icon: '⛈', label: 'Thunderstorm with hail' };
+}
+
+function windDirArrow(deg) {
+  if (deg == null) return '';
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+function renderForecast(data) {
+  const c = data.current || {};
+  const cu = data.current_units || {};
+  const h = data.hourly || {};
+  const d = data.daily || {};
+  const now = new Date();
+
+  // Location name
+  const locEl = document.getElementById('fp-location-name');
+  locEl.textContent = data.location?.name || '';
+
+  // ── Current conditions ──────────────────────────────────────────────────
+  const wmo = wmoIcon(c.weather_code, c.is_day !== 0);
+  document.getElementById('fp-temp').textContent     = Math.round(c.temperature_2m ?? 0);
+  document.getElementById('fp-condition').textContent = wmo.label;
+  document.getElementById('fp-feels').textContent    = Math.round(c.apparent_temperature ?? c.temperature_2m ?? 0) + '°F';
+  document.getElementById('fp-humidity').textContent = (c.relative_humidity_2m ?? '—') + '%';
+
+  const wspd = Math.round(c.wind_speed_10m ?? 0);
+  const wgust = c.wind_gusts_10m ? ` (gusts ${Math.round(c.wind_gusts_10m)} mph)` : '';
+  const wdir = windDirArrow(c.wind_direction_10m);
+  document.getElementById('fp-wind').textContent     = `${wspd} mph ${wdir}${wgust}`;
+
+  const vis = c.visibility != null ? (c.visibility >= 1609 ? (c.visibility / 1609).toFixed(1) + ' mi' : Math.round(c.visibility) + ' m') : '—';
+  document.getElementById('fp-visibility').textContent = vis;
+  document.getElementById('fp-clouds').textContent   = (c.cloud_cover ?? '—') + '%';
+  document.getElementById('fp-dewpoint').textContent = Math.round(c.dew_point_2m ?? 0) + '°F';
+  document.getElementById('fp-pressure').textContent = c.surface_pressure ? Math.round(c.surface_pressure) + ' hPa' : '—';
+
+  // Update the map pill too
+  if (c.apparent_temperature != null) {
+    const f = Math.round(c.apparent_temperature);
+    document.getElementById('fl-val').textContent = f + '°F';
+    document.getElementById('feelslike-pill').style.display = 'flex';
+  }
+
+  document.getElementById('fp-current').style.display = 'block';
+
+  // ── Hourly (next 24h) ───────────────────────────────────────────────────
+  const hourlyEl = document.getElementById('fp-hourly');
+  hourlyEl.innerHTML = '';
+  const times = h.time || [];
+  const nowH = now.getTime();
+  // Find index of current hour
+  let startIdx = 0;
+  for (let i = 0; i < times.length; i++) {
+    if (new Date(times[i]).getTime() >= nowH - 30 * 60 * 1000) { startIdx = i; break; }
+  }
+  const endIdx = Math.min(startIdx + 25, times.length);
+  for (let i = startIdx; i < endIdx; i++) {
+    const t = new Date(times[i]);
+    const isNow = i === startIdx;
+    const hWmo = wmoIcon(h.weather_code?.[i], h.is_day?.[i] !== 0);
+    const card = document.createElement('div');
+    card.className = 'fp-hour-card' + (isNow ? ' now' : '');
+    const timeLabel = isNow ? 'Now' : t.toLocaleTimeString([], { hour: 'numeric' });
+    const precip = h.precipitation_probability?.[i];
+    const precipStr = precip != null && precip > 5 ? `${precip}%` : '';
+    card.innerHTML =
+      `<div class="fp-h-time">${timeLabel}</div>`
+    + `<div class="fp-h-icon">${hWmo.icon}</div>`
+    + `<div class="fp-h-temp">${Math.round(h.temperature_2m?.[i] ?? 0)}°</div>`
+    + `<div class="fp-h-feels">FL ${Math.round(h.apparent_temperature?.[i] ?? 0)}°</div>`
+    + (precipStr ? `<div class="fp-h-precip">💧${precipStr}</div>` : '')
+    + `<div class="fp-h-wind">${Math.round(h.wind_speed_10m?.[i] ?? 0)} mph</div>`;
+    hourlyEl.appendChild(card);
+  }
+  document.getElementById('fp-hourly-wrap').style.display = 'block';
+
+  // ── Daily (7-day) ───────────────────────────────────────────────────────
+  const dailyEl = document.getElementById('fp-daily');
+  dailyEl.innerHTML = '';
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  (d.time || []).forEach((dateStr, i) => {
+    const dt = new Date(dateStr + 'T12:00:00');
+    const isToday = dt.toDateString() === now.toDateString();
+    const dWmo = wmoIcon(d.weather_code?.[i], true);
+    const hi = Math.round(d.temperature_2m_max?.[i] ?? 0);
+    const lo = Math.round(d.temperature_2m_min?.[i] ?? 0);
+    const hiFL = Math.round(d.apparent_temperature_max?.[i] ?? hi);
+    const loFL = Math.round(d.apparent_temperature_min?.[i] ?? lo);
+    const precip = d.precipitation_probability_max?.[i];
+    const precipSum = d.precipitation_sum?.[i];
+    const snowSum = d.snowfall_sum?.[i];
+    const windMax = Math.round(d.wind_speed_10m_max?.[i] ?? 0);
+    const gustMax = Math.round(d.wind_gusts_10m_max?.[i] ?? 0);
+    const wdomDir = windDirArrow(d.wind_direction_10m_dominant?.[i]);
+    const uvIdx = d.uv_index?.[i];
+    const sunrise = d.sunrise?.[i] ? new Date(d.sunrise[i]).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—';
+    const sunset  = d.sunset?.[i]  ? new Date(d.sunset[i]).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '—';
+
+    // Find matching NWS narrative for this day
+    let nwsShort = '';
+    if (data.nws) {
+      const match = data.nws.find(p => {
+        const pDate = p.name.toLowerCase();
+        const dayName = days[dt.getDay()].toLowerCase();
+        return pDate.includes(dayName) && p.isDaytime;
+      });
+      if (match) nwsShort = match.short;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'fp-day-row' + (isToday ? ' today' : '');
+    row.innerHTML =
+      `<div class="fp-day-name">${isToday ? 'Today' : days[dt.getDay()]}</div>`
+    + `<div class="fp-day-icon">${dWmo.icon}</div>`
+    + `<div class="fp-day-desc">${nwsShort || dWmo.label}</div>`
+    + `<div class="fp-day-hi">${hi}°</div>`
+    + `<div class="fp-day-lo">${lo}°</div>`
+    + `<div class="fp-day-detail">
+        <div class="fp-day-detail-grid">
+          <div>🌡 Feels Like: <strong>${hiFL}° / ${loFL}°</strong></div>
+          <div>💧 Precip: <strong>${precip != null ? precip + '%' : '—'}${precipSum ? ' / ' + precipSum.toFixed(2) + '"' : ''}</strong></div>
+          ${snowSum > 0.1 ? `<div>❄️ Snow: <strong>${snowSum.toFixed(1)} cm</strong></div>` : ''}
+          <div>💨 Wind: <strong>${windMax} mph ${wdomDir} (gusts ${gustMax})</strong></div>
+          ${uvIdx != null ? `<div>☀️ UV Index: <strong>${uvIdx.toFixed(1)}</strong></div>` : ''}
+          <div>🌅 Sunrise: <strong>${sunrise}</strong></div>
+          <div>🌇 Sunset: <strong>${sunset}</strong></div>
+        </div>
+      </div>`;
+    row.onclick = () => {
+      const det = row.querySelector('.fp-day-detail');
+      det.classList.toggle('open');
+    };
+    dailyEl.appendChild(row);
+  });
+  document.getElementById('fp-daily-wrap').style.display = 'block';
+
+  // ── Storm indicators (CAPE / Lifted Index / Freezing Level) ─────────────
+  // Show when any of the next 12h has significant CAPE
+  const futureIdx = Math.min(startIdx + 12, times.length);
+  const maxCape = Math.max(...(h.cape || []).slice(startIdx, futureIdx).map(v => v ?? 0));
+  const minLI   = Math.min(...(h.lifted_index || []).slice(startIdx, futureIdx).map(v => v ?? 99));
+  const frzLvl  = h.freezing_level_height?.[startIdx];
+
+  if (maxCape > 500) {
+    const stormEl = document.getElementById('fp-storm-grid');
+    stormEl.innerHTML =
+      `<div class="fp-storm-card"><div class="fp-storm-val">${Math.round(maxCape)}</div><div class="fp-storm-label">Max CAPE (J/kg) — next 12h</div></div>`
+    + (minLI < 99 ? `<div class="fp-storm-card"><div class="fp-storm-val">${minLI.toFixed(1)}</div><div class="fp-storm-label">Min Lifted Index</div></div>` : '')
+    + (frzLvl != null ? `<div class="fp-storm-card"><div class="fp-storm-val">${Math.round(frzLvl * 3.281).toLocaleString()} ft</div><div class="fp-storm-label">Freezing Level</div></div>` : '');
+    document.getElementById('fp-storm-wrap').style.display = 'block';
+  } else {
+    document.getElementById('fp-storm-wrap').style.display = 'none';
+  }
+
+  // ── NWS narrative ───────────────────────────────────────────────────────
+  if (data.nws && data.nws.length > 0) {
+    const nwsEl = document.getElementById('fp-nws-list');
+    nwsEl.innerHTML = '';
+    data.nws.forEach(period => {
+      if (!period.detail) return;
+      const row = document.createElement('div');
+      row.className = 'fp-nws-row';
+      row.innerHTML =
+        `<div class="fp-nws-name">${period.name}</div>`
+      + `<div class="fp-nws-short">${period.short}</div>`
+      + `<div class="fp-nws-detail">${period.detail}</div>`;
+      row.onclick = () => {
+        row.querySelector('.fp-nws-detail').classList.toggle('open');
+      };
+      nwsEl.appendChild(row);
+    });
+    document.getElementById('fp-nws-wrap').style.display = 'block';
+  } else {
+    document.getElementById('fp-nws-wrap').style.display = 'none';
+  }
+}
+
+// ── Camera source toggles ─────────────────────────────────────────────────────
+function onCamSourceToggle() {
+  const showDot   = document.getElementById('cam-dot-toggle')?.checked !== false;
+  const showWindy = document.getElementById('cam-windy-toggle')?.checked !== false;
+  if (!cameraLayer) return;
+  cameraLayer.eachLayer(marker => {
+    const cam = marker._wtCam;
+    if (!cam) return;
+    const isDot   = cam.source === 'dot' || cam.source === 'otc';
+    const isWindy = cam.source === 'windy';
+    const visible = (isDot && showDot) || (isWindy && showWindy);
+    const el = marker.getElement?.();
+    if (el) el.style.display = visible ? '' : 'none';
+    // Also toggle click interactivity
+    if (visible) marker.on('click', marker._wtClickHandler);
+    else         marker.off('click', marker._wtClickHandler);
+  });
 }
 
 const MODELS = {

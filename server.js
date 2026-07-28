@@ -1464,6 +1464,20 @@ const STATE_DOTS = [
     parse: _parseILGateway,
   },
 
+  // ── Ohio DOT (OHGO) ──────────────────────────────────────────────────────
+  // OHGO Public API — publicapi.ohgo.com. Different schema from IBI/Skyline.
+  // Auth: api-key query param. Each camera site has a CameraViews array with
+  // SmallUrl/LargeUrl/Direction. Images update every 5 seconds — genuinely live.
+  {
+    id: 'oh',
+    label: 'Ohio DOT (OHGO)',
+    url: 'https://publicapi.ohgo.com/api/v1/cameras',
+    envKey: 'OH_DOT_KEY',
+    authParam: 'api-key',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseOHGO,
+  },
+
   // ── To add more states ───────────────────────────────────────────────────
   // IBI/Skyline platform (most US state 511 sites):
   //   { id:'xx', label:'State DOT', url:'https://511xx.gov/api/v2/get/cameras?format=json',
@@ -1472,6 +1486,39 @@ const STATE_DOTS = [
   // Other platforms: write a new parse function following the same pattern
   // as _parseILGateway, then use it here.
 ];
+
+// ── Ohio DOT (OHGO) parser ────────────────────────────────────────────────
+// OHGO returns { results: [ { Id, Latitude, Longitude, Location, Description,
+//   CameraViews: [ { Direction, SmallUrl, LargeUrl, MainRoute } ] } ] }
+// One camera site may have multiple views (directions). We emit one camera
+// object per view so each appears as an independent dot on the map.
+function _parseOHGO(raw) {
+  const cameras = [];
+  const results = Array.isArray(raw) ? raw : (raw.results || raw.data || []);
+  results.forEach(site => {
+    const lat = parseFloat(site.Latitude);
+    const lng = parseFloat(site.Longitude);
+    if (!isFinite(lat) || !isFinite(lng)) return;
+    const views = Array.isArray(site.CameraViews) ? site.CameraViews : [];
+    if (views.length === 0) return;
+    views.forEach((view, i) => {
+      const imageUrl = view.LargeUrl || view.SmallUrl;
+      if (!imageUrl) return;
+      cameras.push({
+        id:        `ohgo-${site.Id}-${i}`,
+        name:      site.Location || site.Description || 'Ohio Camera',
+        lat, lng,
+        imageUrl,
+        videoUrl:  null,
+        playerUrl: null,
+        direction: view.Direction || null,
+        source:    'dot',
+        state:     'OH',
+      });
+    });
+  });
+  return cameras;
+}
 
 // Cache for state DOT data: id -> { cameras, ts }
 const _stateDOTCache = new Map();
@@ -1798,12 +1845,8 @@ async function _loadWindy(stateCode) {
       // Diagnostic: log first 200 chars so Railway logs show auth/format issues
       if (page === 0) console.log(`[Cameras] Windy ${stateCode} raw:`, text.slice(0, 200));
       const data = JSON.parse(text);
-      const batch = data.webcams || data.data || []; // V3 returns {webcams:[...]}, V2 also {webcams:[...]}
+      const batch = data.webcams || data.data || []; // V3 returns {data:[...]}, V2 {webcams:[...]}
       if (!batch.length) break; // no more results
-      // Diagnostic: log first webcam object so we can verify V3 field names (webcamId, player shape, etc.)
-      if (page === 0 && batch.length > 0) {
-        console.log(`[Cameras] Windy ${stateCode} first webcam:`, JSON.stringify(batch[0]));
-      }
 
       batch.forEach(w => {
         const lat = w.location?.latitude, lng = w.location?.longitude;
@@ -1816,10 +1859,11 @@ async function _loadWindy(stateCode) {
           lat, lng,
           imageUrl:  w.images?.current?.preview || w.image?.current?.preview || null,
           videoUrl:  null,
-          // V3 player is a flat object of embed URL strings keyed by timespan.
-          // Use player.day directly — it's the correct working embed URL.
-          // Do NOT construct from webcamId alone (bare /player/{id} returns 404).
-          playerUrl: w.player?.day || null,
+          // Always construct from webcamId — API's player.day.embed returns
+          // a broken V2 /we_player/ URL that 404s. The V3 embed URL works reliably.
+          playerUrl: w.webcamId
+                     ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}`
+                     : null,
           windyId:   w.webcamId,
           direction: null,
           source:    'windy',
@@ -1968,6 +2012,133 @@ app.get('/api/aqi', async (req, res) => {
   } catch(e) {
     console.error('[AQI] Proxy error:', e.message);
     res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
+  }
+});
+
+// GET /api/forecast?lat=&lon=  (or ?zip=)
+// Unified forecast proxy — merges Open-Meteo (GFS/HRRR) + NWS narrative text.
+// Open-Meteo: current conditions, 168h hourly, 7-day daily — free, no key.
+// NWS: plain-English forecast narrative for each period — US only, free.
+// Cached 15 minutes server-side. Zip-to-coords via Open-Meteo geocoding.
+const _forecastCache = new Map();
+const FORECAST_TTL = 15 * 60 * 1000;
+
+app.get('/api/forecast', async (req, res) => {
+  let lat = parseFloat(req.query.lat);
+  let lon = parseFloat(req.query.lon);
+  let locationName = req.query.name || null;
+
+  // Zip-to-coords via Open-Meteo geocoding (free, no key)
+  if (req.query.zip) {
+    try {
+      const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`;
+      const geoText = await fetchTextOverHttp(geoUrl);
+      const geo = JSON.parse(geoText);
+      const r = geo.results?.[0];
+      if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
+      lat = r.latitude; lon = r.longitude;
+      locationName = locationName || [r.name, r.admin1].filter(Boolean).join(', ');
+    } catch(e) {
+      return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message });
+    }
+  }
+
+  if (isNaN(lat) || isNaN(lon)) {
+    return res.status(400).json({ error: 'lat/lon or zip required' });
+  }
+
+  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const cached = _forecastCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < FORECAST_TTL) {
+    res.set('Cache-Control', 'public, max-age=900');
+    return res.json(cached.data);
+  }
+
+  try {
+    // ── Open-Meteo GFS/HRRR ─────────────────────────────────────────────────
+    const omUrl = 'https://api.open-meteo.com/v1/gfs'
+      + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+      + '&timezone=auto'
+      + '&temperature_unit=fahrenheit'
+      + '&wind_speed_unit=mph'
+      + '&precipitation_unit=inch'
+      + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,'
+      + 'dew_point_2m,precipitation,weather_code,cloud_cover,'
+      + 'wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
+      + 'surface_pressure,visibility,is_day'
+      + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,'
+      + 'precipitation,weather_code,cloud_cover,wind_speed_10m,'
+      + 'wind_direction_10m,wind_gusts_10m,visibility,'
+      + 'cape,lifted_index,freezing_level_height,'
+      + 'snowfall,snow_depth,uv_index,is_day,relative_humidity_2m,dew_point_2m'
+      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
+      + 'apparent_temperature_max,apparent_temperature_min,'
+      + 'sunrise,sunset,daylight_duration,uv_index,'
+      + 'precipitation_sum,snowfall_sum,precipitation_hours,'
+      + 'precipitation_probability_max,'
+      + 'wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant'
+      + '&forecast_days=7&models=best_match';
+
+    const omText = await fetchTextOverHttp(omUrl);
+    const om = JSON.parse(omText);
+
+    // ── NWS narrative (US only — skip gracefully outside coverage) ──────────
+    let nwsNarrative = null;
+    try {
+      const ptsText = await fetchTextOverHttp(
+        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
+        { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
+      );
+      const pts = JSON.parse(ptsText);
+      const forecastUrl = pts?.properties?.forecast;
+      if (forecastUrl) {
+        const fText = await fetchTextOverHttp(forecastUrl,
+          { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
+        );
+        const f = JSON.parse(fText);
+        // Keep the first 14 periods (7 days × day+night) with name + short + detailed forecast
+        nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
+          name:     p.name,
+          short:    p.shortForecast,
+          detail:   p.detailedForecast,
+          isDaytime: p.isDaytime,
+          temp:     p.temperature,
+          tempUnit: p.temperatureUnit,
+          icon:     p.icon,
+        }));
+      }
+    } catch(e) {
+      // NWS doesn't cover outside CONUS — silent fail, Open-Meteo data still returned
+      console.log(`[Forecast] NWS unavailable for ${lat.toFixed(3)},${lon.toFixed(3)}: ${e.message}`);
+    }
+
+    const data = {
+      location: { lat, lon, name: locationName },
+      timezone: om.timezone,
+      timezone_abbreviation: om.timezone_abbreviation,
+      utc_offset_seconds: om.utc_offset_seconds,
+      current: om.current,
+      current_units: om.current_units,
+      hourly: om.hourly,
+      hourly_units: om.hourly_units,
+      daily: om.daily,
+      daily_units: om.daily_units,
+      nws: nwsNarrative,
+      generated_at: Date.now(),
+    };
+
+    _forecastCache.set(cacheKey, { data, ts: Date.now() });
+    // Evict oldest if cache grows too large (one entry per location)
+    if (_forecastCache.size > 30) {
+      const oldest = [..._forecastCache.entries()].sort((a,b) => a[1].ts - b[1].ts)[0];
+      if (oldest) _forecastCache.delete(oldest[0]);
+    }
+
+    res.set('Cache-Control', 'public, max-age=900');
+    res.json(data);
+  } catch(e) {
+    console.error('[Forecast] Error:', e.message);
+    res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
   }
 });
 

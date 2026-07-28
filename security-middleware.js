@@ -125,7 +125,7 @@ function securityHeaders(req, res, next) {
       // IEM storm attributes GeoJSON
       " https://mesonet.agron.iastate.edu" +
       // Travel forecast city data (domestic + international travel displays)
-      " https://api.open-meteo.com" +
+      " https://api.open-meteo.com https://geocoding-api.open-meteo.com" +
       // NWS — forecasts, conditions, alerts, points, radar station lookup
       " https://api.weather.gov" +
       " https://forecast.weather.gov" +
