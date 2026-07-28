@@ -1518,17 +1518,22 @@ map.on('movestart zoomstart', () => {
   preloadGen++; // cancel any in-flight preload chain
   frameLayers.forEach((l, i) => { if (i !== currentFrame && map.hasLayer(l)) map.removeLayer(l); });
   forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame && map.hasLayer(f.layer)) map.removeLayer(f.layer); });
+  // Detach inactive GOES frames too
+  if (goesBuilt) goesFrames.forEach((f, i) => { if (i !== goesFrameIdx && map.hasLayer(f.layer)) map.removeLayer(f.layer); });
 });
 
 // After the view settles, ensure the active layer is attached, then
 // re-preload the rest for the new viewport.
 map.on('moveend zoomend', () => {
-  if (radarMode === 'past') {
+  if (activePaint === 'goes') {
+    goesEnsureAttached(goesFrames[goesFrameIdx]?.layer);
+    setTimeout(goesPreloadAll, 500);
+  } else if (radarMode === 'past') {
     ensureAttached(frameLayers[currentFrame]);
   } else {
     ensureAttached(forecastFrames[currentForecastFrame].layer);
   }
-  setTimeout(preloadAllFrames, 500);
+  if (activePaint !== 'goes') setTimeout(preloadAllFrames, 500);
 });
 
 setTimeout(preloadAllFrames, 1500);
@@ -1558,6 +1563,7 @@ function updateFrameLabel() {
 }
 
 function stepFrame(dir) {
+  if (activePaint === 'goes') { goesStepFrame(dir); return; }
   let next = currentFrame + dir;
   if (next < 0) next = FRAMES.length - 1;
   if (next >= FRAMES.length) next = 0;
@@ -1565,6 +1571,7 @@ function stepFrame(dir) {
 }
 
 function togglePlay() {
+  if (activePaint === 'goes') { goesTogglePlay(); return; }
   isPlaying = !isPlaying;
   const btn = document.getElementById('btn-play');
   if (isPlaying) {
@@ -1657,6 +1664,7 @@ function updateForecastLabel() {
 // Override stepFrame and togglePlay for forecast mode
 const _origStepFrame = stepFrame;
 window.stepFrame = function(dir) {
+  if (activePaint === 'goes') { goesStepFrame(dir); return; }
   if (radarMode === 'past') {
     _origStepFrame(dir);
   } else {
@@ -2081,7 +2089,7 @@ async function renderAlertLayers() {
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
       // of polygon geometry (catches county-boundary edge cases).
-      const ugc = props.geocode?.UGC || [];
+      const ugc = s.properties?.geocode?.UGC || [];
       const inZone = (userZone   && ugc.includes(userZone))
                   || (userCounty && ugc.includes(userCounty));
       if (inPoly || inZone) {
@@ -2108,14 +2116,11 @@ async function renderAlertLayers() {
   // Sort so the most severe alert is checked/shown first in overlap popups
   activeAlertFeatures.sort((a, b) => alertPriorityRank(a.event) - alertPriorityRank(b.event));
 
-  // Show or hide banner based on whether user is in a zone.
-  // showBanner() only gates on the layer-panel toggle (bannerDismissed),
-  // so a new location search always re-shows the ticker for active alerts
-  // even if the user previously hit X on the old location's ticker.
+  // Show or hide banner based on whether user is in a zone
   if (activeBannerAlerts.length > 0 && !bannerDismissed) {
     showBanner(activeBannerAlerts);
   } else if (activeBannerAlerts.length === 0) {
-    bannerDismissed = false; // reset layer-panel suppress when area is clear
+    bannerDismissed = false; // reset dismiss if alerts cleared
     hideBanner();
   }
 
@@ -2204,18 +2209,12 @@ let bannerDismissed = false;
 let activeBannerAlerts = [];
 
 function dismissBanner() {
-  // X button hides the ticker for the current alert set only — it does NOT
-  // permanently suppress the banner. A new location search or a new alert
-  // arriving will re-show it. To permanently hide the ticker use the
-  // layer panel "Warning Banner" toggle (which sets bannerDismissed).
+  bannerDismissed = true;
   document.getElementById('warning-banner').style.display = 'none';
   document.getElementById('map').classList.remove('banner-visible');
-  map.invalidateSize();
 }
 
 function showBanner(alerts) {
-  // bannerDismissed is set only by the layer panel "Warning Banner" toggle —
-  // the X button no longer sets it, so the ticker re-appears on new searches.
   if (bannerDismissed || !alerts.length) return;
   const banner = document.getElementById('warning-banner');
   const scrollText = document.getElementById('warning-scroll-text');
@@ -2315,17 +2314,218 @@ function pointInPolygon(lat, lng, geometry) {
 
 const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 
-let goesLayer = null;
-function ensureGoes() {
-  if (!goesLayer) {
-    goesLayer = L.tileLayer.wms(
+// ── GOES SATELLITE ANIMATION ─────────────────────────────────────────────────
+// 9 frames at 10-min intervals, ~80 minutes of history.
+// Same opacity-swap technique as NEXRAD: all WMS layers exist simultaneously,
+// only the active frame is visible. Tiles stay cached across frame switches
+// so animation is smooth with no flash.
+//
+// IEM WMS TIME format: 2026-07-28T18:00:00Z
+// Layer: conus_ch13 (IR clean window — best for day+night cloud detail)
+
+const GOES_FRAME_COUNT  = 9;    // frames (10-min steps = 80 min history)
+const GOES_INTERVAL_MS  = 10 * 60 * 1000; // 10 min between frames
+const GOES_SPEED_MS     = 150;  // ms per frame during playback
+const GOES_HOLD_MS      = 1500; // hold on latest frame before looping
+const GOES_BASE_OPACITY = 0.85;
+
+let goesFrames      = [];  // [{ time: Date, label: string, layer: L.TileLayer.WMS }]
+let goesFrameIdx    = 0;
+let goesPlaying     = false;
+let goesPlayTimer   = null;
+let goesRefreshTimer = null;
+let goesPreloadGen  = 0;
+let goesBuilt       = false;
+
+// Build a UTC time string rounded down to the nearest 10-min boundary
+function goesSnap(date) {
+  const d = new Date(date);
+  d.setUTCSeconds(0, 0);
+  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10);
+  return d;
+}
+
+function goesTimeStr(date) {
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function goesLabel(date) {
+  // Local time, same style as radar frame labels
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function buildGoesFrames() {
+  // Destroy previous layers
+  goesFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
+  goesFrames = [];
+
+  const latest = goesSnap(new Date());
+  for (let i = GOES_FRAME_COUNT - 1; i >= 0; i--) {
+    const t = new Date(latest.getTime() - i * GOES_INTERVAL_MS);
+    const layer = L.tileLayer.wms(
       'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
-      { layers:'conus_ch13', format:'image/png', transparent:true,
-        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
-    // Refresh GOES every 10 minutes so imagery doesn't feel frozen
-    setInterval(() => { if (goesLayer && map.hasLayer(goesLayer)) goesLayer.redraw(); }, 10 * 60 * 1000);
+      {
+        layers: 'conus_ch13',
+        format: 'image/png',
+        transparent: true,
+        opacity: 0,
+        zIndex: 90 + i,
+        attribution: i === 0 ? 'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' : '',
+        TIME: goesTimeStr(t),
+        tileSize: 256,
+        keepBuffer: 1,
+        updateWhenIdle: true,
+        updateWhenZooming: false,
+      }
+    );
+    goesFrames.push({ time: t, label: goesLabel(t), layer });
   }
-  return goesLayer;
+  goesFrameIdx = goesFrames.length - 1; // start on latest
+  goesBuilt = true;
+}
+
+function ensureGoes() {
+  if (!goesBuilt) buildGoesFrames();
+}
+
+// Attach only the active GOES frame; detach others (mirrors radar pattern)
+function goesEnsureAttached(layer) {
+  if (!map.hasLayer(layer)) layer.addTo(map);
+}
+
+let goesPreloadChain = 0;
+function goesPreloadAll() {
+  const myGen = ++goesPreloadChain;
+  const current = goesFrames[goesFrameIdx];
+  const queue = goesFrames.filter(f => f !== current);
+  let idx = 0;
+  function next() {
+    if (myGen !== goesPreloadChain) return;
+    if (idx >= queue.length) return;
+    const f = queue[idx];
+    if (map.hasLayer(f.layer)) { idx++; return next(); }
+    let done = false;
+    const finish = () => {
+      if (done) return; done = true;
+      f.layer.off('load', finish);
+      idx++;
+      setTimeout(next, 100);
+    };
+    f.layer.setOpacity(0);
+    f.layer.on('load', finish);
+    f.layer.addTo(map);
+    setTimeout(finish, 3000);
+  }
+  next();
+}
+
+function goesShowFrame(idx) {
+  // Hide all, show target
+  goesFrames.forEach((f, i) => {
+    if (i === idx) {
+      goesEnsureAttached(f.layer);
+      f.layer.setOpacity(GOES_BASE_OPACITY);
+    } else {
+      f.layer.setOpacity(0);
+    }
+  });
+  goesFrameIdx = idx;
+  goesUpdateLabel();
+}
+
+function goesUpdateLabel() {
+  const f = goesFrames[goesFrameIdx];
+  if (!f) return;
+  const isLatest = goesFrameIdx === goesFrames.length - 1;
+  document.getElementById('anim-progress').textContent = f.label + (isLatest ? ' ●' : '');
+}
+
+function goesStepFrame(dir) {
+  let next = goesFrameIdx + dir;
+  if (next < 0) next = goesFrames.length - 1;
+  if (next >= goesFrames.length) next = 0;
+  goesShowFrame(next);
+}
+
+function goesTogglePlay() {
+  goesPlaying = !goesPlaying;
+  const btn = document.getElementById('btn-play');
+  if (goesPlaying) {
+    btn.textContent = '⏸ Pause';
+    btn.classList.add('on');
+    function advance() {
+      let next = goesFrameIdx + 1;
+      if (next >= goesFrames.length) {
+        // Hold on latest frame, then loop
+        goesShowFrame(goesFrames.length - 1);
+        goesPlayTimer = setTimeout(() => {
+          if (goesPlaying) { goesShowFrame(0); goesPlayTimer = setTimeout(advance, GOES_SPEED_MS); }
+        }, GOES_HOLD_MS);
+        return;
+      }
+      goesShowFrame(next);
+      goesPlayTimer = setTimeout(advance, GOES_SPEED_MS);
+    }
+    advance();
+  } else {
+    btn.textContent = '▶ Play';
+    btn.classList.remove('on');
+    clearTimeout(goesPlayTimer);
+  }
+}
+
+// Rebuild frames every 10 min so the loop stays current without a page reload
+function goesScheduleRefresh() {
+  clearTimeout(goesRefreshTimer);
+  const msToNextTen = GOES_INTERVAL_MS - (Date.now() % GOES_INTERVAL_MS);
+  goesRefreshTimer = setTimeout(() => {
+    if (activePaint === 'goes') {
+      const wasPlaying = goesPlaying;
+      goesStopAll();
+      buildGoesFrames();
+      goesActivate();
+      if (wasPlaying) goesTogglePlay();
+    } else {
+      // Rebuild silently so frames are fresh next time GOES is activated
+      buildGoesFrames();
+    }
+    goesScheduleRefresh();
+  }, msToNextTen + 90000); // wait 90s past the boundary for IEM to ingest
+}
+
+function goesStopAll() {
+  goesPlaying = false;
+  clearTimeout(goesPlayTimer);
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-play').classList.remove('on');
+  goesFrames.forEach(f => { f.layer.setOpacity(0); if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
+}
+
+function goesActivate() {
+  ensureGoes();
+  goesFrameIdx = goesFrames.length - 1;
+  goesShowFrame(goesFrameIdx);
+  setTimeout(goesPreloadAll, 400);
+  goesScheduleRefresh();
+  // Show mode-bar controls that make sense for satellite (step only)
+  // Hide Past/Future mode selector — doesn't apply to GOES
+  const modeBar = document.getElementById('mode-bar');
+  const modeDivider = modeBar?.nextElementSibling;
+  if (modeBar) modeBar.style.display = 'none';
+  if (modeDivider && modeDivider.classList.contains('tb-div')) modeDivider.style.display = 'none';
+}
+
+function goesDeactivate() {
+  goesStopAll();
+  clearTimeout(goesRefreshTimer);
+  // Restore mode bar for radar
+  const modeBar = document.getElementById('mode-bar');
+  const modeDivider = modeBar?.nextElementSibling;
+  if (modeBar) modeBar.style.display = '';
+  if (modeDivider && modeDivider.classList.contains('tb-div')) modeDivider.style.display = '';
+  // Restore radar frame label
+  if (radarMode === 'past') updateFrameLabel();
+  else updateForecastLabel();
 }
 
 // ── CANADIAN RADAR (MSC GeoMet composite — no site selector needed) ───────────
@@ -3389,7 +3589,7 @@ function clearAllPaint(){
   frameLayers.forEach(l => l.setOpacity(0));
   forecastFrames.forEach(f => f.layer.setOpacity(0));
   radarVisible = false;
-  if (goesLayer && map.hasLayer(goesLayer)) map.removeLayer(goesLayer);
+  if (goesBuilt) goesDeactivate();
   // NOTE: clearCC() and clearCanada() intentionally removed from here.
   // CC and Canadian Radar are toggleable overlays (applyOverlay), not
   // mutually-exclusive paints — switching base reflectivity/GOES/apptemp
@@ -3480,7 +3680,7 @@ function setPaint(member){
         forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
       }
       break;
-    case 'goes':    ensureGoes().addTo(map); break;
+    case 'goes':    goesActivate(); break;
     case 'apptemp': showAppTemp(); break;
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
   }
@@ -4270,8 +4470,8 @@ function setRadarOpacity(val) {
     } else {
       forecastFrames[currentForecastFrame].layer.setOpacity(opacity);
     }
-  } else if (activePaint === 'goes' && goesLayer) {
-    goesLayer.setOpacity(opacity);
+  } else if (activePaint === 'goes' && goesFrames.length) {
+    goesFrames[goesFrameIdx]?.layer.setOpacity(opacity);
   } else if (activePaint === 'apptemp' && appTempLayer) {
     appTempLayer.setOpacity(opacity);
   }
@@ -5675,62 +5875,44 @@ async function searchLocation(e) {
   if (!q) return;
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
-    // Route through our server proxy (/api/geocode → Open-Meteo geocoding).
-    // Calling Nominatim directly from the browser requires a valid contact
-    // User-Agent per their ToS — browsers don't send one and get silently
-    // empty results. Open-Meteo geocoding has no such requirement.
-    const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
-    const geo = await res.json();
-    if (!res.ok || !geo.lat) {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=json&limit=1`,
+      { headers:{'Accept-Language':'en'} }
+    );
+    const data = await res.json();
+    if (data && data.length > 0) {
+      userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
+      const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
+      // Re-evaluate banner for new search location
+      if (lastAlertsData) renderAlertLayers();
+
+      // Remove previous search marker
+      if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+
+      // Add pin marker
+      searchMarker = L.marker([userLat, userLng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="
+            width:14px; height:14px; border-radius:50%;
+            background:#f4a261; border:2px solid #fff;
+            box-shadow:0 0 8px rgba(244,162,97,0.8);
+            margin-top:-7px; margin-left:-7px;
+          "></div>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+        })
+      }).addTo(map);
+      searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
+
+      // Zoom to zoom level 10 for city/zip — tight enough to see local area
+      map.setView([userLat, userLng], 10);
+      document.getElementById('alerts-status').textContent = placeName;
+      document.getElementById('zip-input').value = '';
+      updateViewButtons('local');
+    } else {
       document.getElementById('alerts-status').textContent = 'Not found';
-      return;
     }
-
-    userLat = geo.lat; userLng = geo.lon;
-    const placeName = geo.name;
-
-    // Smooth pan + zoom to searched location
-    map.flyTo([userLat, userLng], 8, { duration: 1.2 });
-
-    // Remove previous search marker
-    if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
-
-    // Add pin marker
-    searchMarker = L.marker([userLat, userLng], {
-      icon: L.divIcon({
-        className: '',
-        html: `<div style="
-          width:14px; height:14px; border-radius:50%;
-          background:#f4a261; border:2px solid #fff;
-          box-shadow:0 0 8px rgba(244,162,97,0.8);
-          margin-top:-7px; margin-left:-7px;
-        "></div>`,
-        iconSize: [14, 14],
-        iconAnchor: [7, 7],
-      })
-    }).addTo(map);
-    searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
-
-    document.getElementById('alerts-status').textContent = placeName;
-    document.getElementById('zip-input').value = '';
-    updateViewButtons('local');
-
-    // Reset zone codes and banner state for the new location so we don't
-    // carry over stale zone data or a previously-dismissed banner.
-    userZone = null;
-    userCounty = null;
-    bannerDismissed = false;
-
-    // Fetch NWS zone for the new location first, THEN re-evaluate alerts.
-    // This ensures zone-based matching (e.g. Severe Thunderstorm Watch) works
-    // correctly — without this, renderAlertLayers runs with the old zone codes.
-    await fetchUserZone(userLat, userLng);
-
-    // fetchUserZone already calls renderAlertLayers if lastAlertsData exists.
-    // Call it unconditionally here as a safety net in case the zone lookup
-    // failed silently — we still want the polygon-containment check to run.
-    if (lastAlertsData) renderAlertLayers();
-
   } catch {
     document.getElementById('alerts-status').textContent = 'Search unavailable';
   }
