@@ -4889,49 +4889,79 @@ function wmoSVG(code, isDay, size) {
     ).join('');
   }
 
-  // ── Composition ───────────────────────────────────────────────────────────
+  // ── Composition — WMO 4677 codes Open-Meteo actually returns ─────────────
   let body = '';
 
   if (code === 0) {
-    // Clear
+    // Clear sky
     body = isDay ? sunShape(cx, cy, 9) : moonShape(cx, cy, 10);
-  } else if (code <= 2) {
-    // Partly cloudy — small sun/moon top-left, cloud bottom-right
+
+  } else if (code === 1) {
+    // Mainly clear — sun with tiny cloud hint, or moon with slight cloud
     if (isDay) {
-      body = sunShape(14, 14, 7) + cloudShape(24, 26, 22, '#94a3b8');
+      body = sunShape(cx, cy, 9) + cloudShape(28, 30, 14, 'rgba(148,163,184,0.5)');
     } else {
-      body = moonShape(13, 13, 7) + cloudShape(24, 26, 22, '#64748b');
+      body = moonShape(cx, cy, 10) + cloudShape(28, 30, 14, 'rgba(100,116,139,0.5)');
     }
+
+  } else if (code === 2) {
+    // Partly cloudy — sun upper-left, cloud lower-right overlapping
+    if (isDay) {
+      body = sunShape(13, 14, 7) + cloudShape(23, 25, 22, '#94a3b8');
+    } else {
+      body = moonShape(12, 13, 7) + cloudShape(23, 25, 22, '#64748b');
+    }
+
   } else if (code === 3) {
-    // Overcast
+    // Overcast — full cloud, slightly darker
     body = cloudShape(cx, cy, 30, '#6b7280');
-  } else if (code <= 49) {
-    // Fog / mist / haze
+
+  } else if (code === 45 || code === 48) {
+    // Fog / rime fog
     body = fogLines(13);
-  } else if (code <= 55) {
-    // Drizzle
-    body = cloudShape(cx, 16, 28) + rainDrops(cx, 28, 2);
-  } else if (code <= 65) {
-    // Rain
-    body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 3);
-  } else if (code <= 67) {
-    // Freezing rain
-    body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 2, '#93c5fd') + snowDots(cx+3, 30, 1);
-  } else if (code <= 77) {
-    // Snow
-    body = cloudShape(cx, 15, 28) + snowDots(cx, 29, 3);
-  } else if (code <= 82) {
-    // Rain showers
-    if (isDay) body = sunShape(12, 12, 6);
-    body += cloudShape(24, 23, 22) + rainDrops(21, 32, 3);
-  } else if (code <= 86) {
-    // Snow showers
-    body = cloudShape(cx, 15, 28) + snowDots(cx, 29, 3);
-  } else if (code <= 99) {
-    // Thunderstorm
-    body = cloudShape(cx, 13, 28, '#4b5563') + rainDrops(cx-4, 27, 2) + boltShape(cx+5, 28);
-  } else {
+
+  } else if (code >= 51 && code <= 55) {
+    // Drizzle (light→dense)
     body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 2);
+
+  } else if (code === 56 || code === 57) {
+    // Freezing drizzle
+    body = cloudShape(cx, 15, 28) + rainDrops(cx, 28, 2, '#93c5fd');
+
+  } else if (code >= 61 && code <= 65) {
+    // Rain (slight→heavy)
+    const n = code <= 61 ? 2 : code <= 63 ? 3 : 4;
+    body = cloudShape(cx, 14, 28) + rainDrops(cx, 27, n);
+
+  } else if (code === 66 || code === 67) {
+    // Freezing rain
+    body = cloudShape(cx, 14, 28) + rainDrops(cx, 27, 2, '#93c5fd') + snowDots(cx+2, 31, 1);
+
+  } else if (code >= 71 && code <= 77) {
+    // Snow (slight→heavy + snow grains)
+    body = cloudShape(cx, 14, 28, '#94a3b8') + snowDots(cx, 29, 3);
+
+  } else if (code >= 80 && code <= 82) {
+    // Rain showers — sun peek + cloud + rain
+    if (isDay) body = sunShape(11, 12, 6);
+    body += cloudShape(24, 23, 22) + rainDrops(21, 32, 3);
+
+  } else if (code === 85 || code === 86) {
+    // Snow showers
+    if (isDay) body = sunShape(11, 12, 6);
+    body += cloudShape(24, 22, 22, '#94a3b8') + snowDots(21, 32, 2);
+
+  } else if (code === 95) {
+    // Thunderstorm (no hail)
+    body = cloudShape(cx, 12, 30, '#4b5563') + rainDrops(cx-5, 26, 2) + boltShape(cx+4, 26);
+
+  } else if (code === 96 || code === 99) {
+    // Thunderstorm with hail — extra bold bolt
+    body = cloudShape(cx, 12, 30, '#374151') + rainDrops(cx-6, 26, 2) + boltShape(cx+4, 25);
+
+  } else {
+    // Fallback — generic cloud
+    body = cloudShape(cx, cy, 28);
   }
 
   const sz = size || 40;
@@ -4939,17 +4969,21 @@ function wmoSVG(code, isDay, size) {
 }
 
 function wmoLabel(code) {
-  if (code === 0)  return 'Clear';
-  if (code <= 2)   return 'Partly Cloudy';
-  if (code === 3)  return 'Overcast';
-  if (code <= 49)  return 'Fog';
-  if (code <= 55)  return 'Drizzle';
-  if (code <= 65)  return 'Rain';
-  if (code <= 77)  return 'Snow';
-  if (code <= 82)  return 'Showers';
-  if (code <= 84)  return 'Snow Showers';
-  if (code <= 94)  return 'Thunderstorm';
-  return 'Severe T-Storm';
+  if (code === 0)              return 'Clear';
+  if (code === 1)              return 'Mainly Clear';
+  if (code === 2)              return 'Partly Cloudy';
+  if (code === 3)              return 'Overcast';
+  if (code === 45 || code === 48) return 'Foggy';
+  if (code >= 51 && code <= 55) return 'Drizzle';
+  if (code === 56 || code === 57) return 'Freezing Drizzle';
+  if (code >= 61 && code <= 65) return code <= 61 ? 'Light Rain' : code <= 63 ? 'Rain' : 'Heavy Rain';
+  if (code === 66 || code === 67) return 'Freezing Rain';
+  if (code >= 71 && code <= 77) return code <= 71 ? 'Light Snow' : code <= 73 ? 'Snow' : 'Heavy Snow';
+  if (code >= 80 && code <= 82) return code === 80 ? 'Light Showers' : code === 81 ? 'Showers' : 'Heavy Showers';
+  if (code === 85 || code === 86) return 'Snow Showers';
+  if (code === 95)             return 'Thunderstorm';
+  if (code === 96 || code === 99) return 'Severe T-Storm';
+  return 'Cloudy';
 }
 
 function tempColor(f) {
