@@ -4781,19 +4781,25 @@ async function loadForecast(coords) {
     params = `lat=${coords.lat.toFixed(4)}&lon=${coords.lon.toFixed(4)}`;
   } else {
     const val = zipInput?.value?.trim();
-    if (!val) return;
+    if (!val) { console.log('[Forecast] no zip value, returning early'); return; }
     _forecastAutoLoaded = false;
     params = `zip=${encodeURIComponent(val)}`;
   }
+  console.log('[Forecast] loadForecast firing, params:', params);
   ['fp-placeholder','fp-current','fp-hourly-wrap','fp-daily-wrap','fp-storm-wrap','fp-nws-wrap','fp-error']
     .forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
-  document.getElementById('fp-loading').style.display = 'block';
+  const loadingEl = document.getElementById('fp-loading');
+  if (loadingEl) loadingEl.style.display = 'block';
   try {
+    console.log('[Forecast] fetching /api/forecast?'+params);
     const resp = await fetch(`/api/forecast?${params}`);
+    console.log('[Forecast] response status:', resp.status);
     if (!resp.ok) { const e = await resp.json().catch(()=>{}); throw new Error(e?.error || `HTTP ${resp.status}`); }
     const data = await resp.json();
+    console.log('[Forecast] data received, keys:', Object.keys(data).join(', '));
+    console.log('[Forecast] current.temperature_2m:', data.current?.temperature_2m);
     _forecastData = data;
-    document.getElementById('fp-loading').style.display = 'none';
+    if (loadingEl) loadingEl.style.display = 'none';
     try {
       renderForecast(data);
     } catch(renderErr) {
@@ -4802,7 +4808,8 @@ async function loadForecast(coords) {
       if (errEl) { errEl.textContent = 'Display error: ' + renderErr.message; errEl.style.display = 'block'; }
     }
   } catch(e) {
-    document.getElementById('fp-loading').style.display = 'none';
+    console.error('[Forecast] fetch failed:', e);
+    if (loadingEl) loadingEl.style.display = 'none';
     const errEl = document.getElementById('fp-error');
     if (errEl) { errEl.textContent = `Could not load forecast: ${e.message}`; errEl.style.display = 'block'; }
   }
