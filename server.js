@@ -3173,7 +3173,11 @@ if (process.env.STARTUP_LIVE_CHECK === 'true') {
 // Requires a public URL (Railway) — not available on localhost
 // ════════════════════════════════════════════
 const WEBSUB_HUB = 'https://pubsubhubbub.appspot.com/subscribe';
-const WEBSUB_LEASE = 9 * 24 * 60 * 60; // 9 days in seconds (max is 10)
+// YouTube's hub honors up to ~10 days but we request 14 days so we can
+// schedule renewal at ~12 days, giving a 2-day safety window.
+// In practice the hub grants its own lease duration regardless of what we
+// request — we read back the actual value from the stored expiry on boot.
+const WEBSUB_LEASE = 14 * 24 * 60 * 60; // 14 days in seconds
 const rawBodyParser = express.raw({ type: 'application/atom+xml', limit: '1mb' });
 
 // Subscribe a single channel to WebSub
@@ -3214,8 +3218,11 @@ async function websubSubscribe(channelId) {
         status,
         statusCode: res.statusCode,
       };
-      // Persist expiry so restarts don't re-subscribe still-valid channels
-      if (status === 'active') rSet('wt:ws:' + channelId, String(expiresAt));
+      // Persist expiry so restarts don't re-subscribe still-valid channels.
+      // Store as a raw number (no TTL — must outlive the lease itself).
+      if (status === 'active') {
+        if (redis) await redis.set('wt:ws:' + channelId, String(expiresAt));
+      }
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
         const ch = getAllChannels().find(c => c.id === channelId);
@@ -3272,7 +3279,46 @@ async function websubSubscribe(channelId) {
   scheduleNextRecentFetch();
 })();
 
-// Subscribe all hasLive channels on startup (only when APP_URL is set)
+// ── WebSub scheduled renewal ────────────────────────────────────────────────
+// We only want to hit the hub when leases are actually expiring — not on
+// every deploy.  scheduleWebSubRenewal() reads the earliest expiry from Redis
+// and sets a one-shot timer to call subscribeAllChannels() 48 h before that
+// expiry.  It is called once at boot (after subscribeAllChannels) and again
+// after each renewal round so the next window is always scheduled.
+let _websubRenewalTimer = null;
+async function scheduleWebSubRenewal() {
+  if (!process.env.APP_URL || !redis) return;
+  try {
+    const channels = getLiveChannels();
+    let earliestExpiry = Infinity;
+    for (const ch of channels) {
+      const raw = await redis.get('wt:ws:' + ch.id);
+      if (raw) {
+        const exp = parseInt(raw, 10);
+        if (!isNaN(exp) && exp < earliestExpiry) earliestExpiry = exp;
+      }
+    }
+    if (earliestExpiry === Infinity) return; // nothing stored yet
+    // Fire 48 h before the earliest expiry
+    const renewAt = earliestExpiry - 48 * 60 * 60 * 1000;
+    const delay   = Math.max(renewAt - Date.now(), 60 * 1000); // at least 1 min from now
+    const daysAway = Math.round(delay / 86400000 * 10) / 10;
+    if (_websubRenewalTimer) clearTimeout(_websubRenewalTimer);
+    _websubRenewalTimer = setTimeout(async () => {
+      console.log('[WebSub] Scheduled renewal firing — refreshing expiring subscriptions...');
+      await subscribeAllChannels();
+      await scheduleWebSubRenewal(); // reschedule for the next window
+    }, delay);
+    console.log(`[WebSub] Next renewal scheduled in ${daysAway} days`);
+  } catch(e) {
+    console.error('[WebSub] scheduleWebSubRenewal error:', e.message);
+  }
+}
+
+// Subscribe all hasLive channels on startup (only when APP_URL is set).
+// On every call it checks Redis first — channels with a valid stored expiry
+// (> 48 h remaining) are skipped entirely, so a deploy seconds after the
+// previous one completes in milliseconds with zero hub traffic.
 async function subscribeAllChannels() {
   if (!process.env.APP_URL) {
     console.log('[WebSub] APP_URL not set — WebSub disabled (expected on localhost)');
@@ -3280,21 +3326,22 @@ async function subscribeAllChannels() {
   }
 
   const channels = getLiveChannels();
-  const RENEW_WINDOW = 24 * 60 * 60 * 1000; // re-subscribe if expiring within 24h
+  // Re-subscribe only if expiring within 48 h — same window used by the scheduler
+  const RENEW_WINDOW = 48 * 60 * 60 * 1000;
   const now = Date.now();
 
   // Check Redis for existing valid subscriptions — skip channels that don't
-  // need re-subscribing. This makes restarts after recent deploys near-instant
-  // instead of blocking for 60+ seconds re-subscribing every channel.
+  // need re-subscribing. Expiry timestamps are stored as plain integer strings
+  // (e.g. "1753654321000") so we use redis.get() directly and parseInt().
   const toSubscribe = [];
   let skipped = 0;
   for (const ch of channels) {
     try {
-      const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
-      if (stored) {
-        const expiresAt = parseInt(stored, 10);
+      const raw = redis ? await redis.get('wt:ws:' + ch.id) : null;
+      if (raw) {
+        const expiresAt = parseInt(raw, 10);
         if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
-          // Still valid for >24h — mark as active without hitting the hub
+          // Still valid for >48 h — mark as active without hitting the hub
           websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
           skipped++;
           continue;
@@ -3458,21 +3505,28 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   }
 });
 
-// Re-subscribe all channels every 8 days (before 9-day lease expires)
-setInterval(() => {
-  if (process.env.APP_URL) {
-    console.log('[WebSub] Renewing subscriptions...');
-    subscribeAllChannels();
-  }
-}, 8 * 24 * 60 * 60 * 1000);
+// Renewal is handled by scheduleWebSubRenewal() which fires a one-shot timer
+// 48 h before the earliest expiry — no blind setInterval needed.
 
-// Admin endpoint to manually trigger re-subscription
+// Admin endpoint to manually trigger re-subscription for all channels.
+// Pass ?force=1 to bypass the 48-h expiry window and re-subscribe everything
+// (useful when you've added new channels or want a clean slate).
 app.post('/api/admin/websub/subscribe', async (req, res) => {
   if (!process.env.APP_URL) {
     return res.status(400).json({ error: 'APP_URL not configured — WebSub requires a public URL' });
   }
+  const force = req.query.force === '1' || req.body?.force === true;
+  if (force && redis) {
+    // Wipe stored expiries so subscribeAllChannels treats all as needing renewal
+    const channels = getLiveChannels();
+    for (const ch of channels) {
+      try { await redis.del('wt:ws:' + ch.id); } catch(_) {}
+    }
+    console.log('[WebSub] Admin forced full resubscription — cleared ' + channels.length + ' stored expiries');
+  }
   await subscribeAllChannels();
-  res.json({ ok: true, message: 'WebSub subscriptions renewed for all channels' });
+  await scheduleWebSubRenewal(); // reschedule timer based on new expiries
+  res.json({ ok: true, message: force ? 'Force-resubscribed all channels' : 'WebSub subscriptions renewed for all channels' });
 });
 
 // Admin endpoint to resubscribe a single channel — for fixing one FAILED row
@@ -3492,8 +3546,12 @@ app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
   }
 });
 
-// Start WebSub subscriptions after boot (10s delay)
-setTimeout(subscribeAllChannels, 10000);
+// Start WebSub subscriptions after boot (10s delay), then schedule renewal
+// so the next hub call fires automatically ~48 h before leases expire.
+setTimeout(async () => {
+  await subscribeAllChannels();
+  await scheduleWebSubRenewal();
+}, 10000);
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER
@@ -3972,7 +4030,7 @@ app.get('/api/admin/websub-health', (req, res) => {
       subscribedAt: lease ? lease.subscribedAt : null,
       expiresAt: lease ? lease.expiresAt : null,
       hoursUntilExpiry: hoursUntilExpiry !== null ? Math.round(hoursUntilExpiry * 10) / 10 : null,
-      expiringSoon: hoursUntilExpiry !== null && hoursUntilExpiry < 24,
+      expiringSoon: hoursUntilExpiry !== null && hoursUntilExpiry < 48,
       expired: hoursUntilExpiry !== null && hoursUntilExpiry < 0,
     };
   });

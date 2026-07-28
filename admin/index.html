@@ -579,7 +579,10 @@
   <div class="section">
     <div class="section-header">
       <div class="section-title">📡 Notification Subscriptions</div>
-      <button class="btn btn-ghost btn-sm" onclick="renewWebSub()">Renew All</button>
+      <div style="display:flex;gap:0.5rem;">
+        <button class="btn btn-ghost btn-sm" onclick="renewWebSub()">Renew Expiring</button>
+        <button class="btn btn-ghost btn-sm" onclick="forceResubAll()" title="Wipe all stored expiries and resubscribe every channel — use when adding new channels or after a Redis flush">Force Resub All</button>
+      </div>
     </div>
     <div class="section-body">
       <div id="websub-summary" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
@@ -1661,6 +1664,19 @@ async function triggerRecentFetch() {
   }
 }
 
+async function forceResubAll() {
+  if (!confirm('Force-resubscribe ALL ' + document.getElementById('websub-summary').textContent.match(/\d+/)?.[0] + ' channels? This hits the hub for every channel regardless of expiry — only use when adding new channels or after a Redis flush.')) return;
+  showToast('Force resubscription started — this will take a few minutes…');
+  try {
+    const res = await fetch('/api/admin/websub/subscribe?force=1', { method:'POST' });
+    const data = await res.json();
+    showToast(data.ok ? '✓ Force resubscription complete' : '⚠ ' + (data.error || 'Unknown error'));
+    await loadWebSubHealth();
+  } catch(e) {
+    showToast('⚠ Force resub request failed');
+  }
+}
+
 async function renewWebSub() {
   const res = await fetch('/api/admin/websub/subscribe', { method:'POST' });
   const data = await res.json();
@@ -1910,12 +1926,18 @@ async function loadWebSubHealth() {
     const res = await fetch('/api/admin/websub-health');
     const data = await res.json();
     const summary = document.getElementById('websub-summary');
+    // Find earliest expiry to show next scheduled renewal
+    const validExpiries = data.leases.filter(l => l.expiresAt).map(l => l.expiresAt);
+    const earliestExpiry = validExpiries.length ? Math.min(...validExpiries) : null;
+    const renewalNote = earliestExpiry
+      ? ' · Next auto-renewal: <strong>' + fmtTs(earliestExpiry - 48 * 60 * 60 * 1000) + '</strong>'
+      : '';
     summary.innerHTML =
       '<span style="color:var(--green)">' + data.active + ' active</span> · ' +
       (data.failed > 0 ? '<span style="color:var(--red)">' + data.failed + ' failed</span> · ' : '') +
       (data.unknown > 0 ? '<span style="color:var(--muted)">' + data.unknown + ' unknown</span> · ' : '') +
-      (data.expiringSoon > 0 ? '<span style="color:var(--gold)">' + data.expiringSoon + ' expiring within 24h</span> · ' : '') +
-      data.total + ' total channels monitored';
+      (data.expiringSoon > 0 ? '<span style="color:var(--gold)">' + data.expiringSoon + ' expiring within 48h</span> · ' : '') +
+      data.total + ' total channels monitored' + renewalNote;
 
     document.getElementById('websub-tbody').innerHTML = data.leases.map(l => {
       const statusColor = l.status === 'active' ? 'var(--green)' : l.status === 'unknown' ? 'var(--muted)' : 'var(--red)';
