@@ -4981,7 +4981,7 @@ function renderForecast(data) {
   document.getElementById('fp-clouds').textContent     = clouds != null ? clouds + '%'              : '—';
 
   // UV from today's daily max or first hourly
-  const uvNow = d.uv_index?.[0] ?? h.uv_index?.[0];
+  const uvNow = d.uv_index_max?.[0] ?? h.uv_index?.[0];
   document.getElementById('fp-uv').textContent = uvLabel(uvNow);
 
   // Wind + compass
@@ -5097,7 +5097,7 @@ function renderForecast(data) {
     const windMx = d.wind_speed_10m_max?.[i];
     const gustMx = d.wind_gusts_10m_max?.[i];
     const wDom   = windDeg(d.wind_direction_10m_dominant?.[i]);
-    const uvi    = d.uv_index?.[i];
+    const uvi    = d.uv_index_max?.[i];
     const sunRise= fmtTime(d.sunrise?.[i]);
     const sunSet = fmtTime(d.sunset?.[i]);
 

@@ -2074,7 +2074,7 @@ app.get('/api/forecast', async (req, res) => {
       + 'snowfall,snow_depth,uv_index,is_day,relative_humidity_2m,dew_point_2m'
       + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
       + 'apparent_temperature_max,apparent_temperature_min,'
-      + 'sunrise,sunset,daylight_duration,uv_index,'
+      + 'sunrise,sunset,daylight_duration,uv_index_max,'
       + 'precipitation_sum,snowfall_sum,precipitation_hours,'
       + 'precipitation_probability_max,'
       + 'wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant'
