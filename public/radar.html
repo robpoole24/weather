@@ -1273,31 +1273,7 @@ function buildAlertTypePanel() {
     </div>
     <div style="max-height:340px;overflow-y:auto;padding:0.3rem;scrollbar-width:thin;scrollbar-color:#7a9bb5 transparent;-webkit-overflow-scrolling:touch;">
       ${rows}
-    </div>
-    <div style="border-top:1px solid rgba(255,255,255,0.1);padding:0.45rem 0.4rem 0.2rem;display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
-      <span style="font-size:0.68rem;color:#7a9bb5;line-height:1.3;">These control map shading.<br>Push notification alerts are separate.</span>
-      <button class="tb-btn" style="font-size:0.7rem;padding:0.25rem 0.6rem;white-space:nowrap;flex-shrink:0;" onclick="saveMapAlertTypesAsPushPrefs()" title="Save your current map filter selections as your push notification alert preferences">💾 Save for push</button>
     </div>`;
-}
-
-// Saves the current map alert-type filter as the user's push notification
-// preferences in localStorage. This lets users configure both in one place
-// without needing to open the separate push-preferences modal.
-// The push prefs key ('push-alert-types') is read by index.html's push system.
-function saveMapAlertTypesAsPushPrefs() {
-  const selected = [...enabledAlertTypes];
-  try {
-    localStorage.setItem('push-alert-types', JSON.stringify(selected));
-    localStorage.removeItem('push-notif-declined'); // treat as configured now
-  } catch(_) {}
-  // Brief in-panel confirmation — find the save button and flash it
-  const btn = document.querySelector('#alert-types-panel button[onclick*="saveMapAlertTypesAsPushPrefs"]');
-  if (btn) {
-    const orig = btn.textContent;
-    btn.textContent = '✓ Saved';
-    btn.style.color = 'var(--green, #4caf50)';
-    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 1800);
-  }
 }
 
 // Close the alert-types panel when clicking elsewhere on the page
@@ -2105,7 +2081,7 @@ async function renderAlertLayers() {
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
       // of polygon geometry (catches county-boundary edge cases).
-      const ugc = s.properties?.geocode?.UGC || [];
+      const ugc = props.geocode?.UGC || [];
       const inZone = (userZone   && ugc.includes(userZone))
                   || (userCounty && ugc.includes(userCounty));
       if (inPoly || inZone) {
@@ -2132,11 +2108,14 @@ async function renderAlertLayers() {
   // Sort so the most severe alert is checked/shown first in overlap popups
   activeAlertFeatures.sort((a, b) => alertPriorityRank(a.event) - alertPriorityRank(b.event));
 
-  // Show or hide banner based on whether user is in a zone
+  // Show or hide banner based on whether user is in a zone.
+  // showBanner() only gates on the layer-panel toggle (bannerDismissed),
+  // so a new location search always re-shows the ticker for active alerts
+  // even if the user previously hit X on the old location's ticker.
   if (activeBannerAlerts.length > 0 && !bannerDismissed) {
     showBanner(activeBannerAlerts);
   } else if (activeBannerAlerts.length === 0) {
-    bannerDismissed = false; // reset dismiss if alerts cleared
+    bannerDismissed = false; // reset layer-panel suppress when area is clear
     hideBanner();
   }
 
@@ -2225,12 +2204,18 @@ let bannerDismissed = false;
 let activeBannerAlerts = [];
 
 function dismissBanner() {
-  bannerDismissed = true;
+  // X button hides the ticker for the current alert set only — it does NOT
+  // permanently suppress the banner. A new location search or a new alert
+  // arriving will re-show it. To permanently hide the ticker use the
+  // layer panel "Warning Banner" toggle (which sets bannerDismissed).
   document.getElementById('warning-banner').style.display = 'none';
   document.getElementById('map').classList.remove('banner-visible');
+  map.invalidateSize();
 }
 
 function showBanner(alerts) {
+  // bannerDismissed is set only by the layer panel "Warning Banner" toggle —
+  // the X button no longer sets it, so the ticker re-appears on new searches.
   if (bannerDismissed || !alerts.length) return;
   const banner = document.getElementById('warning-banner');
   const scrollText = document.getElementById('warning-scroll-text');
@@ -5698,8 +5683,9 @@ async function searchLocation(e) {
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
       const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
-      // Re-evaluate banner for new search location
-      if (lastAlertsData) renderAlertLayers();
+
+      // Smooth pan + zoom to searched location
+      map.flyTo([userLat, userLng], 8, { duration: 1.2 });
 
       // Remove previous search marker
       if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
@@ -5720,11 +5706,26 @@ async function searchLocation(e) {
       }).addTo(map);
       searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
 
-      // Zoom to zoom level 10 for city/zip — tight enough to see local area
-      map.setView([userLat, userLng], 10);
       document.getElementById('alerts-status').textContent = placeName;
       document.getElementById('zip-input').value = '';
       updateViewButtons('local');
+
+      // Reset zone codes and banner state for the new location so we don't
+      // carry over stale zone data or a previously-dismissed banner.
+      userZone = null;
+      userCounty = null;
+      bannerDismissed = false;
+
+      // Fetch NWS zone for the new location first, THEN re-evaluate alerts.
+      // This ensures zone-based matching (e.g. Severe Thunderstorm Watch) works
+      // correctly — without this, renderAlertLayers runs with the old zone codes.
+      await fetchUserZone(userLat, userLng);
+
+      // fetchUserZone already calls renderAlertLayers if lastAlertsData exists.
+      // Call it unconditionally here as a safety net in case the zone lookup
+      // failed silently — we still want the polygon-containment check to run.
+      if (lastAlertsData) renderAlertLayers();
+
     } else {
       document.getElementById('alerts-status').textContent = 'Not found';
     }
