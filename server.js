@@ -3219,9 +3219,12 @@ async function websubSubscribe(channelId) {
         statusCode: res.statusCode,
       };
       // Persist expiry so restarts don't re-subscribe still-valid channels.
-      // Store as a raw number (no TTL — must outlive the lease itself).
-      if (status === 'active') {
-        if (redis) await redis.set('wt:ws:' + channelId, String(expiresAt));
+      // Store as a plain integer string — NOT via rSet (which would JSON-encode
+      // it, breaking parseInt on the read-back path in subscribeAllChannels).
+      // Fire-and-forget: this callback is sync, so no await allowed here.
+      if (status === 'active' && redis) {
+        redis.set('wt:ws:' + channelId, String(expiresAt))
+          .catch(e => console.error('[WebSub] Redis persist error for ' + channelId + ':', e.message));
       }
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
