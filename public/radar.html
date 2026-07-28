@@ -1497,30 +1497,26 @@ function preloadAllFrames() {
 
     const layer = queue[idx];
 
-    // Already attached — tiles are loaded or loading, skip immediately
+    // Already attached — already loaded, skip immediately
     if (map.hasLayer(layer)) { idx++; setTimeout(next, 20); return; }
 
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      layer.off('load error', finish);
+      layer.off('load', finish);
       idx++;
-      // Don't show percentage — it's misleading when frames skip or cache hits vary.
-      // Just clear when complete.
       if (statusEl) statusEl.textContent = idx < queue.length ? '⬡ caching…' : '';
       setTimeout(next, 80);
     };
 
-    // Attach listener BEFORE addTo — prevents the race where cached tiles fire
-    // 'load' synchronously during addTo before the listener is registered.
-    layer.once('load', finish);
-    layer.once('error', finish); // don't stall on tile errors either
+    // Attach 'load' listener BEFORE addTo so we don't miss it if tiles are
+    // already cached and Leaflet fires synchronously during addTo.
+    layer.on('load', finish);
     layer.setOpacity(0);
     layer.addTo(map);
 
-    // Safety net: WMS tiles can be slow (server renders on demand).
-    // 6s gives enough time for a cold IEM render without stalling indefinitely.
+    // Safety net for slow/failed tiles — 6s for WMS cold renders
     setTimeout(() => { if (!done) finish(); }, 6000);
   }
   next();
@@ -2421,13 +2417,11 @@ function goesPreloadAll() {
     let done = false;
     const finish = () => {
       if (done) return; done = true;
-      f.layer.off('load error', finish);
+      f.layer.off('load', finish);
       idx++;
       setTimeout(next, 100);
     };
-    // Attach before addTo to avoid race with cached tiles
-    f.layer.once('load', finish);
-    f.layer.once('error', finish);
+    f.layer.on('load', finish);
     f.layer.setOpacity(0);
     f.layer.addTo(map);
     setTimeout(() => { if (!done) finish(); }, 6000);
@@ -2859,20 +2853,18 @@ function clearSS() {
 function preloadSSFrames(myGen) {
   let idx = 0;
   function next() {
-    if (myGen !== ssPreloadGen) return; // superseded by a newer view/product change
+    if (myGen !== ssPreloadGen) return;
     if (idx >= ssLayers.length) { startSSAnimation(); return; }
     const layer = ssLayers[idx];
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      layer.off('load error', finish);
+      layer.off('load', finish);
       idx++;
       setTimeout(next, 60);
     };
-    // Attach before addTo to avoid race with cached tiles firing load synchronously
-    layer.once('load', finish);
-    layer.once('error', finish);
+    layer.on('load', finish);
     layer.setOpacity(0);
     layer.addTo(map);
     setTimeout(() => { if (!done) finish(); }, 6000);
