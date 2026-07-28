@@ -4794,12 +4794,17 @@ async function loadForecast(coords) {
     const data = await resp.json();
     _forecastData = data;
     document.getElementById('fp-loading').style.display = 'none';
-    renderForecast(data);
+    try {
+      renderForecast(data);
+    } catch(renderErr) {
+      console.error('[Forecast] renderForecast crashed:', renderErr);
+      const errEl = document.getElementById('fp-error');
+      if (errEl) { errEl.textContent = 'Display error: ' + renderErr.message; errEl.style.display = 'block'; }
+    }
   } catch(e) {
     document.getElementById('fp-loading').style.display = 'none';
     const errEl = document.getElementById('fp-error');
-    errEl.textContent = `Could not load forecast: ${e.message}`;
-    errEl.style.display = 'block';
+    if (errEl) { errEl.textContent = `Could not load forecast: ${e.message}`; errEl.style.display = 'block'; }
   }
 }
 
@@ -5249,7 +5254,6 @@ function onModelChange(model) {
 const BASEMAP_ITEMS=[
   {id:'reflectivity',ico:'🌧',name:'Base Reflectivity',sub:'National mosaic'},
   {id:'goes',ico:'🛰',name:'GOES Satellite',sub:'Infrared cloud imagery'},
-  {id:'apptemp',ico:'🌡',name:'Feels Like',sub:'Wind chill / heat index'},
 ];
 const RADAR_ITEMS=[
   // Single-site products — require selecting a nearby WSR-88D station.

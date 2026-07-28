@@ -2024,6 +2024,7 @@ const _forecastCache = new Map();
 const FORECAST_TTL = 15 * 60 * 1000;
 
 app.get('/api/forecast', async (req, res) => {
+  console.log(`[Forecast] Request: zip=${req.query.zip} lat=${req.query.lat} lon=${req.query.lon}`);
   let lat = parseFloat(req.query.lat);
   let lon = parseFloat(req.query.lon);
   let locationName = req.query.name || null;
@@ -2081,6 +2082,8 @@ app.get('/api/forecast', async (req, res) => {
 
     const omText = await fetchTextOverHttp(omUrl);
     const om = JSON.parse(omText);
+    console.log(`[Forecast] Open-Meteo response keys: ${Object.keys(om).join(', ')}`);
+    console.log(`[Forecast] current fields: ${JSON.stringify(om.current).slice(0, 200)}`);
 
     // ── NWS narrative (US only — skip gracefully outside coverage) ──────────
     let nwsNarrative = null;
