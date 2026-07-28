@@ -2085,6 +2085,8 @@ app.get('/api/forecast', async (req, res) => {
     console.log(`[Forecast] Open-Meteo response keys: ${Object.keys(om).join(', ')}`);
     if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
     console.log(`[Forecast] current.temperature_2m: ${om.current?.temperature_2m}`);
+    console.log('[Forecast] daily weather_codes:', JSON.stringify(om.daily?.weather_code));
+    console.log('[Forecast] hourly weather_codes (first 6):', JSON.stringify(om.hourly?.weather_code?.slice(0,6)));
 
     // ── NWS narrative (US only — skip gracefully outside coverage) ──────────
     let nwsNarrative = null;
