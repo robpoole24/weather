@@ -60,10 +60,13 @@ function init({ redis, getAllChannels, websubLeases, cache,
   // Load admin FCM tokens from Redis
   _loadAdminTokens();
 
-  // Run first check 30s after boot, then every 5 min
-  setTimeout(() => {
-    runAllChecks();
-    _checkTimer = setInterval(runAllChecks, CHECK_INTERVAL_MS);
+  // Run first check 30s after boot, then every 5 min.
+  // All wrapped in try/catch — monitor must never crash the main server.
+  setTimeout(async () => {
+    try { await runAllChecks(); } catch(e) { console.error('[Monitor] Check error:', e.message); }
+    _checkTimer = setInterval(async () => {
+      try { await runAllChecks(); } catch(e) { console.error('[Monitor] Check error:', e.message); }
+    }, CHECK_INTERVAL_MS);
   }, 30 * 1000);
 
   console.log('[Monitor] Health monitor initialized — first check in 30s');

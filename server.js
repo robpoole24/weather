@@ -4453,7 +4453,12 @@ radar.routes(app);
 
 // Health monitor dashboard
 app.get('/monitor', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'monitor.html'));
+  const monitorPath = path.join(__dirname, 'public', 'monitor.html');
+  if (require('fs').existsSync(monitorPath)) {
+    res.sendFile(monitorPath);
+  } else {
+    res.redirect('/api/monitor/status');
+  }
 });
 
 app.get('*', (req, res) => {
@@ -4564,23 +4569,29 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.warn('[Radar] Redis not available — push notifications disabled');
   }
 
-  // Init health monitor — pass all the state it needs to inspect
-  const radarModule = require('./radar');
-  monitor.init({
-    redis,
-    getAllChannels,
-    websubLeases,
-    cache,
-    getQuota: () => ({
-      primaryUnits:    burnTracker.primaryUnits || 0,
-      primaryLimit:    60000,
-      archiveUnits:    burnTracker.archiveUnits || 0,
-      archiveLimit:    10000,
-      primaryExceeded: primaryQuotaExceeded,
-      archiveExceeded: archiveQuotaExceeded,
-    }),
-    eventLog,
-    firebaseApp: radarModule._firebaseApp || null,
-    admin:       require('firebase-admin'),
-  });
+  // Init health monitor — wrapped in try/catch so a monitor failure
+  // can never take down the main server.
+  try {
+    let fbAdmin = null;
+    try { fbAdmin = require('firebase-admin'); } catch(_) {}
+    monitor.init({
+      redis,
+      getAllChannels,
+      websubLeases,
+      cache,
+      getQuota: () => ({
+        primaryUnits:    burnTracker.primaryUnits || 0,
+        primaryLimit:    60000,
+        archiveUnits:    burnTracker.archiveUnits || 0,
+        archiveLimit:    10000,
+        primaryExceeded: primaryQuotaExceeded,
+        archiveExceeded: archiveQuotaExceeded,
+      }),
+      eventLog,
+      firebaseApp: radar._firebaseApp || null,
+      admin:       fbAdmin,
+    });
+  } catch(e) {
+    console.error('[Monitor] Failed to initialize health monitor:', e.message);
+  }
 });
