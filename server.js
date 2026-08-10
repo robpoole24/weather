@@ -4,7 +4,8 @@ const { applySecurityMiddleware, applyErrorHandler } = require('./security-middl
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const radar = require('./radar');
+const radar   = require('./radar');
+const monitor = require('./monitor');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 
@@ -2012,31 +2013,6 @@ app.get('/api/aqi', async (req, res) => {
   } catch(e) {
     console.error('[AQI] Proxy error:', e.message);
     res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
-  }
-});
-
-// GET /api/geocode?q=twin+lakes+co
-// Thin geocoding proxy using Open-Meteo's geocoding API (free, no key, no
-// user-agent requirements). Used by the radar search box so it doesn't have
-// to call Nominatim directly from the browser (Nominatim requires a valid
-// contact User-Agent and will silently return empty results without one).
-// Returns { lat, lon, name } or 404.
-app.get('/api/geocode', async (req, res) => {
-  const q = (req.query.q || '').trim();
-  if (!q) return res.status(400).json({ error: 'q parameter required' });
-  try {
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=en&format=json`;
-    const text = await fetchTextOverHttp(url);
-    const data = JSON.parse(text);
-    const r = data.results?.[0];
-    if (!r) return res.status(404).json({ error: `No location found for "${q}"` });
-    res.json({
-      lat: r.latitude,
-      lon: r.longitude,
-      name: [r.name, r.admin1].filter(Boolean).join(', '),
-    });
-  } catch(e) {
-    res.status(502).json({ error: 'Geocoding unavailable', detail: e.message });
   }
 });
 
@@ -4190,6 +4166,45 @@ app.get('/api/admin/channel-health', (req, res) => {
     }
   });
 });
+
+// ── Monitor endpoints ──────────────────────────────────────────────────────────
+
+// Public status summary — safe to expose (no secrets, no channel data)
+app.get('/api/monitor/status', async (req, res) => {
+  let results = monitor.getLastResults();
+  if (!results && redis) {
+    try {
+      const raw = await redis.get('monitor:last-results');
+      if (raw) results = JSON.parse(raw);
+    } catch(_) {}
+  }
+  if (!results) {
+    results = await monitor.runAllChecks();
+  }
+  res.json(results);
+});
+
+// Admin: force a manual check run right now
+app.post('/api/monitor/run', adminAuth, async (req, res) => {
+  const results = await monitor.runAllChecks();
+  res.json(results);
+});
+
+// Admin: register an FCM token to receive monitor alerts
+app.post('/api/monitor/register-admin', adminAuth, async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'token required' });
+  await monitor.addAdminToken(token);
+  res.json({ ok: true, totalAdminTokens: monitor.getAdminTokens().length });
+});
+
+// Admin: remove an FCM token from monitor alerts
+app.delete('/api/monitor/register-admin', adminAuth, async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'token required' });
+  await monitor.removeAdminToken(token);
+  res.json({ ok: true, totalAdminTokens: monitor.getAdminTokens().length });
+});
 app.get('/api/admin/test-connectivity', async (req, res) => {
   const testUrl = key => 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
     '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
@@ -4436,6 +4451,11 @@ app.get('/weatherstar/images/*', (req, res) => {
 // radar.js registers GET routes that would otherwise be swallowed by app.get('*')
 radar.routes(app);
 
+// Health monitor dashboard
+app.get('/monitor', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'monitor.html'));
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -4543,4 +4563,24 @@ server.listen(PORT, '0.0.0.0', async () => {
   } else {
     console.warn('[Radar] Redis not available — push notifications disabled');
   }
+
+  // Init health monitor — pass all the state it needs to inspect
+  const radarModule = require('./radar');
+  monitor.init({
+    redis,
+    getAllChannels,
+    websubLeases,
+    cache,
+    getQuota: () => ({
+      primaryUnits:    burnTracker.primaryUnits || 0,
+      primaryLimit:    60000,
+      archiveUnits:    burnTracker.archiveUnits || 0,
+      archiveLimit:    10000,
+      primaryExceeded: primaryQuotaExceeded,
+      archiveExceeded: archiveQuotaExceeded,
+    }),
+    eventLog,
+    firebaseApp: radarModule._firebaseApp || null,
+    admin:       require('firebase-admin'),
+  });
 });

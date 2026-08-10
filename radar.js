@@ -409,4 +409,4 @@ function routes(app) {
   });
 }
 
-module.exports = { init, routes, registerToken, unregisterToken, updateTokenPreferences, lookupZone, ALERT_META, DEFAULT_ALERT_TYPES };
+module.exports = { init, routes, registerToken, unregisterToken, updateTokenPreferences, lookupZone, ALERT_META, DEFAULT_ALERT_TYPES, get _firebaseApp() { return firebaseApp; } };

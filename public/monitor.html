@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>WeatherTV — System Monitor</title>
+<style>
+  :root {
+    --bg: #0a0e14; --surface: #111827; --border: #1e2a3a;
+    --green: #4caf50; --red: #ef5350; --yellow: #ffc107;
+    --accent: #7ab8e8; --muted: #6b7a8d; --text: #e8f4fd;
+    --font: 'Barlow Condensed', 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font);
+         font-size: 1rem; min-height: 100vh; }
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.5rem; display: flex; align-items: center;
+    gap: 1rem; justify-content: space-between;
+  }
+  header h1 { font-size: 1.3rem; letter-spacing: 0.08em; color: var(--accent); }
+  .status-pill {
+    padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.85rem;
+    font-weight: 700; letter-spacing: 0.06em;
+  }
+  .pill-ok { background: rgba(76,175,80,0.2); color: var(--green); border: 1px solid var(--green); }
+  .pill-fail { background: rgba(239,83,80,0.2); color: var(--red); border: 1px solid var(--red); }
+  .pill-loading { background: rgba(107,122,141,0.2); color: var(--muted); border: 1px solid var(--muted); }
+
+  main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+
+  .meta-row {
+    display: flex; gap: 1rem; align-items: center; margin-bottom: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .meta-row span { font-size: 0.8rem; color: var(--muted); }
+  .btn {
+    background: var(--surface); border: 1px solid var(--border); color: var(--accent);
+    padding: 0.3rem 0.9rem; border-radius: 6px; cursor: pointer;
+    font-family: var(--font); font-size: 0.85rem; letter-spacing: 0.05em;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--border); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.85rem; }
+
+  .check-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0.85rem 1rem;
+    display: flex; align-items: flex-start; gap: 0.75rem;
+    transition: border-color 0.2s;
+  }
+  .check-card.ok    { border-left: 3px solid var(--green); }
+  .check-card.fail  { border-left: 3px solid var(--red); }
+  .check-icon { font-size: 1.3rem; line-height: 1; flex-shrink: 0; margin-top: 0.1rem; }
+  .check-body { flex: 1; min-width: 0; }
+  .check-label { font-size: 0.9rem; font-weight: 700; letter-spacing: 0.04em; margin-bottom: 0.2rem; }
+  .check-detail { font-size: 0.78rem; color: var(--muted); word-break: break-word; }
+  .check-card.fail .check-detail { color: #ff8a80; }
+
+  .section-title {
+    font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); margin: 1.5rem 0 0.6rem;
+  }
+
+  .register-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem; margin-top: 1.5rem;
+  }
+  .register-box h3 { font-size: 0.9rem; margin-bottom: 0.5rem; color: var(--accent); }
+  .register-box p  { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.75rem; }
+  .register-box input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 0.4rem 0.7rem; border-radius: 6px; font-size: 0.82rem;
+    width: 100%; margin-bottom: 0.5rem; font-family: var(--font);
+  }
+  .register-box .row { display: flex; gap: 0.5rem; }
+
+  #toast {
+    position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+    background: #23323f; border: 1px solid var(--accent); border-radius: 8px;
+    padding: 0.5rem 1.2rem; font-size: 0.85rem; color: var(--accent);
+    opacity: 0; transition: opacity 0.25s; pointer-events: none; z-index: 99;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📡 WeatherTV Monitor</h1>
+  <div id="overall-pill" class="status-pill pill-loading">Loading…</div>
+</header>
+
+<main>
+  <div class="meta-row">
+    <span id="last-checked">Checking…</span>
+    <span id="duration"></span>
+    <button class="btn" id="btn-refresh" onclick="refresh()">↺ Run now</button>
+    <button class="btn" id="btn-auto" onclick="toggleAuto()">Auto: ON</button>
+  </div>
+
+  <div class="section-title">System Checks</div>
+  <div class="grid" id="check-grid">
+    <div class="check-card" style="opacity:0.4"><div class="check-icon">⏳</div><div class="check-body"><div class="check-label">Loading…</div></div></div>
+  </div>
+
+  <div class="register-box" id="register-box" style="display:none">
+    <h3>🔔 Register for admin alerts</h3>
+    <p>Enter your FCM device token to receive push notifications when any check fails. This is your personal device token from the WeatherTV notification setup.</p>
+    <input type="text" id="token-input" placeholder="FCM device token…"/>
+    <div class="row">
+      <input type="password" id="admin-key-input" placeholder="Admin key…" style="max-width:180px"/>
+      <button class="btn" onclick="registerToken()">Register</button>
+      <button class="btn" onclick="unregisterToken()">Remove</button>
+    </div>
+  </div>
+
+  <div style="text-align:right;margin-top:1rem">
+    <button class="btn" onclick="document.getElementById('register-box').style.display=document.getElementById('register-box').style.display==='none'?'block':'none'">FCM Admin Alerts ▾</button>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const ICONS = {
+  'Server':               '🖥️',
+  'Redis':                '🔴',
+  'WebSub':               '📡',
+  'Live Detection':       '📺',
+  'Recent Fetch':         '🎬',
+  'YT Quota':             '📊',
+  'NWS Alerts API':       '🌩️',
+  'Open-Meteo':           '🌤️',
+  'NEXRAD Tiles (IEM)':   '🌧️',
+  'GOES Satellite (GIBS)':'🛰️',
+  'Memory':               '💾',
+  'Lightning (IEM)':      '⚡',
+  'Channels':             '📋',
+  'Error Log':            '🚨',
+};
+
+let autoRefresh = true;
+let autoTimer = null;
+
+function fmt(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function render(data) {
+  // Overall pill
+  const pill = document.getElementById('overall-pill');
+  pill.textContent = data.ok ? '✓ All Systems Operational' : `✗ ${data.failed} Check(s) Failed`;
+  pill.className = 'status-pill ' + (data.ok ? 'pill-ok' : 'pill-fail');
+
+  // Meta row
+  document.getElementById('last-checked').textContent = 'Last checked: ' + fmt(data.checkedAt);
+  document.getElementById('duration').textContent = `(${data.durationMs}ms)`;
+
+  // Sort: failed first
+  const sorted = [...data.results].sort((a, b) => {
+    if (a.ok === b.ok) return a.label.localeCompare(b.label);
+    return a.ok ? 1 : -1;
+  });
+
+  const grid = document.getElementById('check-grid');
+  grid.innerHTML = sorted.map(r => `
+    <div class="check-card ${r.ok ? 'ok' : 'fail'}">
+      <div class="check-icon">${ICONS[r.label] || '🔍'}</div>
+      <div class="check-body">
+        <div class="check-label">${r.label}</div>
+        <div class="check-detail">${r.detail || (r.ok ? 'OK' : 'Failed')}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function refresh() {
+  const btn = document.getElementById('btn-refresh');
+  btn.disabled = true;
+  btn.textContent = '↺ Checking…';
+  try {
+    const res = await fetch('/api/monitor/status');
+    const data = await res.json();
+    render(data);
+  } catch(e) {
+    document.getElementById('overall-pill').textContent = '✗ Monitor unreachable';
+    document.getElementById('overall-pill').className = 'status-pill pill-fail';
+  }
+  btn.disabled = false;
+  btn.textContent = '↺ Run now';
+}
+
+function toggleAuto() {
+  autoRefresh = !autoRefresh;
+  document.getElementById('btn-auto').textContent = 'Auto: ' + (autoRefresh ? 'ON' : 'OFF');
+  if (autoRefresh) scheduleAuto();
+  else { clearTimeout(autoTimer); autoTimer = null; }
+}
+
+function scheduleAuto() {
+  clearTimeout(autoTimer);
+  if (!autoRefresh) return;
+  autoTimer = setTimeout(async () => { await refresh(); scheduleAuto(); }, 60 * 1000);
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function registerToken() {
+  const token = document.getElementById('token-input').value.trim();
+  const key   = document.getElementById('admin-key-input').value.trim();
+  if (!token || !key) { showToast('Token and admin key required'); return; }
+  try {
+    const r = await fetch('/api/monitor/register-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
+      body: JSON.stringify({ token }),
+    });
+    const d = await r.json();
+    if (r.ok) showToast(`✓ Registered — ${d.totalAdminTokens} admin token(s) active`);
+    else showToast('✗ ' + (d.error || 'Failed'));
+  } catch(e) { showToast('✗ Request failed'); }
+}
+
+async function unregisterToken() {
+  const token = document.getElementById('token-input').value.trim();
+  const key   = document.getElementById('admin-key-input').value.trim();
+  if (!token || !key) { showToast('Token and admin key required'); return; }
+  try {
+    const r = await fetch('/api/monitor/register-admin', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
+      body: JSON.stringify({ token }),
+    });
+    const d = await r.json();
+    if (r.ok) showToast(`✓ Removed — ${d.totalAdminTokens} admin token(s) remain`);
+    else showToast('✗ ' + (d.error || 'Failed'));
+  } catch(e) { showToast('✗ Request failed'); }
+}
+
+// Boot
+refresh();
+scheduleAuto();
+</script>
+</body>
+</html>
