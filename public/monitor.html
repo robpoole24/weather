@@ -110,7 +110,19 @@
   <div class="register-box" id="register-box" style="display:none">
     <h3>🔔 Register for admin alerts</h3>
     <p>Enter your FCM device token to receive push notifications when any check fails. This is your personal device token from the WeatherTV notification setup.</p>
-    <input type="text" id="token-input" placeholder="FCM device token…"/>
+
+    <div id="token-detected" style="display:none;margin-bottom:0.75rem;">
+      <div style="font-size:0.78rem;color:var(--green);margin-bottom:0.4rem;">✓ Token detected from this device</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <code id="token-preview" style="font-size:0.68rem;color:var(--muted);word-break:break-all;flex:1;background:var(--bg);padding:0.3rem 0.5rem;border-radius:4px;border:1px solid var(--border);"></code>
+        <button class="btn" onclick="copyToken()" style="flex-shrink:0;">Copy</button>
+      </div>
+    </div>
+    <div id="token-missing" style="display:none;margin-bottom:0.75rem;">
+      <div style="font-size:0.78rem;color:var(--yellow);">⚠ No token found on this device. Visit <a href="/" style="color:var(--accent);">WeatherTV</a> first and allow notifications, then come back here.</div>
+    </div>
+
+    <input type="text" id="token-input" placeholder="FCM device token (auto-filled if detected above)…"/>
     <div class="row">
       <input type="password" id="admin-key-input" placeholder="Admin key…" style="max-width:180px"/>
       <button class="btn" onclick="registerToken()">Register</button>
@@ -250,6 +262,37 @@ async function unregisterToken() {
 // Boot
 refresh();
 scheduleAuto();
+loadToken();
+
+function loadToken() {
+  const token = localStorage.getItem('wtv-fcm-token');
+  if (token) {
+    document.getElementById('token-detected').style.display = 'block';
+    document.getElementById('token-missing').style.display  = 'none';
+    document.getElementById('token-preview').textContent = token.slice(0, 20) + '…' + token.slice(-10);
+    document.getElementById('token-input').value = token;
+  } else {
+    document.getElementById('token-missing').style.display  = 'block';
+    document.getElementById('token-detected').style.display = 'none';
+  }
+}
+
+function copyToken() {
+  const token = localStorage.getItem('wtv-fcm-token');
+  if (!token) { showToast('No token found'); return; }
+  navigator.clipboard.writeText(token)
+    .then(() => showToast('✓ Token copied to clipboard'))
+    .catch(() => {
+      // Fallback for older mobile browsers
+      const el = document.createElement('textarea');
+      el.value = token;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+      showToast('✓ Token copied');
+    });
+}
 </script>
 </body>
 </html>
