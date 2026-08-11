@@ -98,8 +98,14 @@ async function _sendEmail(subject, text) {
       method:   'POST',
       headers:  { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     }, res => {
-      res.resume();
-      resolve(res.statusCode >= 200 && res.statusCode < 300);
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => {
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        if (!ok) console.error(`[Monitor] Resend failed ${res.statusCode}:`, data);
+        else console.log('[Monitor] Resend email sent OK');
+        resolve(ok);
+      });
     });
     req.on('error', e => { console.error('[Monitor] Resend error:', e.message); resolve(false); });
     req.setTimeout(8000, () => { req.destroy(); resolve(false); });
