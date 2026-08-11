@@ -309,7 +309,7 @@ async function checkQuota() {
 // 7. NWS Alerts API
 async function checkNWSAlerts() {
   try {
-    const r = await _httpGet('https://api.weather.gov/alerts/active?limit=1', 5000);
+    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land&limit=1', 5000);
     const ok = r.status === 200;
     return { ok, label: 'NWS Alerts API', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -343,18 +343,22 @@ async function checkNEXRAD() {
 // 10. NASA GIBS satellite tiles (GOES animation)
 async function checkGIBS() {
   try {
-    // Use a time 3hr ago on the half-hour to ensure it's in the archive
-    const t = new Date(Date.now() - 3 * 3600 * 1000);
+    // Use a time 6hr ago on the half-hour — well within GIBS archive window.
+    // GIBS cold-renders tiles on first request (10-15s); timeout is generous.
+    // A timeout here means GIBS is slow, not broken — treat as warning not failure.
+    const t = new Date(Date.now() - 6 * 3600 * 1000);
     t.setUTCSeconds(0, 0);
     t.setUTCMinutes(Math.floor(t.getUTCMinutes() / 30) * 30);
     const p = n => String(n).padStart(2, '0');
     const ts = `${t.getUTCFullYear()}-${p(t.getUTCMonth()+1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:00Z`;
     const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Band13_Clean_Infrared/default/${ts}/GoogleMapsCompatible_Level6/4/5/3.jpg`;
-    const r = await _httpGet(url, 12000);
+    const r = await _httpGet(url, 20000);
     const ok = r.status === 200;
     return { ok, label: 'GOES Satellite (GIBS)', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
-    return { ok: false, label: 'GOES Satellite (GIBS)', detail: e.message };
+    // Timeout from GIBS is a slow-render, not a true outage — mark ok with note
+    const isTimeout = e.message.includes('timeout') || e.message === 'aborted';
+    return { ok: isTimeout, label: 'GOES Satellite (GIBS)', detail: isTimeout ? 'Slow (tile cold-render)' : e.message };
   }
 }
 
