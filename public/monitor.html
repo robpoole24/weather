@@ -118,7 +118,7 @@
       </div>
       <div style="display:flex;gap:0.5rem;align-items:baseline;">
         <code style="color:var(--accent);min-width:180px;flex-shrink:0;">MONITOR_EMAIL_FROM</code>
-        <span style="color:var(--muted);">Sending address (must be verified in Resend)</span>
+        <span style="color:var(--muted);">e.g. alerts@send.altruisticapps.com (verified Resend domain, not Gmail)</span>
       </div>
       <div style="display:flex;gap:0.5rem;align-items:baseline;">
         <code style="color:var(--accent);min-width:180px;flex-shrink:0;">RESEND_API_KEY</code>
@@ -249,15 +249,17 @@ function showToast(msg) {
 
 
 async function testAlert() {
-  const key = prompt('Admin key:');
-  if (!key) return;
+  const user = prompt('Admin username (default: admin):') || 'admin';
+  const pass = prompt('Admin password (ADMIN_PASSWORD):');
+  if (!pass) return;
   const btn = document.getElementById('btn-test');
   btn.disabled = true;
   btn.textContent = '✉ Sending…';
+  const credentials = btoa(user + ':' + pass);
   try {
     const r = await fetch('/api/monitor/test-alert', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + credentials },
     });
     const d = await r.json();
     if (!r.ok) { showToast('✗ ' + (d.error || 'Failed')); return; }

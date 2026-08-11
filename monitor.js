@@ -49,6 +49,7 @@ let _lastRun       = null;
 let _lastResults   = null;
 let _alertCooldowns = {}; // { checkId: lastAlertTimestamp }
 let _checkTimer    = null;
+let _startTime     = Date.now();
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 function init({ redis, getAllChannels, websubLeases, cache, getQuota, eventLog }) {
@@ -207,10 +208,10 @@ function _httpGet(url, timeoutMs = 8000) {
 // 1. Server self-check
 async function checkServer() {
   try {
-    // Use localhost — Railway containers can't always resolve their own
-    // external hostname (ENOTFOUND). Port defaults to 3000 or PORT env var.
+    // Use 127.0.0.1 explicitly — 'localhost' resolves to ::1 (IPv6) on some
+    // Railway containers where the server only binds on IPv4, causing ECONNREFUSED.
     const port = process.env.PORT || 3000;
-    const r = await _httpGet(`http://localhost:${port}/api/health`, 4000);
+    const r = await _httpGet(`http://127.0.0.1:${port}/api/health`, 4000);
     const ok = r.status === 200;
     return { ok, label: 'Server', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -232,6 +233,12 @@ async function checkRedis() {
 // 3. WebSub subscription health
 async function checkWebSub() {
   if (!_getAllChannels || !_websubLeases) return { ok: false, label: 'WebSub', detail: 'Not initialized' };
+  // Give 5 minutes after boot for subscriptions to complete before alarming.
+  // Initial subscription of 159 channels takes 1-2 minutes.
+  const uptimeMs = Date.now() - _startTime;
+  if (uptimeMs < 5 * 60 * 1000) {
+    return { ok: true, label: 'WebSub', detail: `Subscribing… (${Math.round(uptimeMs/1000)}s since boot)` };
+  }
   const channels = _getAllChannels().filter(c => c.hasLive);
   if (!channels.length) return { ok: true, label: 'WebSub', detail: 'No live channels' };
   const now = Date.now();
