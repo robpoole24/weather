@@ -324,14 +324,18 @@ async function checkQuota() {
   }
 }
 
-// 7. NWS Alerts API
+// 7. NWS reachability — check via the /api/forecast proxy which calls NWS /points.
+// Hitting api.weather.gov directly from Railway IPs is unreliable (rate-limited).
+// The forecast endpoint is server-side and cached, making it a better proxy indicator.
 async function checkNWSAlerts() {
   try {
-    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land', 5000);
+    const port = process.env.PORT || 3000;
+    // Milwaukee coords — just checking reachability of the server's NWS-backed endpoint
+    const r = await _httpGet(`http://127.0.0.1:${port}/api/forecast?lat=43.04&lon=-87.91`, 8000);
     const ok = r.status === 200;
-    return { ok, label: 'NWS Alerts API', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
+    return { ok, label: 'NWS / Forecast API', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
-    return { ok: false, label: 'NWS Alerts API', detail: e.message };
+    return { ok: false, label: 'NWS / Forecast API', detail: e.message };
   }
 }
 
