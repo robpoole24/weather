@@ -75,6 +75,20 @@ function init({ redis, getAllChannels, websubLeases, cache, getQuota, eventLog }
           if (val) _alertCooldowns[key.replace('monitor:cooldown:', '')] = parseInt(val, 10);
         }
         if (keys.length) console.log(`[Monitor] Restored ${keys.length} alert cooldown(s) from Redis`);
+        // If no cooldowns exist yet, write a fresh set for all known check IDs
+        // to suppress the post-deploy flood for one full cooldown window
+        else {
+          const checkIds = ['server','redis','websub','live-detection','recent-fetch',
+            'yt-quota','nws-/-forecast-api','open-meteo','nexrad-tiles-(iem)',
+            'goes-satellite-(gibs)','memory','lightning-(iem)','channels','error-log'];
+          const now = Date.now();
+          const ttl  = Math.ceil(ALERT_COOLDOWN_MS / 1000);
+          for (const id of checkIds) {
+            await redis.setex('monitor:cooldown:' + id, ttl, String(now));
+            _alertCooldowns[id] = now;
+          }
+          console.log('[Monitor] Wrote initial cooldowns to Redis — suppressing post-deploy flood for 30min');
+        }
       } catch(e) { console.warn('[Monitor] Could not restore cooldowns:', e.message); }
     })();
   }
@@ -86,9 +100,9 @@ function init({ redis, getAllChannels, websubLeases, cache, getQuota, eventLog }
     _checkTimer = setInterval(async () => {
       try { await runAllChecks(); } catch(e) { console.error('[Monitor] Check error:', e.message); }
     }, CHECK_INTERVAL_MS);
-  }, 30 * 1000);
+  }, 3 * 60 * 1000);
 
-  console.log('[Monitor] Health monitor initialized — first check in 30s');
+  console.log('[Monitor] Health monitor initialized — first check in 3 minutes');
 }
 
 // ── Email via Resend ──────────────────────────────────────────────────────────
@@ -164,14 +178,22 @@ async function _sendSMS(text) {
 
 // ── Alert dispatcher ─────────────────────────────────────────────────────────
 async function _sendAlert(checkId, title, body) {
-  // Cooldown — don't re-alert the same issue for 30 min.
-  // Persisted to Redis so deploys don't reset and cause a flood of alerts.
+  // Cooldown — check Redis directly as the source of truth so deploys never
+  // cause a re-alert flood. In-memory copy is a fast-path fallback only.
   const now = Date.now();
   if (_alertCooldowns[checkId] && now - _alertCooldowns[checkId] < ALERT_COOLDOWN_MS) return;
-  _alertCooldowns[checkId] = now;
   if (_redis) {
-    try { await _redis.setex('monitor:cooldown:' + checkId, Math.ceil(ALERT_COOLDOWN_MS / 1000), String(now)); } catch(_) {}
+    try {
+      const stored = await _redis.get('monitor:cooldown:' + checkId);
+      if (stored && now - parseInt(stored, 10) < ALERT_COOLDOWN_MS) {
+        _alertCooldowns[checkId] = parseInt(stored, 10); // sync in-memory
+        return;
+      }
+      // Set cooldown in Redis BEFORE sending so concurrent runs can't both fire
+      await _redis.setex('monitor:cooldown:' + checkId, Math.ceil(ALERT_COOLDOWN_MS / 1000), String(now));
+    } catch(_) {}
   }
+  _alertCooldowns[checkId] = now;
 
   console.warn(`[Monitor] ALERT: ${title} — ${body}`);
 

@@ -3174,7 +3174,7 @@ if (process.env.STARTUP_LIVE_CHECK === 'true') {
 // Requires a public URL (Railway) — not available on localhost
 // ════════════════════════════════════════════
 const WEBSUB_HUB = 'https://pubsubhubbub.appspot.com/subscribe';
-const WEBSUB_LEASE = 9 * 24 * 60 * 60; // 9 days in seconds (max is 10)
+const WEBSUB_LEASE = 14 * 24 * 60 * 60; // 14 days — hub grants its own duration; we schedule renewal 48h before expiry
 const rawBodyParser = express.raw({ type: 'application/atom+xml', limit: '1mb' });
 
 // Subscribe a single channel to WebSub
@@ -3215,8 +3215,13 @@ async function websubSubscribe(channelId) {
         status,
         statusCode: res.statusCode,
       };
-      // Persist expiry so restarts don't re-subscribe still-valid channels
-      if (status === 'active') rSet('wt:ws:' + channelId, String(expiresAt));
+      // Persist expiry as a plain integer string so parseInt reads it correctly.
+      // rSet() would JSON-encode it, making parseInt return NaN on the read-back.
+      // Fire-and-forget — this callback is synchronous, no await allowed here.
+      if (status === 'active' && redis) {
+        redis.set('wt:ws:' + channelId, String(expiresAt))
+          .catch(e => console.error('[WebSub] Redis persist error for ' + channelId + ':', e.message));
+      }
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
         const ch = getAllChannels().find(c => c.id === channelId);
@@ -3273,7 +3278,42 @@ async function websubSubscribe(channelId) {
   scheduleNextRecentFetch();
 })();
 
-// Subscribe all hasLive channels on startup (only when APP_URL is set)
+// ── scheduleWebSubRenewal ─────────────────────────────────────────────────────
+// Reads stored expiry timestamps from Redis and sets a one-shot timer to fire
+// 48h before the earliest expiry. After each renewal it reschedules itself.
+// This is the ONLY thing that triggers hub calls — not deploys, not restarts.
+let _websubRenewalTimer = null;
+async function scheduleWebSubRenewal() {
+  if (!process.env.APP_URL || !redis) return;
+  try {
+    const channels = getLiveChannels();
+    let earliestExpiry = Infinity;
+    for (const ch of channels) {
+      const raw = await redis.get('wt:ws:' + ch.id);
+      if (raw) {
+        const exp = parseInt(raw, 10);
+        if (!isNaN(exp) && exp < earliestExpiry) earliestExpiry = exp;
+      }
+    }
+    if (earliestExpiry === Infinity) return; // nothing stored yet
+    const renewAt = earliestExpiry - 48 * 60 * 60 * 1000;
+    const delay   = Math.max(renewAt - Date.now(), 60 * 1000);
+    const daysAway = (delay / 86400000).toFixed(1);
+    if (_websubRenewalTimer) clearTimeout(_websubRenewalTimer);
+    _websubRenewalTimer = setTimeout(async () => {
+      console.log('[WebSub] Scheduled renewal firing — refreshing expiring subscriptions...');
+      await subscribeAllChannels();
+      await scheduleWebSubRenewal();
+    }, delay);
+    console.log(`[WebSub] Next renewal scheduled in ${daysAway} days`);
+  } catch(e) {
+    console.error('[WebSub] scheduleWebSubRenewal error:', e.message);
+  }
+}
+
+// Subscribe only channels whose stored expiry is within 48h or missing.
+// On a normal deploy where subscriptions are fresh, every channel is skipped
+// and the function completes in milliseconds with zero hub traffic.
 async function subscribeAllChannels() {
   if (!process.env.APP_URL) {
     console.log('[WebSub] APP_URL not set — WebSub disabled (expected on localhost)');
@@ -3281,27 +3321,25 @@ async function subscribeAllChannels() {
   }
 
   const channels = getLiveChannels();
-  const RENEW_WINDOW = 24 * 60 * 60 * 1000; // re-subscribe if expiring within 24h
+  const RENEW_WINDOW = 48 * 60 * 60 * 1000; // renew if expiring within 48h
   const now = Date.now();
 
-  // Check Redis for existing valid subscriptions — skip channels that don't
-  // need re-subscribing. This makes restarts after recent deploys near-instant
-  // instead of blocking for 60+ seconds re-subscribing every channel.
   const toSubscribe = [];
   let skipped = 0;
   for (const ch of channels) {
     try {
-      const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
-      if (stored) {
-        const expiresAt = parseInt(stored, 10);
+      // Use redis directly (not rSet/rGet) — expiry is stored as a plain integer
+      // string. rGet would JSON.parse it, but it was stored via redis.set not rSet.
+      const raw = redis ? await redis.get('wt:ws:' + ch.id) : null;
+      if (raw) {
+        const expiresAt = parseInt(raw, 10);
         if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
-          // Still valid for >24h — mark as active without hitting the hub
           websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
           skipped++;
           continue;
         }
       }
-    } catch(_) { /* Redis unavailable — subscribe to be safe */ }
+    } catch(_) {}
     toSubscribe.push(ch);
   }
 
@@ -3494,7 +3532,13 @@ app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
 });
 
 // Start WebSub subscriptions after boot (10s delay)
-setTimeout(subscribeAllChannels, 10000);
+// Boot WebSub: check expiries first, subscribe only what's needed,
+// then schedule the next renewal timer based on actual stored expiry dates.
+// Deploys that happen hours after a fresh subscription complete instantly.
+setTimeout(async () => {
+  await subscribeAllChannels();
+  await scheduleWebSubRenewal();
+}, 10000);
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER
@@ -4166,52 +4210,31 @@ app.get('/api/admin/channel-health', (req, res) => {
     }
   });
 });
-
-// ── Monitor endpoints ──────────────────────────────────────────────────────────
-
-// Public status summary — safe to expose (no secrets, no channel data)
+// ── Monitor endpoints ────────────────────────────────────────────────────────
 app.get('/api/monitor/status', async (req, res) => {
-  // Return cached results immediately — never run checks inline in a request.
-  // Running checks here caused 524 timeouts when external services were slow.
-  // The scheduled runner in monitor.js populates results every 5 minutes.
   let results = monitor.getLastResults();
   if (!results && redis) {
-    try {
-      const raw = await redis.get('monitor:last-results');
-      if (raw) results = JSON.parse(raw);
-    } catch(_) {}
+    try { const raw = await redis.get('monitor:last-results'); if (raw) results = JSON.parse(raw); } catch(_) {}
   }
   if (!results) {
-    // First boot — checks haven't run yet (they fire 30s after start).
-    // Return a pending response rather than hanging on a live check.
-    return res.json({
-      ok: null,
-      pending: true,
-      message: 'First check runs 30s after boot — refresh in a moment.',
-      checkedAt: null,
-      durationMs: 0,
-      results: [],
-      failed: 0,
-    });
+    return res.json({ ok: null, pending: true, message: 'First check runs 3 minutes after boot — refresh shortly.', checkedAt: null, durationMs: 0, results: [], failed: 0 });
   }
   res.json(results);
 });
 
-// Admin: force a manual check run right now
 app.post('/api/monitor/run', adminAuth, async (req, res) => {
   const results = await monitor.runAllChecks();
   res.json(results);
 });
 
-// Admin: send a test alert to verify email/SMS config
 app.post('/api/monitor/test-alert', adminAuth, async (req, res) => {
   const results = await monitor.sendTestAlert();
   res.json(results);
 });
 
-// Alert channels are configured via Railway env vars:
-//   MONITOR_EMAIL_TO, RESEND_API_KEY, MONITOR_SMS_TO, TEXTBELT_API_KEY
-// No registration endpoint needed — set the env vars and redeploy.
+// Alert channels configured via Railway env vars — no registration endpoint needed.
+// MONITOR_EMAIL_TO, MONITOR_EMAIL_FROM, RESEND_API_KEY, MONITOR_SMS_TO, TEXTBELT_API_KEY
+
 app.get('/api/admin/test-connectivity', async (req, res) => {
   const testUrl = key => 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
     '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
@@ -4460,7 +4483,7 @@ radar.routes(app);
 
 // Health monitor dashboard
 app.get('/monitor', (req, res) => {
-  const monitorPath = path.join(__dirname, 'public', 'monitor.html');
+  const monitorPath = require('path').join(__dirname, 'public', 'monitor.html');
   if (require('fs').existsSync(monitorPath)) {
     res.sendFile(monitorPath);
   } else {
@@ -4576,8 +4599,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.warn('[Radar] Redis not available — push notifications disabled');
   }
 
-  // Init health monitor — wrapped in try/catch so a monitor failure
-  // can never take down the main server.
+  // Init health monitor
   try {
     monitor.init({
       redis,
@@ -4595,6 +4617,6 @@ server.listen(PORT, '0.0.0.0', async () => {
       eventLog,
     });
   } catch(e) {
-    console.error('[Monitor] Failed to initialize health monitor:', e.message);
+    console.error('[Monitor] Failed to initialize:', e.message);
   }
 });
