@@ -25,6 +25,7 @@
 'use strict';
 
 const https = require('https');
+const http  = require('http');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const CHECK_INTERVAL_MS   = 5  * 60 * 1000; // run checks every 5 min
@@ -166,16 +167,29 @@ Dashboard: ${APP_URL}/monitor`;
 
 // ── HTTP health fetch ─────────────────────────────────────────────────────────
 function _httpGet(url, timeoutMs = 8000) {
-  // Use Promise.race against a hard deadline so a stalled connection
-  // (one that accepts but never sends data) never hangs indefinitely.
-  // req.setTimeout only catches inactivity, not total wall-clock time.
+  // Use Promise.race against a hard deadline — req.setTimeout only catches
+  // inactivity, not total wall-clock time. Supports http and https, and
+  // follows one redirect (handles 301/302 from IEM and others).
   const deadline = new Promise((_, reject) =>
     setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)
   );
   const request = new Promise((resolve, reject) => {
     const start = Date.now();
+    const lib   = url.startsWith('https') ? https : http;
     try {
-      const req = https.get(url, { headers: { 'User-Agent': 'WeatherTV-Monitor/1.0' } }, res => {
+      const req = lib.get(url, { headers: { 'User-Agent': 'WeatherTV-Monitor/1.0' } }, res => {
+        // Follow one redirect
+        if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+          res.resume();
+          const redirectLib = res.headers.location.startsWith('https') ? https : http;
+          redirectLib.get(res.headers.location, { headers: { 'User-Agent': 'WeatherTV-Monitor/1.0' } }, res2 => {
+            let body = '';
+            res2.on('data', d => { body += d; if (body.length > 50000) res2.destroy(); });
+            res2.on('end', () => resolve({ status: res2.statusCode, body, ms: Date.now() - start }));
+            res2.on('error', reject);
+          }).on('error', reject);
+          return;
+        }
         let body = '';
         res.on('data', d => { body += d; if (body.length > 50000) req.destroy(); });
         res.on('end', () => resolve({ status: res.statusCode, body, ms: Date.now() - start }));
@@ -193,7 +207,10 @@ function _httpGet(url, timeoutMs = 8000) {
 // 1. Server self-check
 async function checkServer() {
   try {
-    const r = await _httpGet(`${APP_URL}/api/health`, 4000);
+    // Use localhost — Railway containers can't always resolve their own
+    // external hostname (ENOTFOUND). Port defaults to 3000 or PORT env var.
+    const port = process.env.PORT || 3000;
+    const r = await _httpGet(`http://localhost:${port}/api/health`, 4000);
     const ok = r.status === 200;
     return { ok, label: 'Server', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -279,7 +296,7 @@ async function checkQuota() {
 // 7. NWS Alerts API
 async function checkNWSAlerts() {
   try {
-    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&limit=1', 5000);
+    const r = await _httpGet('https://api.weather.gov/alerts/active?limit=1', 5000);
     const ok = r.status === 200;
     return { ok, label: 'NWS Alerts API', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -320,7 +337,7 @@ async function checkGIBS() {
     const p = n => String(n).padStart(2, '0');
     const ts = `${t.getUTCFullYear()}-${p(t.getUTCMonth()+1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:00Z`;
     const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Band13_Clean_Infrared/default/${ts}/GoogleMapsCompatible_Level6/4/5/3.jpg`;
-    const r = await _httpGet(url, 5000);
+    const r = await _httpGet(url, 12000);
     const ok = r.status === 200;
     return { ok, label: 'GOES Satellite (GIBS)', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -339,7 +356,7 @@ async function checkMemory() {
 async function checkLightning() {
   try {
     // Can't test WSS easily over HTTP, so check IEM's lightning data endpoint
-    const r = await _httpGet('https://mesonet.agron.iastate.edu/geojson/recent_nexrad.py?minutes=5', 5000);
+    const r = await _httpGet('https://mesonet.agron.iastate.edu/json/radar.py?operation=list&network=NEXRAD', 5000);
     const ok = r.status === 200;
     return { ok, label: 'Lightning (IEM)', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
