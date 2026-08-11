@@ -4171,6 +4171,9 @@ app.get('/api/admin/channel-health', (req, res) => {
 
 // Public status summary — safe to expose (no secrets, no channel data)
 app.get('/api/monitor/status', async (req, res) => {
+  // Return cached results immediately — never run checks inline in a request.
+  // Running checks here caused 524 timeouts when external services were slow.
+  // The scheduled runner in monitor.js populates results every 5 minutes.
   let results = monitor.getLastResults();
   if (!results && redis) {
     try {
@@ -4179,7 +4182,17 @@ app.get('/api/monitor/status', async (req, res) => {
     } catch(_) {}
   }
   if (!results) {
-    results = await monitor.runAllChecks();
+    // First boot — checks haven't run yet (they fire 30s after start).
+    // Return a pending response rather than hanging on a live check.
+    return res.json({
+      ok: null,
+      pending: true,
+      message: 'First check runs 30s after boot — refresh in a moment.',
+      checkedAt: null,
+      durationMs: 0,
+      results: [],
+      failed: 0,
+    });
   }
   res.json(results);
 });
@@ -4190,21 +4203,15 @@ app.post('/api/monitor/run', adminAuth, async (req, res) => {
   res.json(results);
 });
 
-// Admin: register an FCM token to receive monitor alerts
-app.post('/api/monitor/register-admin', adminAuth, async (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'token required' });
-  await monitor.addAdminToken(token);
-  res.json({ ok: true, totalAdminTokens: monitor.getAdminTokens().length });
+// Admin: send a test alert to verify email/SMS config
+app.post('/api/monitor/test-alert', adminAuth, async (req, res) => {
+  const results = await monitor.sendTestAlert();
+  res.json(results);
 });
 
-// Admin: remove an FCM token from monitor alerts
-app.delete('/api/monitor/register-admin', adminAuth, async (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'token required' });
-  await monitor.removeAdminToken(token);
-  res.json({ ok: true, totalAdminTokens: monitor.getAdminTokens().length });
-});
+// Alert channels are configured via Railway env vars:
+//   MONITOR_EMAIL_TO, RESEND_API_KEY, MONITOR_SMS_TO, TEXTBELT_API_KEY
+// No registration endpoint needed — set the env vars and redeploy.
 app.get('/api/admin/test-connectivity', async (req, res) => {
   const testUrl = key => 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
     '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
@@ -4572,8 +4579,6 @@ server.listen(PORT, '0.0.0.0', async () => {
   // Init health monitor — wrapped in try/catch so a monitor failure
   // can never take down the main server.
   try {
-    let fbAdmin = null;
-    try { fbAdmin = require('firebase-admin'); } catch(_) {}
     monitor.init({
       redis,
       getAllChannels,
@@ -4588,8 +4593,6 @@ server.listen(PORT, '0.0.0.0', async () => {
         archiveExceeded: archiveQuotaExceeded,
       }),
       eventLog,
-      firebaseApp: radar._firebaseApp || null,
-      admin:       fbAdmin,
     });
   } catch(e) {
     console.error('[Monitor] Failed to initialize health monitor:', e.message);

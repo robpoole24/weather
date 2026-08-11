@@ -100,6 +100,7 @@
     <span id="duration"></span>
     <button class="btn" id="btn-refresh" onclick="refresh()">↺ Run now</button>
     <button class="btn" id="btn-auto" onclick="toggleAuto()">Auto: ON</button>
+    <button class="btn" id="btn-test" onclick="testAlert()">✉ Test alert</button>
   </div>
 
   <div class="section-title">System Checks</div>
@@ -107,31 +108,34 @@
     <div class="check-card" style="opacity:0.4"><div class="check-icon">⏳</div><div class="check-body"><div class="check-label">Loading…</div></div></div>
   </div>
 
-  <div class="register-box" id="register-box" style="display:none">
-    <h3>🔔 Register for admin alerts</h3>
-    <p>Enter your FCM device token to receive push notifications when any check fails. This is your personal device token from the WeatherTV notification setup.</p>
-
-    <div id="token-detected" style="display:none;margin-bottom:0.75rem;">
-      <div style="font-size:0.78rem;color:var(--green);margin-bottom:0.4rem;">✓ Token detected from this device</div>
-      <div style="display:flex;gap:0.5rem;align-items:center;">
-        <code id="token-preview" style="font-size:0.68rem;color:var(--muted);word-break:break-all;flex:1;background:var(--bg);padding:0.3rem 0.5rem;border-radius:4px;border:1px solid var(--border);"></code>
-        <button class="btn" onclick="copyToken()" style="flex-shrink:0;">Copy</button>
+  <div class="register-box">
+    <h3>🔔 Alert configuration</h3>
+    <p>Alerts are sent via email and/or SMS. Set these Railway environment variables and redeploy — no registration needed.</p>
+    <div style="display:grid;gap:0.4rem;font-size:0.8rem;">
+      <div style="display:flex;gap:0.5rem;align-items:baseline;">
+        <code style="color:var(--accent);min-width:180px;flex-shrink:0;">MONITOR_EMAIL_TO</code>
+        <span style="color:var(--muted);">Your email address</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:baseline;">
+        <code style="color:var(--accent);min-width:180px;flex-shrink:0;">MONITOR_EMAIL_FROM</code>
+        <span style="color:var(--muted);">Sending address (must be verified in Resend)</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:baseline;">
+        <code style="color:var(--accent);min-width:180px;flex-shrink:0;">RESEND_API_KEY</code>
+        <span style="color:var(--muted);">From resend.com — 3,000 emails/month free</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:baseline;margin-top:0.3rem;">
+        <code style="color:var(--accent);min-width:180px;flex-shrink:0;">MONITOR_SMS_TO</code>
+        <span style="color:var(--muted);">Your phone number e.g. +19206669979</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:baseline;">
+        <code style="color:var(--accent);min-width:180px;flex-shrink:0;">TEXTBELT_API_KEY</code>
+        <span style="color:var(--muted);">From textbelt.com — $10 for ~1,000 texts</span>
       </div>
     </div>
-    <div id="token-missing" style="display:none;margin-bottom:0.75rem;">
-      <div style="font-size:0.78rem;color:var(--yellow);">⚠ No token found on this device. Visit <a href="/" style="color:var(--accent);">WeatherTV</a> first and allow notifications, then come back here.</div>
+    <div style="margin-top:0.75rem;font-size:0.75rem;color:var(--muted);">
+      Both channels are optional — set one or both. Alerts fire at most once per 30 minutes per issue.
     </div>
-
-    <input type="text" id="token-input" placeholder="FCM device token (auto-filled if detected above)…"/>
-    <div class="row">
-      <input type="password" id="admin-key-input" placeholder="Admin key…" style="max-width:180px"/>
-      <button class="btn" onclick="registerToken()">Register</button>
-      <button class="btn" onclick="unregisterToken()">Remove</button>
-    </div>
-  </div>
-
-  <div style="text-align:right;margin-top:1rem">
-    <button class="btn" onclick="document.getElementById('register-box').style.display=document.getElementById('register-box').style.display==='none'?'block':'none'">FCM Admin Alerts ▾</button>
   </div>
 </main>
 
@@ -197,11 +201,26 @@ async function refresh() {
   btn.textContent = '↺ Checking…';
   try {
     const res = await fetch('/api/monitor/status');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    render(data);
+    if (data.pending) {
+      // First boot - checks not run yet
+      document.getElementById('overall-pill').textContent = '⏳ Starting up…';
+      document.getElementById('overall-pill').className = 'status-pill pill-loading';
+      document.getElementById('last-checked').textContent = 'First check runs 30s after boot';
+      document.getElementById('check-grid').innerHTML =
+        '<div class="check-card" style="opacity:0.5"><div class="check-icon">⏳</div>' +
+        '<div class="check-body"><div class="check-label">Initializing…</div>' +
+        '<div class="check-detail">Refresh in a moment</div></div></div>';
+      // Auto-retry in 10s
+      setTimeout(refresh, 10000);
+    } else {
+      render(data);
+    }
   } catch(e) {
     document.getElementById('overall-pill').textContent = '✗ Monitor unreachable';
     document.getElementById('overall-pill').className = 'status-pill pill-fail';
+    document.getElementById('last-checked').textContent = 'Error: ' + e.message;
   }
   btn.disabled = false;
   btn.textContent = '↺ Run now';
@@ -227,72 +246,38 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-async function registerToken() {
-  const token = document.getElementById('token-input').value.trim();
-  const key   = document.getElementById('admin-key-input').value.trim();
-  if (!token || !key) { showToast('Token and admin key required'); return; }
+
+
+async function testAlert() {
+  const key = prompt('Admin key:');
+  if (!key) return;
+  const btn = document.getElementById('btn-test');
+  btn.disabled = true;
+  btn.textContent = '✉ Sending…';
   try {
-    const r = await fetch('/api/monitor/register-admin', {
+    const r = await fetch('/api/monitor/test-alert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
-      body: JSON.stringify({ token }),
     });
     const d = await r.json();
-    if (r.ok) showToast(`✓ Registered — ${d.totalAdminTokens} admin token(s) active`);
-    else showToast('✗ ' + (d.error || 'Failed'));
-  } catch(e) { showToast('✗ Request failed'); }
-}
-
-async function unregisterToken() {
-  const token = document.getElementById('token-input').value.trim();
-  const key   = document.getElementById('admin-key-input').value.trim();
-  if (!token || !key) { showToast('Token and admin key required'); return; }
-  try {
-    const r = await fetch('/api/monitor/register-admin', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json', 'x-admin-key': key },
-      body: JSON.stringify({ token }),
-    });
-    const d = await r.json();
-    if (r.ok) showToast(`✓ Removed — ${d.totalAdminTokens} admin token(s) remain`);
-    else showToast('✗ ' + (d.error || 'Failed'));
-  } catch(e) { showToast('✗ Request failed'); }
+    if (!r.ok) { showToast('✗ ' + (d.error || 'Failed')); return; }
+    const lines = [];
+    if (d.email !== 'not configured') lines.push('Email: ' + d.email + (d.emailTo ? ' → ' + d.emailTo : ''));
+    if (d.sms   !== 'not configured') lines.push('SMS: '   + d.sms   + (d.smsTo   ? ' → ' + d.smsTo   : ''));
+    if (!lines.length) lines.push('No channels configured — set Railway env vars');
+    showToast(lines.join(' | '));
+  } catch(e) {
+    showToast('✗ ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✉ Test alert';
+  }
 }
 
 // Boot
 refresh();
 scheduleAuto();
-loadToken();
 
-function loadToken() {
-  const token = localStorage.getItem('wtv-fcm-token');
-  if (token) {
-    document.getElementById('token-detected').style.display = 'block';
-    document.getElementById('token-missing').style.display  = 'none';
-    document.getElementById('token-preview').textContent = token.slice(0, 20) + '…' + token.slice(-10);
-    document.getElementById('token-input').value = token;
-  } else {
-    document.getElementById('token-missing').style.display  = 'block';
-    document.getElementById('token-detected').style.display = 'none';
-  }
-}
-
-function copyToken() {
-  const token = localStorage.getItem('wtv-fcm-token');
-  if (!token) { showToast('No token found'); return; }
-  navigator.clipboard.writeText(token)
-    .then(() => showToast('✓ Token copied to clipboard'))
-    .catch(() => {
-      // Fallback for older mobile browsers
-      const el = document.createElement('textarea');
-      el.value = token;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      showToast('✓ Token copied');
-    });
-}
 </script>
 </body>
 </html>

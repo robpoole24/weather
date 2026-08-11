@@ -2,16 +2,24 @@
 // monitor.js — WeatherTV Health Monitor
 // ═══════════════════════════════════════════════════════════════════
 // Runs health checks on every WeatherTV subsystem on a schedule.
-// Sends FCM push alerts to registered admin devices when anything
+// Sends alerts via email (Resend) and/or SMS (Textbelt) when anything
 // breaks. Results are cached in Redis and served via /api/monitor/status.
 //
 // Checks run every 5 minutes. Alert cooldown: 30 minutes per check
 // type so you don't get spammed during an extended outage.
 //
+// Railway env vars — set whichever you want, both are optional:
+//   MONITOR_EMAIL_TO   — address to send alert emails to
+//   MONITOR_EMAIL_FROM — sending address (must be verified in Resend)
+//   RESEND_API_KEY     — from resend.com (3,000 emails/month free)
+//   MONITOR_SMS_TO     — phone number for SMS alerts e.g. +19206669979
+//   TEXTBELT_API_KEY   — from textbelt.com ($10 for ~1,000 texts)
+//                        use 'textbelt' (no quotes) for the free 1/day key
+//
 // Called from server.js:
 //   const monitor = require('./monitor');
 //   monitor.init({ redis, getAllChannels, websubLeases, cache,
-//                  primaryQuotaExceeded, eventLog, firebaseApp, admin });
+//                  getQuota, eventLog });
 // ═══════════════════════════════════════════════════════════════════
 
 'use strict';
@@ -21,7 +29,6 @@ const https = require('https');
 // ── Constants ────────────────────────────────────────────────────────────────
 const CHECK_INTERVAL_MS   = 5  * 60 * 1000; // run checks every 5 min
 const ALERT_COOLDOWN_MS   = 30 * 60 * 1000; // only re-alert same issue after 30 min
-const RESULT_TTL_MS       = 10 * 60 * 1000; // status cache lifetime
 const APP_URL             = process.env.APP_URL || 'https://www.watchweathertv.com';
 
 // Thresholds
@@ -37,28 +44,24 @@ let _websubLeases  = null;
 let _cache         = null;
 let _getQuota      = null;
 let _eventLog      = null;
-let _firebaseApp   = null;
-let _admin         = null;
 let _lastRun       = null;
 let _lastResults   = null;
 let _alertCooldowns = {}; // { checkId: lastAlertTimestamp }
 let _checkTimer    = null;
-let _adminTokens   = []; // FCM tokens for admin alerts
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-function init({ redis, getAllChannels, websubLeases, cache,
-                getQuota, eventLog, firebaseApp, admin }) {
+function init({ redis, getAllChannels, websubLeases, cache, getQuota, eventLog }) {
   _redis         = redis;
   _getAllChannels = getAllChannels;
   _websubLeases  = websubLeases;
   _cache         = cache;
   _getQuota      = getQuota;
   _eventLog      = eventLog;
-  _firebaseApp   = firebaseApp;
-  _admin         = admin;
 
-  // Load admin FCM tokens from Redis
-  _loadAdminTokens();
+  const email = process.env.MONITOR_EMAIL_TO;
+  const sms   = process.env.MONITOR_SMS_TO;
+  const chan   = [email && 'email', sms && 'SMS'].filter(Boolean).join(' + ') || 'none configured';
+  console.log(`[Monitor] Alert channels: ${chan}`);
 
   // Run first check 30s after boot, then every 5 min.
   // All wrapped in try/catch — monitor must never crash the main server.
@@ -72,29 +75,72 @@ function init({ redis, getAllChannels, websubLeases, cache,
   console.log('[Monitor] Health monitor initialized — first check in 30s');
 }
 
-// ── Admin token management ────────────────────────────────────────────────────
-async function _loadAdminTokens() {
-  if (!_redis) return;
-  try {
-    const raw = await _redis.get('monitor:admin-tokens');
-    if (raw) _adminTokens = JSON.parse(raw);
-    console.log(`[Monitor] Loaded ${_adminTokens.length} admin FCM token(s)`);
-  } catch(e) {
-    console.warn('[Monitor] Could not load admin tokens:', e.message);
-  }
+// ── Email via Resend ──────────────────────────────────────────────────────────
+async function _sendEmail(subject, text) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const to     = process.env.MONITOR_EMAIL_TO;
+  const from   = process.env.MONITOR_EMAIL_FROM || 'monitor@watchweathertv.com';
+  if (!apiKey || !to) return false;
+
+  const body = JSON.stringify({
+    from, to,
+    subject,
+    text,
+    html: `<pre style="font-family:monospace;font-size:14px">${text.replace(/</g,'&lt;')}</pre>`,
+  });
+
+  return new Promise(resolve => {
+    const req = https.request({
+      hostname: 'api.resend.com',
+      path:     '/emails',
+      method:   'POST',
+      headers:  { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => {
+      res.resume();
+      resolve(res.statusCode >= 200 && res.statusCode < 300);
+    });
+    req.on('error', e => { console.error('[Monitor] Resend error:', e.message); resolve(false); });
+    req.setTimeout(8000, () => { req.destroy(); resolve(false); });
+    req.write(body);
+    req.end();
+  });
 }
 
-async function addAdminToken(token) {
-  if (!_adminTokens.includes(token)) _adminTokens.push(token);
-  if (_redis) await _redis.set('monitor:admin-tokens', JSON.stringify(_adminTokens));
+// ── SMS via Textbelt ──────────────────────────────────────────────────────────
+async function _sendSMS(text) {
+  const apiKey = process.env.TEXTBELT_API_KEY;
+  const phone  = process.env.MONITOR_SMS_TO;
+  if (!apiKey || !phone) return false;
+
+  // Textbelt has a 160-char SMS limit — trim if needed
+  const msg = text.length > 155 ? text.slice(0, 152) + '...' : text;
+  const body = new URLSearchParams({ phone, message: msg, key: apiKey }).toString();
+
+  return new Promise(resolve => {
+    const req = https.request({
+      hostname: 'textbelt.com',
+      path:     '/text',
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+    }, res => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(data);
+          if (!j.success) console.warn('[Monitor] Textbelt failed:', j.error || data);
+          resolve(!!j.success);
+        } catch { resolve(false); }
+      });
+    });
+    req.on('error', e => { console.error('[Monitor] Textbelt error:', e.message); resolve(false); });
+    req.setTimeout(8000, () => { req.destroy(); resolve(false); });
+    req.write(body);
+    req.end();
+  });
 }
 
-async function removeAdminToken(token) {
-  _adminTokens = _adminTokens.filter(t => t !== token);
-  if (_redis) await _redis.set('monitor:admin-tokens', JSON.stringify(_adminTokens));
-}
-
-// ── FCM Alert Sender ─────────────────────────────────────────────────────────
+// ── Alert dispatcher ─────────────────────────────────────────────────────────
 async function _sendAlert(checkId, title, body) {
   // Cooldown — don't re-alert the same issue for 30 min
   const now = Date.now();
@@ -103,35 +149,43 @@ async function _sendAlert(checkId, title, body) {
 
   console.warn(`[Monitor] ALERT: ${title} — ${body}`);
 
-  if (!_firebaseApp || !_admin || !_adminTokens.length) return;
-  try {
-    const messaging = _admin.messaging(_firebaseApp);
-    await messaging.sendEachForMulticast({
-      tokens: _adminTokens,
-      notification: { title: `⚠️ WeatherTV: ${title}`, body },
-      android: {
-        priority: 'high',
-        notification: { channelId: 'monitor_alerts', priority: 'max', defaultSound: true },
-      },
-      data: { type: 'monitor_alert', checkId },
-    });
-  } catch(e) {
-    console.error('[Monitor] FCM send error:', e.message);
-  }
+  const subject = `⚠️ WeatherTV: ${title}`;
+  const text    = `WeatherTV Monitor Alert
+
+Check: ${title}
+Detail: ${body}
+Time: ${new Date().toLocaleString()}
+Dashboard: ${APP_URL}/monitor`;
+
+  // Fire both channels concurrently — failure of one doesn't block the other
+  await Promise.allSettled([
+    _sendEmail(subject, text),
+    _sendSMS(`WeatherTV ALERT: ${title} — ${body}`),
+  ]);
 }
 
 // ── HTTP health fetch ─────────────────────────────────────────────────────────
 function _httpGet(url, timeoutMs = 8000) {
-  return new Promise((resolve, reject) => {
+  // Use Promise.race against a hard deadline so a stalled connection
+  // (one that accepts but never sends data) never hangs indefinitely.
+  // req.setTimeout only catches inactivity, not total wall-clock time.
+  const deadline = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)
+  );
+  const request = new Promise((resolve, reject) => {
     const start = Date.now();
-    const req = https.get(url, { headers: { 'User-Agent': 'WeatherTV-Monitor/1.0' } }, res => {
-      let body = '';
-      res.on('data', d => { body += d; if (body.length > 50000) req.destroy(); });
-      res.on('end', () => resolve({ status: res.statusCode, body, ms: Date.now() - start }));
-    });
-    req.on('error', reject);
-    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('timeout')); });
+    try {
+      const req = https.get(url, { headers: { 'User-Agent': 'WeatherTV-Monitor/1.0' } }, res => {
+        let body = '';
+        res.on('data', d => { body += d; if (body.length > 50000) req.destroy(); });
+        res.on('end', () => resolve({ status: res.statusCode, body, ms: Date.now() - start }));
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('socket timeout')); });
+    } catch(e) { reject(e); }
   });
+  return Promise.race([request, deadline]);
 }
 
 // ── Individual Checks ─────────────────────────────────────────────────────────
@@ -139,7 +193,7 @@ function _httpGet(url, timeoutMs = 8000) {
 // 1. Server self-check
 async function checkServer() {
   try {
-    const r = await _httpGet(`${APP_URL}/api/health`, 6000);
+    const r = await _httpGet(`${APP_URL}/api/health`, 4000);
     const ok = r.status === 200;
     return { ok, label: 'Server', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -225,7 +279,7 @@ async function checkQuota() {
 // 7. NWS Alerts API
 async function checkNWSAlerts() {
   try {
-    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&limit=1', 8000);
+    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&limit=1', 5000);
     const ok = r.status === 200;
     return { ok, label: 'NWS Alerts API', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -236,7 +290,7 @@ async function checkNWSAlerts() {
 // 8. Open-Meteo forecast API
 async function checkOpenMeteo() {
   try {
-    const r = await _httpGet('https://api.open-meteo.com/v1/forecast?latitude=43&longitude=-87.9&current=temperature_2m&forecast_days=1', 8000);
+    const r = await _httpGet('https://api.open-meteo.com/v1/forecast?latitude=43&longitude=-87.9&current=temperature_2m&forecast_days=1', 5000);
     const ok = r.status === 200;
     return { ok, label: 'Open-Meteo', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -248,7 +302,7 @@ async function checkOpenMeteo() {
 async function checkNEXRAD() {
   try {
     // Check a known-good static tile URL (current frame)
-    const r = await _httpGet('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/4/4/6.png', 8000);
+    const r = await _httpGet('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/4/4/6.png', 5000);
     const ok = r.status === 200;
     return { ok, label: 'NEXRAD Tiles (IEM)', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -266,7 +320,7 @@ async function checkGIBS() {
     const p = n => String(n).padStart(2, '0');
     const ts = `${t.getUTCFullYear()}-${p(t.getUTCMonth()+1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:00Z`;
     const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Band13_Clean_Infrared/default/${ts}/GoogleMapsCompatible_Level6/4/5/3.jpg`;
-    const r = await _httpGet(url, 10000);
+    const r = await _httpGet(url, 5000);
     const ok = r.status === 200;
     return { ok, label: 'GOES Satellite (GIBS)', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -285,7 +339,7 @@ async function checkMemory() {
 async function checkLightning() {
   try {
     // Can't test WSS easily over HTTP, so check IEM's lightning data endpoint
-    const r = await _httpGet('https://mesonet.agron.iastate.edu/geojson/recent_nexrad.py?minutes=5', 6000);
+    const r = await _httpGet('https://mesonet.agron.iastate.edu/geojson/recent_nexrad.py?minutes=5', 5000);
     const ok = r.status === 200;
     return { ok, label: 'Lightning (IEM)', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
@@ -375,12 +429,29 @@ async function runAllChecks() {
   return _lastResults;
 }
 
+// ── Test alert ────────────────────────────────────────────────────────────────
+async function sendTestAlert() {
+  const subject = '✅ WeatherTV Monitor — test alert';
+  const text    = `This is a test alert from WeatherTV Monitor.\n\nIf you received this, email and/or SMS alerts are working correctly.\n\nTime: ${new Date().toLocaleString()}\nDashboard: ${APP_URL}/monitor`;
+
+  const emailOk = await _sendEmail(subject, text);
+  const smsOk   = await _sendSMS(`WeatherTV Monitor test — alerts are working. ${new Date().toLocaleTimeString()}`);
+
+  const emailCfg = !!(process.env.RESEND_API_KEY && process.env.MONITOR_EMAIL_TO);
+  const smsCfg   = !!(process.env.TEXTBELT_API_KEY && process.env.MONITOR_SMS_TO);
+
+  return {
+    email: emailCfg ? (emailOk ? 'sent' : 'failed — check RESEND_API_KEY and MONITOR_EMAIL_FROM') : 'not configured',
+    sms:   smsCfg   ? (smsOk   ? 'sent' : 'failed — check TEXTBELT_API_KEY and MONITOR_SMS_TO')   : 'not configured',
+    emailTo:  process.env.MONITOR_EMAIL_TO  || null,
+    smsTo:    process.env.MONITOR_SMS_TO    || null,
+  };
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 module.exports = {
   init,
   runAllChecks,
+  sendTestAlert,
   getLastResults: () => _lastResults,
-  addAdminToken,
-  removeAdminToken,
-  getAdminTokens: () => _adminTokens,
 };
