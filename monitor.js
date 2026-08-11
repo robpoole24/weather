@@ -35,7 +35,7 @@ const APP_URL             = process.env.APP_URL || 'https://www.watchweathertv.c
 // Thresholds
 const WEBSUB_FAIL_THRESHOLD  = 0.10; // alert if >10% of channels failed/unknown
 const MEMORY_WARN_MB         = 400;  // alert if RSS exceeds this
-const RECENT_FETCH_STALE_MS  = 4 * 60 * 60 * 1000; // alert if no fetch in 4hr
+const RECENT_FETCH_STALE_MS  = 18 * 60 * 60 * 1000; // fetches run at noon+6pm EST; 18hr covers overnight gap
 const LIVE_CHECK_STALE_MS    = 30 * 60 * 1000;      // alert if live check hasn't run in 30min
 
 // ── Module State ─────────────────────────────────────────────────────────────
@@ -64,6 +64,20 @@ function init({ redis, getAllChannels, websubLeases, cache, getQuota, eventLog }
   const sms   = process.env.MONITOR_SMS_TO;
   const chan   = [email && 'email', sms && 'SMS'].filter(Boolean).join(' + ') || 'none configured';
   console.log(`[Monitor] Alert channels: ${chan}`);
+
+  // Restore cooldowns from Redis so a deploy doesn't trigger a re-alert flood
+  if (redis) {
+    (async () => {
+      try {
+        const keys = await redis.keys('monitor:cooldown:*');
+        for (const key of keys) {
+          const val = await redis.get(key);
+          if (val) _alertCooldowns[key.replace('monitor:cooldown:', '')] = parseInt(val, 10);
+        }
+        if (keys.length) console.log(`[Monitor] Restored ${keys.length} alert cooldown(s) from Redis`);
+      } catch(e) { console.warn('[Monitor] Could not restore cooldowns:', e.message); }
+    })();
+  }
 
   // Run first check 30s after boot, then every 5 min.
   // All wrapped in try/catch — monitor must never crash the main server.
@@ -150,10 +164,14 @@ async function _sendSMS(text) {
 
 // ── Alert dispatcher ─────────────────────────────────────────────────────────
 async function _sendAlert(checkId, title, body) {
-  // Cooldown — don't re-alert the same issue for 30 min
+  // Cooldown — don't re-alert the same issue for 30 min.
+  // Persisted to Redis so deploys don't reset and cause a flood of alerts.
   const now = Date.now();
   if (_alertCooldowns[checkId] && now - _alertCooldowns[checkId] < ALERT_COOLDOWN_MS) return;
   _alertCooldowns[checkId] = now;
+  if (_redis) {
+    try { await _redis.setex('monitor:cooldown:' + checkId, Math.ceil(ALERT_COOLDOWN_MS / 1000), String(now)); } catch(_) {}
+  }
 
   console.warn(`[Monitor] ALERT: ${title} — ${body}`);
 
@@ -309,7 +327,7 @@ async function checkQuota() {
 // 7. NWS Alerts API
 async function checkNWSAlerts() {
   try {
-    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land&limit=1', 5000);
+    const r = await _httpGet('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=land', 5000);
     const ok = r.status === 200;
     return { ok, label: 'NWS Alerts API', detail: ok ? `${r.ms}ms` : `HTTP ${r.status}` };
   } catch(e) {
