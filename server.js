@@ -1240,10 +1240,15 @@ app.get('/api/canada-alerts', async (req, res) => {
     return res.json(_caAlertsCache.data);
   }
   // EC has several URL patterns for their alert feeds — try each until one works
+  // ECCC's old battleboard RSS URLs died when CAM launched Aug 11 2026.
+  // NAAD (National Alert Aggregation & Dissemination) is now the primary
+  // public feed — operated by Pelmorex, includes CAM polygon warnings.
+  // MSC Datamart CAP directory is a fallback (file listing, not a feed,
+  // but contains <entry> tags we can parse).
   const EC_ALERT_URLS = [
-    'https://weather.gc.ca/rss/battleboard/can_e.xml',
-    'https://www.weather.gc.ca/rss/battleboard/can_e.xml',
-    'https://weather.gc.ca/en/warnings/rss/can_e.xml',
+    'https://rss.naad-adna.pelmorex.com/',
+    'https://capcp2.naad-adna.pelmorex.com/rss',
+    'https://dd.weather.gc.ca/today/alerts/cap/',
   ];
   let xml = null;
   for (const feedUrl of EC_ALERT_URLS) {
