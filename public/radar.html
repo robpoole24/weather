@@ -1359,6 +1359,14 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
   subdomains:'abcd', maxZoom:19
 }).addTo(map);
 
+// Labels-only layer sits above all radar/satellite/alert overlays so city
+// names and roads are always readable regardless of what's underneath.
+// Transparent everywhere except text — radar colors show through fully.
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
+  subdomains:'abcd', maxZoom:19, zIndex:1200, pane:'overlayPane',
+  opacity:1, interactive:false,
+}).addTo(map);
+
 // ── SMOOTH ANIMATION ENGINE ──────────────────────────────────────────────────
 // Key technique: all frame layers exist on the map simultaneously,
 // but all are opacity:0 except the active one. This keeps tiles loaded
@@ -1484,25 +1492,32 @@ let preloadGen = 0;
 
 function preloadAllFrames() {
   const myGen = ++preloadGen;
-  const statusEl = document.getElementById('preload-status');
-
-  // Attach all inactive frames at once with opacity:0.
-  // The browser throttles concurrent requests naturally (6 per host in Chrome).
-  // Event-based sequencing is unreliable: Leaflet fires 'load' immediately on
-  // opacity:0 layers because there are no visible tiles to wait for.
   const queue = [];
-  frameLayers.forEach((l, i) => { if (i !== currentFrame && !map.hasLayer(l)) queue.push(l); });
-  forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame && !map.hasLayer(f.layer)) queue.push(f.layer); });
+  frameLayers.forEach((l, i) => { if (i !== currentFrame) queue.push(l); });
+  forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame) queue.push(f.layer); });
 
-  if (!queue.length) { if (statusEl) statusEl.textContent = ''; return; }
-
-  if (statusEl) statusEl.textContent = '⬡ caching…';
-  queue.forEach(l => { l.setOpacity(0); if (!map.hasLayer(l)) l.addTo(map); });
-
-  // Clear the status after a reasonable buffer — no event needed
-  setTimeout(() => {
-    if (myGen === preloadGen && statusEl) statusEl.textContent = '';
-  }, 4000);
+  let idx = 0;
+  function next() {
+    if (myGen !== preloadGen) return; // superseded by a newer view change
+    const el = document.getElementById('preload-status');
+    if (idx >= queue.length) { if (el) el.textContent = ''; return; }
+    const layer = queue[idx];
+    if (map.hasLayer(layer)) { idx++; return next(); }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      layer.off('load', finish);
+      idx++;
+      if (el) el.textContent = idx < queue.length ? `Caching ${Math.round((idx/queue.length)*100)}%` : '';
+      setTimeout(next, 80);
+    };
+    layer.setOpacity(0);
+    layer.on('load', finish);
+    layer.addTo(map);
+    setTimeout(finish, 2500); // safety net if 'load' never fires
+  }
+  next();
 }
 
 // Detach all inactive layers the instant a pan/zoom begins — prevents the
@@ -1511,22 +1526,17 @@ map.on('movestart zoomstart', () => {
   preloadGen++; // cancel any in-flight preload chain
   frameLayers.forEach((l, i) => { if (i !== currentFrame && map.hasLayer(l)) map.removeLayer(l); });
   forecastFrames.forEach((f, i) => { if (i !== currentForecastFrame && map.hasLayer(f.layer)) map.removeLayer(f.layer); });
-  // Detach inactive GOES frames too
-  if (goesBuilt) goesFrames.forEach((f, i) => { if (i !== goesFrameIdx && map.hasLayer(f.layer)) map.removeLayer(f.layer); });
 });
 
 // After the view settles, ensure the active layer is attached, then
 // re-preload the rest for the new viewport.
 map.on('moveend zoomend', () => {
-  if (activePaint === 'goes') {
-    goesEnsureAttached(goesFrames[goesFrameIdx]?.layer);
-    setTimeout(goesPreloadAll, 500);
-  } else if (radarMode === 'past') {
+  if (radarMode === 'past') {
     ensureAttached(frameLayers[currentFrame]);
   } else {
     ensureAttached(forecastFrames[currentForecastFrame].layer);
   }
-  if (activePaint !== 'goes') setTimeout(preloadAllFrames, 500);
+  setTimeout(preloadAllFrames, 500);
 });
 
 setTimeout(preloadAllFrames, 1500);
@@ -1556,7 +1566,6 @@ function updateFrameLabel() {
 }
 
 function stepFrame(dir) {
-  if (activePaint === 'goes') { goesStepFrame(dir); return; }
   let next = currentFrame + dir;
   if (next < 0) next = FRAMES.length - 1;
   if (next >= FRAMES.length) next = 0;
@@ -1564,7 +1573,6 @@ function stepFrame(dir) {
 }
 
 function togglePlay() {
-  if (activePaint === 'goes') { goesTogglePlay(); return; }
   isPlaying = !isPlaying;
   const btn = document.getElementById('btn-play');
   if (isPlaying) {
@@ -1657,7 +1665,6 @@ function updateForecastLabel() {
 // Override stepFrame and togglePlay for forecast mode
 const _origStepFrame = stepFrame;
 window.stepFrame = function(dir) {
-  if (activePaint === 'goes') { goesStepFrame(dir); return; }
   if (radarMode === 'past') {
     _origStepFrame(dir);
   } else {
@@ -2307,270 +2314,17 @@ function pointInPolygon(lat, lng, geometry) {
 
 const WXTILES_BASE = 'https://tiles.watchweathertv.com';
 
-// ── GOES SATELLITE ANIMATION ─────────────────────────────────────────────────
-// 24 frames at 30-min intervals = 12 hours of history.
-// Same opacity-swap technique as NEXRAD radar animation.
-//
-// Uses NASA GIBS (Global Imagery Browse Services) WMTS tiles — the same
-// source powering NASA Worldview. Free, no key, reliable 2017-present archive
-// at 10-min intervals. img-src: https: in CSP covers tile <img> requests.
-//   Layer: GOES-East_ABI_Band13_Clean_Infrared (Channel 13 Clean IR, full disk)
-//   Matrix: GoogleMapsCompatible_Level6 (full hemisphere, expandable to global coverage)
-// IEM tile.py returned 503 for goes_east_conus_ch13; WMS TIME= had gaps.
-
-const GOES_FRAME_COUNT  = 24;              // frames (30-min steps = 12hr history)
-const GOES_INTERVAL_MS  = 30 * 60 * 1000; // 30 min between frames
-const GOES_SPEED_MS     = 150;             // ms per frame during playback
-const GOES_HOLD_MS      = 2000;            // hold on latest frame before looping
-const GOES_BASE_OPACITY = 0.85;
-
-let goesFrames       = [];  // [{ time: Date, label: string, layer: L.TileLayer }]
-let goesFrameIdx     = 0;
-let goesPlaying      = false;
-let goesPlayTimer    = null;
-let goesRefreshTimer = null;
-let goesPreloadGen   = 0;
-let goesBuilt        = false;
-
-function goesSnap(date) {
-  const d = new Date(date);
-  d.setUTCSeconds(0, 0);
-  const intervalMins = GOES_INTERVAL_MS / 60000;
-  d.setUTCMinutes(Math.floor(d.getUTCMinutes() / intervalMins) * intervalMins);
-  return d;
-}
-
-// GIBS has ~60-150 min ingest latency. Frames within 2.5hr of now may be
-// blank or glitchy. We anchor the loop end to 2.5hr ago so all 24 frames
-// have confirmed-available imagery.
-const GOES_LATENCY_MS = 2.5 * 60 * 60 * 1000;
-
-// NASA GIBS time format: YYYY-MM-DDTHH:MM:00Z (ISO 8601 UTC, zero-padded)
-function gibsTime(date) {
-  const p = n => String(n).padStart(2, '0');
-  return date.getUTCFullYear() + '-'
-    + p(date.getUTCMonth() + 1) + '-'
-    + p(date.getUTCDate()) + 'T'
-    + p(date.getUTCHours()) + ':'
-    + p(date.getUTCMinutes()) + ':00Z';
-}
-
-function goesLabel(date) {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function buildGoesFrames() {
-  goesFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
-  goesFrames = [];
-
-  const latest = goesSnap(new Date(Date.now() - GOES_LATENCY_MS));
-  for (let i = GOES_FRAME_COUNT - 1; i >= 0; i--) {
-    const t  = new Date(latest.getTime() - i * GOES_INTERVAL_MS);
-    const ts = gibsTime(t);
-    const layer = L.tileLayer(
-      `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Band13_Clean_Infrared/default/${ts}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.jpg`,
-      {
-        opacity: 0,
-        zIndex: 90 + i,
-        attribution: i === 0 ? 'Satellite: <a href="https://worldview.earthdata.nasa.gov/">NASA GIBS/GOES</a>' : '',
-        tileSize: 256,
-        keepBuffer: 1,
-        updateWhenIdle: true,
-        updateWhenZooming: false,
-        maxNativeZoom: 6, // GIBS full disk layer tops out at zoom 6
-      }
-    );
-    goesFrames.push({ time: t, label: goesLabel(t), layer });
-  }
-  goesFrameIdx = goesFrames.length - 1;
-  goesBuilt = true;
-}
-
+let goesLayer = null;
 function ensureGoes() {
-  if (!goesBuilt) buildGoesFrames();
-}
-
-// Attach only the active GOES frame; detach others (mirrors radar pattern)
-function goesEnsureAttached(layer) {
-  if (!map.hasLayer(layer)) layer.addTo(map);
-}
-
-let goesPreloadChain = 0;
-function goesPreloadAll() {
-  const myGen = ++goesPreloadChain;
-  const statusEl = document.getElementById('preload-status');
-  const playBtn  = document.getElementById('btn-play');
-
-  // Disable play until tiles are loaded — otherwise animation advances labels
-  // with no visible map change because WMS tiles haven't rendered yet.
-  if (playBtn) { playBtn.disabled = true; playBtn.style.opacity = '0.4'; }
-  if (statusEl) statusEl.textContent = '🛰 loading satellite…';
-
-  // Count how many frames have at least one tile loaded.
-  // We use 'tileload' (per-tile) not 'load' (all-tiles) because 'load'
-  // fires immediately on opacity:0 layers in Leaflet 1.9.4.
-  const total = goesFrames.length;
-  let loadedFrames = 0;
-  const seenFrames = new Set();
-
-  function onTileLoad() {
-    if (myGen !== goesPreloadChain) return;
-    // Find which frame this layer belongs to and count it once
-    goesFrames.forEach((f, i) => {
-      if (seenFrames.has(i)) return;
-      if (map.hasLayer(f.layer)) {
-        // Check if this layer has any loaded tiles by looking at _tiles
-        const tiles = f.layer._tiles || {};
-        const hasLoaded = Object.values(tiles).some(t => t.loaded);
-        if (hasLoaded) {
-          seenFrames.add(i);
-          loadedFrames++;
-          if (statusEl && loadedFrames < total) {
-            statusEl.textContent = `🛰 ${loadedFrames}/${total} frames`;
-          }
-          if (loadedFrames >= total) {
-            if (statusEl) statusEl.textContent = '';
-            if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
-            // Clean up listeners
-            goesFrames.forEach(f => f.layer.off('tileload', onTileLoad));
-          }
-        }
-      }
-    });
+  if (!goesLayer) {
+    goesLayer = L.tileLayer.wms(
+      'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
+      { layers:'conus_ch13', format:'image/png', transparent:true,
+        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
+    // Refresh GOES every 10 minutes so imagery doesn't feel frozen
+    setInterval(() => { if (goesLayer && map.hasLayer(goesLayer)) goesLayer.redraw(); }, 10 * 60 * 1000);
   }
-
-  // Attach tileload listener to every frame, then add all to map
-  goesFrames.forEach((f, i) => {
-    if (i === goesFrameIdx) return; // active frame already attached
-    f.layer.on('tileload', onTileLoad);
-    f.layer.setOpacity(0);
-    if (!map.hasLayer(f.layer)) f.layer.addTo(map);
-  });
-  // Also watch the active frame (already attached)
-  goesFrames[goesFrameIdx]?.layer.on('tileload', onTileLoad);
-
-  // Safety net — enable play after 20s regardless (24 WMS frames take longer)
-  setTimeout(() => {
-    if (myGen !== goesPreloadChain) return;
-    if (statusEl) statusEl.textContent = '';
-    if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
-    goesFrames.forEach(f => f.layer.off('tileload', onTileLoad));
-  }, 20000);
-}
-
-function goesShowFrame(idx) {
-  // Hide all, show target
-  goesFrames.forEach((f, i) => {
-    if (i === idx) {
-      goesEnsureAttached(f.layer);
-      f.layer.setOpacity(GOES_BASE_OPACITY);
-    } else {
-      f.layer.setOpacity(0);
-    }
-  });
-  goesFrameIdx = idx;
-  goesUpdateLabel();
-}
-
-function goesUpdateLabel() {
-  const f = goesFrames[goesFrameIdx];
-  if (!f) return;
-  const isLatest = goesFrameIdx === goesFrames.length - 1;
-  document.getElementById('anim-progress').textContent = f.label + (isLatest ? ' ●' : '');
-}
-
-function goesStepFrame(dir) {
-  let next = goesFrameIdx + dir;
-  if (next < 0) next = goesFrames.length - 1;
-  if (next >= goesFrames.length) next = 0;
-  goesShowFrame(next);
-}
-
-function goesTogglePlay() {
-  goesPlaying = !goesPlaying;
-  const btn = document.getElementById('btn-play');
-  if (goesPlaying) {
-    btn.textContent = '⏸ Pause';
-    btn.classList.add('on');
-    function advance() {
-      let next = goesFrameIdx + 1;
-      if (next >= goesFrames.length) {
-        // Hold on latest frame, then loop
-        goesShowFrame(goesFrames.length - 1);
-        goesPlayTimer = setTimeout(() => {
-          if (goesPlaying) { goesShowFrame(0); goesPlayTimer = setTimeout(advance, GOES_SPEED_MS); }
-        }, GOES_HOLD_MS);
-        return;
-      }
-      goesShowFrame(next);
-      goesPlayTimer = setTimeout(advance, GOES_SPEED_MS);
-    }
-    advance();
-  } else {
-    btn.textContent = '▶ Play';
-    btn.classList.remove('on');
-    clearTimeout(goesPlayTimer);
-  }
-}
-
-// Rebuild frames every 10 min so the loop stays current without a page reload
-function goesScheduleRefresh() {
-  clearTimeout(goesRefreshTimer);
-  const msToNextInterval = GOES_INTERVAL_MS - (Date.now() % GOES_INTERVAL_MS);
-  goesRefreshTimer = setTimeout(() => {
-    if (activePaint === 'goes') {
-      const wasPlaying = goesPlaying;
-      goesStopAll();
-      buildGoesFrames();
-      goesActivate();
-      if (wasPlaying) goesTogglePlay();
-    } else {
-      // Rebuild silently so frames are fresh next time GOES is activated
-      buildGoesFrames();
-    }
-    goesScheduleRefresh();
-  }, msToNextInterval + 90000); // wait 90s past the boundary for IEM to ingest
-}
-
-function goesStopAll() {
-  goesPlaying = false;
-  clearTimeout(goesPlayTimer);
-  document.getElementById('btn-play').textContent = '▶ Play';
-  document.getElementById('btn-play').classList.remove('on');
-  goesFrames.forEach(f => { f.layer.setOpacity(0); if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
-}
-
-function goesActivate() {
-  ensureGoes();
-  goesFrameIdx = goesFrames.length - 1;
-  goesShowFrame(goesFrameIdx);
-  setTimeout(goesPreloadAll, 400);
-  goesScheduleRefresh();
-  // Show mode-bar controls that make sense for satellite (step only)
-  // Hide Past/Future mode selector — doesn't apply to GOES
-  const modeBar = document.getElementById('mode-bar');
-  const modeDivider = modeBar?.nextElementSibling;
-  if (modeBar) modeBar.style.display = 'none';
-  if (modeDivider && modeDivider.classList.contains('tb-div')) modeDivider.style.display = 'none';
-}
-
-function goesDeactivate() {
-  goesStopAll();
-  clearTimeout(goesRefreshTimer);
-  ++goesPreloadChain; // cancel any in-flight preload
-  // Re-enable play button (may have been disabled during satellite tile loading)
-  const playBtn = document.getElementById('btn-play');
-  if (playBtn) { playBtn.disabled = false; playBtn.style.opacity = ''; }
-  const statusEl = document.getElementById('preload-status');
-  if (statusEl) statusEl.textContent = '';
-  // Restore mode bar for radar
-  const modeBar = document.getElementById('mode-bar');
-  const modeDivider = modeBar?.nextElementSibling;
-  if (modeBar) modeBar.style.display = '';
-  if (modeDivider && modeDivider.classList.contains('tb-div')) modeDivider.style.display = '';
-  // Restore radar frame label
-  if (radarMode === 'past') updateFrameLabel();
-  else updateForecastLabel();
+  return goesLayer;
 }
 
 // ── CANADIAN RADAR (MSC GeoMet composite — no site selector needed) ───────────
@@ -2882,22 +2636,27 @@ function clearSS() {
   ssActiveKey = null;
 }
 
-// Sequentially attach each SS frame, waiting for one to load (or a 6s
-// timeout) before starting the next — exactly mirrors preloadAllFrames().
-// Once all are loaded, starts the oldest→newest animation loop.
-// Sequentially attach SS frames with a fixed delay between each.
-// Starts animation once all frames are attached.
-// Fixed delays are more reliable than load-event detection on opacity:0 layers.
+// Sequentially attach each SS frame, waiting for one to load (or a 2.5s
+// timeout) before starting the next — exactly mirrors preloadAllFrames()
+// above. Once all are loaded, starts the oldest→newest animation loop.
 function preloadSSFrames(myGen) {
   let idx = 0;
   function next() {
-    if (myGen !== ssPreloadGen) return;
+    if (myGen !== ssPreloadGen) return; // superseded by a newer view/product change
     if (idx >= ssLayers.length) { startSSAnimation(); return; }
     const layer = ssLayers[idx];
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      layer.off('load', finish);
+      idx++;
+      setTimeout(next, 60);
+    };
     layer.setOpacity(0);
-    if (!map.hasLayer(layer)) layer.addTo(map);
-    idx++;
-    setTimeout(next, 300); // 300ms per frame — enough for tile requests to queue up
+    layer.on('load', finish);
+    layer.addTo(map);
+    setTimeout(finish, 2500); // safety net if 'load' never fires
   }
   next();
 }
@@ -3629,7 +3388,7 @@ function clearAllPaint(){
   frameLayers.forEach(l => l.setOpacity(0));
   forecastFrames.forEach(f => f.layer.setOpacity(0));
   radarVisible = false;
-  if (goesBuilt) goesDeactivate();
+  if (goesLayer && map.hasLayer(goesLayer)) map.removeLayer(goesLayer);
   // NOTE: clearCC() and clearCanada() intentionally removed from here.
   // CC and Canadian Radar are toggleable overlays (applyOverlay), not
   // mutually-exclusive paints — switching base reflectivity/GOES/apptemp
@@ -3720,7 +3479,7 @@ function setPaint(member){
         forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
       }
       break;
-    case 'goes':    goesActivate(); break;
+    case 'goes':    ensureGoes().addTo(map); break;
     case 'apptemp': showAppTemp(); break;
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
   }
@@ -4510,8 +4269,8 @@ function setRadarOpacity(val) {
     } else {
       forecastFrames[currentForecastFrame].layer.setOpacity(opacity);
     }
-  } else if (activePaint === 'goes' && goesFrames.length) {
-    goesFrames[goesFrameIdx]?.layer.setOpacity(opacity);
+  } else if (activePaint === 'goes' && goesLayer) {
+    goesLayer.setOpacity(opacity);
   } else if (activePaint === 'apptemp' && appTempLayer) {
     appTempLayer.setOpacity(opacity);
   }
