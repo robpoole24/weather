@@ -29,12 +29,12 @@ const http  = require('http');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const CHECK_INTERVAL_MS   = 5  * 60 * 1000; // run checks every 5 min
-const ALERT_COOLDOWN_MS   = 30 * 60 * 1000; // only re-alert same issue after 30 min
+const ALERT_COOLDOWN_MS   = 2 * 60 * 60 * 1000; // only re-alert same issue after 2 hours
 const APP_URL             = process.env.APP_URL || 'https://www.watchweathertv.com';
 
 // Thresholds
 const WEBSUB_FAIL_THRESHOLD  = 0.10; // alert if >10% of channels failed/unknown
-const MEMORY_WARN_MB         = 400;  // alert if RSS exceeds this
+const MEMORY_WARN_MB         = 600;  // alert if RSS exceeds this (Railway hobby containers run 150-300MB normally)
 const RECENT_FETCH_STALE_MS  = 18 * 60 * 60 * 1000; // fetches run at noon+6pm EST; 18hr covers overnight gap
 const LIVE_CHECK_STALE_MS    = 30 * 60 * 1000;      // alert if live check hasn't run in 30min
 
@@ -307,15 +307,21 @@ async function checkWebSub() {
   };
 }
 
-// 4. YouTube live detection — was there a live check recently?
+// 4. YouTube live detection — WebSub is event-driven, no scheduled poll.
+// lastLiveCheck updates only when a WebSub push arrives or admin triggers a check.
+// We check that WebSub is active (subscriptions in place) as the proxy for health.
+// A separate check on WebSub subscription count handles the real failure mode.
 async function checkLiveDetection() {
   if (!_cache) return { ok: false, label: 'Live Detection', detail: 'Cache not available' };
-  const lastCheck = _cache.lastLiveCheck || null;
-  if (!lastCheck) return { ok: false, label: 'Live Detection', detail: 'No live check recorded yet' };
-  const age = Date.now() - lastCheck;
-  const ok = age < LIVE_CHECK_STALE_MS;
-  const mins = Math.round(age / 60000);
-  return { ok, label: 'Live Detection', detail: ok ? `Last check ${mins}m ago` : `Stale — ${mins}m since last check` };
+  const liveCount = Object.values(_cache.liveStatuses || {}).filter(s => s.isLive).length;
+  const lastCheck = _cache.lastLiveCheck;
+  const age = lastCheck ? Math.round((Date.now() - lastCheck) / 60000) : null;
+  const detail = age !== null
+    ? `${liveCount} channel(s) live · last WebSub event ${age}m ago`
+    : `${liveCount} channel(s) live · awaiting first WebSub event`;
+  // Live detection is always "ok" from the monitor's perspective — WebSub
+  // health is what matters, and that's checked separately.
+  return { ok: true, label: 'Live Detection', detail };
 }
 
 // 5. Recent video fetch health
