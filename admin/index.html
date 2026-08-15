@@ -318,6 +318,7 @@
 
       <div style="display:flex;gap:0.5rem;margin-bottom:1.25rem;">
         <button class="btn btn-primary btn-sm" onclick="addHighlight()">+ Add Highlight</button>
+        <button id="btn-backfill-titles" class="btn btn-ghost btn-sm" onclick="backfillHighlightTitles()" title="Fetch titles from YouTube for any highlights showing only a video ID">Fix missing titles</button>
       </div>
       <div id="highlight-result" style="font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;margin-bottom:0.75rem;"></div>
 
@@ -579,10 +580,7 @@
   <div class="section">
     <div class="section-header">
       <div class="section-title">📡 Notification Subscriptions</div>
-      <div style="display:flex;gap:0.5rem;">
-        <button class="btn btn-ghost btn-sm" onclick="renewWebSub()">Renew Expiring</button>
-        <button class="btn btn-ghost btn-sm" onclick="forceResubAll()" title="Wipe all stored expiries and resubscribe every channel — use when adding new channels or after a Redis flush">Force Resub All</button>
-      </div>
+      <button class="btn btn-ghost btn-sm" onclick="renewWebSub()">Renew All</button>
     </div>
     <div class="section-body">
       <div id="websub-summary" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
@@ -1664,19 +1662,6 @@ async function triggerRecentFetch() {
   }
 }
 
-async function forceResubAll() {
-  if (!confirm('Force-resubscribe ALL ' + document.getElementById('websub-summary').textContent.match(/\d+/)?.[0] + ' channels? This hits the hub for every channel regardless of expiry — only use when adding new channels or after a Redis flush.')) return;
-  showToast('Force resubscription started — this will take a few minutes…');
-  try {
-    const res = await fetch('/api/admin/websub/subscribe?force=1', { method:'POST' });
-    const data = await res.json();
-    showToast(data.ok ? '✓ Force resubscription complete' : '⚠ ' + (data.error || 'Unknown error'));
-    await loadWebSubHealth();
-  } catch(e) {
-    showToast('⚠ Force resub request failed');
-  }
-}
-
 async function renewWebSub() {
   const res = await fetch('/api/admin/websub/subscribe', { method:'POST' });
   const data = await res.json();
@@ -1926,18 +1911,12 @@ async function loadWebSubHealth() {
     const res = await fetch('/api/admin/websub-health');
     const data = await res.json();
     const summary = document.getElementById('websub-summary');
-    // Find earliest expiry to show next scheduled renewal
-    const validExpiries = data.leases.filter(l => l.expiresAt).map(l => l.expiresAt);
-    const earliestExpiry = validExpiries.length ? Math.min(...validExpiries) : null;
-    const renewalNote = earliestExpiry
-      ? ' · Next auto-renewal: <strong>' + fmtTs(earliestExpiry - 48 * 60 * 60 * 1000) + '</strong>'
-      : '';
     summary.innerHTML =
       '<span style="color:var(--green)">' + data.active + ' active</span> · ' +
       (data.failed > 0 ? '<span style="color:var(--red)">' + data.failed + ' failed</span> · ' : '') +
       (data.unknown > 0 ? '<span style="color:var(--muted)">' + data.unknown + ' unknown</span> · ' : '') +
-      (data.expiringSoon > 0 ? '<span style="color:var(--gold)">' + data.expiringSoon + ' expiring within 48h</span> · ' : '') +
-      data.total + ' total channels monitored' + renewalNote;
+      (data.expiringSoon > 0 ? '<span style="color:var(--gold)">' + data.expiringSoon + ' expiring within 24h</span> · ' : '') +
+      data.total + ' total channels monitored';
 
     document.getElementById('websub-tbody').innerHTML = data.leases.map(l => {
       const statusColor = l.status === 'active' ? 'var(--green)' : l.status === 'unknown' ? 'var(--muted)' : 'var(--red)';
@@ -2698,17 +2677,30 @@ async function addHighlight() {
     }
   }
 
-  // Auto-fetch title + thumbnail via oEmbed — free, zero quota cost
-  // Works for any public YouTube video regardless of channel
+  // Auto-fetch title + thumbnail — try oEmbed first (free, zero quota),
+  // fall back to the server's YouTube Data API proxy if oEmbed fails or
+  // returns no title (happens for non-embeddable/restricted videos).
   let title = '', thumbnail = '';
   try {
     const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
     if (oe.ok) {
       const d = await oe.json();
-      title = d.title || '';
+      title     = d.title || '';
       thumbnail = d.thumbnail_url || '';
     }
-  } catch(e) {}
+  } catch(_) {}
+
+  // oEmbed failed or returned no title — use the server-side YouTube API proxy
+  if (!title) {
+    try {
+      const r = await fetch(`/api/admin/video-info?videoId=${encodeURIComponent(videoId)}`);
+      if (r.ok) {
+        const d = await r.json();
+        title     = d.title     || '';
+        thumbnail = d.thumbnail || thumbnail;
+      }
+    } catch(_) {}
+  }
 
   const res = await fetch('/api/admin/highlights', {
     method: 'POST',
@@ -2732,7 +2724,20 @@ async function addHighlight() {
   }
 }
 
-async function removeHighlight(index) {
+async function backfillHighlightTitles() {
+  const btn = document.getElementById('btn-backfill-titles');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fixing…'; }
+  try {
+    const res = await fetch('/api/admin/highlights/backfill-titles', { method: 'POST' });
+    const d   = await res.json();
+    showHighlightResult(d.ok ? `✓ Fixed ${d.fixed} title(s)` : '⚠ Backfill failed', d.ok);
+    if (d.fixed) await loadData();
+  } catch(e) {
+    showHighlightResult('⚠ ' + e.message, false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Fix missing titles'; }
+  }
+}
   if (!confirm('Remove this highlight?')) return;
   const res = await fetch(`/api/admin/highlights/${index}`, { method: 'DELETE' });
   const data = await res.json();
