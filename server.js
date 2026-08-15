@@ -417,6 +417,59 @@ app.get('/api/admin/video-info', adminAuth, async (req, res) => {
   }
 });
 
+// Admin — backfill titles for all highlights that have empty title.
+// Safety: refuses to run if appDataStore has no highlights at all — that
+// indicates Redis restore hasn't completed yet and we must not overwrite.
+app.post('/api/admin/highlights/backfill-titles', adminAuth, async (req, res) => {
+  // If appDataStore is null, Redis restore is still pending — do NOT run
+  if (!appDataStore) {
+    return res.status(503).json({ error: 'Server data not fully loaded yet — wait a moment and retry' });
+  }
+  const data = loadData();
+  // Extra guard: refuse to save if highlights is empty (would wipe existing data)
+  if (!data.highlights?.length) return res.json({ ok: true, fixed: 0, note: 'No highlights found' });
+  const key = getApiKey();
+  let fixed = 0;
+  for (const h of data.highlights) {
+    if (h.title) continue;
+    try {
+      const url = `https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${h.videoId}&part=snippet&fields=items(snippet(title,thumbnails))`;
+      const d = await ytFetch(url);
+      const item = d.items?.[0];
+      if (item?.snippet?.title) {
+        h.title     = item.snippet.title;
+        h.thumbnail = item.snippet.thumbnails?.medium?.url || h.thumbnail || '';
+        fixed++;
+      }
+    } catch(_) {}
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (fixed) saveData(data);
+  res.json({ ok: true, fixed });
+});
+
+// Admin — one-time restore of highlights lost in the Aug 2026 data wipe.
+// Only runs if highlights array is currently empty (safe guard).
+app.post('/api/admin/highlights/restore-from-backup', adminAuth, async (req, res) => {
+  if (!appDataStore) return res.status(503).json({ error: 'Data not loaded yet — retry in a moment' });
+  const data = loadData();
+  if (data.highlights?.length > 0) {
+    return res.json({ ok: false, error: `Highlights already exist (${data.highlights.length} entries) — restore aborted to prevent overwrite` });
+  }
+  // Known highlights from July 27 2026 backup
+  data.highlights = [
+    { channelId: 'UCvBVK2ymNzPLRJrgip2GeQQ', videoId: '2EbeqTG99GQ',  title: 'TornadoTRX gets hit by a tornado on @MaxVelocityWX stream',      thumbnail: 'https://i.ytimg.com/vi/2EbeqTG99GQ/hqdefault.jpg'  },
+    { channelId: 'UCpYQmszu4IP37xyt3RQb2gw', videoId: '3OmGOM8XvBk',  title: 'This Tornado Was Intercepted by a DRONE On A Live Stream...',   thumbnail: 'https://i.ytimg.com/vi/3OmGOM8XvBk/hqdefault.jpg'  },
+    { channelId: 'UCV6hWxB0-u_IX7e-h4fEBAw', videoId: 'MJaU5QDG0Q8',  title: 'NEVER STOP CHASING, the movie, premieres on August 21!',        thumbnail: 'https://i.ytimg.com/vi/MJaU5QDG0Q8/hqdefault.jpg'  },
+    { channelId: 'Midwest Safety',            videoId: 'zY8kbrlzCaY',  title: 'Bodycam Captures Deadly Tornado Response',                      thumbnail: 'https://i.ytimg.com/vi/zY8kbrlzCaY/hqdefault.jpg'  },
+    { channelId: 'New York Post',             videoId: 'R0LZU5k_H0k',  title: '',                                                              thumbnail: ''                                                   },
+    { channelId: 'Joe Schmit',               videoId: 'j3ttR3r0IrI',  title: '',                                                              thumbnail: ''                                                   },
+    { channelId: 'June First',               videoId: 'QSsmR9KpE8k',  title: '',                                                              thumbnail: ''                                                   },
+  ];
+  saveData(data);
+  res.json({ ok: true, restored: data.highlights.length });
+});
+
 app.get('/api/admin/highlights', (req, res) => {
   const data = loadData();
   res.json(data.highlights || []);
@@ -443,30 +496,6 @@ app.delete('/api/admin/highlights/:index', (req, res) => {
   data.highlights.splice(idx, 1);
   saveData(data);
   res.json({ ok: true });
-});
-
-// Admin — backfill titles for all highlights that have empty title
-app.post('/api/admin/highlights/backfill-titles', adminAuth, async (req, res) => {
-  const data = loadData();
-  if (!data.highlights?.length) return res.json({ ok: true, fixed: 0 });
-  const key = getApiKey();
-  let fixed = 0;
-  for (const h of data.highlights) {
-    if (h.title) continue; // already has a title
-    try {
-      const url = `https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${h.videoId}&part=snippet&fields=items(snippet(title,thumbnails))`;
-      const d = await ytFetch(url);
-      const item = d.items?.[0];
-      if (item?.snippet?.title) {
-        h.title     = item.snippet.title;
-        h.thumbnail = item.snippet.thumbnails?.medium?.url || h.thumbnail || '';
-        fixed++;
-      }
-    } catch(_) {}
-    await new Promise(r => setTimeout(r, 200)); // avoid quota burst
-  }
-  if (fixed) saveData(data);
-  res.json({ ok: true, fixed });
 });
 
 // Admin — reorder highlights (swap by index, direction up/down)
