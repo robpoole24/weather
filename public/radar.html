@@ -4496,11 +4496,37 @@ function _twoRiskLabel(prob, risk) {
 }
 
 async function _loadTWOData() {
+  // Layer 1 = Two-Day invest probability ovals (polygons, not points)
+  // Layer 2 = Seven-Day invest probability ovals
+  // We query both, deduplicate by idp_source, compute centroids from bbox.
+  // The WMS renders X markers at the centroid — we replicate that here.
   const fields = 'idp_source,prob2day,risk2day,prob5day,risk5day,idp_issueddate';
-  const url = NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson';
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.features || [];
+  const [r1, r2] = await Promise.allSettled([
+    fetch(NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
+    fetch(NHC_TWO_REST + '/2/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
+  ]);
+  const seen = new Set();
+  const features = [];
+  // Merge layer 1 (2-day) and layer 2 (7-day), preferring layer 1 data when both have same invest
+  for (const result of [r1, r2]) {
+    if (result.status !== 'fulfilled') continue;
+    for (const feat of (result.value?.features || [])) {
+      const id = feat.properties?.idp_source || '';
+      if (seen.has(id)) continue;
+      seen.add(id);
+      // Compute centroid from polygon bounding box
+      const coords = feat.geometry?.coordinates?.[0];
+      if (coords && coords.length) {
+        const lngs = coords.map(c => c[0]);
+        const lats = coords.map(c => c[1]);
+        const cLng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
+        const cLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+        feat._centroid = [cLat, cLng];
+      }
+      features.push(feat);
+    }
+  }
+  return features;
 }
 
 async function _refreshTWOPanel() {
@@ -4512,9 +4538,9 @@ async function _refreshTWOPanel() {
 
   features.forEach(feat => {
     const p = feat.properties || {};
-    const coords = feat.geometry && feat.geometry.coordinates;
-    if (!coords) return;
-    const lat = coords[1], lng = coords[0];
+    const centroid = feat._centroid;
+    if (!centroid) return;
+    const lat = centroid[0], lng = centroid[1];
     const sysId = p.idp_source || 'Invest';
     const col2  = _twoRiskColor(p.risk2day);
     const col5  = _twoRiskColor(p.risk5day);
@@ -4569,8 +4595,8 @@ async function _refreshTWOPanel() {
     const sysId = p.idp_source || 'Invest';
     const col2 = _twoRiskColor(p.risk2day);
     const col5 = _twoRiskColor(p.risk5day);
-    const coords = feat.geometry && feat.geometry.coordinates;
-    const flyFn = coords ? 'map.flyTo([' + coords[1] + ',' + coords[0] + '],5,{duration:1.5})' : '';
+    const centroid = feat._centroid;
+    const flyFn = centroid ? 'map.flyTo([' + centroid[0] + ',' + centroid[1] + '],5,{duration:1.5})' : '';
     return '<div style="margin-bottom:0.65rem;padding-bottom:0.55rem;border-bottom:1px solid rgba(0,180,216,0.12)">' +
       '<div style="display:flex;align-items:baseline;gap:0.4rem;margin-bottom:0.2rem">' +
       '<span style="font-family:\'Barlow Condensed\',sans-serif;font-size:0.95rem;font-weight:700;color:#e8f4fd;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px" onclick="' + flyFn + '" title="Fly to disturbance">\uD83C\uDF00 ' + sysId + '</span>' +
@@ -5604,7 +5630,7 @@ const PRECIP_ITEMS=[
   {id:'river-gauges',ico:'📏',name:'River & Flood Gauges', sub:'NWS NWPS · flood stage status',          def:false},
 ];
 const TROPICAL_ITEMS=[
-  {id:'nhc-two',      ico:'🔴', name:'Tropical Weather Outlook',       sub:'NHC · invest areas · formation probability', def:false},
+  {id:'nhc-two',      ico:'🔴', name:'Tropical Weather Outlook',       sub:'NHC · global · invests + named storms · formation probability', def:false},
   {id:'nhc-atlantic', ico:'🌀', name:'Atlantic Tropical Storms',       sub:'NHC · active tracks · cones',                def:false},
   {id:'nhc-pacific',  ico:'🌀', name:'E. Pacific Tropical Storms',     sub:'NHC · active tracks · cones',                def:false},
   {id:'nhc-cpac',     ico:'🌀', name:'C. Pacific Tropical Storms',     sub:'NHC · Hawaii region · active tracks',        def:false},
