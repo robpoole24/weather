@@ -5360,21 +5360,73 @@ async function refreshTropicalPanel() {
       </div>`;
   }).join('');
 
+  // ── Build unified panel — one scrollable list, everything in order ──────────
+  // Order: active invests (with probability) → monitoring areas (0%) → named storms
+  const activeInvests   = invests.filter(f => !f._monitoringOnly);
+  const monitoringAreas = invests.filter(f =>  f._monitoringOnly);
+
+  const activeInvestHTML   = invests
+    .filter(f => !f._monitoringOnly)
+    .map(feat => investHTML.split('</div>').find ? null : null) // rebuilt below
+    .join(''); // placeholder — we rebuild directly
+
+  // Rebuild invest rows properly separated by type
+  const allInvestRows = invests.map(feat => {
+    const p       = feat.properties || {};
+    const sysId   = (p.idp_source || 'Invest').toUpperCase();
+    const col2    = _twoRiskColor(p.risk2day);
+    const col5    = _twoRiskColor(p.risk5day);
+    const centroid = feat._centroid;
+    const flyFn   = centroid ? `map.flyTo([${centroid[0]},${centroid[1]}],5,{duration:1.5})` : '';
+    const isMonitorRow = !!feat._monitoringOnly;
+    const rowColor     = isMonitorRow ? '#888' : col2;
+    return `
+      <div style="margin-bottom:0.55rem;padding-bottom:0.45rem;
+        border-bottom:1px solid rgba(0,180,216,0.1);
+        opacity:${isMonitorRow ? '0.8' : '1'}">
+        <div style="display:flex;align-items:baseline;gap:0.4rem;margin-bottom:0.18rem">
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;
+            font-weight:900;color:${rowColor};cursor:pointer;
+            text-decoration:underline dotted;text-underline-offset:3px"
+            onclick="${flyFn}" title="Fly to disturbance">
+            ✕ ${isMonitorRow ? 'Area to Watch' : sysId}</span>
+          <span style="font-size:0.62rem;color:var(--muted)">
+            ${isMonitorRow ? 'Monitoring only' : 'Invest'}</span>
+        </div>
+        ${isMonitorRow
+          ? `<div style="font-size:0.67rem;color:var(--muted);line-height:1.3">
+               NHC tracking this area. Formation chance: 0%.
+             </div>`
+          : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.15rem;font-size:0.7rem">
+               <div>
+                 <span style="color:var(--muted);font-size:0.6rem">2-Day: </span>
+                 <strong style="color:${col2}">${_twoRiskLabel(p.prob2day, p.risk2day)}</strong>
+               </div>
+               <div>
+                 <span style="color:var(--muted);font-size:0.6rem">7-Day: </span>
+                 <strong style="color:${col5}">${_twoRiskLabel(p.prob5day, p.risk5day)}</strong>
+               </div>
+             </div>`
+        }
+      </div>`;
+  }).join('');
+
   _tropicalPanel.innerHTML = `
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:700;
       color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.5rem">
       🌀 Tropical Weather · ${totalCount} Active
     </div>
-    ${invests.length ? (() => {
-      const activeInvests   = invests.filter(f => !f._monitoringOnly);
-      const monitoringAreas = invests.filter(f =>  f._monitoringOnly);
-      return (activeInvests.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif">Disturbances (${activeInvests.length})</div>` : '') +
-             investHTML +
-             (monitoringAreas.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin:0.3rem 0;font-family:'Barlow Condensed',sans-serif">NHC Monitoring Areas (${monitoringAreas.length})</div>` : '');
-    })() : ''}
-    ${activeStorms.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;
-      letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif;
-      ${invests.length ? 'margin-top:0.3rem' : ''}">
+    ${activeInvests.length ? `<div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
+      letter-spacing:0.07em;margin-bottom:0.25rem;font-family:'Barlow Condensed',sans-serif">
+      Disturbances (${activeInvests.length})</div>` : ''}
+    ${monitoringAreas.length ? `<div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
+      letter-spacing:0.07em;margin-bottom:0.25rem;font-family:'Barlow Condensed',sans-serif;
+      ${activeInvests.length ? 'margin-top:0.1rem' : ''}">
+      Areas to Watch (${monitoringAreas.length})</div>` : ''}
+    ${allInvestRows}
+    ${activeStorms.length ? `<div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
+      letter-spacing:0.07em;margin-bottom:0.25rem;font-family:'Barlow Condensed',sans-serif;
+      ${invests.length ? 'margin-top:0.1rem' : ''}">
       Named Storms (${activeStorms.length})</div>${stormHTML}` : ''}
     <div style="font-size:0.62rem;color:var(--muted);text-align:right;margin-top:-0.2rem">
       NHC · Updated every 6h ·
