@@ -764,6 +764,9 @@
   <button class="tb-btn" id="v-regional" onclick="setView('regional')">Regional</button>
   <button class="tb-btn view-on" id="v-national" onclick="setView('national')">National</button>
 
+  <div class="tb-div"></div>
+  <button class="tb-btn" id="btn-units" onclick="cycleUnits()" title="Toggle wind speed units">mph</button>
+
   <span id="alerts-status"></span>
 </div>
 
@@ -1314,11 +1317,10 @@ const FRAMES = buildFrameList(); // 12 frames, ~55 min
 
 // ── MAP INIT ─────────────────────────────────────────────────────────────────
 const map = L.map('map', {
-  center:[39.5,-98.35], zoom:4,
+  center:[20,-40], zoom:3,  // Start centered on Atlantic/Pacific to see both ocean basins
   minZoom:2, maxZoom:19,
-  // Wide bounds: covers continental US, Canada, Caribbean, Mexico, Alaska, Hawaii
-  maxBounds:[[-5,-175],[85,-50]],
-  maxBoundsViscosity:0.85,
+  // No maxBounds — full world map. Users can pan to Africa, Asia, anywhere.
+  worldCopyJump: true,      // keeps markers visible when panning past ±180°
   zoomControl:false
 });
 L.control.zoom({ position:'bottomright' }).addTo(map);
@@ -1569,6 +1571,8 @@ function updateFrameLabel() {
 }
 
 function stepFrame(dir) {
+  if (activePaint === 'global-radar') { rvStepFrame(dir); return; }
+  if (activePaint === 'goes') { goesStepFrame(dir); return; }
   let next = currentFrame + dir;
   if (next < 0) next = FRAMES.length - 1;
   if (next >= FRAMES.length) next = 0;
@@ -1576,6 +1580,8 @@ function stepFrame(dir) {
 }
 
 function togglePlay() {
+  if (activePaint === 'global-radar') { rvTogglePlay(); return; }
+  if (activePaint === 'goes') { goesTogglePlay(); return; }
   isPlaying = !isPlaying;
   const btn = document.getElementById('btn-play');
   if (isPlaying) {
@@ -3392,6 +3398,7 @@ function clearAllPaint(){
   forecastFrames.forEach(f => f.layer.setOpacity(0));
   radarVisible = false;
   if (goesLayer && map.hasLayer(goesLayer)) map.removeLayer(goesLayer);
+  if (rvFrameLayers.length) rvDeactivate();
   // NOTE: clearCC() and clearCanada() intentionally removed from here.
   // CC and Canadian Radar are toggleable overlays (applyOverlay), not
   // mutually-exclusive paints — switching base reflectivity/GOES/apptemp
@@ -3482,6 +3489,7 @@ function setPaint(member){
         forecastFrames[currentForecastFrame].layer.setOpacity(0.72);
       }
       break;
+    case 'global-radar': rvActivate(); break;
     case 'goes':    ensureGoes().addTo(map); break;
     case 'apptemp': showAppTemp(); break;
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
@@ -4462,6 +4470,127 @@ function stopRiverGauges() {
   const _gleg2 = document.getElementById('river-gauge-legend'); if (_gleg2) _gleg2.style.display = 'none';
 }
 
+// ── GLOBAL RADAR (RainViewer) ─────────────────────────────────────────────────
+// RainViewer provides radar composites from 1,200+ stations in 150+ countries:
+// NOAA MRMS (US), MSC (Canada), EUMETNET OPERA (Europe 24 countries),
+// JMA (Japan), CWA (Taiwan), MET Malaysia, and more. Same animation pattern
+// as NEXRAD — fetch available timestamps, build tile layers, animate.
+// Free for personal/community use. Attribution: rainviewer.com
+const RV_API_URL      = 'https://api.rainviewer.com/public/weather-maps.json';
+const RV_TILE_BASE    = 'https://tilecache.rainviewer.com';
+const RV_COLOR_SCHEME = 4;   // 4=default DBZ colors, 2=Universal Blue, 7=Titan
+const RV_MAX_FRAMES   = 12;  // past frames (~60 min at 5-min intervals)
+
+let rvFrameLayers  = [];
+let rvFrameIdx     = 0;
+let rvPlaying      = false;
+let rvPlayTimer    = null;
+let rvRefreshTimer = null;
+let rvPreloadGen   = 0;
+
+async function buildRVFrames() {
+  rvFrameLayers.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
+  rvFrameLayers = [];
+  const res  = await fetch(RV_API_URL);
+  const data = await res.json();
+  const past = (data.radar?.past || []).slice(-RV_MAX_FRAMES);
+  past.forEach((frame, idx) => {
+    const label = new Date(frame.time * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    const layer = L.tileLayer(
+      `${RV_TILE_BASE}/v2/radar/${frame.time}/256/{z}/{x}/{y}/${RV_COLOR_SCHEME}/1_1.png`,
+      { opacity:0, zIndex:200+idx, tileSize:256, keepBuffer:1,
+        updateWhenIdle:true, updateWhenZooming:false,
+        attribution: idx===0 ? 'Global Radar: <a href="https://www.rainviewer.com">RainViewer</a>' : '' }
+    );
+    rvFrameLayers.push({ time: frame.time, label, layer });
+  });
+  rvFrameIdx = rvFrameLayers.length - 1;
+}
+
+function rvShowFrame(idx) {
+  rvFrameLayers.forEach((f, i) => {
+    if (i === idx) { if (!map.hasLayer(f.layer)) f.layer.addTo(map); f.layer.setOpacity(0.72); }
+    else f.layer.setOpacity(0);
+  });
+  rvFrameIdx = idx;
+  const f = rvFrameLayers[idx];
+  if (f) document.getElementById('anim-progress').textContent = f.label + (idx === rvFrameLayers.length-1 ? ' ●' : '');
+}
+
+function rvPreloadAll() {
+  const myGen = ++rvPreloadGen;
+  const statusEl = document.getElementById('preload-status');
+  if (statusEl) statusEl.textContent = '🌍 caching…';
+  rvFrameLayers.forEach((f, i) => {
+    if (i !== rvFrameIdx && !map.hasLayer(f.layer)) { f.layer.setOpacity(0); f.layer.addTo(map); }
+  });
+  setTimeout(() => { if (myGen===rvPreloadGen && statusEl) statusEl.textContent=''; }, 5000);
+}
+
+function rvStepFrame(dir) {
+  let next = rvFrameIdx + dir;
+  if (next < 0) next = rvFrameLayers.length-1;
+  if (next >= rvFrameLayers.length) next = 0;
+  rvShowFrame(next);
+}
+
+function rvTogglePlay() {
+  rvPlaying = !rvPlaying;
+  const btn = document.getElementById('btn-play');
+  if (rvPlaying) {
+    btn.textContent = '⏸ Pause'; btn.classList.add('on');
+    function advance() {
+      let next = rvFrameIdx + 1;
+      if (next >= rvFrameLayers.length) {
+        rvShowFrame(rvFrameLayers.length-1);
+        rvPlayTimer = setTimeout(() => { if (rvPlaying) { rvShowFrame(0); rvPlayTimer = setTimeout(advance, 450); } }, 1500);
+        return;
+      }
+      rvShowFrame(next); rvPlayTimer = setTimeout(advance, 450);
+    }
+    advance();
+  } else {
+    btn.textContent = '▶ Play'; btn.classList.remove('on'); clearTimeout(rvPlayTimer);
+  }
+}
+
+async function rvActivate() {
+  const statusEl = document.getElementById('preload-status');
+  if (statusEl) statusEl.textContent = '🌍 Loading global radar…';
+  try {
+    await buildRVFrames();
+  } catch(e) {
+    console.error('[RainViewer] Failed:', e.message);
+    if (statusEl) statusEl.textContent = 'Global radar unavailable';
+    return;
+  }
+  // Hide Past/Future mode bar — RainViewer has past-only, no forecast
+  const modeBar = document.getElementById('mode-bar');
+  const modeDivider = modeBar?.nextElementSibling;
+  if (modeBar) modeBar.style.display = 'none';
+  if (modeDivider && modeDivider.classList.contains('tb-div')) modeDivider.style.display = 'none';
+  rvShowFrame(rvFrameIdx);
+  setTimeout(rvPreloadAll, 500);
+  clearInterval(rvRefreshTimer);
+  rvRefreshTimer = setInterval(async () => {
+    const wasPlaying = rvPlaying;
+    if (rvPlaying) rvTogglePlay();
+    try { await buildRVFrames(); rvShowFrame(rvFrameIdx); setTimeout(rvPreloadAll, 500); } catch(_) {}
+    if (wasPlaying) rvTogglePlay();
+  }, 5 * 60 * 1000);
+}
+
+function rvDeactivate() {
+  rvPlaying = false; clearTimeout(rvPlayTimer); clearInterval(rvRefreshTimer); ++rvPreloadGen;
+  rvFrameLayers.forEach(f => { f.layer.setOpacity(0); if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-play').classList.remove('on');
+  const modeBar = document.getElementById('mode-bar');
+  const modeDivider = modeBar?.nextElementSibling;
+  if (modeBar) modeBar.style.display = '';
+  if (modeDivider && modeDivider.classList.contains('tb-div')) modeDivider.style.display = '';
+}
+
 // ── NHC Tropical Storms ───────────────────────────────────────────────────────
 // Two layers: WMS tile overlay for tracks/cones + JSON advisory text panel
 const _nhcLayers = {}, _nhcPanels = {}, _nhcTrackLayers = {};
@@ -4728,6 +4857,50 @@ const NHC_BASIN_SLOTS = {
 };
 
 // Category color scale (Saffir-Simpson + sub-hurricane types)
+// ── Wind speed unit system ─────────────────────────────────────────────────────
+// Units cycle: mph → km/h → kt → mph
+// Persisted to localStorage so preference survives page reloads.
+const WIND_UNITS = ['mph', 'km/h', 'kt'];
+let _windUnitIdx = (() => {
+  const saved = localStorage.getItem('wtv-wind-unit');
+  const idx = WIND_UNITS.indexOf(saved);
+  return idx >= 0 ? idx : 0; // default mph
+})();
+
+function cycleUnits() {
+  _windUnitIdx = (_windUnitIdx + 1) % WIND_UNITS.length;
+  localStorage.setItem('wtv-wind-unit', WIND_UNITS[_windUnitIdx]);
+  const btn = document.getElementById('btn-units');
+  if (btn) btn.textContent = WIND_UNITS[_windUnitIdx];
+}
+
+function ktToMph(kt) { return Math.round((kt || 0) * 1.15078); }
+function ktToKmh(kt) { return Math.round((kt || 0) * 1.852);   }
+
+function windDisplay(kt) {
+  if (kt == null) return '—';
+  const unit = WIND_UNITS[_windUnitIdx];
+  const kt_r = Math.round(kt);
+  if (unit === 'mph') return `${ktToMph(kt)} mph / ${kt_r} kt`;
+  if (unit === 'km/h') return `${ktToKmh(kt)} km/h / ${kt_r} kt`;
+  return `${kt_r} kt`;
+}
+
+function windDisplayShort(kt) {
+  if (kt == null) return '—';
+  const unit = WIND_UNITS[_windUnitIdx];
+  const kt_r = Math.round(kt);
+  if (unit === 'mph') return `${ktToMph(kt)} mph (${kt_r} kt)`;
+  if (unit === 'km/h') return `${ktToKmh(kt)} km/h (${kt_r} kt)`;
+  return `${kt_r} kt`;
+}
+
+// Apply saved unit on load
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('btn-units');
+  if (btn) btn.textContent = WIND_UNITS[_windUnitIdx];
+});
+
 function nhcCatColor(ssnum, tcdvlp) {
   if (ssnum >= 5) return '#ff00ff';
   if (ssnum === 4) return '#ff4500';
@@ -4747,296 +4920,408 @@ function nhcCatLabel(ssnum, tcdvlp) {
   return tcdvlp || '?';
 }
 
-async function startNHC(basin) {
-  // ── WMS tile layer ─────────────────────────────────────────────────────────
-  // Load all slots for this basin as a single WMS request — NWS MapServer
-  // returns empty tiles for inactive storm slots, so this is safe and efficient.
-  if (!_nhcLayers[basin]) {
-    const slots = NHC_BASIN_SLOTS[basin]?.slots || [];
-    const allLayers = slots.map(s => s.wmsLayers).join(',');
-    _nhcLayers[basin] = L.tileLayer.wms(NHC_WMS_BASE, {
-      layers: allLayers,
-      format: 'image/png',
-      transparent: true,
-      version: '1.3.0',
-      opacity: 0.9,
-      zIndex: 425,
-      attribution: 'Tropical: <a href="https://www.nhc.noaa.gov">NOAA/NHC</a>',
-    }).addTo(map);
+// ── UNIFIED TROPICAL SYSTEM ──────────────────────────────────────────────────
+// Single startTropical() replaces separate atl/pac/cpac/two toggles.
+// Queries all NHC basins + TWO invest data simultaneously, draws everything
+// on one shared layer group, and shows one unified panel — no overlapping.
+// Named storm popups and invest popups are handled by the track/TWO code above.
+
+let _tropicalLayer   = null;  // WMS tile layer (cones, named storms, TWO ovals)
+let _tropicalTracks  = null;  // L.layerGroup for all basin tracks + invest markers
+let _tropicalPanel   = null;  // single unified side panel
+let _tropicalTimer   = null;
+
+const ALL_BASINS = ['atl', 'pac', 'cpac'];
+
+async function startTropical() {
+  // TWO WMS (invest ovals + motion arrows) + named storm WMS (cones/tracks)
+  // Use the summary service which renders everything globally
+  if (!_tropicalLayer) {
+    // Combine TWO summary layers with all named storm layers
+    const allNamedLayers = ALL_BASINS
+      .flatMap(b => NHC_BASIN_SLOTS[b].slots.map(s => s.wmsLayers))
+      .join(',');
+    // Render: TWO ovals (1,3,33) + all named storm cones/tracks
+    _tropicalLayer = L.layerGroup([
+      L.tileLayer.wms(NHC_TWO_WMS, {
+        layers: NHC_TWO_LAYERS,
+        format: 'image/png', transparent: true, version: '1.3.0',
+        opacity: 0.85, zIndex: 410,
+        attribution: 'Tropical: <a href="https://www.nhc.noaa.gov">NOAA/NHC</a>',
+      }),
+      L.tileLayer.wms(NHC_WMS_BASE, {
+        layers: allNamedLayers,
+        format: 'image/png', transparent: true, version: '1.3.0',
+        opacity: 0.9, zIndex: 425,
+      }),
+    ]).addTo(map);
+  } else {
+    _tropicalLayer.addTo(map);
   }
-  await refreshNHCPanel(basin);
+
+  await refreshTropicalPanel();
+  clearInterval(_tropicalTimer);
+  _tropicalTimer = setInterval(refreshTropicalPanel, 6 * 60 * 60 * 1000);
 }
 
-async function refreshNHCPanel(basin) {
-  let panelEl = document.getElementById(`nhc-panel-${basin}`);
-  if (!panelEl) {
-    panelEl = document.createElement('div');
-    panelEl.id = `nhc-panel-${basin}`;
-    panelEl.style.cssText = [
+async function refreshTropicalPanel() {
+  // ── Panel setup ───────────────────────────────────────────────────────────
+  if (!_tropicalPanel) {
+    _tropicalPanel = document.createElement('div');
+    _tropicalPanel.id = 'nhc-panel-tropical';
+    _tropicalPanel.style.cssText = [
       'position:absolute', 'top:52px', 'right:8px', 'z-index:450',
       'background:rgba(10,14,20,0.95)', 'border:1px solid rgba(0,180,216,0.3)',
-      'border-radius:8px', 'padding:0.65rem 0.85rem', 'max-width:280px',
-      'min-width:220px', 'font-size:0.75rem', 'font-family:Barlow,sans-serif',
-      'box-shadow:0 4px 18px rgba(0,0,0,0.6)', 'max-height:70vh',
+      'border-radius:8px', 'padding:0.65rem 0.85rem', 'max-width:300px',
+      'min-width:240px', 'font-size:0.75rem', 'font-family:Barlow,sans-serif',
+      'box-shadow:0 4px 18px rgba(0,0,0,0.6)', 'max-height:80vh',
       'overflow-y:auto', 'scrollbar-width:thin', 'scrollbar-color:#7a9bb5 transparent',
     ].join(';');
-    document.getElementById('map').appendChild(panelEl);
+    document.getElementById('map').appendChild(_tropicalPanel);
   }
-  _nhcPanels[basin] = panelEl;
-  panelEl.innerHTML = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--muted);letter-spacing:0.06em">Loading…</div>`;
+  _tropicalPanel.style.display = 'block';
+  _tropicalPanel.innerHTML = `<div style="font-family:'Barlow Condensed',sans-serif;
+    font-size:0.72rem;color:var(--muted)">Loading tropical data…</div>`;
 
-  try {
-    // Query all forecast point slots for this basin in parallel.
-    // Each slot returns features only when that storm slot is active.
-    const slots = NHC_BASIN_SLOTS[basin]?.slots || [];
-    const results = await Promise.allSettled(slots.map(slot =>
-      fetch(`${NHC_REST_BASE}/${slot.pointsLayerId}/query?where=1%3D1&outFields=stormname,tcdvlp,ssnum,maxwind,gust,datelbl,fldatelbl,tau,lat,lon,tcspd,tcdir&f=geojson`)
-        .then(r => r.json())
-    ));
+  // ── Fetch all data in parallel ─────────────────────────────────────────────
+  const [investFeats, ...basinResults] = await Promise.allSettled([
+    _loadTWOData(),
+    ...ALL_BASINS.map(basin => {
+      const slots = NHC_BASIN_SLOTS[basin]?.slots || [];
+      return Promise.allSettled(slots.map(slot =>
+        fetch(`${NHC_REST_BASE}/${slot.pointsLayerId}/query?where=1%3D1&outFields=stormname,tcdvlp,ssnum,maxwind,gust,datelbl,fldatelbl,tau,lat,lon,tcspd,tcdir&f=geojson`)
+          .then(r => r.json())
+      )).then(results => ({ basin, results }));
+    }),
+  ]);
 
-    // Collect active storms — a slot is active if it has features
-    const activeStorms = [];
-    results.forEach((res, i) => {
-      if (res.status !== 'fulfilled') return;
-      const features = res.value?.features || [];
+  // ── Collect named storms across all basins ────────────────────────────────
+  const activeStorms = [];
+  basinResults.forEach(res => {
+    if (res.status !== 'fulfilled') return;
+    const { basin, results } = res.value;
+    results.forEach((slotRes, i) => {
+      if (slotRes.status !== 'fulfilled') return;
+      const features = slotRes.value?.features || [];
       if (!features.length) return;
-      // All features in a slot share the same storm name — group into one storm
-      const points = features
-        .map(f => f.properties)
-        .sort((a, b) => (a.tau || 0) - (b.tau || 0));
+      const points = features.map(f => f.properties).sort((a, b) => (a.tau||0) - (b.tau||0));
       const current = points[0];
       activeStorms.push({
-        name: current.stormname || `${NHC_BASIN_SLOTS[basin].prefix}${i + 1}`,
+        basin,
+        name: current.stormname || `${NHC_BASIN_SLOTS[basin].prefix}${i+1}`,
         tcdvlp: current.tcdvlp || '',
         ssnum: current.ssnum || 0,
         maxwind: current.maxwind,
         gust: current.gust,
         tcspd: current.tcspd,
         tcdir: current.tcdir,
-        points, // full forecast track points sorted by tau
+        points,
       });
     });
+  });
 
-    const basinLabel = basin === 'atl' ? 'Atlantic' : 'Pacific';
+  // ── Collect invests ───────────────────────────────────────────────────────
+  const invests = investFeats.status === 'fulfilled' ? investFeats.value : [];
 
-    // ── Draw forecast tracks on map ──────────────────────────────────────────
-    if (_nhcTrackLayers[basin]) { map.removeLayer(_nhcTrackLayers[basin]); delete _nhcTrackLayers[basin]; }
-    if (activeStorms.length) {
-      const trackGroup = L.layerGroup().addTo(map);
-      _nhcTrackLayers[basin] = trackGroup;
-      activeStorms.forEach(storm => {
-        const all = storm.points;
-        if (!all.length) return;
-        // Colored line segments between each advisory point
-        for (let i = 0; i < all.length - 1; i++) {
-          const a = all[i], b2 = all[i + 1];
-          if (a.lat == null || b2.lat == null) continue;
-          L.polyline([[a.lat, a.lon], [b2.lat, b2.lon]], {
-            color: nhcCatColor(a.ssnum || 0, a.tcdvlp || ''), weight: 3, opacity: 0.85
-          }).addTo(trackGroup);
-        }
-        // Category-colored dots at each forecast point
-        all.forEach(pt => {
-          if (pt.lat == null) return;
-          const isCurrent = (pt.tau || 0) === 0;
-          const col = nhcCatColor(pt.ssnum || 0, pt.tcdvlp || '');
-          const lbl = nhcCatLabel(pt.ssnum || 0, pt.tcdvlp || '');
-          const mk = L.circleMarker([pt.lat, pt.lon], {
-            radius: isCurrent ? 9 : 6, color: '#000', weight: isCurrent ? 2 : 1,
-            fillColor: col, fillOpacity: isCurrent ? 1 : 0.85, zIndexOffset: isCurrent ? 100 : 0
-          });
-          // Build forecast track table for this popup (all future points from here)
-          const futureFromHere = all.filter(q => (q.tau||0) > (pt.tau||0));
-          const trackRowsHere = futureFromHere.slice(0, 5).map(q => {
-            const qc = nhcCatColor(q.ssnum||0, q.tcdvlp||'');
-            const ql = nhcCatLabel(q.ssnum||0, q.tcdvlp||'');
-            const qt = q.datelbl || (q.tau != null ? `+${q.tau}h` : '');
-            const qw = q.maxwind != null ? Math.round(q.maxwind) + ' kt' : '—';
-            return `<tr>
-              <td style="padding:0.12em 0.3em;color:var(--muted);font-size:0.68rem">${qt}</td>
-              <td style="padding:0.12em 0.3em">
-                <span style="background:${qc}22;color:${qc};font-weight:700;
-                  padding:0.05em 0.3em;border-radius:3px;font-size:0.68rem">${ql}</span>
-              </td>
-              <td style="padding:0.12em 0.3em;color:#e8f4fd;text-align:right;font-size:0.68rem">${qw}</td>
-            </tr>`;
-          }).join('');
-          const stormKey = storm.name.replace(/[^a-zA-Z]/g,'').toLowerCase();
-          const nhcLink = basin === 'atl'
-            ? `https://www.nhc.noaa.gov/tracker/#${stormKey}`
-            : `https://www.nhc.noaa.gov/tracker/#${stormKey}`;
-          mk.bindPopup(`
-            <div class="alert-popup" style="min-width:230px">
-              <div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.35rem">
-                <div style="width:10px;height:10px;border-radius:50%;
-                  background:${col};flex-shrink:0"></div>
-                <div>
-                  <div style="font-family:'Barlow Condensed',sans-serif;font-size:1.05rem;
-                    font-weight:700;color:${col};letter-spacing:0.05em">🌀 ${storm.name}</div>
-                  <div style="font-size:0.68rem;color:var(--muted)">${pt.fldatelbl || pt.datelbl || ''}</div>
-                </div>
-              </div>
-              <div style="background:rgba(0,180,216,0.07);border-radius:6px;
-                padding:0.4rem 0.55rem;margin-bottom:0.4rem">
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.25rem;font-size:0.72rem">
-                  <div>
-                    <div style="font-size:0.58rem;color:var(--muted);text-transform:uppercase;
-                      letter-spacing:0.05em">Status</div>
-                    <div style="font-weight:700;color:${col};font-family:'Barlow Condensed',sans-serif;
-                      font-size:0.9rem">${lbl}</div>
-                  </div>
-                  <div>
-                    <div style="font-size:0.58rem;color:var(--muted);text-transform:uppercase;
-                      letter-spacing:0.05em">Winds</div>
-                    <div style="font-weight:700;color:#e8f4fd;font-family:'Barlow Condensed',sans-serif;
-                      font-size:0.9rem">${Math.round(pt.maxwind||0)} kt</div>
-                  </div>
-                  <div>
-                    <div style="font-size:0.58rem;color:var(--muted);text-transform:uppercase;
-                      letter-spacing:0.05em">Gusts</div>
-                    <div style="font-weight:700;color:#e8f4fd;font-family:'Barlow Condensed',sans-serif;
-                      font-size:0.9rem">${pt.gust ? Math.round(pt.gust) + ' kt' : '—'}</div>
-                  </div>
-                </div>
-              </div>
-              ${trackRowsHere ? `
-              <div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
-                letter-spacing:0.06em;font-family:'Barlow Condensed',sans-serif;
-                margin-bottom:0.2rem">Forecast Track</div>
-              <table style="width:100%;border-collapse:collapse;margin-bottom:0.4rem">
-                <tbody>${trackRowsHere}</tbody>
-              </table>` : ''}
-              <div style="border-top:1px solid rgba(0,180,216,0.15);padding-top:0.3rem;
-                display:flex;flex-direction:column;gap:0.2rem">
-                <a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener"
-                   style="color:#00b4d8;font-size:0.7rem;text-decoration:none">
-                  📋 Full Advisory — NHC ↗</a>
-                <a href="https://www.nhc.noaa.gov/refresh/graphics_${basin === 'atl' ? 'at' : basin === 'cpac' ? 'cp' : 'ep'}+shtml/500W+5day_cone_no_ens_and_wind.shtml" target="_blank" rel="noopener"
-                   style="color:#00b4d8;font-size:0.7rem;text-decoration:none">
-                  🌀 5-Day Cone Graphic ↗</a>
-              </div>
-            </div>
-          `, { maxWidth: 290, className: 'nhc-popup' });
-          trackGroup.addLayer(mk);
-        });
-        // Storm name label at current position — clickable to fly to storm
-        const cur = all[0];
-        if (cur?.lat != null) {
-          window[`_nhcPos_${storm.name.replace(/[^a-z0-9]/gi,'')}`] = cur;
-          const curCol = nhcCatColor(cur.ssnum || 0, cur.tcdvlp || '');
-          const curLbl = nhcCatLabel(cur.ssnum || 0, cur.tcdvlp || '');
-          L.marker([cur.lat, cur.lon], {
-            icon: L.divIcon({
-              className: '',
-              html: `<div style="
-                font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;
-                color:#fff;text-shadow:0 0 3px #000,0 0 3px #000;white-space:nowrap;
-                margin-left:12px;margin-top:-8px;cursor:pointer;
-                background:rgba(0,0,0,0.45);padding:0.1rem 0.35rem;border-radius:4px;
-                border-left:3px solid ${curCol};
-              ">${storm.name} <span style="color:${curCol};font-size:0.7rem">${curLbl}</span></div>`,
-              iconSize: [160, 22], iconAnchor: [0, 11],
-            }),
-            interactive: false, zIndexOffset: 200,
-          }).addTo(trackGroup);
-        }
+  // ── Rebuild track + invest layers ─────────────────────────────────────────
+  if (_tropicalTracks) { map.removeLayer(_tropicalTracks); }
+  _tropicalTracks = L.layerGroup().addTo(map);
+
+  // Named storm tracks
+  activeStorms.forEach(storm => {
+    const all = storm.points;
+    if (!all.length) return;
+    for (let i = 0; i < all.length - 1; i++) {
+      const a = all[i], b = all[i+1];
+      if (a.lat == null || b.lat == null) continue;
+      L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
+        color: nhcCatColor(a.ssnum||0, a.tcdvlp||''), weight: 3, opacity: 0.85,
+      }).addTo(_tropicalTracks);
+    }
+    all.forEach(pt => {
+      if (pt.lat == null) return;
+      const isCurrent = (pt.tau||0) === 0;
+      const col = nhcCatColor(pt.ssnum||0, pt.tcdvlp||'');
+      const lbl = nhcCatLabel(pt.ssnum||0, pt.tcdvlp||'');
+      const mk  = L.circleMarker([pt.lat, pt.lon], {
+        radius: isCurrent ? 9 : 6, color: '#000', weight: isCurrent ? 2 : 1,
+        fillColor: col, fillOpacity: isCurrent ? 1 : 0.85, zIndexOffset: isCurrent ? 100 : 0,
       });
-    }
-
-    if (!activeStorms.length) {
-      panelEl.innerHTML = `
-        <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;font-weight:700;
-          color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.3rem">
-          🌀 ${basinLabel} Tropical
-        </div>
-        <div style="color:var(--muted);font-size:0.72rem">No active storms</div>`;
-      return;
-    }
-
-    // Render each active storm with a full forecast track table
-    const stormHTML = activeStorms.map(storm => {
-      const curColor = nhcCatColor(storm.ssnum, storm.tcdvlp);
-      const curLabel = nhcCatLabel(storm.ssnum, storm.tcdvlp);
-      const movement = (storm.tcspd != null && storm.tcdir != null)
-        ? `Moving ${compassDir(storm.tcdir)} at ${Math.round(storm.tcspd)} kt`
-        : '';
-
-      // Forecast track table — one row per advisory point (tau > 0)
-      const forecastPoints = storm.points.filter(p => (p.tau || 0) > 0);
-      const trackRows = forecastPoints.map(p => {
-        const col = nhcCatColor(p.ssnum || 0, p.tcdvlp || '');
-        const lbl = nhcCatLabel(p.ssnum || 0, p.tcdvlp || '');
-        const winds = p.maxwind != null ? `${Math.round(p.maxwind)} kt` : '—';
-        const time = p.datelbl || (p.tau != null ? `+${p.tau}h` : '');
+      const futureFromHere = all.filter(q => (q.tau||0) > (pt.tau||0));
+      const trackRowsHere  = futureFromHere.slice(0, 5).map(q => {
+        const qc = nhcCatColor(q.ssnum||0, q.tcdvlp||'');
+        const ql = nhcCatLabel(q.ssnum||0, q.tcdvlp||'');
         return `<tr>
-          <td style="padding:0.15em 0.3em;color:var(--muted)">${time}</td>
-          <td style="padding:0.15em 0.3em">
-            <span style="display:inline-block;padding:0.05em 0.35em;border-radius:3px;
-              background:${col}22;color:${col};font-weight:700;font-size:0.7rem">${lbl}</span>
+          <td style="padding:0.12em 0.3em;color:var(--muted);font-size:0.68rem">${q.datelbl || (q.tau != null ? '+'+q.tau+'h' : '')}</td>
+          <td style="padding:0.12em 0.3em">
+            <span style="background:${qc}22;color:${qc};font-weight:700;
+              padding:0.05em 0.3em;border-radius:3px;font-size:0.68rem">${ql}</span>
           </td>
-          <td style="padding:0.15em 0.3em;color:#e8f4fd;text-align:right">${winds}</td>
+          <td style="padding:0.12em 0.3em;color:#e8f4fd;text-align:right;font-size:0.68rem">${q.maxwind != null ? windDisplayShort(q.maxwind) : '—'}</td>
         </tr>`;
       }).join('');
+      mk.bindPopup(`
+        <div class="alert-popup" style="min-width:230px">
+          <div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.35rem">
+            <div style="width:10px;height:10px;border-radius:50%;background:${col};flex-shrink:0"></div>
+            <div>
+              <div style="font-family:'Barlow Condensed',sans-serif;font-size:1.05rem;
+                font-weight:700;color:${col};letter-spacing:0.05em">🌀 ${storm.name}</div>
+              <div style="font-size:0.68rem;color:var(--muted)">${pt.fldatelbl || pt.datelbl || ''}</div>
+            </div>
+          </div>
+          <div style="background:rgba(0,180,216,0.07);border-radius:6px;
+            padding:0.4rem 0.55rem;margin-bottom:0.4rem">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.25rem;font-size:0.72rem">
+              <div>
+                <div style="font-size:0.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em">Status</div>
+                <div style="font-weight:700;color:${col};font-family:'Barlow Condensed',sans-serif;font-size:0.9rem">${lbl}</div>
+              </div>
+              <div>
+                <div style="font-size:0.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em">Winds</div>
+                <div style="font-weight:700;color:#e8f4fd;font-family:'Barlow Condensed',sans-serif;font-size:0.9rem">${windDisplay(pt.maxwind)}</div>
+              </div>
+              <div>
+                <div style="font-size:0.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em">Gusts</div>
+                <div style="font-weight:700;color:#e8f4fd;font-family:'Barlow Condensed',sans-serif;font-size:0.9rem">${pt.gust ? windDisplay(pt.gust) : '—'}</div>
+              </div>
+            </div>
+          </div>
+          ${trackRowsHere ? `<div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
+              letter-spacing:0.06em;margin-bottom:0.2rem">Forecast Track</div>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:0.4rem">
+              <tbody>${trackRowsHere}</tbody>
+            </table>` : ''}
+          <div style="border-top:1px solid rgba(0,180,216,0.15);padding-top:0.3rem;
+            display:flex;flex-direction:column;gap:0.2rem">
+            <a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener"
+               style="color:#00b4d8;font-size:0.7rem;text-decoration:none">📋 Full Advisory — NHC ↗</a>
+            <a href="https://www.nhc.noaa.gov/refresh/graphics_${storm.basin === 'atl' ? 'at' : storm.basin === 'cpac' ? 'cp' : 'ep'}+shtml/500W+5day_cone_no_ens_and_wind.shtml"
+               target="_blank" rel="noopener" style="color:#00b4d8;font-size:0.7rem;text-decoration:none">🌀 5-Day Cone Graphic ↗</a>
+          </div>
+        </div>
+      `, { maxWidth: 290, className: 'nhc-popup' });
+      _tropicalTracks.addLayer(mk);
+    });
+    // Storm name + category pill label at current position
+    const cur = all[0];
+    if (cur?.lat != null) {
+      const curCol = nhcCatColor(cur.ssnum||0, cur.tcdvlp||'');
+      const curLbl = nhcCatLabel(cur.ssnum||0, cur.tcdvlp||'');
+      L.marker([cur.lat, cur.lon], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;
+            font-size:0.8rem;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000;
+            white-space:nowrap;margin-left:12px;margin-top:-8px;
+            background:rgba(0,0,0,0.5);padding:0.1rem 0.35rem;border-radius:4px;
+            border-left:3px solid ${curCol}">
+            ${storm.name} <span style="color:${curCol};font-size:0.7rem">${curLbl}</span>
+          </div>`,
+          iconSize: [180, 22], iconAnchor: [0, 11],
+        }),
+        interactive: false, zIndexOffset: 200,
+      }).addTo(_tropicalTracks);
+    }
+  });
 
-      return `
-        <div style="margin-bottom:0.75rem;padding-bottom:0.65rem;border-bottom:1px solid rgba(0,180,216,0.15)">
-          <div style="display:flex;align-items:baseline;gap:0.45rem;margin-bottom:0.25rem">
-            <span style="font-family:'Barlow Condensed',sans-serif;font-size:1rem;font-weight:700;
-              color:${curColor};cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px"
-              title="Click to fly to storm"
-              onclick="(()=>{const pt=window._nhcCurrentPos_${storm.name.replace(/[^a-zA-Z0-9]/g,'')};if(pt)map.flyTo([pt.lat,pt.lon],5,{duration:1.5});})()">
-              ${storm.name}</span>
-            <span style="font-size:0.72rem;color:${curColor};font-weight:600">${curLabel}</span>
+  // Invest X markers (from TWO REST data)
+  invests.forEach(feat => {
+    const p        = feat.properties || {};
+    const centroid = feat._centroid;
+    if (!centroid) return;
+    const [lat, lng] = centroid;
+    const sysId = (p.idp_source || 'Invest').toUpperCase();
+    const col2  = _twoRiskColor(p.risk2day);
+    const col5  = _twoRiskColor(p.risk5day);
+    const issued = p.idp_issueddate
+      ? new Date(p.idp_issueddate).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
+      : '';
+    const mk = L.marker([lat, lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="width:32px;height:32px;display:flex;align-items:center;
+          justify-content:center;cursor:pointer">
+          <div style="font-size:1.5rem;font-weight:900;line-height:1;color:${col2};
+            text-shadow:0 0 4px #000,0 0 4px #000;font-family:'Barlow Condensed',sans-serif">✕</div>
+        </div>`,
+        iconSize: [32, 32], iconAnchor: [16, 16],
+      }),
+      zIndexOffset: 400,
+    }).addTo(_tropicalTracks);
+    // Invest label above X
+    L.marker([lat, lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;
+          font-size:0.75rem;color:#fff;text-shadow:0 0 3px #000,0 0 3px #000;
+          white-space:nowrap;margin-left:18px;margin-top:-22px">${sysId}</div>`,
+        iconSize: [90, 18], iconAnchor: [0, 18],
+      }),
+      interactive: false,
+    }).addTo(_tropicalTracks);
+    mk.bindPopup(`
+      <div class="alert-popup" style="min-width:220px">
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem">
+          <span style="font-size:1.1rem;font-weight:900;color:${col2};
+            font-family:'Barlow Condensed',sans-serif">✕</span>
+          <div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:1rem;
+              font-weight:700;color:${col2};letter-spacing:0.05em">${sysId}</div>
+            <div style="font-size:0.7rem;color:var(--muted)">NHC Tropical Disturbance · Invest</div>
           </div>
-          <div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.1rem">${storm.tcdvlp}</div>
-          <div style="font-size:0.75rem;color:#e8f4fd;margin-bottom:0.15rem">
-            <span style="color:${curColor};font-weight:700">${storm.maxwind != null ? Math.round(storm.maxwind) + ' kt' : '—'}</span>
-            ${storm.gust != null ? `<span style="color:var(--muted)"> · Gusts ${Math.round(storm.gust)} kt</span>` : ''}
+        </div>
+        <div style="background:rgba(0,180,216,0.07);border-radius:6px;
+          padding:0.45rem 0.55rem;margin-bottom:0.4rem">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.3rem">
+            <div>
+              <div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
+                letter-spacing:0.06em;margin-bottom:0.1rem">2-Day Formation</div>
+              <div style="font-size:0.9rem;font-weight:700;color:${col2};
+                font-family:'Barlow Condensed',sans-serif">${_twoRiskLabel(p.prob2day, p.risk2day)}</div>
+            </div>
+            <div>
+              <div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
+                letter-spacing:0.06em;margin-bottom:0.1rem">7-Day Formation</div>
+              <div style="font-size:0.9rem;font-weight:700;color:${col5};
+                font-family:'Barlow Condensed',sans-serif">${_twoRiskLabel(p.prob5day, p.risk5day)}</div>
+            </div>
           </div>
-          ${movement ? `<div style="font-size:0.7rem;color:var(--muted);margin-bottom:0.35rem">${movement}</div>` : ''}
-          ${forecastPoints.length ? `
-          <div style="font-size:0.66rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;
-            font-family:'Barlow Condensed',sans-serif;margin-bottom:0.2rem">5-Day Forecast Track</div>
+        </div>
+        ${issued ? `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:0.4rem">NHC outlook issued: ${issued}</div>` : ''}
+        <div style="border-top:1px solid rgba(0,180,216,0.15);padding-top:0.35rem;
+          display:flex;flex-direction:column;gap:0.2rem">
+          <a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" rel="noopener"
+             style="color:#00b4d8;font-size:0.72rem;text-decoration:none">📋 NHC Tropical Weather Outlook ↗</a>
+          <a href="https://www.nhc.noaa.gov/satellite.php" target="_blank" rel="noopener"
+             style="color:#00b4d8;font-size:0.72rem;text-decoration:none">🛰 NHC Satellite Imagery ↗</a>
+        </div>
+      </div>
+    `, { maxWidth: 280, className: 'nhc-popup' });
+  });
+
+  // ── Build unified panel ───────────────────────────────────────────────────
+  const totalCount = activeStorms.length + invests.length;
+  if (!totalCount) {
+    _tropicalPanel.innerHTML = `
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:700;
+        color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.3rem">
+        🌀 Tropical Weather · Global</div>
+      <div style="color:var(--muted);font-size:0.72rem">No active storms or disturbances</div>
+      <div style="font-size:0.62rem;color:var(--muted);margin-top:0.4rem;text-align:right">
+        <a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" style="color:#00b4d8">NHC TWO ↗</a></div>`;
+    return;
+  }
+
+  // Invest rows
+  const investHTML = invests.map(feat => {
+    const p = feat.properties || {};
+    const sysId   = (p.idp_source || 'Invest').toUpperCase();
+    const col2    = _twoRiskColor(p.risk2day);
+    const col5    = _twoRiskColor(p.risk5day);
+    const centroid = feat._centroid;
+    const flyFn   = centroid ? `map.flyTo([${centroid[0]},${centroid[1]}],5,{duration:1.5})` : '';
+    return `
+      <div style="margin-bottom:0.55rem;padding-bottom:0.45rem;
+        border-bottom:1px solid rgba(0,180,216,0.1)">
+        <div style="display:flex;align-items:baseline;gap:0.4rem;margin-bottom:0.18rem">
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:0.95rem;
+            font-weight:900;color:${col2};cursor:pointer;
+            text-decoration:underline dotted;text-underline-offset:3px"
+            onclick="${flyFn}" title="Fly to disturbance">✕ ${sysId}</span>
+          <span style="font-size:0.65rem;color:var(--muted)">Invest · Disturbance</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.15rem;font-size:0.7rem">
+          <div>
+            <span style="color:var(--muted);font-size:0.6rem">2-Day: </span>
+            <strong style="color:${col2}">${_twoRiskLabel(p.prob2day, p.risk2day)}</strong>
+          </div>
+          <div>
+            <span style="color:var(--muted);font-size:0.6rem">7-Day: </span>
+            <strong style="color:${col5}">${_twoRiskLabel(p.prob5day, p.risk5day)}</strong>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Named storm rows
+  const stormHTML = activeStorms.map(storm => {
+    const curColor = nhcCatColor(storm.ssnum, storm.tcdvlp);
+    const curLabel = nhcCatLabel(storm.ssnum, storm.tcdvlp);
+    const movement = (storm.tcspd != null && storm.tcdir != null)
+      ? `Moving ${compassDir(storm.tcdir)} at ${Math.round(storm.tcspd)} kt (${ktToMph(storm.tcspd)} mph)` : '';
+    const forecastPoints = storm.points.filter(p => (p.tau||0) > 0);
+    const trackRows = forecastPoints.map(p => {
+      const col = nhcCatColor(p.ssnum||0, p.tcdvlp||'');
+      const lbl = nhcCatLabel(p.ssnum||0, p.tcdvlp||'');
+      return `<tr>
+        <td style="padding:0.12em 0.3em;color:var(--muted)">${p.datelbl || (p.tau != null ? '+'+p.tau+'h' : '')}</td>
+        <td style="padding:0.12em 0.3em">
+          <span style="display:inline-block;padding:0.05em 0.3em;border-radius:3px;
+            background:${col}22;color:${col};font-weight:700;font-size:0.68rem">${lbl}</span>
+        </td>
+        <td style="padding:0.12em 0.3em;color:#e8f4fd;text-align:right">
+          ${p.maxwind != null ? windDisplayShort(p.maxwind) : '—'}</td>
+      </tr>`;
+    }).join('');
+    const safeName = storm.name.replace(/[^a-zA-Z0-9]/g,'');
+    return `
+      <div style="margin-bottom:0.75rem;padding-bottom:0.65rem;
+        border-bottom:1px solid rgba(0,180,216,0.15)">
+        <div style="display:flex;align-items:baseline;gap:0.45rem;margin-bottom:0.2rem">
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:1rem;
+            font-weight:700;color:${curColor};cursor:pointer;
+            text-decoration:underline dotted;text-underline-offset:3px"
+            title="Click to fly to storm"
+            onclick="(()=>{const pt=window._nhcCurrentPos_${safeName};if(pt)map.flyTo([pt.lat,pt.lon],5,{duration:1.5});})()">
+            🌀 ${storm.name}</span>
+          <span style="font-size:0.72rem;color:${curColor};font-weight:600">${curLabel}</span>
+        </div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.1rem">${storm.tcdvlp}</div>
+        <div style="font-size:0.75rem;color:#e8f4fd;margin-bottom:0.15rem">
+          <span style="color:${curColor};font-weight:700">${storm.maxwind != null ? windDisplay(storm.maxwind) : '—'}</span>
+          ${storm.gust != null ? `<span style="color:var(--muted)"> · Gusts ${windDisplayShort(storm.gust)}</span>` : ''}
+        </div>
+        ${movement ? `<div style="font-size:0.7rem;color:var(--muted);margin-bottom:0.3rem">${movement}</div>` : ''}
+        ${forecastPoints.length ? `
+          <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;
+            letter-spacing:0.06em;font-family:'Barlow Condensed',sans-serif;margin-bottom:0.15rem">
+            5-Day Forecast Track</div>
           <table style="width:100%;border-collapse:collapse;font-size:0.72rem">
-            <thead>
-              <tr style="font-family:'Barlow Condensed',sans-serif;font-size:0.65rem;color:var(--muted);letter-spacing:0.04em">
-                <th style="padding:0.1em 0.3em;text-align:left;font-weight:400">Time</th>
-                <th style="padding:0.1em 0.3em;text-align:left;font-weight:400">Type</th>
-                <th style="padding:0.1em 0.3em;text-align:right;font-weight:400">Winds</th>
-              </tr>
-            </thead>
+            <thead><tr style="font-family:'Barlow Condensed',sans-serif;font-size:0.62rem;
+              color:var(--muted);letter-spacing:0.04em">
+              <th style="padding:0.08em 0.3em;text-align:left;font-weight:400">Time</th>
+              <th style="padding:0.08em 0.3em;text-align:left;font-weight:400">Type</th>
+              <th style="padding:0.08em 0.3em;text-align:right;font-weight:400">Winds</th>
+            </tr></thead>
             <tbody>${trackRows}</tbody>
           </table>` : ''}
-        </div>`;
-    }).join('');
-
-    panelEl.innerHTML = `
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:700;
-        color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.5rem">
-        🌀 ${basinLabel} Tropical · ${activeStorms.length} Storm${activeStorms.length !== 1 ? 's' : ''}
-      </div>
-      ${stormHTML}
-      <div style="font-size:0.62rem;color:var(--muted);text-align:right;margin-top:-0.3rem">
-        NHC · Updated every 6h
       </div>`;
+  }).join('');
 
-  } catch(e) {
-    console.warn('[NHC]', e.message);
-    panelEl.innerHTML = `<div style="color:var(--muted);font-size:0.72rem">🌀 Tropical data unavailable</div>`;
-  }
+  _tropicalPanel.innerHTML = `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:700;
+      color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.5rem">
+      🌀 Tropical Weather · ${totalCount} Active
+    </div>
+    ${invests.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;
+      letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif">
+      Disturbances (${invests.length})</div>${investHTML}` : ''}
+    ${activeStorms.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;
+      letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif;
+      ${invests.length ? 'margin-top:0.3rem' : ''}">
+      Named Storms (${activeStorms.length})</div>${stormHTML}` : ''}
+    <div style="font-size:0.62rem;color:var(--muted);text-align:right;margin-top:-0.2rem">
+      NHC · Updated every 6h ·
+      <a href="https://www.nhc.noaa.gov/" target="_blank" style="color:#00b4d8">nhc.noaa.gov ↗</a>
+    </div>`;
 }
 
-// Convert degrees to compass direction string
-function compassDir(deg) {
-  if (deg == null) return '';
-  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  return dirs[Math.round(deg / 22.5) % 16];
-}
-
-function stopNHC(basin) {
-  if (_nhcLayers[basin]) { map.removeLayer(_nhcLayers[basin]); delete _nhcLayers[basin]; }
-  if (_nhcTrackLayers[basin]) { map.removeLayer(_nhcTrackLayers[basin]); delete _nhcTrackLayers[basin]; }
-  if (_nhcPanels[basin]) { _nhcPanels[basin].remove(); delete _nhcPanels[basin]; }
+function stopTropical() {
+  if (_tropicalLayer)  { map.removeLayer(_tropicalLayer); }
+  if (_tropicalTracks) { map.removeLayer(_tropicalTracks); _tropicalTracks = null; }
+  if (_tropicalPanel)  { _tropicalPanel.style.display = 'none'; }
+  clearInterval(_tropicalTimer);
 }
 
 function stopChasers() {
@@ -5731,8 +6016,9 @@ function onModelChange(model) {
 }
 
 const BASEMAP_ITEMS=[
-  {id:'reflectivity',ico:'🌧',name:'Base Reflectivity',sub:'National mosaic'},
-  {id:'goes',ico:'🛰',name:'GOES Satellite',sub:'Infrared cloud imagery'},
+  {id:'global-radar', ico:'🌍', name:'Global Radar',       sub:'RainViewer · 150+ countries · animated'},
+  {id:'reflectivity', ico:'🌧', name:'US Radar (NEXRAD)',  sub:'IEM mosaic · high-res CONUS only'},
+  {id:'goes',         ico:'🛰', name:'GOES Satellite',     sub:'Infrared cloud imagery'},
 ];
 const RADAR_ITEMS=[
   // Single-site products — require selecting a nearby WSR-88D station.
@@ -5770,10 +6056,7 @@ const PRECIP_ITEMS=[
   {id:'river-gauges',ico:'📏',name:'River & Flood Gauges', sub:'NWS NWPS · flood stage status',          def:false},
 ];
 const TROPICAL_ITEMS=[
-  {id:'nhc-two',      ico:'🔴', name:'Tropical Weather Outlook',       sub:'NHC · global · invests + named storms · formation probability', def:false},
-  {id:'nhc-atlantic', ico:'🌀', name:'Atlantic Tropical Storms',       sub:'NHC · active tracks · cones',                def:false},
-  {id:'nhc-pacific',  ico:'🌀', name:'E. Pacific Tropical Storms',     sub:'NHC · active tracks · cones',                def:false},
-  {id:'nhc-cpac',     ico:'🌀', name:'C. Pacific Tropical Storms',     sub:'NHC · Hawaii region · active tracks',        def:false},
+  {id:'nhc-tropical', ico:'🌀', name:'Tropical Weather', sub:'NHC · global · storms + invests + tracks · formation probability', def:false},
 ];
 const FIRE_ITEMS=[
   {id:'hms-smoke',        ico:'💨',name:'Smoke Plumes',         sub:'NOAA HMS · light / medium / heavy density',   def:false},
@@ -5821,10 +6104,7 @@ function applyOverlay(id,on){
     case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); updateQPELegend(); break;
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
-    case 'nhc-two':        if (on) startTWO();        else stopTWO();        break;
-    case 'nhc-atlantic':   if (on) startNHC('atl');  else stopNHC('atl');  break;
-    case 'nhc-pacific':    if (on) startNHC('pac');  else stopNHC('pac');  break;
-    case 'nhc-cpac':       if (on) startNHC('cpac'); else stopNHC('cpac'); break;
+    case 'nhc-tropical':   if (on) startTropical(); else stopTropical(); break;
     case 'hms-smoke':      if (on) startHMSSmoke(); else clearHMSSmoke(); break;
     case 'fire-perimeters': if (on) startFirePerimeters(); else clearFirePerimeters(); break;
     case 'aqi':             if (on) startAQI(); else clearAQI(); break;
