@@ -4470,15 +4470,15 @@ function stopRiverGauges() {
   const _gleg2 = document.getElementById('river-gauge-legend'); if (_gleg2) _gleg2.style.display = 'none';
 }
 
-// ── GLOBAL RADAR (RainViewer) ─────────────────────────────────────────────────
-// RainViewer provides radar composites from 1,200+ stations in 150+ countries:
-// NOAA MRMS (US), MSC (Canada), EUMETNET OPERA (Europe 24 countries),
-// JMA (Japan), CWA (Taiwan), MET Malaysia, and more. Same animation pattern
-// as NEXRAD — fetch available timestamps, build tile layers, animate.
-// Free for personal/community use. Attribution: rainviewer.com
-const RV_API_URL      = 'https://api.rainviewer.com/public/weather-maps.json';
-const RV_TILE_BASE    = 'https://tilecache.rainviewer.com';
-const RV_COLOR_SCHEME = 4;   // 4=default DBZ colors, 2=Universal Blue, 7=Titan
+// ── GLOBAL RADAR (LibreWXR) ───────────────────────────────────────────────────
+// LibreWXR is a drop-in RainViewer replacement with no rate limits.
+// Covers NOAA MRMS (US), MSC (Canada), EUMETNET OPERA (Europe 24 countries),
+// JMA (Japan), CWA (Taiwan), MET Malaysia, and ECMWF IFS global base layer.
+// API-compatible with RainViewer v2. Free, CC-BY-4.0. Attribution: librewxr.net
+// https://librewxr.net/
+const RV_API_URL      = 'https://api.librewxr.net/public/weather-maps.json';
+const RV_TILE_BASE    = 'https://tilecache.librewxr.net';
+const RV_COLOR_SCHEME = 4;   // 4=default DBZ colors (same scheme IDs as RainViewer)
 const RV_MAX_FRAMES   = 12;  // past frames (~60 min at 5-min intervals)
 
 let rvFrameLayers  = [];
@@ -4500,7 +4500,7 @@ async function buildRVFrames() {
       `${RV_TILE_BASE}/v2/radar/${frame.time}/256/{z}/{x}/{y}/${RV_COLOR_SCHEME}/1_1.png`,
       { opacity:0, zIndex:200+idx, tileSize:256, keepBuffer:1,
         updateWhenIdle:true, updateWhenZooming:false,
-        attribution: idx===0 ? 'Global Radar: <a href="https://www.rainviewer.com">RainViewer</a>' : '' }
+        attribution: idx===0 ? 'Global Radar: <a href="https://librewxr.net">LibreWXR</a>' : '' }
     );
     rvFrameLayers.push({ time: frame.time, label, layer });
   });
@@ -4876,6 +4876,13 @@ function cycleUnits() {
 
 function ktToMph(kt) { return Math.round((kt || 0) * 1.15078); }
 function ktToKmh(kt) { return Math.round((kt || 0) * 1.852);   }
+
+// Convert degrees to compass direction string
+function compassDir(deg) {
+  if (deg == null) return '';
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(deg / 22.5) % 16];
+}
 
 function windDisplay(kt) {
   if (kt == null) return '—';
@@ -6016,7 +6023,7 @@ function onModelChange(model) {
 }
 
 const BASEMAP_ITEMS=[
-  {id:'global-radar', ico:'🌍', name:'Global Radar',       sub:'RainViewer · 150+ countries · animated'},
+  {id:'global-radar', ico:'🌍', name:'Global Radar',       sub:'LibreWXR · global radar · 150+ countries · animated'},
   {id:'reflectivity', ico:'🌧', name:'US Radar (NEXRAD)',  sub:'IEM mosaic · high-res CONUS only'},
   {id:'goes',         ico:'🛰', name:'GOES Satellite',     sub:'Infrared cloud imagery'},
 ];
