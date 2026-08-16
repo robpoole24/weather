@@ -4477,7 +4477,7 @@ function stopRiverGauges() {
 // API-compatible with RainViewer v2. Free, CC-BY-4.0. Attribution: librewxr.net
 // https://librewxr.net/
 const RV_API_URL      = 'https://api.librewxr.net/public/weather-maps.json';
-const RV_TILE_BASE    = 'https://tilecache.librewxr.net';
+const RV_TILE_BASE    = 'https://api.librewxr.net';  // tiles served from same domain as API
 const RV_COLOR_SCHEME = 4;   // 4=default DBZ colors (same scheme IDs as RainViewer)
 const RV_MAX_FRAMES   = 12;  // past frames (~60 min at 5-min intervals)
 
@@ -4636,32 +4636,33 @@ function _twoRiskLabel(prob, risk) {
 }
 
 async function _loadTWOData() {
-  // Layer 1 = Two-Day invest probability ovals (polygons, not points)
-  // Layer 2 = Seven-Day invest probability ovals
-  // We query both, deduplicate by idp_source, compute centroids from bbox.
-  // The WMS renders X markers at the centroid — we replicate that here.
-  const fields = 'idp_source,prob2day,risk2day,prob5day,risk5day,idp_issueddate';
+  // Layer 1 = Two-Day: Current Location — esriGeometryPoint (direct lat/lon)
+  // Layer 2 = Seven-Day: Current Location — esriGeometryPoint
+  // Fields confirmed from MapServer metadata: prob2day, risk2day, prob7day, risk7day
+  // No centroid calculation needed — these are genuine point features.
+  const fields = 'idp_source,prob2day,risk2day,prob7day,risk7day,idp_filedate';
   const [r1, r2] = await Promise.allSettled([
     fetch(NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
     fetch(NHC_TWO_REST + '/2/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
   ]);
   const seen = new Set();
   const features = [];
-  // Merge layer 1 (2-day) and layer 2 (7-day), preferring layer 1 data when both have same invest
   for (const result of [r1, r2]) {
     if (result.status !== 'fulfilled') continue;
     for (const feat of (result.value?.features || [])) {
       const id = feat.properties?.idp_source || '';
       if (seen.has(id)) continue;
       seen.add(id);
-      // Compute centroid from polygon bounding box
-      const coords = feat.geometry?.coordinates?.[0];
-      if (coords && coords.length) {
-        const lngs = coords.map(c => c[0]);
-        const lats = coords.map(c => c[1]);
-        const cLng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
-        const cLat = (Math.min(...lats) + Math.max(...lats)) / 2;
-        feat._centroid = [cLat, cLng];
+      // Layer 1 is a point layer — coordinates are [lng, lat] directly
+      const coords = feat.geometry?.coordinates;
+      if (coords && coords.length === 2) {
+        feat._centroid = [coords[1], coords[0]]; // [lat, lng]
+      }
+      // Normalise field names: some older queries used prob5day/risk5day aliases
+      if (feat.properties) {
+        feat.properties.prob5day = feat.properties.prob7day;
+        feat.properties.risk5day = feat.properties.risk7day;
+        feat.properties.idp_issueddate = feat.properties.idp_filedate;
       }
       features.push(feat);
     }

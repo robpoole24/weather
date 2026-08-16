@@ -117,7 +117,7 @@ function securityHeaders(req, res, next) {
       // NowCOAST WMS (surface analysis, ERO, tropical) — tile requests go direct
       " https://nowcoast.noaa.gov" +
       // LibreWXR — global radar tiles (drop-in RainViewer replacement, no rate limits)
-      " https://api.librewxr.net https://tilecache.librewxr.net" +
+      " https://api.librewxr.net" +  // LibreWXR: both API and tiles served from this domain
       // NWS National Water Prediction Service (river/flood gauges)
       " https://api.water.noaa.gov" +
       // USGS streamflow backup
