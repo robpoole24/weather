@@ -4640,11 +4640,13 @@ async function _loadTWOData() {
   // Layer 2 = Seven-Day: Current Location — esriGeometryPoint
   // Fields confirmed from MapServer metadata: prob2day, risk2day, prob7day, risk7day
   // No centroid calculation needed — these are genuine point features.
-  const fields = 'idp_source,prob2day,risk2day,prob7day,risk7day,idp_filedate';
+  const fields = 'idp_source,basin,prob2day,risk2day,prob7day,risk7day,idp_filedate';
   const [r1, r2] = await Promise.allSettled([
     fetch(NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
     fetch(NHC_TWO_REST + '/2/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
   ]);
+  console.log('[TWO] Layer 1 result:', r1.status, r1.status === 'fulfilled' ? JSON.stringify(r1.value).slice(0, 300) : r1.reason?.message);
+  console.log('[TWO] Layer 2 result:', r2.status, r2.status === 'fulfilled' ? JSON.stringify(r2.value).slice(0, 300) : r2.reason?.message);
   const seen = new Set();
   const features = [];
   for (const result of [r1, r2]) {
@@ -4667,6 +4669,7 @@ async function _loadTWOData() {
       features.push(feat);
     }
   }
+  console.log('[TWO] Total invest features:', features.length);
   return features;
 }
 
