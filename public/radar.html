@@ -4645,8 +4645,7 @@ async function _loadTWOData() {
     fetch(NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
     fetch(NHC_TWO_REST + '/2/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
   ]);
-  console.log('[TWO] Layer 1 result:', r1.status, r1.status === 'fulfilled' ? JSON.stringify(r1.value).slice(0, 300) : r1.reason?.message);
-  console.log('[TWO] Layer 2 result:', r2.status, r2.status === 'fulfilled' ? JSON.stringify(r2.value).slice(0, 300) : r2.reason?.message);
+
   const seen = new Set();
   const features = [];
   for (const result of [r1, r2]) {
@@ -4669,7 +4668,6 @@ async function _loadTWOData() {
       features.push(feat);
     }
   }
-  console.log('[TWO] Total invest features:', features.length);
   return features;
 }
 
@@ -4785,7 +4783,7 @@ async function _refreshTWOPanel() {
   _twoPanelEl.style.display = 'block';
 
   if (!features.length) {
-    _twoPanelEl.innerHTML = '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:0.72rem;font-weight:700;color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.3rem">\uD83D\uDD34 Tropical Weather Outlook</div><div style="color:var(--muted);font-size:0.72rem">No active disturbances</div><div style="font-size:0.62rem;color:var(--muted);margin-top:0.4rem;text-align:right"><a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" style="color:#00b4d8">NHC TWO \u2197</a></div>';
+    _twoPanelEl.innerHTML = '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:0.72rem;font-weight:700;color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.3rem">\uD83D\uDD34 Tropical Weather Outlook</div><div style="color:var(--muted);font-size:0.72rem">No active disturbances</div><div style="font-size:0.68rem;color:var(--muted);margin-top:0.3rem;line-height:1.4">NHC removes invests when formation chance drops to 0%. Disturbances reappear when development potential increases.</div><div style="font-size:0.62rem;color:var(--muted);margin-top:0.4rem;text-align:right"><a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" style="color:#00b4d8">NHC TWO \u2197</a></div>';
     return;
   }
 
@@ -5219,6 +5217,7 @@ async function refreshTropicalPanel() {
         color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.3rem">
         🌀 Tropical Weather · Global</div>
       <div style="color:var(--muted);font-size:0.72rem">No active storms or disturbances</div>
+      <div style="font-size:0.68rem;color:var(--muted);margin-top:0.3rem;line-height:1.4">Invests appear when NHC assigns >0% formation probability. The TWO ovals above show monitored areas.</div>
       <div style="font-size:0.62rem;color:var(--muted);margin-top:0.4rem;text-align:right">
         <a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" style="color:#00b4d8">NHC TWO ↗</a></div>`;
     return;
