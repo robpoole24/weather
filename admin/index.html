@@ -318,6 +318,7 @@
 
       <div style="display:flex;gap:0.5rem;margin-bottom:1.25rem;">
         <button class="btn btn-primary btn-sm" onclick="addHighlight()">+ Add Highlight</button>
+        <button id="btn-backfill-titles" class="btn btn-ghost btn-sm" onclick="backfillHighlightTitles()" title="Fetch titles from YouTube for any highlights showing only a video ID">Fix missing titles</button>
         <button class="btn btn-ghost btn-sm" onclick="restoreHighlightsFromBackup()" title="Restore the 7 highlights lost in the August 2026 data wipe — only works if highlights list is currently empty">⚠ Restore from backup</button>
       </div>
       <div id="highlight-result" style="font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;margin-bottom:0.75rem;"></div>
@@ -2677,17 +2678,30 @@ async function addHighlight() {
     }
   }
 
-  // Auto-fetch title + thumbnail via oEmbed — free, zero quota cost
-  // Works for any public YouTube video regardless of channel
+  // Auto-fetch title + thumbnail — try oEmbed first (free, no quota),
+  // fall back to server's YouTube Data API proxy if oEmbed fails or
+  // returns no title (happens for restricted/non-embeddable videos).
   let title = '', thumbnail = '';
   try {
     const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
     if (oe.ok) {
       const d = await oe.json();
-      title = d.title || '';
+      title     = d.title || '';
       thumbnail = d.thumbnail_url || '';
     }
   } catch(e) {}
+
+  // oEmbed failed or returned no title — use server-side YouTube API proxy
+  if (!title) {
+    try {
+      const r = await fetch(`/api/admin/video-info?videoId=${encodeURIComponent(videoId)}`);
+      if (r.ok) {
+        const d = await r.json();
+        title     = d.title     || '';
+        thumbnail = d.thumbnail || thumbnail;
+      }
+    } catch(_) {}
+  }
 
   const res = await fetch('/api/admin/highlights', {
     method: 'POST',
@@ -2708,6 +2722,25 @@ async function addHighlight() {
     await loadData();
   } else {
     showHighlightResult('⚠ ' + (data.error || 'Failed.'), false);
+  }
+}
+
+async function backfillHighlightTitles() {
+  const btn = document.getElementById('btn-backfill-titles');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fixing…'; }
+  try {
+    const r = await fetch('/api/admin/highlights/backfill-titles', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(d.fixed > 0 ? `✓ Fixed ${d.fixed} title(s)` : 'No missing titles found');
+      if (d.fixed) await loadData();
+    } else {
+      showToast('⚠ ' + (d.error || 'Backfill failed'));
+    }
+  } catch(e) {
+    showToast('⚠ ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Fix missing titles'; }
   }
 }
 
