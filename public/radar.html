@@ -4636,38 +4636,75 @@ function _twoRiskLabel(prob, risk) {
 }
 
 async function _loadTWOData() {
-  // Layer 1 = Two-Day: Current Location — esriGeometryPoint (direct lat/lon)
-  // Layer 2 = Seven-Day: Current Location — esriGeometryPoint
-  // Fields confirmed from MapServer metadata: prob2day, risk2day, prob7day, risk7day
-  // No centroid calculation needed — these are genuine point features.
-  const fields = 'idp_source,basin,prob2day,risk2day,prob7day,risk7day,idp_filedate';
-  const [r1, r2] = await Promise.allSettled([
-    fetch(NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
-    fetch(NHC_TWO_REST + '/2/query?where=1%3D1&outFields=' + fields + '&returnGeometry=true&f=geojson').then(r => r.json()),
+  // Layer 1 = Two-Day: Current Location (point) — only present when formation prob > 0%
+  // Layer 2 = Seven-Day: Current Location (point) — same
+  // Layer 3 = Seven-Day: Potential Development Region (polygon) — persists at 0% probability
+  // Strategy: query all three. Layers 1+2 give clickable invest markers with probability data.
+  // Layer 3 gives polygon areas NHC is still monitoring even when prob dropped to 0%.
+  // We compute centroids from layer 3 polygons to show gray "monitoring area" markers
+  // so users can see NHC is still watching a disturbance even with no development expected.
+  const fields12 = 'idp_source,basin,prob2day,risk2day,prob7day,risk7day,idp_filedate';
+  const fields3  = 'idp_source,basin,idp_filedate';
+  const [r1, r2, r3] = await Promise.allSettled([
+    fetch(NHC_TWO_REST + '/1/query?where=1%3D1&outFields=' + fields12 + '&returnGeometry=true&f=geojson').then(r => r.json()),
+    fetch(NHC_TWO_REST + '/2/query?where=1%3D1&outFields=' + fields12 + '&returnGeometry=true&f=geojson').then(r => r.json()),
+    fetch(NHC_TWO_REST + '/3/query?where=1%3D1&outFields=' + fields3  + '&returnGeometry=true&f=geojson').then(r => r.json()),
   ]);
 
   const seen = new Set();
   const features = [];
+
+  // Process point layers first (layers 1 & 2) — have full probability data
   for (const result of [r1, r2]) {
     if (result.status !== 'fulfilled') continue;
     for (const feat of (result.value?.features || [])) {
-      const id = feat.properties?.idp_source || '';
+      const id = feat.properties?.idp_source || Math.random().toString();
       if (seen.has(id)) continue;
       seen.add(id);
-      // Layer 1 is a point layer — coordinates are [lng, lat] directly
       const coords = feat.geometry?.coordinates;
       if (coords && coords.length === 2) {
-        feat._centroid = [coords[1], coords[0]]; // [lat, lng]
+        feat._centroid = [coords[1], coords[0]]; // point: [lng,lat] → [lat,lng]
       }
-      // Normalise field names: some older queries used prob5day/risk5day aliases
       if (feat.properties) {
         feat.properties.prob5day = feat.properties.prob7day;
         feat.properties.risk5day = feat.properties.risk7day;
         feat.properties.idp_issueddate = feat.properties.idp_filedate;
+        feat._fromPoint = true;
       }
       features.push(feat);
     }
   }
+
+  // Layer 3 polygon fallback — shows disturbances NHC is watching at 0% probability.
+  // Only add if this idp_source wasn't already found in layers 1/2.
+  if (r3.status === 'fulfilled') {
+    for (const feat of (r3.value?.features || [])) {
+      const id = feat.properties?.idp_source || '';
+      if (seen.has(id)) continue; // already have better data from layers 1/2
+      seen.add(id);
+      // Compute centroid from polygon bounding box
+      const coords = feat.geometry?.coordinates?.[0];
+      if (coords && coords.length) {
+        const lngs = coords.map(c => c[0]);
+        const lats  = coords.map(c => c[1]);
+        feat._centroid = [
+          (Math.min(...lats)  + Math.max(...lats))  / 2,
+          (Math.min(...lngs) + Math.max(...lngs)) / 2,
+        ];
+      }
+      if (feat.properties) {
+        // No probability data on layer 3 — mark as monitoring-only
+        feat.properties.prob2day = '0%';
+        feat.properties.risk2day = 'LOW';
+        feat.properties.prob5day = '0%';
+        feat.properties.risk5day = 'LOW';
+        feat.properties.idp_issueddate = feat.properties.idp_filedate;
+        feat._monitoringOnly = true; // flag to style differently
+      }
+      features.push(feat);
+    }
+  }
+
   return features;
 }
 
@@ -4690,37 +4727,42 @@ async function _refreshTWOPanel() {
       ? new Date(p.idp_issueddate).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})
       : '';
 
-    // NHC-style X marker — matches the WMS symbol, large enough to tap on mobile
+    // NHC-style X marker — gray/dimmed for monitoring-only (0% prob), colored for active invests
+    const isMonitorOnly = !!feat._monitoringOnly;
+    const markerColor   = isMonitorOnly ? '#888888' : col2;
+    const markerLabel   = isMonitorOnly ? 'Area to Watch' : sysId;
+
     const mk = L.marker([lat, lng], {
       icon: L.divIcon({
         className: '',
         html: `<div style="
           position:relative;width:32px;height:32px;
           display:flex;align-items:center;justify-content:center;
-          cursor:pointer;
+          cursor:pointer;opacity:${isMonitorOnly ? '0.7' : '1'};
         ">
           <div style="
             font-size:1.5rem;font-weight:900;line-height:1;
-            color:${col2};text-shadow:0 0 4px #000,0 0 4px #000;
+            color:${markerColor};text-shadow:0 0 4px #000,0 0 4px #000;
             font-family:'Barlow Condensed',sans-serif;
           ">✕</div>
         </div>`,
         iconSize: [32, 32],
         iconAnchor: [16, 16],
       }),
-      zIndexOffset: 400,
+      zIndexOffset: isMonitorOnly ? 300 : 400,
     }).addTo(_twoMarkers);
 
-    // System ID label above the X
+    // Label above the X
     L.marker([lat, lng], {
       icon: L.divIcon({
         className: '',
         html: `<div style="
           font-family:'Barlow Condensed',sans-serif;font-weight:700;
-          font-size:0.75rem;color:#fff;
+          font-size:${isMonitorOnly ? '0.62rem' : '0.75rem'};
+          color:${isMonitorOnly ? '#aaa' : '#fff'};
           text-shadow:0 0 3px #000,0 0 3px #000;
           white-space:nowrap;margin-left:18px;margin-top:-22px;
-        ">${sysId}</div>`,
+        ">${markerLabel}</div>`,
         iconSize: [90, 18], iconAnchor: [0, 18],
       }),
       interactive: false,
@@ -4734,8 +4776,8 @@ async function _refreshTWOPanel() {
             font-family:'Barlow Condensed',sans-serif;letter-spacing:0.04em">✕</span>
           <div>
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:1rem;
-              font-weight:700;color:${col2};letter-spacing:0.05em">${sysId}</div>
-            <div style="font-size:0.7rem;color:var(--muted)">NHC Tropical Disturbance · Invest</div>
+              font-weight:700;color:${markerColor};letter-spacing:0.05em">${isMonitorOnly ? '🔍 Area to Watch' : sysId}</div>
+            <div style="font-size:0.7rem;color:var(--muted)">${isMonitorOnly ? 'NHC Monitoring Area · No development expected' : 'NHC Tropical Disturbance · Invest'}</div>
           </div>
         </div>
         <div style="background:rgba(0,180,216,0.07);border-radius:6px;
@@ -4744,8 +4786,8 @@ async function _refreshTWOPanel() {
             <div>
               <div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
                 letter-spacing:0.06em;margin-bottom:0.1rem">2-Day Formation</div>
-              <div style="font-size:0.9rem;font-weight:700;color:${col2};
-                font-family:'Barlow Condensed',sans-serif">${_twoRiskLabel(p.prob2day, p.risk2day)}</div>
+              <div style="font-size:0.9rem;font-weight:700;color:${markerColor};
+                font-family:'Barlow Condensed',sans-serif">${isMonitorOnly ? 'None (0%)' : _twoRiskLabel(p.prob2day, p.risk2day)}</div>
             </div>
             <div>
               <div style="font-size:0.6rem;color:var(--muted);text-transform:uppercase;
@@ -5231,16 +5273,25 @@ async function refreshTropicalPanel() {
     const col5    = _twoRiskColor(p.risk5day);
     const centroid = feat._centroid;
     const flyFn   = centroid ? `map.flyTo([${centroid[0]},${centroid[1]}],5,{duration:1.5})` : '';
+    const isMonitorRow = !!feat._monitoringOnly;
+    const rowColor     = isMonitorRow ? '#888' : col2;
     return `
       <div style="margin-bottom:0.55rem;padding-bottom:0.45rem;
-        border-bottom:1px solid rgba(0,180,216,0.1)">
+        border-bottom:1px solid rgba(0,180,216,0.1);
+        opacity:${isMonitorRow ? '0.8' : '1'}">
         <div style="display:flex;align-items:baseline;gap:0.4rem;margin-bottom:0.18rem">
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:0.95rem;
-            font-weight:900;color:${col2};cursor:pointer;
+            font-weight:900;color:${rowColor};cursor:pointer;
             text-decoration:underline dotted;text-underline-offset:3px"
-            onclick="${flyFn}" title="Fly to disturbance">✕ ${sysId}</span>
-          <span style="font-size:0.65rem;color:var(--muted)">Invest · Disturbance</span>
+            onclick="${flyFn}" title="Fly to disturbance">
+            ✕ ${isMonitorRow ? 'Area to Watch' : sysId}</span>
+          <span style="font-size:0.65rem;color:var(--muted)">
+            ${isMonitorRow ? 'Monitoring · No development expected' : 'Invest · Disturbance'}</span>
         </div>
+        ${isMonitorRow ? `
+        <div style="font-size:0.68rem;color:var(--muted)">
+          NHC is tracking this area. Formation chance currently 0%.
+        </div>` : `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.15rem;font-size:0.7rem">
           <div>
             <span style="color:var(--muted);font-size:0.6rem">2-Day: </span>
@@ -5250,7 +5301,7 @@ async function refreshTropicalPanel() {
             <span style="color:var(--muted);font-size:0.6rem">7-Day: </span>
             <strong style="color:${col5}">${_twoRiskLabel(p.prob5day, p.risk5day)}</strong>
           </div>
-        </div>
+        </div>`}
       </div>`;
   }).join('');
 
@@ -5314,9 +5365,13 @@ async function refreshTropicalPanel() {
       color:#00b4d8;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.5rem">
       🌀 Tropical Weather · ${totalCount} Active
     </div>
-    ${invests.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;
-      letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif">
-      Disturbances (${invests.length})</div>${investHTML}` : ''}
+    ${invests.length ? (() => {
+      const activeInvests   = invests.filter(f => !f._monitoringOnly);
+      const monitoringAreas = invests.filter(f =>  f._monitoringOnly);
+      return (activeInvests.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif">Disturbances (${activeInvests.length})</div>` : '') +
+             investHTML +
+             (monitoringAreas.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;margin:0.3rem 0;font-family:'Barlow Condensed',sans-serif">NHC Monitoring Areas (${monitoringAreas.length})</div>` : '');
+    })() : ''}
     ${activeStorms.length ? `<div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;
       letter-spacing:0.07em;margin-bottom:0.3rem;font-family:'Barlow Condensed',sans-serif;
       ${invests.length ? 'margin-top:0.3rem' : ''}">
