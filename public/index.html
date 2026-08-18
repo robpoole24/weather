@@ -3139,7 +3139,7 @@ function openLiveChat(videoId, channelName) {
   // Desktop: sidebar chat panel
   const chatFrame = document.getElementById('chat-frame');
   const domain = window.location.hostname;
-  chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain;
+  chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain + '&dark_theme=1';
   document.getElementById('live-chat-panel').classList.add('visible');
   const btn = document.getElementById('chat-toggle-btn');
   if (btn) btn.classList.add('chat-open');
@@ -3154,7 +3154,7 @@ function openMobileChatOverlay(videoId, channelName) {
 
   videoFrame.src = 'https://www.youtube.com/embed/' + videoId + '?autoplay=1&rel=0';
   chatFrame.src  = 'https://www.youtube.com/live_chat?v=' + videoId +
-                   '&embed_domain=' + window.location.hostname;
+                   '&embed_domain=' + window.location.hostname + '&dark_theme=1';
   if (titleEl) titleEl.textContent = channelName || 'Live Chat';
 
   setMobileChatLayout();
@@ -4023,10 +4023,6 @@ async function initPushNotifications(lat, lng) {
       serviceWorkerRegistration: swReg,
     });
     if (!token) { console.warn('[Push] No FCM token returned'); return; }
-
-    // Persist token in localStorage so the monitor page can read it for
-    // admin alert registration — the token is device-specific, not a secret.
-    try { localStorage.setItem('wtv-fcm-token', token); } catch(_) {}
 
     // Only re-register if token or location changed
     if (token === _fcmToken && lat === _pushLat && lng === _pushLng) return;
