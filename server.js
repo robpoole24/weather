@@ -3038,11 +3038,11 @@ async function websubSubscribe(channelId) {
       // Persist lease expiry for ALL successful hub responses (202 = accepted).
       // YouTube's hub always returns 202 — it verifies asynchronously.
       // We write on any 2xx so restarts skip still-valid subscriptions.
-      // Use await-safe pattern: rSet is fire-and-forget but we log failures.
+      // Store as a number (not string) — rGet JSON.parses the stored value,
+      // so storing a number means rGet returns a number, keeping the math clean.
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        rSet('wt:ws:' + channelId, String(expiresAt)).catch(e =>
-          console.warn('[WebSub] Redis write failed for ' + channelId + ':', e.message)
-        );
+        rSet('wt:ws:' + channelId, expiresAt);
+        console.log('[WebSub] Lease persisted for ' + channelId + ' (expires in 9d)');
       }
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
@@ -3116,33 +3116,24 @@ async function subscribeAllChannels() {
   // instead of blocking for 60+ seconds re-subscribing every channel.
   const toSubscribe = [];
   let skipped = 0;
-  // Diagnostic: log Redis state for first channel to confirm reads are working
-  let redisOk = false;
+  // Diagnostic: log Redis availability on first channel
+  console.log(`[WebSub] Redis available: ${!!redis} — checking ${channels.length} subscriptions`);
+
   for (const ch of channels) {
-    try {
-      const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
-      if (!redisOk) {
-        console.log(`[WebSub] Redis check for ${ch.id}: stored="${stored}" redisClient=${!!redisClient}`);
-        redisOk = true;
-      }
-      if (stored) {
-        const expiresAt = parseInt(stored, 10);
-        const hoursLeft = Math.round((expiresAt - now) / 3600000);
-        if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
-          // Still valid for >24h — mark as active without hitting the hub
-          websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
-          skipped++;
-          continue;
-        } else {
-          console.log(`[WebSub] ${ch.id} needs renewal: expiresAt=${expiresAt} hoursLeft=${hoursLeft}`);
-        }
+    // rGet handles null redis and all errors internally — safe to call always
+    const stored = await rGet('wt:ws:' + ch.id);
+    if (stored !== null) {
+      // rGet JSON.parses the value — if we stored a raw number string, it comes back as number
+      const expiresAt = typeof stored === 'number' ? stored : parseInt(String(stored), 10);
+      const hoursLeft = Math.round((expiresAt - now) / 3600000);
+      if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
+        // Still valid for >24h — mark as active without hitting the hub
+        websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
+        skipped++;
+        continue;
       } else {
-        // Only log first few missing so we don't flood on fresh deploy
-        if (toSubscribe.length < 3) console.log(`[WebSub] ${ch.id} has no Redis key — subscribing`);
+        console.log(`[WebSub] ${ch.id} expires in ${hoursLeft}h — renewing`);
       }
-    } catch(e) {
-      console.warn('[WebSub] Redis error for ' + ch.id + ':', e.message);
-      // Redis unavailable — subscribe to be safe
     }
     toSubscribe.push(ch);
   }
