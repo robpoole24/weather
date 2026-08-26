@@ -908,15 +908,19 @@
 
   /* ── Chaser mini-map (video panel tracker) ── */
   #chaser-map-panel {
-    width: 100%;
-    flex-shrink: 0;
-    position: relative;
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
     background: #0a0e14;
     border-top: 2px solid #ffd166;
-    display: none; /* shown by JS when chaser is mapped */
+    display: none;
+    z-index: 10;
     transition: height 0.3s ease;
   }
   #chaser-map-panel.active { display: block; }
+  /* When map is active, shrink the iframe so it sits above the map */
+  #video-wrapper.chaser-active #video-frame {
+    height: calc(100% - var(--chaser-map-h, 38%));
+  }
   #chaser-map-el {
     width: 100%;
     height: 100%;
@@ -1328,14 +1332,12 @@
 
   <!-- Video frame wrapper with optional live chat panel -->
   <div id="video-area-inner" style="display:none;width:100%;height:100%;flex-direction:row;">
-    <div id="video-wrapper" style="flex:1;overflow:hidden;position:relative;display:flex;flex-direction:column;">
-      <div id="video-frame-wrap" style="flex:1;min-height:0;position:relative;overflow:hidden;">
-        <iframe id="video-frame"
-          style="width:100%;height:100%;border:none;display:block;"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowfullscreen>
-        </iframe>
-      </div>
+    <div id="video-wrapper" style="flex:1;overflow:hidden;position:relative;">
+      <iframe id="video-frame"
+        style="width:100%;height:100%;border:none;display:block;"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowfullscreen>
+      </iframe>
       <div id="chaser-map-panel">
         <div id="chaser-map-el"></div>
         <div id="chaser-map-label">📍 Chaser Location</div>
@@ -3293,15 +3295,21 @@ if (!document.getElementById('chaser-pulse-style')) {
 }
 
 function _initChaserMap(lat, lng, headingDeg, isMoving, chaserName) {
-  const panel = document.getElementById('chaser-map-panel');
-  const el    = document.getElementById('chaser-map-el');
-  if (!panel || !el) return;
-
-  // Set panel height as % of wrapper
+  const panel   = document.getElementById('chaser-map-panel');
+  const el      = document.getElementById('chaser-map-el');
   const wrapper = document.getElementById('video-wrapper');
-  const wrapH = wrapper ? wrapper.offsetHeight : 400;
-  panel.style.height = Math.round(wrapH * CHASER_MAP_PCT / 100) + 'px';
+  const frame   = document.getElementById('video-frame');
+  if (!panel || !el || !wrapper) return;
+
+  // Size the map panel as a % of the wrapper height
+  const wrapH   = wrapper.offsetHeight || 400;
+  const mapH    = Math.round(wrapH * CHASER_MAP_PCT / 100);
+  panel.style.height = mapH + 'px';
   panel.classList.add('active');
+
+  // Shrink the iframe to sit above the map panel (absolute positioned)
+  if (frame) frame.style.height = (wrapH - mapH) + 'px';
+  wrapper.classList.add('chaser-active');
 
   // Invalidate any stale Leaflet instance
   if (_chaserMap) { _chaserMap.remove(); _chaserMap = null; _chaserDot = null; _chaserNexrad = null; }
@@ -3364,8 +3372,12 @@ function _teardownChaserMap() {
   if (_chaserPollTimer) { clearInterval(_chaserPollTimer); _chaserPollTimer = null; }
   if (_chaserMap)       { _chaserMap.remove(); _chaserMap = null; }
   _chaserDot = null; _chaserNexrad = null; _chaserChannelId = null;
-  const panel = document.getElementById('chaser-map-panel');
-  if (panel) panel.classList.remove('active');
+  const panel   = document.getElementById('chaser-map-panel');
+  const frame   = document.getElementById('video-frame');
+  const wrapper = document.getElementById('video-wrapper');
+  if (panel)   { panel.classList.remove('active'); panel.style.height = ''; }
+  if (frame)   { frame.style.height = ''; }  // restore to CSS 100%
+  if (wrapper) { wrapper.classList.remove('chaser-active'); }
 }
 
 // Parse Spotter Network movement string "NNW (321)" → degrees, or null
@@ -3413,8 +3425,12 @@ window.addEventListener('resize', () => {
   if (!_chaserMap) return;
   const wrapper = document.getElementById('video-wrapper');
   const panel   = document.getElementById('chaser-map-panel');
+  const frame   = document.getElementById('video-frame');
   if (wrapper && panel) {
-    panel.style.height = Math.round(wrapper.offsetHeight * CHASER_MAP_PCT / 100) + 'px';
+    const wrapH = wrapper.offsetHeight || 400;
+    const mapH  = Math.round(wrapH * CHASER_MAP_PCT / 100);
+    panel.style.height = mapH + 'px';
+    if (frame) frame.style.height = (wrapH - mapH) + 'px';
     _chaserMap.invalidateSize();
   }
 });
