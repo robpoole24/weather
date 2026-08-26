@@ -3287,7 +3287,7 @@ function _initChaserMap(lat, lng, deg, moving, name) {
   if (_chaserMap) { _chaserMap.remove(); _chaserMap = null; }
 
   _chaserMap = L.map(el, { center:[lat,lng], zoom:9, zoomControl:true, attributionControl:false, keyboard:false });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { subdomains:'abcd', maxZoom:13, attribution:'&copy; CartoDB &copy; OSM' }).addTo(_chaserMap);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:13, attribution:'&copy; OpenStreetMap contributors' }).addTo(_chaserMap);
   _chaserNexrad = L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png', { opacity:0.65, zIndex:10, maxNativeZoom:9, maxZoom:13 }).addTo(_chaserMap);
   _chaserDot = L.marker([lat,lng], { icon:_chaserDotIcon(deg,moving), zIndexOffset:1000, interactive:false }).addTo(_chaserMap);
 
