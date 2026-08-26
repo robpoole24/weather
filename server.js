@@ -1404,36 +1404,11 @@ const STATE_DOTS = [
     parse: _parseIBI511,
   },
 
-  // ── Ohio DOT (OHGO) ──────────────────────────────────────────────────────
-  // OHGO Public API — publicapi.ohgo.com. Auth: api-key query param.
-  // Each camera site has CameraViews array with SmallUrl/LargeUrl/Direction.
-  {
-    id: 'oh',
-    label: 'Ohio DOT (OHGO)',
-    url: 'https://publicapi.ohgo.com/api/v1/cameras',
-    envKey: 'OH_DOT_KEY',
-    authParam: 'api-key',
-    cacheTTL: 10 * 60 * 1000,
-    parse: _parseOHGO,
-  },
-
-  // ── Pennsylvania (PennDOT) ──────────────────────────────────────────────
-  // PennDOT provides still images via a Nonexclusive Video Sharing License
-  // Agreement (executed 8/10/2026, Agreement No. BOO092026). Access is via
-  // direct HTTP image URLs — no live API, no key required. Camera list is a
-  // static JSON file (penndot_cameras.json) generated from PennDOT's
-  // provided spreadsheet and committed to the repo. Refresh by re-running
-  // scripts/parse_penndot.py and committing the updated JSON.
-  // Image URLs: https://www.dot35.state.pa.us/public/districts/DistrictN/webcams/{id}.jpg
-  // Images update approximately every 30 seconds on PennDOT's servers.
-  {
-    id: 'pa',
-    label: 'Pennsylvania DOT',
-    url: null,                    // static — loaded from penndot_cameras.json
-    envKey: null,                 // no API key needed per the license agreement
-    cacheTTL: 10 * 60 * 1000,
-    parse: _parsePennDOT,
-  },
+  // ── Pennsylvania ─────────────────────────────────────────────────────────
+  // PA uses ASP.NET map layer markers per Road511's article — non-standard
+  // format, needs investigation before building a parser.
+  // { id:'pa', label:'Pennsylvania DOT', url:'CONFIRM_URL',
+  //   envKey:'PA_511_KEY', cacheTTL:10*60*1000, parse:_parsePADOT },
 
   // ── Additional IBI/Skyline states (same _parseIBI511, just needs a key) ─
   { id:'id', label:'Idaho DOT',   url:'https://511.idaho.gov/api/v2/get/cameras?format=json',     envKey:'ID_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
@@ -1497,56 +1472,6 @@ const STATE_DOTS = [
   // Other platforms: write a new parse function following the same pattern
   // as _parseILGateway, then use it here.
 ];
-
-// ── PennDOT static-JSON parser ───────────────────────────────────────────────
-// PennDOT cameras are provided as a static list (penndot_cameras.json) under a
-// Nonexclusive Video Sharing License Agreement (BOO092026, executed 8/10/2026).
-// The JSON is pre-parsed from PennDOT's spreadsheet — no live API call needed.
-// Images load directly from dot35.state.pa.us; the server just serves the list.
-let _pennDOTCameras = null;
-function _parsePennDOT() {
-  if (_pennDOTCameras) return _pennDOTCameras;
-  try {
-    const data = require('./penndot_cameras.json');
-    _pennDOTCameras = Array.isArray(data) ? data : [];
-    console.log(`[Cameras] PennDOT static list loaded: ${_pennDOTCameras.length} cameras`);
-    return _pennDOTCameras;
-  } catch(e) {
-    console.error('[Cameras] PennDOT: could not load penndot_cameras.json:', e.message);
-    return [];
-  }
-}
-
-// ── Ohio DOT (OHGO) parser ────────────────────────────────────────────────────
-// OHGO Public API — publicapi.ohgo.com. Different schema from IBI/Skyline.
-// Auth: api-key query param. Each camera site has a CameraViews array.
-function _parseOHGO(raw) {
-  const cameras = [];
-  const results = Array.isArray(raw) ? raw : (raw.results || raw.data || []);
-  results.forEach(site => {
-    const lat = parseFloat(site.Latitude);
-    const lng = parseFloat(site.Longitude);
-    if (!isFinite(lat) || !isFinite(lng)) return;
-    const views = Array.isArray(site.CameraViews) ? site.CameraViews : [];
-    if (views.length === 0) return;
-    views.forEach((view, i) => {
-      const imageUrl = view.LargeUrl || view.SmallUrl;
-      if (!imageUrl) return;
-      cameras.push({
-        id:        `ohgo-${site.Id}-${i}`,
-        name:      site.Location || site.Description || 'Ohio Camera',
-        lat, lng,
-        imageUrl,
-        videoUrl:  null,
-        playerUrl: null,
-        direction: view.Direction || null,
-        source:    'dot',
-        state:     'OH',
-      });
-    });
-  });
-  return cameras;
-}
 
 // Cache for state DOT data: id -> { cameras, ts }
 const _stateDOTCache = new Map();
@@ -1667,13 +1592,6 @@ async function _loadStateDOT(dot) {
 
   // Skip if this DOT requires a key and it's not configured
   if (dot.envKey && !process.env[dot.envKey]) return [];
-
-  // Static-data DOTs (url: null) — call parse() directly with no fetch
-  if (!dot.url) {
-    const cameras = dot.parse(null, dot.id, dot);
-    _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
-    return cameras;
-  }
 
   let url = dot.url;
   if (dot.envKey && process.env[dot.envKey]) {
@@ -3117,7 +3035,15 @@ async function websubSubscribe(channelId) {
         statusCode: res.statusCode,
       };
       // Persist expiry so restarts don't re-subscribe still-valid channels
-      if (status === 'active') rSet('wt:ws:' + channelId, String(expiresAt));
+      // Persist lease expiry for ALL successful hub responses (202 = accepted).
+      // YouTube's hub always returns 202 — it verifies asynchronously.
+      // We write on any 2xx so restarts skip still-valid subscriptions.
+      // Use await-safe pattern: rSet is fire-and-forget but we log failures.
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        rSet('wt:ws:' + channelId, String(expiresAt)).catch(e =>
+          console.warn('[WebSub] Redis write failed for ' + channelId + ':', e.message)
+        );
+      }
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
         const ch = getAllChannels().find(c => c.id === channelId);
@@ -3190,19 +3116,34 @@ async function subscribeAllChannels() {
   // instead of blocking for 60+ seconds re-subscribing every channel.
   const toSubscribe = [];
   let skipped = 0;
+  // Diagnostic: log Redis state for first channel to confirm reads are working
+  let redisOk = false;
   for (const ch of channels) {
     try {
       const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
+      if (!redisOk) {
+        console.log(`[WebSub] Redis check for ${ch.id}: stored="${stored}" redisClient=${!!redisClient}`);
+        redisOk = true;
+      }
       if (stored) {
         const expiresAt = parseInt(stored, 10);
+        const hoursLeft = Math.round((expiresAt - now) / 3600000);
         if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
           // Still valid for >24h — mark as active without hitting the hub
           websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
           skipped++;
           continue;
+        } else {
+          console.log(`[WebSub] ${ch.id} needs renewal: expiresAt=${expiresAt} hoursLeft=${hoursLeft}`);
         }
+      } else {
+        // Only log first few missing so we don't flood on fresh deploy
+        if (toSubscribe.length < 3) console.log(`[WebSub] ${ch.id} has no Redis key — subscribing`);
       }
-    } catch(_) { /* Redis unavailable — subscribe to be safe */ }
+    } catch(e) {
+      console.warn('[WebSub] Redis error for ' + ch.id + ':', e.message);
+      // Redis unavailable — subscribe to be safe
+    }
     toSubscribe.push(ch);
   }
 
@@ -3396,6 +3337,168 @@ app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
 
 // Start WebSub subscriptions after boot (10s delay)
 setTimeout(subscribeAllChannels, 10000);
+
+// ════════════════════════════════════════════
+// BACKGROUND ATOM FEED SCANNER
+// Catches live streams that WebSub missed — runs every 3 minutes.
+// Cost: 0 quota (public Atom feeds, no API key needed).
+// Each channel's public feed always reflects the most recent video.
+// If that video is <2h old, we confirm via videos.list (1 unit each).
+// WebSub remains primary; this is the gap-filler.
+// Enable by setting BACKGROUND_SCANNER=true in Railway env vars.
+// ════════════════════════════════════════════
+
+const SCANNER_INTERVAL_MS  = 3 * 60 * 1000;   // 3 minutes between full sweeps
+const SCANNER_CONFIRM_AGE_MS = 2 * 60 * 60 * 1000; // confirm videos posted <2h ago
+const SCANNER_BATCH_SIZE    = 10;              // channels per batch (avoids thundering herd)
+const SCANNER_BATCH_DELAY_MS = 500;           // ms between batches
+const SCANNER_CONFIRM_LIMIT = 30;             // max videos.list confirms per sweep
+let   _scannerRunning = false;                 // prevent overlapping runs
+
+// Fetch one channel's public Atom feed, return { videoId, publishedMs } or null
+async function _fetchAtomFeed(channelId) {
+  const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
+  try {
+    const text = await fetchTextOverHttp(url);
+    // Extract most recent entry's video ID and published timestamp
+    const vidMatch   = text.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+    const pubMatch   = text.match(/<published>([^<]+)<\/published>/);
+    const liveMatch  = text.match(/<yt:liveBroadcastContent>([^<]+)<\/yt:liveBroadcastContent>/);
+    if (!vidMatch) return null;
+    return {
+      videoId:     vidMatch[1].trim(),
+      publishedMs: pubMatch  ? new Date(pubMatch[1].trim()).getTime() : 0,
+      feedLive:    liveMatch ? liveMatch[1].trim() : 'none', // 'live'|'upcoming'|'none'
+    };
+  } catch(e) {
+    return null; // network error — skip silently
+  }
+}
+
+// Confirm a specific video is an active live stream via videos.list (1 unit)
+async function _confirmVideoLive(channelId, videoId) {
+  if (primaryQuotaExceeded) return null;
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return null;
+  try {
+    trackBurn(true, 1);
+    const url = `https://www.googleapis.com/youtube/v3/videos?key=${key}` +
+      `&id=${videoId}&part=liveStreamingDetails&fields=items/liveStreamingDetails`;
+    const data = await ytFetch(url);
+    if (checkQuotaError(data)) { markQuotaExceeded(true); return null; }
+    const details = data.items && data.items[0] && data.items[0].liveStreamingDetails;
+    // Active: has actualStartTime, no actualEndTime
+    return !!(details && details.actualStartTime && !details.actualEndTime);
+  } catch(e) {
+    return null;
+  }
+}
+
+async function runBackgroundScanner() {
+  if (_scannerRunning) {
+    console.log('[Scanner] Previous sweep still running — skipping');
+    return;
+  }
+  if (!process.env.APP_URL) return; // disabled on localhost
+
+  _scannerRunning = true;
+  const channels = getLiveChannels();
+  if (!channels.length) { _scannerRunning = false; return; }
+
+  const now = Date.now();
+  let feedsChecked = 0, confirmed = 0, newLive = 0, confirmsUsed = 0;
+
+  // Process in batches to avoid hammering YouTube
+  for (let i = 0; i < channels.length; i += SCANNER_BATCH_SIZE) {
+    const batch = channels.slice(i, i + SCANNER_BATCH_SIZE);
+
+    await Promise.all(batch.map(async ch => {
+      try {
+        const feed = await _fetchAtomFeed(ch.id);
+        if (!feed) return;
+        feedsChecked++;
+
+        const currentStatus = cache.liveStatuses[ch.id];
+        const alreadyLive   = currentStatus && currentStatus.isLive;
+        const ageMs         = now - feed.publishedMs;
+
+        // If feed explicitly says live — trust it immediately, 0 quota
+        if (feed.feedLive === 'live') {
+          if (!alreadyLive) {
+            const entry = { isLive: true, videoId: feed.videoId, checkedAt: now, source: 'scanner_feed' };
+            cache.liveStatuses[ch.id] = entry;
+            cache.lastLiveCheck = now;
+            rSet('wt:live:' + ch.id, entry, REDIS_TTL.liveStatus);
+            rSet('wt:lastLive', now);
+            updateChannelActivity(ch.id, { lastLiveDate: now });
+            delete cache.recentVideos[ch.id];
+            rDel('wt:recent:' + ch.id);
+            console.log(`[Scanner] LIVE (feed, 0 units): ${ch.name}`);
+            newLive++;
+          }
+          return;
+        }
+
+        // If already marked live by WebSub/previous scan — skip (WebSub handles end-of-stream)
+        if (alreadyLive) return;
+
+        // If feed says upcoming — skip (not yet live)
+        if (feed.feedLive === 'upcoming') return;
+
+        // Most recent video is <2h old — worth confirming if not recently checked
+        if (ageMs < SCANNER_CONFIRM_AGE_MS && confirmsUsed < SCANNER_CONFIRM_LIMIT) {
+          // Skip if we checked this video recently via WebSub
+          const lastWsCheck = websubLastCheck[ch.id] || 0;
+          if (now - lastWsCheck < 5 * 60 * 1000) return; // checked <5min ago by WebSub
+
+          confirmsUsed++;
+          const isLive = await _confirmVideoLive(ch.id, feed.videoId);
+          if (isLive === null) return; // quota error or network fail
+
+          confirmed++;
+          const entry = { isLive, videoId: isLive ? feed.videoId : null, checkedAt: now, source: 'scanner_confirm' };
+          cache.liveStatuses[ch.id] = entry;
+          cache.lastLiveCheck = now;
+          rSet('wt:live:' + ch.id, entry, REDIS_TTL.liveStatus);
+          rSet('wt:lastLive', now);
+          websubLastCheck[ch.id] = now; // rate-limit future WebSub checks too
+
+          if (isLive) {
+            updateChannelActivity(ch.id, { lastLiveDate: now });
+            delete cache.recentVideos[ch.id];
+            rDel('wt:recent:' + ch.id);
+            console.log(`[Scanner] LIVE CONFIRMED (1 unit): ${ch.name}`);
+            newLive++;
+          }
+        }
+      } catch(e) {
+        // Swallow per-channel errors — never let one bad channel stop the sweep
+      }
+    }));
+
+    // Pause between batches
+    if (i + SCANNER_BATCH_SIZE < channels.length) {
+      await new Promise(r => setTimeout(r, SCANNER_BATCH_DELAY_MS));
+    }
+  }
+
+  _scannerRunning = false;
+  if (newLive > 0 || confirmsUsed > 0) {
+    console.log(`[Scanner] Sweep complete — ${feedsChecked} feeds, ${confirmsUsed} confirmed (${confirmsUsed} units), ${newLive} newly live`);
+  }
+}
+
+// Start scanner if enabled
+if (process.env.BACKGROUND_SCANNER === 'true') {
+  // Stagger first run by 60s so startup WebSub subscription finishes first
+  setTimeout(() => {
+    runBackgroundScanner();
+    setInterval(runBackgroundScanner, SCANNER_INTERVAL_MS);
+  }, 60 * 1000);
+  console.log('[Scanner] Background Atom feed scanner enabled (every 3 min)');
+} else {
+  console.log('[Scanner] Background scanner disabled — set BACKGROUND_SCANNER=true to enable');
+}
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER
@@ -3796,6 +3899,11 @@ app.get('/api/yt/quota-status', (req, res) => {
     archiveKeyRole: 'emergency-standby',
     primaryQuotaLimit: 60000,
     archiveQuotaLimit: 10000,
+    backgroundScanner: {
+      enabled: process.env.BACKGROUND_SCANNER === 'true',
+      intervalMin: SCANNER_INTERVAL_MS / 60000,
+      running: _scannerRunning,
+    },
   });
 });
 
@@ -3803,6 +3911,12 @@ app.get('/api/yt/quota-status', (req, res) => {
 app.post('/api/admin/trigger-live-check', async (req, res) => {
   res.json({ ok: true, message: 'Live check triggered' });
   await scheduledLiveCheck();
+});
+
+// Manual trigger for background scanner sweep — for testing
+app.post('/api/admin/trigger-scanner', adminAuth, async (req, res) => {
+  res.json({ ok: true, message: 'Background scanner sweep triggered' });
+  runBackgroundScanner().catch(e => console.error('[Scanner] Manual trigger error:', e.message));
 });
 
 // Manual trigger for live status check
