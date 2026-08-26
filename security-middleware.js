@@ -125,7 +125,7 @@ function securityHeaders(req, res, next) {
       // IEM storm attributes GeoJSON
       " https://mesonet.agron.iastate.edu" +
       // Travel forecast city data (domestic + international travel displays)
-      " https://api.open-meteo.com https://geocoding-api.open-meteo.com" +
+      " https://api.open-meteo.com" +
       // NWS — forecasts, conditions, alerts, points, radar station lookup
       " https://api.weather.gov" +
       " https://forecast.weather.gov" +
@@ -267,7 +267,7 @@ function apiKeyLeakDetector(req, res, next) {
 function applySecurityMiddleware(app, options = {}) {
   const {
     rateLimit = { windowMs: 60000, max: 200 },     // 200 req/min general
-    adminRateLimit = { windowMs: 60000, max: 20 },  // 20 req/min on admin routes
+    adminRateLimit = { windowMs: 60000, max: 120 },  // 120 req/min on admin routes — admin panel polls aggressively
     maxBodyKB = 512,
   } = options;
 
