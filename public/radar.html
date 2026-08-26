@@ -2982,13 +2982,7 @@ function openCameraOverlay(cam) {
 
   } else if (cam.imageUrl) {
     _startImageStream(cam, body);
-    if (cam.state === 'PA') {
-      // PennDOT license (BOO092026) §3a: logo must remain visible at all times
-      footer.innerHTML = `<img src="${logo_data_uri}" alt="PennDOT" style="height:22px;opacity:0.85;vertical-align:middle;margin-right:6px;">` +
-        `<span style="font-size:0.65rem;color:var(--muted)">Refreshes every ${CAM_IMG_REFRESH_MS/1000}s</span>`;
-    } else {
-      footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS/1000}s · ${cam.name}`;
-    }
+    footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS/1000}s · ${cam.name}`;
   } else {
     body.innerHTML = '<div id="camera-overlay-status">No feed available for this camera</div>';
     footer.textContent = cam.name;
