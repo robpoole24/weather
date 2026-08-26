@@ -3506,6 +3506,7 @@ function setPaint(member){
     const msg = document.getElementById('site-message');
     if (msg && !overlayState['cc']) msg.textContent = 'Tap a station below or allow location for auto-detection.';
   }
+  saveLayerPrefs(); // persist active base paint
 }
 
 // ══ PRODUCT LEGEND ════════════════════════════════════════════════════════════
@@ -6186,8 +6187,40 @@ const CAM_ITEMS=[
 const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
-function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
+
+function lpDefaults(){
+  activePaint='reflectivity';
+  OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def);
+}
+
+function saveLayerPrefs() {
+  try {
+    localStorage.setItem('wtv-overlay-state', JSON.stringify(overlayState));
+    localStorage.setItem('wtv-active-paint', activePaint || 'reflectivity');
+  } catch(e) {}
+}
+
+function restoreLayerPrefs() {
+  try {
+    const savedOverlay = localStorage.getItem('wtv-overlay-state');
+    const savedPaint   = localStorage.getItem('wtv-active-paint');
+    if (savedOverlay) {
+      const parsed = JSON.parse(savedOverlay);
+      // Only restore keys that still exist in OVERLAY_ITEMS — guards against
+      // old keys from removed features persisting and causing errors
+      const validIds = new Set(OVERLAY_ITEMS.map(o => o.id));
+      Object.entries(parsed).forEach(([id, val]) => {
+        if (validIds.has(id)) overlayState[id] = !!val;
+      });
+    }
+    if (savedPaint && ['reflectivity','goes','apptemp'].includes(savedPaint)) {
+      activePaint = savedPaint;
+    }
+  } catch(e) {}
+}
+
 lpDefaults();
+restoreLayerPrefs();
 
 // Wire camera overlay close button
 document.getElementById('camera-overlay-close').addEventListener('click', closeCameraOverlay);
@@ -6280,12 +6313,14 @@ document.getElementById('layer-panel').addEventListener('click',(e)=>{
   if (kind==='paint'){ togglePaint(id); }
   else { overlayState[id]=!overlayState[id]; applyOverlay(id,overlayState[id]); }
   renderPanel();
+  saveLayerPrefs();
 });
 function resetLayers(){
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,false); });
   lpDefaults(); setPaint('reflectivity');
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
   renderPanel();
+  saveLayerPrefs(); // persist the reset so it survives reload
 }
 (function initModelSelect() {
   const sel = document.getElementById('model-select');
@@ -6310,7 +6345,13 @@ function dismissBeta() {
 
 renderPanel();
 resolveRadarSites(userLat, userLng);
+// Apply restored overlays — overlayState already merged saved prefs in restoreLayerPrefs()
 OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
+// Apply restored base paint (reflectivity is already active by default;
+// only call setPaint again if the user had a different paint saved)
+if (activePaint && activePaint !== 'reflectivity') {
+  setPaint(activePaint);
+}
 
 updateAlertTypeBadge();
 loadAlerts();
