@@ -1968,117 +1968,6 @@ app.get('/api/aqi', async (req, res) => {
   }
 });
 
-// GET /api/forecast?lat=&lon= (or ?zip=)
-// Unified forecast proxy — merges Open-Meteo (current + 168h hourly + 7-day daily) + NWS narrative.
-// Open-Meteo: free, no key. NWS: US only, free. Cached 15 minutes server-side.
-const _forecastCache = new Map();
-const FORECAST_TTL   = 15 * 60 * 1000;
-
-app.get('/api/forecast', async (req, res) => {
-  console.log(`[Forecast] Request: zip=${req.query.zip} lat=${req.query.lat} lon=${req.query.lon}`);
-  let lat = parseFloat(req.query.lat);
-  let lon = parseFloat(req.query.lon);
-  let locationName = req.query.name || null;
-
-  // Zip/city → coords via Open-Meteo geocoding (free, no key)
-  if (req.query.zip) {
-    try {
-      const geoText = await fetchTextOverHttp(
-        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`
-      );
-      const geo = JSON.parse(geoText);
-      const r   = geo.results?.[0];
-      if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
-      lat = r.latitude; lon = r.longitude;
-      locationName = locationName || [r.name, r.admin1].filter(Boolean).join(', ');
-    } catch(e) {
-      return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message });
-    }
-  }
-
-  if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat/lon or zip required' });
-
-  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
-  const cached   = _forecastCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < FORECAST_TTL) {
-    res.set('Cache-Control', 'public, max-age=900');
-    return res.json(cached.data);
-  }
-
-  try {
-    // Open-Meteo — /v1/forecast auto-selects HRRR for US, no models= param needed
-    const omUrl = 'https://api.open-meteo.com/v1/forecast'
-      + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
-      + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
-      + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,'
-      + 'precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,'
-      + 'wind_gusts_10m,surface_pressure,visibility,is_day'
-      + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,'
-      + 'weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
-      + 'visibility,cape,lifted_index,freezing_level_height,snowfall,snow_depth,'
-      + 'uv_index,is_day,relative_humidity_2m,dew_point_2m'
-      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
-      + 'apparent_temperature_max,apparent_temperature_min,'
-      + 'sunrise,sunset,daylight_duration,uv_index_max,'
-      + 'precipitation_sum,snowfall_sum,precipitation_hours,'
-      + 'precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,'
-      + 'wind_direction_10m_dominant'
-      + '&forecast_days=7';
-
-    const omText = await fetchTextOverHttp(omUrl);
-    const om     = JSON.parse(omText);
-    console.log(`[Forecast] Open-Meteo keys: ${Object.keys(om).join(', ')}`);
-    if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
-    console.log(`[Forecast] current.temperature_2m: ${om.current?.temperature_2m}`);
-
-    // NWS narrative (US only — silent fail outside CONUS)
-    let nwsNarrative = null;
-    try {
-      const ptsText = await fetchTextOverHttp(
-        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
-        { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-      );
-      const pts = JSON.parse(ptsText);
-      const forecastUrl = pts?.properties?.forecast;
-      if (forecastUrl) {
-        const fText = await fetchTextOverHttp(forecastUrl,
-          { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-        );
-        const f = JSON.parse(fText);
-        nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
-          name: p.name, short: p.shortForecast, detail: p.detailedForecast,
-          isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
-        }));
-      }
-    } catch(e) {
-      console.log(`[Forecast] NWS unavailable for ${lat.toFixed(3)},${lon.toFixed(3)}: ${e.message}`);
-    }
-
-    const data = {
-      location: { lat, lon, name: locationName },
-      timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
-      utc_offset_seconds: om.utc_offset_seconds,
-      current: om.current, current_units: om.current_units,
-      hourly: om.hourly, hourly_units: om.hourly_units,
-      daily: om.daily, daily_units: om.daily_units,
-      nws: nwsNarrative,
-      generated_at: Date.now(),
-    };
-
-    _forecastCache.set(cacheKey, { data, ts: Date.now() });
-    if (_forecastCache.size > 30) {
-      const oldest = [..._forecastCache.entries()].sort((a,b)=>a[1].ts-b[1].ts)[0];
-      if (oldest) _forecastCache.delete(oldest[0]);
-    }
-
-    res.set('Cache-Control', 'public, max-age=900');
-    res.json(data);
-  } catch(e) {
-    console.error('[Forecast] Error:', e.message);
-    res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
-  }
-});
-
 // GET /api/hms-smoke
 // Proxies NOAA OSPO's current HMS smoke KML and converts it to GeoJSON.
 // NOAA does NOT publish a GeoJSON format — only KML, Shapefile, and GeoTiff.
@@ -2359,10 +2248,19 @@ app.post('/api/admin/chasers/map', (req, res) => {
   if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
   const data = loadData();
   if (!data.chaserMap) data.chaserMap = {};
+  // pinnedMappings: set of spotterNetworkIds that were manually mapped by admin.
+  // Auto-map-exact will never overwrite these, even if it finds a different exact match.
+  if (!data.pinnedMappings) data.pinnedMappings = [];
   if (channelId) {
     data.chaserMap[spotterNetworkId] = channelId;
+    // Pin it — manual choice trumps auto-map permanently
+    if (!data.pinnedMappings.includes(spotterNetworkId)) {
+      data.pinnedMappings.push(spotterNetworkId);
+    }
   } else {
-    delete data.chaserMap[spotterNetworkId]; // unmap
+    // Unmap — also remove pin so auto-map can suggest again
+    delete data.chaserMap[spotterNetworkId];
+    data.pinnedMappings = data.pinnedMappings.filter(id => id !== spotterNetworkId);
   }
   saveData(data);
   res.json({ ok: true });
@@ -2411,22 +2309,41 @@ app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
   const knownChasers = data.knownChasers || {};
   const allChannels = [];
   (data.groups || []).forEach(g => {
-    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
+    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name, hasLive: ch.hasLive }));
   });
+
+  // Suffixes that indicate a secondary/archive channel — never auto-map to these
+  // when a primary channel is available for the same chaser.
+  const SECONDARY_SUFFIXES = /(archive|archives|clips|highlights|vod|vods|highlights?|shorts?|backup)/i;
 
   let mapped = 0;
   const mappedNames = [];
+  const pinnedMappings = new Set(data.pinnedMappings || []);
   Object.entries(knownChasers).forEach(([spotterNetworkId, c]) => {
-    if (data.chaserMap[spotterNetworkId]) return; // already mapped
-    for (const ch of allChannels) {
-      if (matchConfidence(c.name, ch.name) === 'exact') {
-        data.chaserMap[spotterNetworkId] = ch.id;
-        mapped++;
-        mappedNames.push({ spotterName: c.name, channelName: ch.name });
-        break; // first exact match wins — exact tier is narrow enough that
-                // multiple exact matches for one chaser should be rare
-      }
-    }
+    if (data.chaserMap[spotterNetworkId]) return; // already mapped (includes pinned)
+    if (pinnedMappings.has(spotterNetworkId)) return; // manually pinned — never auto-overwrite
+
+    // Collect ALL exact matches, then pick the best one:
+    // 1. hasLive: true channels first
+    // 2. Channels without archive/clips/highlights suffixes
+    // 3. First match as tiebreaker
+    const exactMatches = allChannels.filter(ch => matchConfidence(c.name, ch.name) === 'exact');
+    if (!exactMatches.length) return;
+
+    const best = exactMatches.sort((a, b) => {
+      const aSecondary = SECONDARY_SUFFIXES.test(a.name);
+      const bSecondary = SECONDARY_SUFFIXES.test(b.name);
+      const aLive = a.hasLive === true;
+      const bLive = b.hasLive === true;
+      // Prefer hasLive:true, then prefer non-archive
+      if (aLive !== bLive) return aLive ? -1 : 1;
+      if (aSecondary !== bSecondary) return aSecondary ? 1 : -1;
+      return 0;
+    })[0];
+
+    data.chaserMap[spotterNetworkId] = best.id;
+    mapped++;
+    mappedNames.push({ spotterName: c.name, channelName: best.name });
   });
 
   if (mapped > 0) saveData(data);
