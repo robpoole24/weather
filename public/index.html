@@ -1234,6 +1234,8 @@
   }
   .about-btn:hover { border-color: var(--accent); color: var(--accent); }
 </style>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 </head>
 <body>
 
@@ -1285,6 +1287,11 @@
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
         allowfullscreen>
       </iframe>
+      <div id="chaser-map-panel" style="display:none;position:absolute;bottom:0;left:0;right:0;background:#0a0e14;border-top:2px solid #ffd166;z-index:10;">
+        <div id="chaser-map-el" style="width:100%;height:100%;"></div>
+        <div id="chaser-map-label" style="position:absolute;top:6px;left:8px;z-index:500;background:rgba(10,14,20,0.85);border:1px solid #ffd166;border-radius:4px;padding:2px 8px;font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#ffd166;pointer-events:none;">📍 Chaser Location</div>
+        <div id="chaser-map-coords" style="position:absolute;bottom:6px;left:8px;z-index:500;background:rgba(10,14,20,0.75);border-radius:3px;padding:1px 6px;font-family:'Barlow Condensed',sans-serif;font-size:0.62rem;color:#64748b;pointer-events:none;"></div>
+      </div>
     </div>
     <div id="live-chat-panel">
       <button type="button" id="chat-close-btn" onclick="hideChatPanel()">✕ Hide Chat</button>
@@ -3059,6 +3066,7 @@ function clearVideo() {
   document.getElementById('live-badge').classList.remove('visible');
   document.getElementById('channel-label').classList.remove('visible');
   closeLiveChat();
+  _teardownChaserMap();
   currentChannel = null;
 }
 
@@ -3080,6 +3088,7 @@ async function playLive(ch) {
 
   loadIframe(url, ch.name + ' • LIVE', true);
   showChatButton(ch);
+  maybeShowChaserMap(ch);
 }
 
 let currentLiveCh = null;
@@ -3177,6 +3186,122 @@ function setMobileChatLayout() {
     videoArea.style.height        = '';
   }
 }
+
+
+// ══════════════════════════════════════════════════════════
+// CHASER MINI-MAP
+// ══════════════════════════════════════════════════════════
+let _chaserMap = null, _chaserDot = null, _chaserNexrad = null;
+let _chaserPollTimer = null, _chaserChannelId = null;
+const CHASER_MAP_H_PCT = 38;
+
+function _chaserDotIcon(deg, moving) {
+  if (moving && deg != null) {
+    return L.divIcon({ className:'', iconSize:[20,20], iconAnchor:[10,10],
+      html:`<div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:16px solid #ffd166;transform:rotate(${deg}deg);filter:drop-shadow(0 2px 4px rgba(0,0,0,0.8));margin:2px auto;"></div>` });
+  }
+  return L.divIcon({ className:'', iconSize:[16,16], iconAnchor:[8,8],
+    html:`<div style="width:14px;height:14px;border-radius:50%;background:#ffd166;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.8);"></div>` });
+}
+
+function _headingDeg(movement) {
+  if (!movement) return null;
+  const m = String(movement).match(/\((\d+)\)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+async function _fetchChaserPosition(channelId) {
+  try {
+    const res  = await fetch('/api/chasers');
+    const data = await res.json();
+    const mapped = (data.chasers || []).filter(c => c.channelId);
+    console.log('[ChaserMap] chasers:', data.chasers?.length, 'mapped:', mapped.length, 'looking for:', channelId);
+    if (mapped.length) console.log('[ChaserMap] mapped:', mapped.map(c=>c.channelId+':'+c.name).join(' | '));
+    return mapped.find(c => c.channelId === channelId) || null;
+  } catch(e) {
+    console.error('[ChaserMap] fetch error:', e);
+    return null;
+  }
+}
+
+function _teardownChaserMap() {
+  if (_chaserPollTimer) { clearInterval(_chaserPollTimer); _chaserPollTimer = null; }
+  if (_chaserMap) { _chaserMap.remove(); _chaserMap = null; }
+  _chaserDot = null; _chaserNexrad = null; _chaserChannelId = null;
+  const panel = document.getElementById('chaser-map-panel');
+  const frame = document.getElementById('video-frame');
+  const wrapper = document.getElementById('video-wrapper');
+  if (panel)   { panel.style.display = 'none'; panel.style.height = ''; }
+  if (frame)   { frame.style.height = ''; }
+  if (wrapper) { wrapper.classList.remove('chaser-active'); }
+}
+
+function _initChaserMap(lat, lng, deg, moving, name) {
+  const panel   = document.getElementById('chaser-map-panel');
+  const el      = document.getElementById('chaser-map-el');
+  const frame   = document.getElementById('video-frame');
+  const wrapper = document.getElementById('video-wrapper');
+  if (!panel || !el || !wrapper) return;
+
+  const wrapH = wrapper.offsetHeight || 400;
+  const mapH  = Math.round(wrapH * CHASER_MAP_H_PCT / 100);
+  panel.style.height  = mapH + 'px';
+  panel.style.display = 'block';
+  if (frame) frame.style.height = (wrapH - mapH) + 'px';
+
+  if (_chaserMap) { _chaserMap.remove(); _chaserMap = null; }
+
+  _chaserMap = L.map(el, { center:[lat,lng], zoom:9, zoomControl:true, attributionControl:false, keyboard:false });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { subdomains:'abcd', maxZoom:13, opacity:0.9 }).addTo(_chaserMap);
+  _chaserNexrad = L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-0/{z}/{x}/{y}.png', { opacity:0.65, zIndex:10, maxZoom:13 }).addTo(_chaserMap);
+  _chaserDot = L.marker([lat,lng], { icon:_chaserDotIcon(deg,moving), zIndexOffset:1000, interactive:false }).addTo(_chaserMap);
+
+  const lbl = document.getElementById('chaser-map-label');
+  if (lbl) lbl.textContent = '📍 ' + name;
+  const coords = document.getElementById('chaser-map-coords');
+  if (coords) coords.textContent = lat.toFixed(4) + '°, ' + lng.toFixed(4) + '°';
+}
+
+async function maybeShowChaserMap(ch) {
+  _teardownChaserMap();
+  _chaserChannelId = ch.id;
+  console.log('[ChaserMap] checking for channelId:', ch.id, ch.name);
+
+  const chaser = await _fetchChaserPosition(ch.id);
+  console.log('[ChaserMap] result:', chaser ? chaser.name + ' @ ' + chaser.lat + ',' + chaser.lng : 'null — no map');
+  if (!chaser || !chaser.lat || !chaser.lng) return;
+
+  const deg    = _headingDeg(chaser.movement);
+  const moving = chaser.mobile || deg !== null;
+  _initChaserMap(chaser.lat, chaser.lng, deg, moving, chaser.name);
+
+  _chaserPollTimer = setInterval(async () => {
+    if (!_chaserChannelId) return;
+    const updated = await _fetchChaserPosition(_chaserChannelId);
+    if (!updated || !updated.lat || !updated.lng) return;
+    if (!_chaserMap || !_chaserDot) return;
+    const d = _headingDeg(updated.movement);
+    _chaserDot.setLatLng([updated.lat, updated.lng]);
+    _chaserDot.setIcon(_chaserDotIcon(d, updated.mobile || d !== null));
+    _chaserMap.panTo([updated.lat, updated.lng], { animate:true, duration:1.5 });
+    if (_chaserNexrad) _chaserNexrad.setUrl('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-0/{z}/{x}/{y}.png?_=' + Date.now());
+    const coords = document.getElementById('chaser-map-coords');
+    if (coords) coords.textContent = updated.lat.toFixed(4) + '°, ' + updated.lng.toFixed(4) + '°';
+  }, 5 * 60 * 1000);
+}
+
+window.addEventListener('resize', () => {
+  if (!_chaserMap) return;
+  const wrapper = document.getElementById('video-wrapper');
+  const panel   = document.getElementById('chaser-map-panel');
+  const frame   = document.getElementById('video-frame');
+  if (!wrapper || !panel) return;
+  const wrapH = wrapper.offsetHeight || 400;
+  const mapH  = Math.round(wrapH * CHASER_MAP_H_PCT / 100);
+  panel.style.height = mapH + 'px';
+  if (frame) frame.style.height = (wrapH - mapH) + 'px';
+  _chaserMap.invalidateSize();
+});
 
 function closeMobileChatOverlay() {
   const overlay = document.getElementById('mobile-chat-overlay');
