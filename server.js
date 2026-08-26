@@ -395,81 +395,6 @@ app.get('/api/highlights', (req, res) => {
 });
 
 // Admin — get highlights
-// Admin — resolve video title + thumbnail from YouTube Data API
-// Used when oEmbed fails (restricted/non-embeddable videos).
-// Returns { title, thumbnail } or 404.
-app.get('/api/admin/video-info', adminAuth, async (req, res) => {
-  const { videoId } = req.query;
-  if (!videoId) return res.status(400).json({ error: 'videoId required' });
-  try {
-    const key = getApiKey();
-    const url = `https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${videoId}&part=snippet&fields=items(snippet(title,thumbnails))`;
-    const data = await ytFetch(url);
-    const item = data.items?.[0];
-    if (!item) return res.status(404).json({ error: 'Video not found' });
-    const snippet = item.snippet;
-    res.json({
-      title:     snippet.title || '',
-      thumbnail: snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || '',
-    });
-  } catch(e) {
-    res.status(502).json({ error: e.message });
-  }
-});
-
-// Admin — backfill titles for all highlights that have empty title.
-// Safety: refuses to run if appDataStore has no highlights at all — that
-// indicates Redis restore hasn't completed yet and we must not overwrite.
-app.post('/api/admin/highlights/backfill-titles', adminAuth, async (req, res) => {
-  // If appDataStore is null, Redis restore is still pending — do NOT run
-  if (!appDataStore) {
-    return res.status(503).json({ error: 'Server data not fully loaded yet — wait a moment and retry' });
-  }
-  const data = loadData();
-  // Extra guard: refuse to save if highlights is empty (would wipe existing data)
-  if (!data.highlights?.length) return res.json({ ok: true, fixed: 0, note: 'No highlights found' });
-  const key = getApiKey();
-  let fixed = 0;
-  for (const h of data.highlights) {
-    if (h.title) continue;
-    try {
-      const url = `https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${h.videoId}&part=snippet&fields=items(snippet(title,thumbnails))`;
-      const d = await ytFetch(url);
-      const item = d.items?.[0];
-      if (item?.snippet?.title) {
-        h.title     = item.snippet.title;
-        h.thumbnail = item.snippet.thumbnails?.medium?.url || h.thumbnail || '';
-        fixed++;
-      }
-    } catch(_) {}
-    await new Promise(r => setTimeout(r, 200));
-  }
-  if (fixed) saveData(data);
-  res.json({ ok: true, fixed });
-});
-
-// Admin — one-time restore of highlights lost in the Aug 2026 data wipe.
-// Only runs if highlights array is currently empty (safe guard).
-app.post('/api/admin/highlights/restore-from-backup', adminAuth, async (req, res) => {
-  if (!appDataStore) return res.status(503).json({ error: 'Data not loaded yet — retry in a moment' });
-  const data = loadData();
-  if (data.highlights?.length > 0) {
-    return res.json({ ok: false, error: `Highlights already exist (${data.highlights.length} entries) — restore aborted to prevent overwrite` });
-  }
-  // Known highlights from July 27 2026 backup
-  data.highlights = [
-    { channelId: 'UCvBVK2ymNzPLRJrgip2GeQQ', videoId: '2EbeqTG99GQ',  title: 'TornadoTRX gets hit by a tornado on @MaxVelocityWX stream',      thumbnail: 'https://i.ytimg.com/vi/2EbeqTG99GQ/hqdefault.jpg'  },
-    { channelId: 'UCpYQmszu4IP37xyt3RQb2gw', videoId: '3OmGOM8XvBk',  title: 'This Tornado Was Intercepted by a DRONE On A Live Stream...',   thumbnail: 'https://i.ytimg.com/vi/3OmGOM8XvBk/hqdefault.jpg'  },
-    { channelId: 'UCV6hWxB0-u_IX7e-h4fEBAw', videoId: 'MJaU5QDG0Q8',  title: 'NEVER STOP CHASING, the movie, premieres on August 21!',        thumbnail: 'https://i.ytimg.com/vi/MJaU5QDG0Q8/hqdefault.jpg'  },
-    { channelId: 'Midwest Safety',            videoId: 'zY8kbrlzCaY',  title: 'Bodycam Captures Deadly Tornado Response',                      thumbnail: 'https://i.ytimg.com/vi/zY8kbrlzCaY/hqdefault.jpg'  },
-    { channelId: 'New York Post',             videoId: 'R0LZU5k_H0k',  title: '',                                                              thumbnail: ''                                                   },
-    { channelId: 'Joe Schmit',               videoId: 'j3ttR3r0IrI',  title: '',                                                              thumbnail: ''                                                   },
-    { channelId: 'June First',               videoId: 'QSsmR9KpE8k',  title: '',                                                              thumbnail: ''                                                   },
-  ];
-  saveData(data);
-  res.json({ ok: true, restored: data.highlights.length });
-});
-
 app.get('/api/admin/highlights', (req, res) => {
   const data = loadData();
   res.json(data.highlights || []);
@@ -1479,11 +1404,36 @@ const STATE_DOTS = [
     parse: _parseIBI511,
   },
 
-  // ── Pennsylvania ─────────────────────────────────────────────────────────
-  // PA uses ASP.NET map layer markers per Road511's article — non-standard
-  // format, needs investigation before building a parser.
-  // { id:'pa', label:'Pennsylvania DOT', url:'CONFIRM_URL',
-  //   envKey:'PA_511_KEY', cacheTTL:10*60*1000, parse:_parsePADOT },
+  // ── Ohio DOT (OHGO) ──────────────────────────────────────────────────────
+  // OHGO Public API — publicapi.ohgo.com. Auth: api-key query param.
+  // Each camera site has CameraViews array with SmallUrl/LargeUrl/Direction.
+  {
+    id: 'oh',
+    label: 'Ohio DOT (OHGO)',
+    url: 'https://publicapi.ohgo.com/api/v1/cameras',
+    envKey: 'OH_DOT_KEY',
+    authParam: 'api-key',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseOHGO,
+  },
+
+  // ── Pennsylvania (PennDOT) ──────────────────────────────────────────────
+  // PennDOT provides still images via a Nonexclusive Video Sharing License
+  // Agreement (executed 8/10/2026, Agreement No. BOO092026). Access is via
+  // direct HTTP image URLs — no live API, no key required. Camera list is a
+  // static JSON file (penndot_cameras.json) generated from PennDOT's
+  // provided spreadsheet and committed to the repo. Refresh by re-running
+  // scripts/parse_penndot.py and committing the updated JSON.
+  // Image URLs: https://www.dot35.state.pa.us/public/districts/DistrictN/webcams/{id}.jpg
+  // Images update approximately every 30 seconds on PennDOT's servers.
+  {
+    id: 'pa',
+    label: 'Pennsylvania DOT',
+    url: null,                    // static — loaded from penndot_cameras.json
+    envKey: null,                 // no API key needed per the license agreement
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parsePennDOT,
+  },
 
   // ── Additional IBI/Skyline states (same _parseIBI511, just needs a key) ─
   { id:'id', label:'Idaho DOT',   url:'https://511.idaho.gov/api/v2/get/cameras?format=json',     envKey:'ID_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
@@ -1539,20 +1489,6 @@ const STATE_DOTS = [
     parse: _parseILGateway,
   },
 
-  // ── Ohio DOT (OHGO) ──────────────────────────────────────────────────────
-  // OHGO Public API — publicapi.ohgo.com. Different schema from IBI/Skyline.
-  // Auth: api-key query param. Each camera site has a CameraViews array with
-  // SmallUrl/LargeUrl/Direction. Images update every 5 seconds — genuinely live.
-  {
-    id: 'oh',
-    label: 'Ohio DOT (OHGO)',
-    url: 'https://publicapi.ohgo.com/api/v1/cameras',
-    envKey: 'OH_DOT_KEY',
-    authParam: 'api-key',
-    cacheTTL: 10 * 60 * 1000,
-    parse: _parseOHGO,
-  },
-
   // ── To add more states ───────────────────────────────────────────────────
   // IBI/Skyline platform (most US state 511 sites):
   //   { id:'xx', label:'State DOT', url:'https://511xx.gov/api/v2/get/cameras?format=json',
@@ -1562,11 +1498,28 @@ const STATE_DOTS = [
   // as _parseILGateway, then use it here.
 ];
 
-// ── Ohio DOT (OHGO) parser ────────────────────────────────────────────────
-// OHGO returns { results: [ { Id, Latitude, Longitude, Location, Description,
-//   CameraViews: [ { Direction, SmallUrl, LargeUrl, MainRoute } ] } ] }
-// One camera site may have multiple views (directions). We emit one camera
-// object per view so each appears as an independent dot on the map.
+// ── PennDOT static-JSON parser ───────────────────────────────────────────────
+// PennDOT cameras are provided as a static list (penndot_cameras.json) under a
+// Nonexclusive Video Sharing License Agreement (BOO092026, executed 8/10/2026).
+// The JSON is pre-parsed from PennDOT's spreadsheet — no live API call needed.
+// Images load directly from dot35.state.pa.us; the server just serves the list.
+let _pennDOTCameras = null;
+function _parsePennDOT() {
+  if (_pennDOTCameras) return _pennDOTCameras;
+  try {
+    const data = require('./penndot_cameras.json');
+    _pennDOTCameras = Array.isArray(data) ? data : [];
+    console.log(`[Cameras] PennDOT static list loaded: ${_pennDOTCameras.length} cameras`);
+    return _pennDOTCameras;
+  } catch(e) {
+    console.error('[Cameras] PennDOT: could not load penndot_cameras.json:', e.message);
+    return [];
+  }
+}
+
+// ── Ohio DOT (OHGO) parser ────────────────────────────────────────────────────
+// OHGO Public API — publicapi.ohgo.com. Different schema from IBI/Skyline.
+// Auth: api-key query param. Each camera site has a CameraViews array.
 function _parseOHGO(raw) {
   const cameras = [];
   const results = Array.isArray(raw) ? raw : (raw.results || raw.data || []);
@@ -1714,6 +1667,13 @@ async function _loadStateDOT(dot) {
 
   // Skip if this DOT requires a key and it's not configured
   if (dot.envKey && !process.env[dot.envKey]) return [];
+
+  // Static-data DOTs (url: null) — call parse() directly with no fetch
+  if (!dot.url) {
+    const cameras = dot.parse(null, dot.id, dot);
+    _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
+    return cameras;
+  }
 
   let url = dot.url;
   if (dot.envKey && process.env[dot.envKey]) {
@@ -2087,139 +2047,6 @@ app.get('/api/aqi', async (req, res) => {
   } catch(e) {
     console.error('[AQI] Proxy error:', e.message);
     res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
-  }
-});
-
-// GET /api/forecast?lat=&lon=  (or ?zip=)
-// Unified forecast proxy — merges Open-Meteo (GFS/HRRR) + NWS narrative text.
-// Open-Meteo: current conditions, 168h hourly, 7-day daily — free, no key.
-// NWS: plain-English forecast narrative for each period — US only, free.
-// Cached 15 minutes server-side. Zip-to-coords via Open-Meteo geocoding.
-const _forecastCache = new Map();
-const FORECAST_TTL = 15 * 60 * 1000;
-
-app.get('/api/forecast', async (req, res) => {
-  console.log(`[Forecast] Request: zip=${req.query.zip} lat=${req.query.lat} lon=${req.query.lon}`);
-  let lat = parseFloat(req.query.lat);
-  let lon = parseFloat(req.query.lon);
-  let locationName = req.query.name || null;
-
-  // Zip-to-coords via Open-Meteo geocoding (free, no key)
-  if (req.query.zip) {
-    try {
-      const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`;
-      const geoText = await fetchTextOverHttp(geoUrl);
-      const geo = JSON.parse(geoText);
-      const r = geo.results?.[0];
-      if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
-      lat = r.latitude; lon = r.longitude;
-      locationName = locationName || [r.name, r.admin1].filter(Boolean).join(', ');
-    } catch(e) {
-      return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message });
-    }
-  }
-
-  if (isNaN(lat) || isNaN(lon)) {
-    return res.status(400).json({ error: 'lat/lon or zip required' });
-  }
-
-  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
-  const cached = _forecastCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < FORECAST_TTL) {
-    res.set('Cache-Control', 'public, max-age=900');
-    return res.json(cached.data);
-  }
-
-  try {
-    // ── Open-Meteo GFS/HRRR ─────────────────────────────────────────────────
-    const omUrl = 'https://api.open-meteo.com/v1/forecast'
-      + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
-      + '&timezone=auto'
-      + '&temperature_unit=fahrenheit'
-      + '&wind_speed_unit=mph'
-      + '&precipitation_unit=inch'
-      + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,'
-      + 'dew_point_2m,precipitation,weather_code,cloud_cover,'
-      + 'wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
-      + 'surface_pressure,visibility,is_day'
-      + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,'
-      + 'precipitation,weather_code,cloud_cover,wind_speed_10m,'
-      + 'wind_direction_10m,wind_gusts_10m,visibility,'
-      + 'cape,lifted_index,freezing_level_height,'
-      + 'snowfall,snow_depth,uv_index,is_day,relative_humidity_2m,dew_point_2m'
-      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
-      + 'apparent_temperature_max,apparent_temperature_min,'
-      + 'sunrise,sunset,daylight_duration,uv_index_max,'
-      + 'precipitation_sum,snowfall_sum,precipitation_hours,'
-      + 'precipitation_probability_max,'
-      + 'wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant'
-      + '&forecast_days=7';
-
-    const omText = await fetchTextOverHttp(omUrl);
-    const om = JSON.parse(omText);
-    console.log(`[Forecast] Open-Meteo response keys: ${Object.keys(om).join(', ')}`);
-    if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
-    console.log(`[Forecast] current.temperature_2m: ${om.current?.temperature_2m}`);
-    console.log('[Forecast] daily weather_codes:', JSON.stringify(om.daily?.weather_code));
-    console.log('[Forecast] hourly weather_codes (first 6):', JSON.stringify(om.hourly?.weather_code?.slice(0,6)));
-
-    // ── NWS narrative (US only — skip gracefully outside coverage) ──────────
-    let nwsNarrative = null;
-    try {
-      const ptsText = await fetchTextOverHttp(
-        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
-        { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-      );
-      const pts = JSON.parse(ptsText);
-      const forecastUrl = pts?.properties?.forecast;
-      if (forecastUrl) {
-        const fText = await fetchTextOverHttp(forecastUrl,
-          { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-        );
-        const f = JSON.parse(fText);
-        // Keep the first 14 periods (7 days × day+night) with name + short + detailed forecast
-        nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
-          name:     p.name,
-          short:    p.shortForecast,
-          detail:   p.detailedForecast,
-          isDaytime: p.isDaytime,
-          temp:     p.temperature,
-          tempUnit: p.temperatureUnit,
-          icon:     p.icon,
-        }));
-      }
-    } catch(e) {
-      // NWS doesn't cover outside CONUS — silent fail, Open-Meteo data still returned
-      console.log(`[Forecast] NWS unavailable for ${lat.toFixed(3)},${lon.toFixed(3)}: ${e.message}`);
-    }
-
-    const data = {
-      location: { lat, lon, name: locationName },
-      timezone: om.timezone,
-      timezone_abbreviation: om.timezone_abbreviation,
-      utc_offset_seconds: om.utc_offset_seconds,
-      current: om.current,
-      current_units: om.current_units,
-      hourly: om.hourly,
-      hourly_units: om.hourly_units,
-      daily: om.daily,
-      daily_units: om.daily_units,
-      nws: nwsNarrative,
-      generated_at: Date.now(),
-    };
-
-    _forecastCache.set(cacheKey, { data, ts: Date.now() });
-    // Evict oldest if cache grows too large (one entry per location)
-    if (_forecastCache.size > 30) {
-      const oldest = [..._forecastCache.entries()].sort((a,b) => a[1].ts - b[1].ts)[0];
-      if (oldest) _forecastCache.delete(oldest[0]);
-    }
-
-    res.set('Cache-Control', 'public, max-age=900');
-    res.json(data);
-  } catch(e) {
-    console.error('[Forecast] Error:', e.message);
-    res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
   }
 });
 
