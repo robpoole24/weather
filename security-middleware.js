@@ -116,8 +116,6 @@ function securityHeaders(req, res, next) {
       // AirNow is proxied through /api/aqi in server.js — no direct browser call needed
       // NowCOAST WMS (surface analysis, ERO, tropical) — tile requests go direct
       " https://nowcoast.noaa.gov" +
-      // LibreWXR — global radar tiles (drop-in RainViewer replacement, no rate limits)
-      " https://api.librewxr.net" +  // LibreWXR: both API and tiles served from this domain
       // NWS National Water Prediction Service (river/flood gauges)
       " https://api.water.noaa.gov" +
       // USGS streamflow backup

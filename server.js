@@ -1968,6 +1968,117 @@ app.get('/api/aqi', async (req, res) => {
   }
 });
 
+// GET /api/forecast?lat=&lon= (or ?zip=)
+// Unified forecast proxy — merges Open-Meteo (current + 168h hourly + 7-day daily) + NWS narrative.
+// Open-Meteo: free, no key. NWS: US only, free. Cached 15 minutes server-side.
+const _forecastCache = new Map();
+const FORECAST_TTL   = 15 * 60 * 1000;
+
+app.get('/api/forecast', async (req, res) => {
+  console.log(`[Forecast] Request: zip=${req.query.zip} lat=${req.query.lat} lon=${req.query.lon}`);
+  let lat = parseFloat(req.query.lat);
+  let lon = parseFloat(req.query.lon);
+  let locationName = req.query.name || null;
+
+  // Zip/city → coords via Open-Meteo geocoding (free, no key)
+  if (req.query.zip) {
+    try {
+      const geoText = await fetchTextOverHttp(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`
+      );
+      const geo = JSON.parse(geoText);
+      const r   = geo.results?.[0];
+      if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
+      lat = r.latitude; lon = r.longitude;
+      locationName = locationName || [r.name, r.admin1].filter(Boolean).join(', ');
+    } catch(e) {
+      return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message });
+    }
+  }
+
+  if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat/lon or zip required' });
+
+  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const cached   = _forecastCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < FORECAST_TTL) {
+    res.set('Cache-Control', 'public, max-age=900');
+    return res.json(cached.data);
+  }
+
+  try {
+    // Open-Meteo — /v1/forecast auto-selects HRRR for US, no models= param needed
+    const omUrl = 'https://api.open-meteo.com/v1/forecast'
+      + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+      + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
+      + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,'
+      + 'precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,'
+      + 'wind_gusts_10m,surface_pressure,visibility,is_day'
+      + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,'
+      + 'weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
+      + 'visibility,cape,lifted_index,freezing_level_height,snowfall,snow_depth,'
+      + 'uv_index,is_day,relative_humidity_2m,dew_point_2m'
+      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
+      + 'apparent_temperature_max,apparent_temperature_min,'
+      + 'sunrise,sunset,daylight_duration,uv_index_max,'
+      + 'precipitation_sum,snowfall_sum,precipitation_hours,'
+      + 'precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,'
+      + 'wind_direction_10m_dominant'
+      + '&forecast_days=7';
+
+    const omText = await fetchTextOverHttp(omUrl);
+    const om     = JSON.parse(omText);
+    console.log(`[Forecast] Open-Meteo keys: ${Object.keys(om).join(', ')}`);
+    if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
+    console.log(`[Forecast] current.temperature_2m: ${om.current?.temperature_2m}`);
+
+    // NWS narrative (US only — silent fail outside CONUS)
+    let nwsNarrative = null;
+    try {
+      const ptsText = await fetchTextOverHttp(
+        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
+        { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
+      );
+      const pts = JSON.parse(ptsText);
+      const forecastUrl = pts?.properties?.forecast;
+      if (forecastUrl) {
+        const fText = await fetchTextOverHttp(forecastUrl,
+          { 'Accept': 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
+        );
+        const f = JSON.parse(fText);
+        nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
+          name: p.name, short: p.shortForecast, detail: p.detailedForecast,
+          isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
+        }));
+      }
+    } catch(e) {
+      console.log(`[Forecast] NWS unavailable for ${lat.toFixed(3)},${lon.toFixed(3)}: ${e.message}`);
+    }
+
+    const data = {
+      location: { lat, lon, name: locationName },
+      timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
+      utc_offset_seconds: om.utc_offset_seconds,
+      current: om.current, current_units: om.current_units,
+      hourly: om.hourly, hourly_units: om.hourly_units,
+      daily: om.daily, daily_units: om.daily_units,
+      nws: nwsNarrative,
+      generated_at: Date.now(),
+    };
+
+    _forecastCache.set(cacheKey, { data, ts: Date.now() });
+    if (_forecastCache.size > 30) {
+      const oldest = [..._forecastCache.entries()].sort((a,b)=>a[1].ts-b[1].ts)[0];
+      if (oldest) _forecastCache.delete(oldest[0]);
+    }
+
+    res.set('Cache-Control', 'public, max-age=900');
+    res.json(data);
+  } catch(e) {
+    console.error('[Forecast] Error:', e.message);
+    res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
+  }
+});
+
 // GET /api/hms-smoke
 // Proxies NOAA OSPO's current HMS smoke KML and converts it to GeoJSON.
 // NOAA does NOT publish a GeoJSON format — only KML, Shapefile, and GeoTiff.
@@ -3035,15 +3146,7 @@ async function websubSubscribe(channelId) {
         statusCode: res.statusCode,
       };
       // Persist expiry so restarts don't re-subscribe still-valid channels
-      // Persist lease expiry for ALL successful hub responses (202 = accepted).
-      // YouTube's hub always returns 202 — it verifies asynchronously.
-      // We write on any 2xx so restarts skip still-valid subscriptions.
-      // Store as a number (not string) — rGet JSON.parses the stored value,
-      // so storing a number means rGet returns a number, keeping the math clean.
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        rSet('wt:ws:' + channelId, expiresAt);
-        console.log('[WebSub] Lease persisted for ' + channelId + ' (expires in 9d)');
-      }
+      if (status === 'active') rSet('wt:ws:' + channelId, String(expiresAt));
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
         const ch = getAllChannels().find(c => c.id === channelId);
@@ -3116,25 +3219,19 @@ async function subscribeAllChannels() {
   // instead of blocking for 60+ seconds re-subscribing every channel.
   const toSubscribe = [];
   let skipped = 0;
-  // Diagnostic: log Redis availability on first channel
-  console.log(`[WebSub] Redis available: ${!!redis} — checking ${channels.length} subscriptions`);
-
   for (const ch of channels) {
-    // rGet handles null redis and all errors internally — safe to call always
-    const stored = await rGet('wt:ws:' + ch.id);
-    if (stored !== null) {
-      // rGet JSON.parses the value — if we stored a raw number string, it comes back as number
-      const expiresAt = typeof stored === 'number' ? stored : parseInt(String(stored), 10);
-      const hoursLeft = Math.round((expiresAt - now) / 3600000);
-      if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
-        // Still valid for >24h — mark as active without hitting the hub
-        websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
-        skipped++;
-        continue;
-      } else {
-        console.log(`[WebSub] ${ch.id} expires in ${hoursLeft}h — renewing`);
+    try {
+      const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
+      if (stored) {
+        const expiresAt = parseInt(stored, 10);
+        if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
+          // Still valid for >24h — mark as active without hitting the hub
+          websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
+          skipped++;
+          continue;
+        }
       }
-    }
+    } catch(_) { /* Redis unavailable — subscribe to be safe */ }
     toSubscribe.push(ch);
   }
 
@@ -3328,168 +3425,6 @@ app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
 
 // Start WebSub subscriptions after boot (10s delay)
 setTimeout(subscribeAllChannels, 10000);
-
-// ════════════════════════════════════════════
-// BACKGROUND ATOM FEED SCANNER
-// Catches live streams that WebSub missed — runs every 3 minutes.
-// Cost: 0 quota (public Atom feeds, no API key needed).
-// Each channel's public feed always reflects the most recent video.
-// If that video is <2h old, we confirm via videos.list (1 unit each).
-// WebSub remains primary; this is the gap-filler.
-// Enable by setting BACKGROUND_SCANNER=true in Railway env vars.
-// ════════════════════════════════════════════
-
-const SCANNER_INTERVAL_MS  = 3 * 60 * 1000;   // 3 minutes between full sweeps
-const SCANNER_CONFIRM_AGE_MS = 2 * 60 * 60 * 1000; // confirm videos posted <2h ago
-const SCANNER_BATCH_SIZE    = 10;              // channels per batch (avoids thundering herd)
-const SCANNER_BATCH_DELAY_MS = 500;           // ms between batches
-const SCANNER_CONFIRM_LIMIT = 30;             // max videos.list confirms per sweep
-let   _scannerRunning = false;                 // prevent overlapping runs
-
-// Fetch one channel's public Atom feed, return { videoId, publishedMs } or null
-async function _fetchAtomFeed(channelId) {
-  const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
-  try {
-    const text = await fetchTextOverHttp(url);
-    // Extract most recent entry's video ID and published timestamp
-    const vidMatch   = text.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-    const pubMatch   = text.match(/<published>([^<]+)<\/published>/);
-    const liveMatch  = text.match(/<yt:liveBroadcastContent>([^<]+)<\/yt:liveBroadcastContent>/);
-    if (!vidMatch) return null;
-    return {
-      videoId:     vidMatch[1].trim(),
-      publishedMs: pubMatch  ? new Date(pubMatch[1].trim()).getTime() : 0,
-      feedLive:    liveMatch ? liveMatch[1].trim() : 'none', // 'live'|'upcoming'|'none'
-    };
-  } catch(e) {
-    return null; // network error — skip silently
-  }
-}
-
-// Confirm a specific video is an active live stream via videos.list (1 unit)
-async function _confirmVideoLive(channelId, videoId) {
-  if (primaryQuotaExceeded) return null;
-  const key = getApiKey();
-  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return null;
-  try {
-    trackBurn(true, 1);
-    const url = `https://www.googleapis.com/youtube/v3/videos?key=${key}` +
-      `&id=${videoId}&part=liveStreamingDetails&fields=items/liveStreamingDetails`;
-    const data = await ytFetch(url);
-    if (checkQuotaError(data)) { markQuotaExceeded(true); return null; }
-    const details = data.items && data.items[0] && data.items[0].liveStreamingDetails;
-    // Active: has actualStartTime, no actualEndTime
-    return !!(details && details.actualStartTime && !details.actualEndTime);
-  } catch(e) {
-    return null;
-  }
-}
-
-async function runBackgroundScanner() {
-  if (_scannerRunning) {
-    console.log('[Scanner] Previous sweep still running — skipping');
-    return;
-  }
-  if (!process.env.APP_URL) return; // disabled on localhost
-
-  _scannerRunning = true;
-  const channels = getLiveChannels();
-  if (!channels.length) { _scannerRunning = false; return; }
-
-  const now = Date.now();
-  let feedsChecked = 0, confirmed = 0, newLive = 0, confirmsUsed = 0;
-
-  // Process in batches to avoid hammering YouTube
-  for (let i = 0; i < channels.length; i += SCANNER_BATCH_SIZE) {
-    const batch = channels.slice(i, i + SCANNER_BATCH_SIZE);
-
-    await Promise.all(batch.map(async ch => {
-      try {
-        const feed = await _fetchAtomFeed(ch.id);
-        if (!feed) return;
-        feedsChecked++;
-
-        const currentStatus = cache.liveStatuses[ch.id];
-        const alreadyLive   = currentStatus && currentStatus.isLive;
-        const ageMs         = now - feed.publishedMs;
-
-        // If feed explicitly says live — trust it immediately, 0 quota
-        if (feed.feedLive === 'live') {
-          if (!alreadyLive) {
-            const entry = { isLive: true, videoId: feed.videoId, checkedAt: now, source: 'scanner_feed' };
-            cache.liveStatuses[ch.id] = entry;
-            cache.lastLiveCheck = now;
-            rSet('wt:live:' + ch.id, entry, REDIS_TTL.liveStatus);
-            rSet('wt:lastLive', now);
-            updateChannelActivity(ch.id, { lastLiveDate: now });
-            delete cache.recentVideos[ch.id];
-            rDel('wt:recent:' + ch.id);
-            console.log(`[Scanner] LIVE (feed, 0 units): ${ch.name}`);
-            newLive++;
-          }
-          return;
-        }
-
-        // If already marked live by WebSub/previous scan — skip (WebSub handles end-of-stream)
-        if (alreadyLive) return;
-
-        // If feed says upcoming — skip (not yet live)
-        if (feed.feedLive === 'upcoming') return;
-
-        // Most recent video is <2h old — worth confirming if not recently checked
-        if (ageMs < SCANNER_CONFIRM_AGE_MS && confirmsUsed < SCANNER_CONFIRM_LIMIT) {
-          // Skip if we checked this video recently via WebSub
-          const lastWsCheck = websubLastCheck[ch.id] || 0;
-          if (now - lastWsCheck < 5 * 60 * 1000) return; // checked <5min ago by WebSub
-
-          confirmsUsed++;
-          const isLive = await _confirmVideoLive(ch.id, feed.videoId);
-          if (isLive === null) return; // quota error or network fail
-
-          confirmed++;
-          const entry = { isLive, videoId: isLive ? feed.videoId : null, checkedAt: now, source: 'scanner_confirm' };
-          cache.liveStatuses[ch.id] = entry;
-          cache.lastLiveCheck = now;
-          rSet('wt:live:' + ch.id, entry, REDIS_TTL.liveStatus);
-          rSet('wt:lastLive', now);
-          websubLastCheck[ch.id] = now; // rate-limit future WebSub checks too
-
-          if (isLive) {
-            updateChannelActivity(ch.id, { lastLiveDate: now });
-            delete cache.recentVideos[ch.id];
-            rDel('wt:recent:' + ch.id);
-            console.log(`[Scanner] LIVE CONFIRMED (1 unit): ${ch.name}`);
-            newLive++;
-          }
-        }
-      } catch(e) {
-        // Swallow per-channel errors — never let one bad channel stop the sweep
-      }
-    }));
-
-    // Pause between batches
-    if (i + SCANNER_BATCH_SIZE < channels.length) {
-      await new Promise(r => setTimeout(r, SCANNER_BATCH_DELAY_MS));
-    }
-  }
-
-  _scannerRunning = false;
-  if (newLive > 0 || confirmsUsed > 0) {
-    console.log(`[Scanner] Sweep complete — ${feedsChecked} feeds, ${confirmsUsed} confirmed (${confirmsUsed} units), ${newLive} newly live`);
-  }
-}
-
-// Start scanner if enabled
-if (process.env.BACKGROUND_SCANNER === 'true') {
-  // Stagger first run by 60s so startup WebSub subscription finishes first
-  setTimeout(() => {
-    runBackgroundScanner();
-    setInterval(runBackgroundScanner, SCANNER_INTERVAL_MS);
-  }, 60 * 1000);
-  console.log('[Scanner] Background Atom feed scanner enabled (every 3 min)');
-} else {
-  console.log('[Scanner] Background scanner disabled — set BACKGROUND_SCANNER=true to enable');
-}
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER
@@ -3890,11 +3825,6 @@ app.get('/api/yt/quota-status', (req, res) => {
     archiveKeyRole: 'emergency-standby',
     primaryQuotaLimit: 60000,
     archiveQuotaLimit: 10000,
-    backgroundScanner: {
-      enabled: process.env.BACKGROUND_SCANNER === 'true',
-      intervalMin: SCANNER_INTERVAL_MS / 60000,
-      running: _scannerRunning,
-    },
   });
 });
 
@@ -3902,12 +3832,6 @@ app.get('/api/yt/quota-status', (req, res) => {
 app.post('/api/admin/trigger-live-check', async (req, res) => {
   res.json({ ok: true, message: 'Live check triggered' });
   await scheduledLiveCheck();
-});
-
-// Manual trigger for background scanner sweep — for testing
-app.post('/api/admin/trigger-scanner', adminAuth, async (req, res) => {
-  res.json({ ok: true, message: 'Background scanner sweep triggered' });
-  runBackgroundScanner().catch(e => console.error('[Scanner] Manual trigger error:', e.message));
 });
 
 // Manual trigger for live status check
