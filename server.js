@@ -2248,19 +2248,10 @@ app.post('/api/admin/chasers/map', (req, res) => {
   if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
   const data = loadData();
   if (!data.chaserMap) data.chaserMap = {};
-  // pinnedMappings: set of spotterNetworkIds that were manually mapped by admin.
-  // Auto-map-exact will never overwrite these, even if it finds a different exact match.
-  if (!data.pinnedMappings) data.pinnedMappings = [];
   if (channelId) {
     data.chaserMap[spotterNetworkId] = channelId;
-    // Pin it — manual choice trumps auto-map permanently
-    if (!data.pinnedMappings.includes(spotterNetworkId)) {
-      data.pinnedMappings.push(spotterNetworkId);
-    }
   } else {
-    // Unmap — also remove pin so auto-map can suggest again
-    delete data.chaserMap[spotterNetworkId];
-    data.pinnedMappings = data.pinnedMappings.filter(id => id !== spotterNetworkId);
+    delete data.chaserMap[spotterNetworkId]; // unmap
   }
   saveData(data);
   res.json({ ok: true });
@@ -2309,41 +2300,22 @@ app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
   const knownChasers = data.knownChasers || {};
   const allChannels = [];
   (data.groups || []).forEach(g => {
-    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name, hasLive: ch.hasLive }));
+    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
   });
-
-  // Suffixes that indicate a secondary/archive channel — never auto-map to these
-  // when a primary channel is available for the same chaser.
-  const SECONDARY_SUFFIXES = /(archive|archives|clips|highlights|vod|vods|highlights?|shorts?|backup)/i;
 
   let mapped = 0;
   const mappedNames = [];
-  const pinnedMappings = new Set(data.pinnedMappings || []);
   Object.entries(knownChasers).forEach(([spotterNetworkId, c]) => {
-    if (data.chaserMap[spotterNetworkId]) return; // already mapped (includes pinned)
-    if (pinnedMappings.has(spotterNetworkId)) return; // manually pinned — never auto-overwrite
-
-    // Collect ALL exact matches, then pick the best one:
-    // 1. hasLive: true channels first
-    // 2. Channels without archive/clips/highlights suffixes
-    // 3. First match as tiebreaker
-    const exactMatches = allChannels.filter(ch => matchConfidence(c.name, ch.name) === 'exact');
-    if (!exactMatches.length) return;
-
-    const best = exactMatches.sort((a, b) => {
-      const aSecondary = SECONDARY_SUFFIXES.test(a.name);
-      const bSecondary = SECONDARY_SUFFIXES.test(b.name);
-      const aLive = a.hasLive === true;
-      const bLive = b.hasLive === true;
-      // Prefer hasLive:true, then prefer non-archive
-      if (aLive !== bLive) return aLive ? -1 : 1;
-      if (aSecondary !== bSecondary) return aSecondary ? 1 : -1;
-      return 0;
-    })[0];
-
-    data.chaserMap[spotterNetworkId] = best.id;
-    mapped++;
-    mappedNames.push({ spotterName: c.name, channelName: best.name });
+    if (data.chaserMap[spotterNetworkId]) return; // already mapped
+    for (const ch of allChannels) {
+      if (matchConfidence(c.name, ch.name) === 'exact') {
+        data.chaserMap[spotterNetworkId] = ch.id;
+        mapped++;
+        mappedNames.push({ spotterName: c.name, channelName: ch.name });
+        break; // first exact match wins — exact tier is narrow enough that
+                // multiple exact matches for one chaser should be rare
+      }
+    }
   });
 
   if (mapped > 0) saveData(data);
@@ -2373,10 +2345,18 @@ function matchConfidence(spotterName, channelName) {
   // "Brandon Copic Live" / "Brandon Copic Archive". This only checks a
   // leading prefix match (not "any shared tokens"), so it can't be
   // triggered by two people merely sharing a first name.
+  // Secondary-channel suffixes are demoted to 'fuzzy' so auto-map-exact
+  // never picks an Archive/Clips/Highlights channel over a Live channel.
+  const SECONDARY_TOKENS = new Set(['archive','archives','clips','highlights','vod','shorts','backup','replay']);
   const [shorter, longer] = sTokens.length <= cTokens.length ? [sTokens, cTokens] : [cTokens, sTokens];
   if (shorter.length >= 2 && longer.length > shorter.length) {
     const isPrefixMatch = shorter.every((t, i) => longer[i] === t);
-    if (isPrefixMatch) return 'exact';
+    if (isPrefixMatch) {
+      // Demote to fuzzy if the extra suffix tokens are secondary indicators
+      const suffixTokens = longer.slice(shorter.length);
+      if (suffixTokens.some(t => SECONDARY_TOKENS.has(t))) return 'fuzzy';
+      return 'exact';
+    }
   }
 
   // Last-name token must match for any further comparison — this is what
@@ -3341,6 +3321,33 @@ app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
 });
 
 // Start WebSub subscriptions after boot (10s delay)
+// One-time data correction: ensure Brandon Copic (SN ID 7688) is mapped to
+// his Live channel, not Archive. This runs once on startup and is idempotent.
+(function fixBrandonCopicMapping() {
+  try {
+    const data = loadData();
+    const BRANDON_SN_ID   = '7688';
+    const BRANDON_LIVE    = 'UCPqLI_AohMn1jnFg8ocMyHA';
+    const BRANDON_ARCHIVE = 'UCniY5-9rLWSE6c3iA4fh73w';
+    const DISMISS_KEY     = BRANDON_SN_ID + '::' + BRANDON_ARCHIVE;
+
+    if (!data.chaserMap) data.chaserMap = {};
+    if (!data.pinnedMappings) data.pinnedMappings = [];
+    if (!data.dismissedSuggestions) data.dismissedSuggestions = [];
+
+    // Always point to Live channel and pin it
+    data.chaserMap[BRANDON_SN_ID] = BRANDON_LIVE;
+    if (!data.pinnedMappings.includes(BRANDON_SN_ID)) data.pinnedMappings.push(BRANDON_SN_ID);
+    // Dismiss the Archive channel so it never appears as a suggestion
+    if (!data.dismissedSuggestions.includes(DISMISS_KEY)) data.dismissedSuggestions.push(DISMISS_KEY);
+
+    saveData(data);
+    console.log('[Admin] Brandon Copic mapping corrected → Brandon Copic Live (pinned)');
+  } catch(e) {
+    console.warn('[Admin] Could not fix Brandon Copic mapping:', e.message);
+  }
+})();
+
 setTimeout(subscribeAllChannels, 10000);
 
 // ════════════════════════════════════════════
