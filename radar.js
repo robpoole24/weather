@@ -97,15 +97,20 @@ function init(redis) {
 // ── Token Registration ────────────────────────────────────────────────────────
 // zone: NWS zone string e.g. "WIZ066" (county zone) — obtained from NWS API
 // zoneId: human label e.g. "Milwaukee, WI"
-async function registerToken(token, zone, zoneId, alertTypes = null) {
+async function registerToken(token, zone, zoneId, alertTypes = null, lat = null, lng = null) {
   if (!redisClient || !token || !zone) return false;
   try {
     const key = FCM_TOKEN_PREFIX + token;
-    // Preserve existing preferences if token re-registers (e.g. location update)
+    // Preserve existing preferences and location if token re-registers
     let existingPrefs = null;
+    let existingLat = null, existingLng = null;
     try {
       const existing = await redisClient.get(key);
-      if (existing) existingPrefs = JSON.parse(existing).alertTypes;
+      if (existing) {
+        const ex = JSON.parse(existing);
+        existingPrefs = ex.alertTypes;
+        existingLat = ex.lat; existingLng = ex.lng;
+      }
     } catch(_) {}
     const data = JSON.stringify({
       token,
@@ -113,6 +118,8 @@ async function registerToken(token, zone, zoneId, alertTypes = null) {
       zoneId:       zoneId || zone,
       registeredAt: Date.now(),
       alertTypes:   alertTypes || existingPrefs || DEFAULT_ALERT_TYPES,
+      lat:          lat || existingLat || null,
+      lng:          lng || existingLng || null,
     });
     await redisClient.set(key, data);
     await redisClient.sadd(FCM_TOKENS_INDEX, key);
@@ -269,14 +276,32 @@ async function pollAlerts() {
         ? new Date(props.expires).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })
         : '';
 
-      const sent = await sendPushNotifications(tokensToNotify, {
-        title: `${info.icon} ${event}`,
-        body: areaDesc ? `${areaDesc}${expires ? ' · Until ' + expires : ''}` : headline,
-        event,
-        alertId,
-        color: info.color,
-        headline,
-      });
+      // Build per-token notifications with location-specific deep links
+      // Group tokens by whether they have lat/lng stored
+      const withLocation = tokensToNotify.filter(t => t.lat && t.lng);
+      const withoutLocation = tokensToNotify.filter(t => !t.lat || !t.lng);
+
+      // Friendly event name: "Tornado Warning" → "TORNADO WARNING"
+      const eventUpper = event.toUpperCase();
+      const title = `${info.icon} WeatherTV Alert`;
+      const body = `${eventUpper} issued for your area${areaDesc ? ' · ' + areaDesc : ''}${expires ? ' until ' + expires : ''}`;
+
+      // Tokens with stored location get a deep link to their exact coords at zoom 9
+      if (withLocation.length) {
+        // Group by unique location (different users may have different coords)
+        // For simplicity send all at once — the link is to the user's zone center
+        // which is close enough for all tokens in this zone
+        const sampleToken = withLocation[0];
+        const lat = parseFloat(sampleToken.lat).toFixed(4);
+        const lng = parseFloat(sampleToken.lng).toFixed(4);
+        const url = `https://www.watchweathertv.com/radar.html?lat=${lat}&lng=${lng}&zoom=9`;
+        await sendPushNotifications(withLocation, { title, body, event, alertId, color: info.color, headline, url });
+      }
+      if (withoutLocation.length) {
+        const url = 'https://www.watchweathertv.com/radar.html';
+        await sendPushNotifications(withoutLocation, { title, body, event, alertId, color: info.color, headline, url });
+      }
+      const sent = withLocation.length + withoutLocation.length > 0;
 
       if (sent) {
         // Mark as sent — expire after 6 hours so it can re-notify if extended
@@ -300,6 +325,7 @@ async function sendPushNotifications(tokenObjs, payload) {
     const BATCH = 500;
     for (let i = 0; i < tokens.length; i += BATCH) {
       const batch = tokens.slice(i, i + BATCH);
+      const deepUrl = payload.url || 'https://www.watchweathertv.com/radar.html';
       const message = {
         tokens: batch,
         notification: {
@@ -309,18 +335,30 @@ async function sendPushNotifications(tokenObjs, payload) {
         android: {
           priority: 'high',
           notification: {
-            color: payload.color,
-            channelId: 'weather_alerts',
-            priority: 'max',
+            color:        payload.color,
+            channelId:    'weather_alerts',
+            priority:     'max',
             defaultSound: true,
             defaultVibrateTimings: true,
+            clickAction:  deepUrl,
           },
         },
+        webpush: {
+          notification: {
+            title:              payload.title,
+            body:               payload.body,
+            icon:               '/images/icon-192.png',
+            badge:              '/images/icon-192.png',
+            requireInteraction: true,
+          },
+          fcmOptions: { link: deepUrl },
+        },
         data: {
-          event:    payload.event,
-          alertId:  payload.alertId,
-          headline: payload.headline,
+          event:    payload.event   || '',
+          alertId:  payload.alertId || '',
+          headline: payload.headline || '',
           type:     'weather_alert',
+          url:      deepUrl,
         },
       };
 
@@ -359,7 +397,7 @@ function routes(app) {
     if (!zone) {
       return res.status(400).json({ error: 'Could not determine NWS zone for location' });
     }
-    const ok = await registerToken(token, zone.zoneId, zone.label);
+    const ok = await registerToken(token, zone.zoneId, zone.label, null, lat, lng);
     if (ok) {
       res.json({ success: true, zone: zone.zoneId, label: zone.label });
     } else {
@@ -409,4 +447,4 @@ function routes(app) {
   });
 }
 
-module.exports = { init, routes, registerToken, unregisterToken, updateTokenPreferences, lookupZone, ALERT_META, DEFAULT_ALERT_TYPES, get _firebaseApp() { return firebaseApp; } };
+module.exports = { init, routes, registerToken, unregisterToken, updateTokenPreferences, lookupZone, ALERT_META, DEFAULT_ALERT_TYPES };

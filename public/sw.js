@@ -46,17 +46,58 @@ self.addEventListener('fetch', e => {
   );
 });
 
-// Handle FCM push notifications (already wired via Firebase)
+// Handle FCM push notifications
 self.addEventListener('push', e => {
   if (!e.data) return;
-  try {
-    const data = e.data.json();
-    self.registration.showNotification(data.title || 'Weather TV Alert', {
-      body: data.body || '',
-      icon: '/images/icon-192.png',
-      badge: '/images/icon-192.png',
-      tag: 'weather-alert',
-      renotify: true,
-    });
-  } catch(err) {}
+  e.waitUntil((async () => {
+    try {
+      const payload = e.data.json();
+      // FCM V1 sends { notification:{title,body}, data:{event,url,...} }
+      // Some paths send title/body at top level — handle both
+      const title = payload.notification?.title || payload.title || 'WeatherTV Alert';
+      const body  = payload.notification?.body  || payload.body  || '';
+      const pdata = payload.data || {};
+      // Use the deep-link URL which includes lat/lng so tapping the
+      // notification opens the radar centered on the user's location
+      const url   = pdata.url || payload.fcmOptions?.link || 'https://www.watchweathertv.com/radar.html';
+
+      await self.registration.showNotification(title, {
+        body,
+        icon:               '/images/icon-192.png',
+        badge:              '/images/icon-192.png',
+        tag:                'weather-alert-' + (pdata.alertId || 'active'),
+        renotify:           true,
+        requireInteraction: true,
+        vibrate:            [200, 100, 200, 100, 400],
+        data:               { url },
+      });
+    } catch(err) {
+      // Fallback — always show something
+      await self.registration.showNotification('WeatherTV Alert', {
+        body: 'Active weather alert in your area. Tap to view.',
+        icon: '/images/icon-192.png',
+        data: { url: '/radar.html' },
+      });
+    }
+  })());
+});
+
+// Open radar when user taps the notification
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/radar.html';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
+      // If WeatherTV is already open, focus it and navigate to radar
+      for (const client of windowClients) {
+        if (client.url.includes('watchweathertv.com') && 'focus' in client) {
+          client.focus();
+          client.navigate(url);
+          return;
+        }
+      }
+      // Otherwise open a new window
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
 });
