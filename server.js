@@ -1968,105 +1968,6 @@ app.get('/api/aqi', async (req, res) => {
   }
 });
 
-// GET /api/forecast?lat=&lon= (or ?zip=)
-// Merges Open-Meteo (current + 168h hourly + 7-day daily) + NWS narrative.
-// Free, no key, 15-min server cache.
-const _forecastCache = new Map();
-const FORECAST_TTL = 15 * 60 * 1000;
-
-app.get('/api/forecast', async (req, res) => {
-  let lat = parseFloat(req.query.lat);
-  let lon = parseFloat(req.query.lon);
-  let locationName = req.query.name || null;
-
-  if (req.query.zip) {
-    try {
-      const geoText = await fetchTextOverHttp(
-        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`
-      );
-      const geo = JSON.parse(geoText);
-      const r = geo.results?.[0];
-      if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
-      lat = r.latitude; lon = r.longitude;
-      locationName = locationName || [r.name, r.admin1].filter(Boolean).join(', ');
-    } catch(e) { return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message }); }
-  }
-
-  if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat/lon or zip required' });
-
-  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
-  const cached = _forecastCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < FORECAST_TTL) {
-    res.set('Cache-Control', 'public, max-age=900');
-    return res.json(cached.data);
-  }
-
-  try {
-    const omUrl = 'https://api.open-meteo.com/v1/forecast'
-      + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
-      + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
-      + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,'
-      + 'precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,'
-      + 'wind_gusts_10m,surface_pressure,visibility,is_day'
-      + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,'
-      + 'weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
-      + 'visibility,cape,lifted_index,freezing_level_height,snowfall,snow_depth,'
-      + 'uv_index,is_day,relative_humidity_2m,dew_point_2m'
-      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
-      + 'apparent_temperature_max,apparent_temperature_min,'
-      + 'sunrise,sunset,daylight_duration,uv_index_max,'
-      + 'precipitation_sum,snowfall_sum,precipitation_hours,'
-      + 'precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,'
-      + 'wind_direction_10m_dominant'
-      + '&forecast_days=7';
-
-    const omText = await fetchTextOverHttp(omUrl);
-    const om = JSON.parse(omText);
-    if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
-
-    let nwsNarrative = null;
-    try {
-      const ptsText = await fetchTextOverHttp(
-        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
-        { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-      );
-      const pts = JSON.parse(ptsText);
-      const forecastUrl = pts?.properties?.forecast;
-      if (forecastUrl) {
-        const fText = await fetchTextOverHttp(forecastUrl,
-          { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-        );
-        const f = JSON.parse(fText);
-        nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
-          name: p.name, short: p.shortForecast, detail: p.detailedForecast,
-          isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
-        }));
-      }
-    } catch(e) { /* NWS unavailable outside CONUS — silent fail */ }
-
-    const data = {
-      location: { lat, lon, name: locationName },
-      timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
-      utc_offset_seconds: om.utc_offset_seconds,
-      current: om.current, current_units: om.current_units,
-      hourly: om.hourly, hourly_units: om.hourly_units,
-      daily: om.daily, daily_units: om.daily_units,
-      nws: nwsNarrative, generated_at: Date.now(),
-    };
-
-    _forecastCache.set(cacheKey, { data, ts: Date.now() });
-    if (_forecastCache.size > 30) {
-      const oldest = [..._forecastCache.entries()].sort((a,b)=>a[1].ts-b[1].ts)[0];
-      if (oldest) _forecastCache.delete(oldest[0]);
-    }
-    res.set('Cache-Control', 'public, max-age=900');
-    res.json(data);
-  } catch(e) {
-    console.error('[Forecast] Error:', e.message);
-    res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
-  }
-});
-
 // GET /api/hms-smoke
 // Proxies NOAA OSPO's current HMS smoke KML and converts it to GeoJSON.
 // NOAA does NOT publish a GeoJSON format — only KML, Shapefile, and GeoTiff.
@@ -3134,7 +3035,11 @@ async function websubSubscribe(channelId) {
         statusCode: res.statusCode,
       };
       // Persist expiry so restarts don't re-subscribe still-valid channels
-      if (status === 'active') rSet('wt:ws:' + channelId, String(expiresAt));
+      // Always persist expiry on any 2xx — YouTube hub returns 202 (async verify), not 200
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        rSet('wt:ws:' + channelId, expiresAt);
+        console.log('[WebSub] Lease persisted for ' + channelId + ' (expires in ' + Math.round(WEBSUB_LEASE/86400) + 'd)');
+      }
       console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
       if (status === 'failed') {
         const ch = getAllChannels().find(c => c.id === channelId);
@@ -3207,19 +3112,22 @@ async function subscribeAllChannels() {
   // instead of blocking for 60+ seconds re-subscribing every channel.
   const toSubscribe = [];
   let skipped = 0;
+  console.log(`[WebSub] Redis available: ${!!redis} — checking ${channels.length} subscriptions`);
   for (const ch of channels) {
-    try {
-      const stored = redisClient ? await redisClient.get('wt:ws:' + ch.id) : null;
-      if (stored) {
-        const expiresAt = parseInt(stored, 10);
-        if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
-          // Still valid for >24h — mark as active without hitting the hub
-          websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
-          skipped++;
-          continue;
-        }
+    // rGet handles null redis and all errors — never crashes
+    const stored = await rGet('wt:ws:' + ch.id);
+    if (stored !== null && stored !== undefined) {
+      const expiresAt = typeof stored === 'number' ? stored : parseInt(String(stored), 10);
+      const hoursLeft = Math.round((expiresAt - now) / 3600000);
+      if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
+        // Still valid for >24h — skip re-subscription
+        websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
+        skipped++;
+        continue;
+      } else if (!isNaN(expiresAt)) {
+        console.log(`[WebSub] ${ch.id} expires in ${hoursLeft}h — renewing`);
       }
-    } catch(_) { /* Redis unavailable — subscribe to be safe */ }
+    }
     toSubscribe.push(ch);
   }
 
@@ -3232,12 +3140,30 @@ async function subscribeAllChannels() {
 
   console.log(`[WebSub] Subscribing ${toSubscribe.length}/${channels.length} channels (${skipped} still valid)...`);
 
+  const failed503 = [];
   for (const ch of toSubscribe) {
     try {
-      await websubSubscribe(ch.id);
-      await new Promise(r => setTimeout(r, 500));
+      const code = await websubSubscribe(ch.id);
+      // 503 = hub temporarily unavailable — collect for retry, not a permanent failure
+      // The existing subscription (if any) remains valid on YouTube's side
+      if (code === 503) failed503.push(ch);
+      await new Promise(r => setTimeout(r, 400));
     } catch(e) {
       console.error('[WebSub] Subscribe error for ' + ch.name + ':', e.message);
+    }
+  }
+
+  // Retry 503s once after a 30-second pause (hub usually recovers quickly)
+  if (failed503.length > 0) {
+    console.log(`[WebSub] Retrying ${failed503.length} channels that got 503 in 30s...`);
+    await new Promise(r => setTimeout(r, 30000));
+    for (const ch of failed503) {
+      try {
+        await websubSubscribe(ch.id);
+        await new Promise(r => setTimeout(r, 400));
+      } catch(e) {
+        console.error('[WebSub] Retry error for ' + ch.name + ':', e.message);
+      }
     }
   }
 
