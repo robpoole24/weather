@@ -1367,9 +1367,11 @@ map.on('popupopen', function(e) {
 document.getElementById('btn-mcd').style.display = '';
 updateZoomIndicator();
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-  attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
-  subdomains:'abcd', maxZoom:19
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution:'&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
+  maxZoom:19,
+  zIndex: 1,
+  pane: 'tilePane'
 }).addTo(map);
 
 // ── SMOOTH ANIMATION ENGINE ──────────────────────────────────────────────────
@@ -1381,7 +1383,7 @@ const frameLayers = FRAMES.map((f, idx) => {
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
     {
-      opacity: idx === FRAMES.length - 1 ? 0.72 : 0,
+      opacity: idx === FRAMES.length - 1 ? 0.82 : 0,
       attribution: idx === 0 ? 'Radar: <a href="https://mesonet.agron.iastate.edu/">IEM/NEXRAD</a>' : '',
       tileSize: 256,
       zIndex: 200 + idx,
@@ -1749,7 +1751,7 @@ async function loadSPC() {
       const dn = Number(props.dn) || Number(props.DN) || 0;
       const style = SPC_DN[dn] || SPC_DN[2];
 
-      const layer = L.geoJSON(geom, {
+      const layer = L.geoJSON(feature, {
         style:{
           color: style.border,
           fillColor: style.fill,
@@ -2329,7 +2331,8 @@ function ensureGoes() {
     goesLayer = L.tileLayer.wms(
       'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
       { layers:'conus_ch13', format:'image/png', transparent:true,
-        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
+        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>',
+        bounds: L.latLngBounds(L.latLng(20, -130), L.latLng(55, -60)) });
     // Refresh GOES every 10 minutes so imagery doesn't feel frozen
     setInterval(() => { if (goesLayer && map.hasLayer(goesLayer)) goesLayer.redraw(); }, 10 * 60 * 1000);
   }
@@ -3506,7 +3509,6 @@ function setPaint(member){
     const msg = document.getElementById('site-message');
     if (msg && !overlayState['cc']) msg.textContent = 'Tap a station below or allow location for auto-detection.';
   }
-  saveLayerPrefs(); // persist active base paint
 }
 
 // ══ PRODUCT LEGEND ════════════════════════════════════════════════════════════
@@ -6187,40 +6189,8 @@ const CAM_ITEMS=[
 const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
-
-function lpDefaults(){
-  activePaint='reflectivity';
-  OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def);
-}
-
-function saveLayerPrefs() {
-  try {
-    localStorage.setItem('wtv-overlay-state', JSON.stringify(overlayState));
-    localStorage.setItem('wtv-active-paint', activePaint || 'reflectivity');
-  } catch(e) {}
-}
-
-function restoreLayerPrefs() {
-  try {
-    const savedOverlay = localStorage.getItem('wtv-overlay-state');
-    const savedPaint   = localStorage.getItem('wtv-active-paint');
-    if (savedOverlay) {
-      const parsed = JSON.parse(savedOverlay);
-      // Only restore keys that still exist in OVERLAY_ITEMS — guards against
-      // old keys from removed features persisting and causing errors
-      const validIds = new Set(OVERLAY_ITEMS.map(o => o.id));
-      Object.entries(parsed).forEach(([id, val]) => {
-        if (validIds.has(id)) overlayState[id] = !!val;
-      });
-    }
-    if (savedPaint && ['reflectivity','goes','apptemp'].includes(savedPaint)) {
-      activePaint = savedPaint;
-    }
-  } catch(e) {}
-}
-
+function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
 lpDefaults();
-restoreLayerPrefs();
 
 // Wire camera overlay close button
 document.getElementById('camera-overlay-close').addEventListener('click', closeCameraOverlay);
@@ -6313,14 +6283,12 @@ document.getElementById('layer-panel').addEventListener('click',(e)=>{
   if (kind==='paint'){ togglePaint(id); }
   else { overlayState[id]=!overlayState[id]; applyOverlay(id,overlayState[id]); }
   renderPanel();
-  saveLayerPrefs();
 });
 function resetLayers(){
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,false); });
   lpDefaults(); setPaint('reflectivity');
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
   renderPanel();
-  saveLayerPrefs(); // persist the reset so it survives reload
 }
 (function initModelSelect() {
   const sel = document.getElementById('model-select');
@@ -6345,13 +6313,7 @@ function dismissBeta() {
 
 renderPanel();
 resolveRadarSites(userLat, userLng);
-// Apply restored overlays — overlayState already merged saved prefs in restoreLayerPrefs()
 OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
-// Apply restored base paint (reflectivity is already active by default;
-// only call setPaint again if the user had a different paint saved)
-if (activePaint && activePaint !== 'reflectivity') {
-  setPaint(activePaint);
-}
 
 updateAlertTypeBadge();
 loadAlerts();
