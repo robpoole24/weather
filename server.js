@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-07-09T06:12:19Z build.1780105000
+// WeatherTV Server — updated 2026-09-06T05:17:52Z build.1788671872
 const express = require('express');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
 const crypto = require('crypto');
