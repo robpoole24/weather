@@ -1367,11 +1367,9 @@ map.on('popupopen', function(e) {
 document.getElementById('btn-mcd').style.display = '';
 updateZoomIndicator();
 
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution:'&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
-  maxZoom:19,
-  zIndex: 1,
-  pane: 'tilePane'
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  attribution:'&copy; <a href="https://carto.com/">CartoDB</a> &copy; <a href="https://openstreetmap.org">OSM</a>',
+  subdomains:'abcd', maxZoom:19
 }).addTo(map);
 
 // ── SMOOTH ANIMATION ENGINE ──────────────────────────────────────────────────
@@ -1383,7 +1381,7 @@ const frameLayers = FRAMES.map((f, idx) => {
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
     {
-      opacity: idx === FRAMES.length - 1 ? 0.82 : 0,
+      opacity: idx === FRAMES.length - 1 ? 0.72 : 0,
       attribution: idx === 0 ? 'Radar: <a href="https://mesonet.agron.iastate.edu/">IEM/NEXRAD</a>' : '',
       tileSize: 256,
       zIndex: 200 + idx,
@@ -1751,7 +1749,7 @@ async function loadSPC() {
       const dn = Number(props.dn) || Number(props.DN) || 0;
       const style = SPC_DN[dn] || SPC_DN[2];
 
-      const layer = L.geoJSON(feature, {
+      const layer = L.geoJSON(geom, {
         style:{
           color: style.border,
           fillColor: style.fill,
@@ -2105,7 +2103,6 @@ async function renderAlertLayers() {
                   || (userCounty && ugc.includes(userCounty));
       if (inPoly || inZone) {
         activeBannerAlerts.push({
-          id: props.id || (event + (props.onset||'')),
           event,
           headline: props.headline || '',
           areaDesc: props.areaDesc || '',
@@ -2133,7 +2130,6 @@ async function renderAlertLayers() {
     showBanner(activeBannerAlerts);
   } else if (activeBannerAlerts.length === 0) {
     bannerDismissed = false; // reset dismiss if alerts cleared
-    dismissedAlertIds.clear(); // clear per-alert dismissals too
     hideBanner();
   }
 
@@ -2220,38 +2216,27 @@ const ALERT_PRIORITY = [
 
 let bannerDismissed = false;
 let activeBannerAlerts = [];
-// Track which specific alert IDs the user dismissed — not a blanket flag.
-// This way new alerts during an outbreak still fire the banner even after
-// the user dismisses the previous one.
-const dismissedAlertIds = new Set();
 
 function dismissBanner() {
-  // Dismiss all currently active banner alerts by ID
-  activeBannerAlerts.forEach(a => {
-    if (a.id) dismissedAlertIds.add(a.id);
-  });
   bannerDismissed = true;
   document.getElementById('warning-banner').style.display = 'none';
   document.getElementById('map').classList.remove('banner-visible');
 }
 
 function showBanner(alerts) {
-  // Filter out individually dismissed alerts — new alerts still show
-  const undismissed = alerts.filter(a => !a.id || !dismissedAlertIds.has(a.id));
-  if (!undismissed.length) return;
-  const alerts_to_show = undismissed;
+  if (bannerDismissed || !alerts.length) return;
   const banner = document.getElementById('warning-banner');
   const scrollText = document.getElementById('warning-scroll-text');
   const icon = document.getElementById('warning-icon');
 
   // Sort by priority
-  alerts_to_show.sort((a, b) => {
+  alerts.sort((a, b) => {
     const ai = ALERT_PRIORITY.indexOf(a.event);
     const bi = ALERT_PRIORITY.indexOf(b.event);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   });
 
-  const top = alerts_to_show[0];
+  const top = alerts[0];
   const s = ALERT_STYLE[top.event] || DEFAULT_STYLE;
 
   // Set banner color
@@ -2273,7 +2258,7 @@ function showBanner(alerts) {
 
   // Build ticker text — all active alerts for user's area, separated by bullets
   // Each item: EVENT TYPE · First affected county/zone — NWS headline
-  const parts = alerts_to_show.map(a => {
+  const parts = alerts.map(a => {
     const headline = a.headline || a.event;
     const area = a.areaDesc ? ` · ${a.areaDesc.split(';')[0].trim()}` : '';
     return `${a.event.toUpperCase()}${area} — ${headline}`;
@@ -2344,8 +2329,7 @@ function ensureGoes() {
     goesLayer = L.tileLayer.wms(
       'https://mesonet.agron.iastate.edu/cgi-bin/wms/goes_east.cgi',
       { layers:'conus_ch13', format:'image/png', transparent:true,
-        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>',
-        bounds: L.latLngBounds(L.latLng(20, -130), L.latLng(55, -60)) });
+        opacity:0.85, zIndex:90, attribution:'Satellite: <a href="https://mesonet.agron.iastate.edu/">IEM/GOES</a>' });
     // Refresh GOES every 10 minutes so imagery doesn't feel frozen
     setInterval(() => { if (goesLayer && map.hasLayer(goesLayer)) goesLayer.redraw(); }, 10 * 60 * 1000);
   }
@@ -3082,8 +3066,13 @@ function closeCameraOverlay() {
 // Close button wired after DOM ready (see init block below)
 
 let ccLayer=null;
+let _ccActiveSite=null; // track which site CC is currently showing
+let _ccZoomTimer=null;  // debounce zoom-triggered rebuilds
+
 function clearCC(){
   if (ccLayer){ map.removeLayer(ccLayer); ccLayer=null; }
+  _ccActiveSite=null;
+  clearTimeout(_ccZoomTimer);
   hideProductLegend();
   document.getElementById('map').classList.remove('cc-click-mode');
   // Only hide the site picker if Velocity/SRV/Echo Tops aren't also using
@@ -3093,7 +3082,6 @@ function clearCC(){
   }
 }
 function showCC(){
-  clearCC();
   document.getElementById('map').classList.add('cc-click-mode');
   // CC is a toggle independent of activePaint, so unlike the old
   // setPaint-driven version this needs to resolve a site itself rather
@@ -3107,11 +3095,28 @@ function showCC(){
   // Require zoom 6+ for a useful view.
   if (map.getZoom() < 6) {
     setStatus('Zoom in to view Correlation Coefficient');
-    map.once('zoomend', () => { if (overlayState['cc']) showCC(); });
+    // Debounced zoom listener — prevent rapid add/remove if user is pinch-zooming
+    clearTimeout(_ccZoomTimer);
+    map.once('zoomend', () => {
+      _ccZoomTimer = setTimeout(() => {
+        if (overlayState['cc']) showCC();
+      }, 300);
+    });
     return;
   }
+  // Guard: if CC is already showing for this exact site, don't rebuild the
+  // tile layer — just leave it. This prevents the rapid flash caused by
+  // showCC() being called multiple times in quick succession (from zoom
+  // events, site resolution callbacks, and overlay state checks).
+  if (ccLayer && _ccActiveSite === currentSite) return;
+
+  // Site changed or layer was cleared — rebuild
+  if (ccLayer) { map.removeLayer(ccLayer); ccLayer=null; }
+  _ccActiveSite = currentSite;
   ccLayer = L.tileLayer(`${WXTILES_BASE}/tiles/cc/${currentSite}/{z}/{x}/{y}.png`,
-    { opacity:0.82, zIndex:255, tileSize:256, crossOrigin:true, attribution:'CC: NEXRAD L2 / Py-ART' }).addTo(map);
+    { opacity:0.82, zIndex:255, tileSize:256, crossOrigin:true,
+      updateWhenIdle:true, updateWhenZooming:false,
+      attribution:'CC: NEXRAD L2 / Py-ART' }).addTo(map);
 }
 
 // Click-to-set-site for CC: instead of hunting a 150+ entry station
@@ -3710,7 +3715,7 @@ async function resolveRadarSites(lat,lng, autoActivate=false){
 function onSiteChange(id){
   currentSite = id;
   if (activePaint in SS_PRODUCTS) showSS(activePaint);
-  if (overlayState['cc']) showCC(); // independent of activePaint — both can update on the same site change
+  if (overlayState['cc'] && currentSite !== _ccActiveSite) showCC(); // rebuild only if site changed
 }
 
 let ltgSocket=null, ltgLayer=null, ltgMarkers=[];
@@ -4966,22 +4971,6 @@ function windDisplayShort(kt) {
 document.addEventListener('DOMContentLoaded', () => {
   const btn = document.getElementById('btn-units');
   if (btn) btn.textContent = WIND_UNITS[_windUnitIdx];
-
-  // Deep-link from push notification: ?lat=XX&lng=YY&zoom=9
-  // When a user taps a weather alert notification, we send them here
-  // with their coords so the map snaps to their location at a useful zoom.
-  const params = new URLSearchParams(window.location.search);
-  const dlLat  = parseFloat(params.get('lat'));
-  const dlLng  = parseFloat(params.get('lng'));
-  const dlZoom = parseInt(params.get('zoom')) || 9;
-  if (isFinite(dlLat) && isFinite(dlLng)) {
-    // Wait for map to finish initializing then fly to location
-    setTimeout(() => {
-      map.flyTo([dlLat, dlLng], dlZoom, { duration: 1.2 });
-      // Clean up URL so refreshing doesn't re-trigger the fly
-      history.replaceState(null, '', window.location.pathname);
-    }, 800);
-  }
 });
 
 function nhcCatColor(ssnum, tcdvlp) {
