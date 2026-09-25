@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-25 build.1790391600 -->
+<!-- WeatherTV Admin — updated 2026-09-25 build.1790395200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -278,6 +278,18 @@
           <button class="btn btn-ghost btn-sm" onclick="document.getElementById('add-group-form').classList.remove('open')">Cancel</button>
         </div>
       </div>
+
+      <!-- Channel ID Validator -->
+      <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Channel ID Validator</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Verify a channel ID resolves to a real YouTube channel before adding it. Costs 1 quota unit.</div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input id="validate-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
+          <button class="btn btn-primary btn-sm" onclick="validateChannel()">Validate</button>
+        </div>
+        <div id="validate-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
+      </div>
+
     </div>
   </div>
 
@@ -577,16 +589,19 @@
     </div>
   </div>
 
-  <!-- Live Verifier -->
+  <!-- Live Detection — verifier dashboard + live lookup/override tools -->
   <div class="section">
     <div class="section-header">
-      <div class="section-title">🛰️ Live Verifier</div>
+      <div class="section-title">🛰️ Live Detection</div>
       <div style="display:flex;gap:0.5rem;align-items:center;">
         <a href="/admin/live-verifier" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Full Report ↗</a>
         <button class="btn btn-primary btn-sm" id="lv-run-btn" onclick="runLiveVerifier()">Run Now</button>
       </div>
     </div>
     <div class="section-body">
+      <!-- Live Verifier dashboard -->
+      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
+      <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Live Verifier</div>
       <div id="lv-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
       <div id="lv-pills" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:1rem"></div>
       <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.4rem">Streams WebSub Missed</div>
@@ -603,6 +618,46 @@
           <tbody id="lv-runs"></tbody>
         </table>
       </div>
+      </div>
+
+      <!-- Live Stream Lookup — free verifier check first, API lookup as fallback -->
+      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Live Stream Lookup</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem"><strong style="color:var(--green)">Check</strong> and <strong style="color:var(--green)">Check &amp; Sync</strong> read the channel's YouTube /live page directly — <strong style="color:var(--green)">zero quota</strong>. Sync marks the channel live or offline in WeatherTV to match. <strong style="color:var(--gold)">API Lookup costs 100 units</strong> — only use it if the free check reports blocked/throttled.</div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input id="lookup-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
+          <button class="btn btn-primary btn-sm" onclick="verifierLookup(false)">Check</button>
+          <button class="btn btn-primary btn-sm" onclick="verifierLookup(true)">Check &amp; Sync</button>
+          <button id="lookup-check-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(false)">API Lookup (100u)</button>
+          <button id="lookup-mark-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(true)">API Lookup &amp; Mark Live</button>
+        </div>
+        <div id="lookup-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
+      </div>
+
+      <!-- Mark Live Manually (zero quota cost) -->
+      <div>
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Mark Channel Live Manually</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Zero quota cost — directly sets a channel's live status. Manual override for when Check &amp; Sync above can't see the stream (e.g. YouTube blocked the check, or a channel is streaming on a second concurrent stream). Get the video ID from the YouTube URL: <code style="font-size:0.75rem;color:var(--accent)">youtube.com/watch?v=<strong>VIDEO_ID</strong></code></div>
+
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.8rem;color:var(--text);margin-bottom:0.6rem;cursor:pointer;">
+          <input type="checkbox" id="marklive-use-existing" checked onchange="toggleMarkLiveChannelInput()">
+          Channel already in our lists
+        </label>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;">
+          <select id="marklive-channel-select" style="font-size:0.82rem;">
+            <option value="">— Select a channel —</option>
+          </select>
+          <input id="marklive-channel-input" type="text" placeholder="Channel ID (UCxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;display:none;">
+          <input id="marklive-video-input" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="manualMarkLive()">✓ Mark Live (0 units)</button>
+          <button class="btn btn-ghost btn-sm" onclick="manualMarkOffline()">✗ Mark Offline (0 units)</button>
+        </div>
+        <div id="marklive-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
+      </div>
+
     </div>
   </div>
 
@@ -689,62 +744,6 @@
           style="width:100%;padding:0.4rem 0.6rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.82rem;">
       </div>
       <div id="cache-view-body" style="font-size:0.8rem;"></div>
-    </div>
-  </div>
-
-  <!-- Channel Tools -->
-  <div class="section">
-    <div class="section-header"><div class="section-title">🔧 Channel Tools</div></div>
-    <div class="section-body">
-
-      <!-- Mark Live Manually (zero quota cost) -->
-      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Mark Channel Live Manually</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Zero quota cost — directly sets a channel's live status. Use when you know a stream is live but notifications missed it. Get the video ID from the YouTube URL: <code style="font-size:0.75rem;color:var(--accent)">youtube.com/watch?v=<strong>VIDEO_ID</strong></code></div>
-
-        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.8rem;color:var(--text);margin-bottom:0.6rem;cursor:pointer;">
-          <input type="checkbox" id="marklive-use-existing" checked onchange="toggleMarkLiveChannelInput()">
-          Channel already in our lists
-        </label>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem;">
-          <select id="marklive-channel-select" style="font-size:0.82rem;">
-            <option value="">— Select a channel —</option>
-          </select>
-          <input id="marklive-channel-input" type="text" placeholder="Channel ID (UCxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;display:none;">
-          <input id="marklive-video-input" type="text" placeholder="Video ID (xxxxxxxxxxx)" style="font-family:monospace;font-size:0.82rem;">
-        </div>
-        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" onclick="manualMarkLive()">✓ Mark Live (0 units)</button>
-          <button class="btn btn-ghost btn-sm" onclick="manualMarkOffline()">✗ Mark Offline (0 units)</button>
-        </div>
-        <div id="marklive-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
-      </div>
-
-      <!-- Channel ID Validator -->
-      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Channel ID Validator</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Verify a channel ID resolves to a real YouTube channel before adding it. Costs 1 quota unit.</div>
-        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <input id="validate-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
-          <button class="btn btn-primary btn-sm" onclick="validateChannel()">Validate</button>
-        </div>
-        <div id="validate-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
-      </div>
-
-      <!-- Live Stream Lookup — free verifier check first, API lookup as fallback -->
-      <div>
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Live Stream Lookup</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem"><strong style="color:var(--green)">Check</strong> and <strong style="color:var(--green)">Check &amp; Sync</strong> read the channel's YouTube /live page directly — <strong style="color:var(--green)">zero quota</strong>. Sync marks the channel live or offline in WeatherTV to match. <strong style="color:var(--gold)">API Lookup costs 100 units</strong> — only use it if the free check reports blocked/throttled.</div>
-        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <input id="lookup-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
-          <button class="btn btn-primary btn-sm" onclick="verifierLookup(false)">Check</button>
-          <button class="btn btn-primary btn-sm" onclick="verifierLookup(true)">Check &amp; Sync</button>
-          <button id="lookup-check-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(false)">API Lookup (100u)</button>
-          <button id="lookup-mark-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(true)">API Lookup &amp; Mark Live</button>
-        </div>
-        <div id="lookup-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
-      </div>
     </div>
   </div>
 
