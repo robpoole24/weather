@@ -1,4 +1,4 @@
-// WeatherTV Live Verifier — build.1790388000
+// WeatherTV Live Verifier — build.1790391600
 // Zero-quota secondary live check: loads youtube.com/channel/{id}/live directly
 // and reads the page's own player data to confirm whether the channel is live NOW.
 // Tracks every run + every stream the primary (WebSub/Atom) system missed, and
@@ -104,7 +104,7 @@ function createLiveVerifier({
   let runs = [];
   let streams = {};     // videoId -> { channelId, name, title, firstSeen, lastSeen, caughtByPrimary }
   let names = {};
-  let pausedUntil = 0, running = false, timer = null, lastStartedAt = null, loaded = false;
+  let pausedUntil = 0, running = false, timer = null, lastStartedAt = null, loaded = false, started = false;
 
   async function load() {
     if (loaded || !store) { loaded = true; return; }
@@ -220,11 +220,13 @@ function createLiveVerifier({
   }
 
   function snapshot() {
+    const lastRun = lastStartedAt || (runs[0] && runs[0].startedAt) || null; // survives restarts via Redis
     return {
+      enabled: started,
       running,
       paused: Date.now() < pausedUntil ? new Date(pausedUntil).toISOString() : null,
-      lastStartedAt,
-      nextRunAt: lastStartedAt ? new Date(Date.parse(lastStartedAt) + sweepIntervalMs).toISOString() : null,
+      lastStartedAt: lastRun,
+      nextRunAt: started && lastRun ? new Date(Date.parse(lastRun) + sweepIntervalMs).toISOString() : null,
       intervalMin: sweepIntervalMs / 60000,
       stats: stats(),
       recentMisses: Object.entries(streams).filter(([, s]) => !s.caughtByPrimary)
@@ -239,12 +241,30 @@ function createLiveVerifier({
     app.get(`${base}/data`, async (req, res) => { await load(); res.json(snapshot()); });
     app.post(`${base}/run`, (req, res) => { sweep('manual'); res.json({ started: true }); });
     app.get(`${base}/check/:channelId`, async (req, res) => res.json(await checkChannelLive(req.params.channelId)));
+    // Check one channel AND update WTV's live status to match (free — no API quota)
+    app.post(`${base}/check/:channelId/apply`, async (req, res) => {
+      const id = req.params.channelId;
+      const r = await checkChannelLive(id);
+      let applied = null;
+      try {
+        if (r.status === 'live') {
+          const known = isKnownLive ? !!(await isKnownLive(id, r.videoId)) : true;
+          await onLive({ ...r, wasKnown: known });
+          applied = known ? 'already-live' : 'marked-live';
+        } else if (r.status === 'offline' || r.status === 'upcoming') {
+          const known = isKnownLive ? !!(await isKnownLive(id)) : false;
+          if (known) { await onOffline(id); applied = 'marked-offline'; } else applied = 'already-offline';
+        }
+      } catch (e) { return res.status(500).json({ ...r, error: e.message }); }
+      res.json({ ...r, applied });
+    });
     app.get(base, (req, res) => res.type('html').send(ADMIN_HTML.replace(/__BASE__/g, base)));
   }
 
   return {
     start() {
       if (typeof fetch !== 'function') { log('Node 18+ required (no global fetch) — verifier NOT started'); return; }
+      started = true;
       sweep('startup'); timer = setInterval(() => sweep('timer'), sweepIntervalMs); },
     stop() { clearInterval(timer); },
     sweep, snapshot, mountAdmin, checkOne: checkChannelLive,

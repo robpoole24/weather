@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-05-28 build.1779973327 -->
+<!-- WeatherTV Admin — updated 2026-09-25 build.1790391600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -577,6 +577,35 @@
     </div>
   </div>
 
+  <!-- Live Verifier -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">🛰️ Live Verifier</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <a href="/admin/live-verifier" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:none">Full Report ↗</a>
+        <button class="btn btn-primary btn-sm" id="lv-run-btn" onclick="runLiveVerifier()">Run Now</button>
+      </div>
+    </div>
+    <div class="section-body">
+      <div id="lv-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Loading...</div>
+      <div id="lv-pills" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:1rem"></div>
+      <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.4rem">Streams WebSub Missed</div>
+      <div style="overflow-x:auto;margin-bottom:1rem;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+          <thead><tr style="background:var(--surface2);"><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Found</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Channel</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Stream</th></tr></thead>
+          <tbody id="lv-misses"></tbody>
+        </table>
+      </div>
+      <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.4rem">Recent Runs</div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+          <thead><tr style="background:var(--surface2);"><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Started</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Took</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Checked</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Live</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Missed</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Stale Cleared</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Errors</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">MB</th></tr></thead>
+          <tbody id="lv-runs"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- WebSub Health -->
   <div class="section">
     <div class="section-header">
@@ -703,14 +732,16 @@
         <div id="validate-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
       </div>
 
-      <!-- Live Stream Lookup (costs 100 units) -->
+      <!-- Live Stream Lookup — free verifier check first, API lookup as fallback -->
       <div>
         <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Live Stream Lookup</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Check if a channel is currently live via the YouTube API. <strong style="color:var(--gold)">Costs 100 quota units.</strong> Only use when you don't know the video ID. Disabled when quota is exceeded.</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem"><strong style="color:var(--green)">Check</strong> and <strong style="color:var(--green)">Check &amp; Sync</strong> read the channel's YouTube /live page directly — <strong style="color:var(--green)">zero quota</strong>. Sync marks the channel live or offline in WeatherTV to match. <strong style="color:var(--gold)">API Lookup costs 100 units</strong> — only use it if the free check reports blocked/throttled.</div>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
           <input id="lookup-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
-          <button id="lookup-check-btn" class="btn btn-primary btn-sm" onclick="lookupLive(false)">Check Only</button>
-          <button id="lookup-mark-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(true)">Check &amp; Mark Live</button>
+          <button class="btn btn-primary btn-sm" onclick="verifierLookup(false)">Check</button>
+          <button class="btn btn-primary btn-sm" onclick="verifierLookup(true)">Check &amp; Sync</button>
+          <button id="lookup-check-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(false)">API Lookup (100u)</button>
+          <button id="lookup-mark-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(true)">API Lookup &amp; Mark Live</button>
         </div>
         <div id="lookup-result" style="margin-top:0.75rem;font-family:'Barlow Condensed',sans-serif;font-size:0.82rem;display:none;"></div>
       </div>
@@ -2883,6 +2914,108 @@ async function manualMarkOffline() {
   } catch(e) { resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>'; }
 }
 
+// ── Live Verifier panel ──────────────────────────────────────────────────────
+function lvEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const LV_TD = 'padding:0.35rem 0.75rem;';
+
+async function loadLiveVerifier() {
+  const statusEl = document.getElementById('lv-status');
+  try {
+    const res = await fetch('/admin/live-verifier/data');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    const s = d.stats;
+
+    let status;
+    if (!d.enabled) status = '<span style="color:var(--gold)">⚠ Not running — set LIVE_VERIFIER=true in Railway</span>';
+    else if (d.paused) status = '<span style="color:var(--red)">⏸ Paused — YouTube throttled us until ' + fmtTs(d.paused) + '</span>';
+    else if (d.running) status = '<span style="color:var(--accent)">● Sweep in progress</span>';
+    else status = '<span style="color:var(--green)">● Active</span>';
+    statusEl.innerHTML = status + ' · Last run ' + fmtTs(d.lastStartedAt) +
+      (d.nextRunAt ? ' · Next ' + fmtTs(d.nextRunAt) : '') + ' · Every ' + d.intervalMin + ' min';
+
+    const rateColor = r => r == null ? 'var(--muted)' : r > 10 ? 'var(--red)' : r > 0 ? 'var(--gold)' : 'var(--green)';
+    const rateTxt = (k) => (s[k].missRate == null ? '—' : s[k].missRate + '%') + ' missed ' + k + ' (' + s[k].missed + '/' + s[k].streams + ')';
+    document.getElementById('lv-pills').innerHTML = [
+      pill(rateTxt('24h'), rateColor(s['24h'].missRate)),
+      pill(rateTxt('7d'),  rateColor(s['7d'].missRate)),
+      pill(rateTxt('30d'), rateColor(s['30d'].missRate)),
+      pill(s.stale24h + ' Stale Cleared 24h', s.stale24h > 0 ? 'var(--gold)' : 'var(--green)'),
+      pill(s.mb24h + ' MB 24h', 'var(--muted)'),
+    ].join('');
+
+    document.getElementById('lv-misses').innerHTML = d.recentMisses.slice(0, 10).map(m =>
+      '<tr style="border-bottom:1px solid var(--border)">' +
+      '<td style="' + LV_TD + 'color:var(--muted);white-space:nowrap">' + fmtTs(m.firstSeen) + '</td>' +
+      '<td style="' + LV_TD + '">' + lvEsc(m.name) + '</td>' +
+      '<td style="' + LV_TD + '"><a href="https://youtu.be/' + lvEsc(m.videoId) + '" target="_blank" style="color:var(--accent)">' + lvEsc(m.title || m.videoId) + '</a></td></tr>'
+    ).join('') || '<tr><td colspan="3" style="' + LV_TD + 'color:var(--muted)">None yet</td></tr>';
+
+    document.getElementById('lv-runs').innerHTML = d.runs.slice(0, 10).map(r => {
+      const errTitle = r.errorChannels && r.errorChannels.length ? ' title="' + lvEsc(r.errorChannels.map(e => e.name + ': ' + e.error).join('\n')) + '"' : '';
+      return '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="' + LV_TD + 'color:var(--muted);white-space:nowrap">' + fmtTs(r.startedAt) + (r.trigger !== 'timer' ? ' (' + lvEsc(r.trigger) + ')' : '') + '</td>' +
+        '<td style="' + LV_TD + '">' + r.durationSec + 's</td>' +
+        '<td style="' + LV_TD + '">' + r.checked + '</td>' +
+        '<td style="' + LV_TD + '">' + r.live + '</td>' +
+        '<td style="' + LV_TD + 'font-weight:700;color:' + (r.missed.length ? 'var(--red)' : 'var(--muted)') + '">' + r.missed.length + '</td>' +
+        '<td style="' + LV_TD + 'color:' + (r.staleCleared.length ? 'var(--gold)' : 'var(--muted)') + '">' + r.staleCleared.length + '</td>' +
+        '<td style="' + LV_TD + 'color:' + (r.errors || r.throttled ? 'var(--gold)' : 'var(--muted)') + '"' + errTitle + '>' + r.errors + (r.throttled ? ' ⚠ throttled' : '') + '</td>' +
+        '<td style="' + LV_TD + 'color:var(--muted)">' + (r.bytes / 1048576).toFixed(1) + '</td></tr>';
+    }).join('') || '<tr><td colspan="8" style="' + LV_TD + 'color:var(--muted)">No runs yet</td></tr>';
+  } catch (e) {
+    statusEl.innerHTML = '<span style="color:var(--red)">✗ Could not load verifier data — is the new server.js deployed?</span>';
+  }
+}
+
+async function runLiveVerifier() {
+  const btn = document.getElementById('lv-run-btn');
+  btn.disabled = true; btn.textContent = 'Running…';
+  try {
+    await fetch('/admin/live-verifier/run', { method: 'POST' });
+    showToast('Live Verifier sweep started — results in ~1–2 min');
+    setTimeout(loadLiveVerifier, 1500);
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Run Now'; loadLiveVerifier(); }, 90000);
+  } catch (e) {
+    showToast('⚠ Could not start sweep');
+    btn.disabled = false; btn.textContent = 'Run Now';
+  }
+}
+
+// Free single-channel check via the verifier; sync=true also updates WTV's live status
+async function verifierLookup(sync) {
+  const channelId = document.getElementById('lookup-input').value.trim();
+  const resultEl = document.getElementById('lookup-result');
+  if (!channelId) return;
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Checking /live page (0 units)...</span>';
+  try {
+    const url = '/admin/live-verifier/check/' + encodeURIComponent(channelId) + (sync ? '/apply' : '');
+    const res = await fetch(url, { method: sync ? 'POST' : 'GET' });
+    const r = await res.json();
+    const watch = r.videoId ? ' · <a href="https://youtu.be/' + lvEsc(r.videoId) + '" target="_blank" style="color:var(--accent)">Watch</a>' : '';
+    const appliedTxt = {
+      'marked-live':     ' · <span style="color:var(--green)">✓ Marked live in WeatherTV (was missing)</span>',
+      'already-live':    ' · <span style="color:var(--muted)">WeatherTV already showing it</span>',
+      'marked-offline':  ' · <span style="color:var(--green)">✓ Cleared stale live status in WeatherTV</span>',
+      'already-offline': ' · <span style="color:var(--muted)">WeatherTV already shows offline</span>',
+    }[r.applied] || '';
+    if (r.status === 'live') {
+      resultEl.innerHTML = '<span style="color:var(--red)">● LIVE</span> — ' + lvEsc(r.title || 'Untitled stream') + watch + appliedTxt;
+    } else if (r.status === 'upcoming') {
+      resultEl.innerHTML = '<span style="color:var(--gold)">◷ Scheduled / waiting room</span> — ' + lvEsc(r.title || '') + watch + ' · not live yet' + appliedTxt;
+    } else if (r.status === 'offline') {
+      resultEl.innerHTML = '<span style="color:var(--muted)">Not currently live</span>' + appliedTxt;
+    } else if (r.status === 'throttled' || r.status === 'blocked') {
+      resultEl.innerHTML = '<span style="color:var(--red)">⚠ YouTube ' + r.status + ' the free check</span> — use API Lookup (100 units) instead';
+    } else {
+      resultEl.innerHTML = '<span style="color:var(--red)">✗ Check failed: ' + lvEsc(r.error || r.code || 'unknown') + '</span>';
+    }
+  } catch (e) {
+    resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed — is the new server.js deployed?</span>';
+  }
+}
+
 // Live stream lookup — disable when quota exceeded
 async function lookupLive(markLive) {
   const channelId = document.getElementById('lookup-input').value.trim();
@@ -2957,9 +3090,11 @@ setInterval(refreshChaserData, 90000);
 loadSystemHealth();
 loadWebSubHealth();
 loadFetchErrors();
+loadLiveVerifier();
 setInterval(loadSystemHealth, 60000);
 setInterval(loadWebSubHealth, 120000);
 setInterval(loadFetchErrors, 60000);
+setInterval(loadLiveVerifier, 60000);
 </script>
 </body>
 </html>
