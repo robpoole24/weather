@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-06T05:40:56Z build.1788673256
+// WeatherTV Server — updated 2026-09-25T18:00:00Z build.1790388000
 const express = require('express');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
 const crypto = require('crypto');
@@ -7,6 +7,7 @@ const path = require('path');
 const radar = require('./radar');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
+const { createLiveVerifier } = require('./live-verifier');
 
 // Load .env file if present
 const envPath = path.join(__dirname, '.env');
@@ -3169,11 +3170,51 @@ async function websubSubscribe(channelId) {
   });
 }
 
+// ── Live Verifier — zero-quota secondary live check ──────────────────────────
+// Loads youtube.com/channel/{id}/live directly to confirm live status, catching
+// streams WebSub misses and clearing stale lives. Uses getLiveChannels(), so it
+// follows the same hasLive flag and overnight quiet hours as the rest of live
+// detection. Admin page: /admin/live-verifier (behind adminAuth via app.use('/admin')).
+// Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 4).
+const liveVerifier = createLiveVerifier({
+  getChannels: async () => getLiveChannels().map(ch => ({ id: ch.id, name: ch.name })),
+  // "Known" = WTV is already showing THIS stream (same videoId when both are known)
+  isKnownLive: async (channelId, videoId) => {
+    const s = cache.liveStatuses[channelId];
+    return !!(s && s.isLive && (!videoId || !s.videoId || s.videoId === videoId));
+  },
+  onLive: async (r) => {
+    const entry = { isLive: true, videoId: r.videoId, checkedAt: Date.now(), source: r.wasKnown ? (cache.liveStatuses[r.channelId]?.source || 'verifier') : 'verifier' };
+    cache.liveStatuses[r.channelId] = entry;   // refreshing checkedAt keeps 12h auto-expiry from killing long streams
+    cache.lastLiveCheck = Date.now();
+    rSet('wt:live:' + r.channelId, entry, REDIS_TTL.liveStatus);
+    rSet('wt:lastLive', cache.lastLiveCheck);
+    if (!r.wasKnown) {
+      updateChannelActivity(r.channelId, { lastLiveDate: Date.now() });
+      console.log('[LiveVerifier] LIVE (missed by WebSub): ' + r.channelId + ' video: ' + r.videoId);
+    }
+  },
+  onOffline: async (channelId) => {
+    const entry = { isLive: false, videoId: null, checkedAt: Date.now(), source: 'verifier' };
+    cache.liveStatuses[channelId] = entry;
+    rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+    console.log('[LiveVerifier] OFFLINE (stale live cleared): ' + channelId);
+  },
+  store: { get: rGet, set: rSet },
+  sweepIntervalMs: (Number(process.env.LIVE_VERIFIER_INTERVAL_MIN) || 4) * 60 * 1000,
+});
+liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data, /run, /check/:channelId
+
 // ── Startup sequence ──
 // Restore app data and cache from Redis first
 (async () => {
   await restoreAppDataFromRedis();  // groups, channels, collections
   await restoreCacheFromRedis();    // video cache, live statuses
+
+  // Start verifier only after live statuses are restored — otherwise run #1
+  // would count every already-live channel as a WebSub miss
+  if (process.env.LIVE_VERIFIER === 'true') liveVerifier.start();
+  else console.log('[LiveVerifier] Disabled (set LIVE_VERIFIER=true to enable)');
 
   // Check if today's scheduled fetch was missed
   // Compare dates not just timestamps to prevent double-fetching on same day
