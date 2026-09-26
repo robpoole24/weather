@@ -1,4 +1,4 @@
-// WeatherTV Live Verifier — build.1790463600
+// WeatherTV Live Verifier — build.1790467200
 // Zero-quota secondary live check: loads youtube.com/channel/{id}/live directly
 // and reads the page's own player data to confirm whether the channel is live NOW.
 // Tracks every run + every stream the primary (WebSub/Atom) system missed, and
@@ -34,11 +34,18 @@ function findVideoId(html) {
 
 // Stop reading once the answer is known. Watch page: once the player response is in.
 // Channel page: as soon as its canonical/og:url identifies it (no reliance on </head>).
-function haveEnough(html) {
-  if (findVideoId(html)) {
-    return html.includes('"isLiveNow":') || html.includes('"playabilityStatus"') && html.includes('var ytInitialData');
-  }
-  return CHANNEL_PAGE.test(html);
+// Scans ONLY the newly-arrived text each chunk (plus a small overlap), not the whole page
+// again — rescanning the growing page every chunk was quadratic CPU.
+function scanChunk(st, text) {
+  if (!st.videoId && findVideoId(text)) st.videoId = true;
+  if (!st.channelPage && CHANNEL_PAGE.test(text)) st.channelPage = true;
+  if (!st.liveNowKey && text.includes('"isLiveNow":')) st.liveNowKey = true;
+  if (!st.playability && text.includes('"playabilityStatus"')) st.playability = true;
+  if (!st.initialData && text.includes('var ytInitialData')) st.initialData = true;
+}
+function haveEnough(st) {
+  if (st.videoId) return st.liveNowKey || (st.playability && st.initialData);
+  return st.channelPage;
 }
 
 async function fetchLivePage(channelId, timeoutMs, { full = false } = {}) {
@@ -51,13 +58,15 @@ async function fetchLivePage(channelId, timeoutMs, { full = false } = {}) {
     if (!res.ok) { res.body?.cancel?.().catch(() => {}); return { code: res.status, bytes: 0, finalUrl: res.url }; }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let html = '', bytes = 0, stoppedEarly = false;
+    let html = '', bytes = 0, stoppedEarly = false, scanned = 0;
+    const st = {};
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.length;
       html += dec.decode(value, { stream: true });
-      if (bytes > MAX_BYTES || (!full && haveEnough(html))) { stoppedEarly = true; reader.cancel().catch(() => {}); break; }
+      if (!full) { scanChunk(st, html.slice(Math.max(0, scanned - 400))); scanned = html.length; }
+      if (bytes > MAX_BYTES || (!full && haveEnough(st))) { stoppedEarly = true; reader.cancel().catch(() => {}); break; }
     }
     return { code: 200, html, bytes, finalUrl: res.url, stoppedEarly };
   } finally {
@@ -107,8 +116,15 @@ async function diagnoseChannel(channelId) {
     const { code, html = '', bytes, finalUrl } = await fetchLivePage(channelId, 15000, { full: true });
     const has = (re) => (typeof re === 'string' ? html.includes(re) : re.test(html));
     const snip = (needle, len = 160) => { const i = html.indexOf(needle); return i < 0 ? null : html.slice(i, i + len); };
+    // Where each marker first appears (KB into the page) — tells us how early we can stop reading
+    const at = (needle) => { const i = html.indexOf(needle); return i < 0 ? null : +(i / 1024).toFixed(1); };
+    const offsetsKB = {
+      canonical: at('rel="canonical"'), ogUrl: at('property="og:url"'), shortlink: at('rel="shortlinkUrl"'),
+      headClose: at('</head>'), body: at('<body'), playerResponse: at('ytInitialPlayerResponse'),
+      videoDetails: at('"videoDetails"'), isLiveNow: at('"isLiveNow"'), initialData: at('ytInitialData'), total: +(html.length / 1024).toFixed(1),
+    };
     return {
-      channelId, httpStatus: code, finalUrl, kb: Math.round(bytes / 1024),
+      channelId, httpStatus: code, finalUrl, kb: Math.round(bytes / 1024), offsetsKB,
       pageTitle: (html.match(/<title>([^<]*)<\/title>/) || [])[1] || null,
       markers: {
         headClose: has('</head>'), body: has('<body'),
