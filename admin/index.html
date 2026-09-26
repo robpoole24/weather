@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-25 build.1790395200 -->
+<!-- WeatherTV Admin — updated 2026-09-25 build.1790463600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -628,6 +628,7 @@
           <input id="lookup-input" type="text" placeholder="UCxxxxxxxxxxxxxxxxxx" style="flex:1;min-width:220px;font-family:monospace;font-size:0.82rem;">
           <button class="btn btn-primary btn-sm" onclick="verifierLookup(false)">Check</button>
           <button class="btn btn-primary btn-sm" onclick="verifierLookup(true)">Check &amp; Sync</button>
+          <button class="btn btn-ghost btn-sm" onclick="verifierDiagnose()" title="Shows exactly what YouTube served the server and which live signals it found">🔍 Diagnose</button>
           <button id="lookup-check-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(false)">API Lookup (100u)</button>
           <button id="lookup-mark-btn" class="btn btn-ghost btn-sm" onclick="lookupLive(true)">API Lookup &amp; Mark Live</button>
         </div>
@@ -3012,6 +3013,34 @@ async function verifierLookup(sync) {
     }
   } catch (e) {
     resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed — is the new server.js deployed?</span>';
+  }
+}
+
+// Full diagnostic of what YouTube serves the server for one channel's /live page
+async function verifierDiagnose() {
+  const channelId = document.getElementById('lookup-input').value.trim();
+  const resultEl = document.getElementById('lookup-result');
+  if (!channelId) return;
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--muted)">Downloading full /live page for diagnosis (0 units)...</span>';
+  try {
+    const d = await (await fetch('/admin/live-verifier/debug/' + encodeURIComponent(channelId))).json();
+    const m = d.markers || {};
+    const flag = (k, good) => '<span style="color:' + (m[k] ? (good ? 'var(--green)' : 'var(--gold)') : 'var(--muted)') + '">' + (m[k] ? '✓' : '·') + ' ' + k + '</span>';
+    const verdict = d.parsed ? d.parsed.status.toUpperCase() : 'ERROR';
+    const vColor = verdict === 'LIVE' ? 'var(--red)' : verdict === 'OFFLINE' ? 'var(--muted)' : 'var(--gold)';
+    resultEl.innerHTML =
+      '<div><strong style="color:' + vColor + '">Verdict: ' + verdict + '</strong>' +
+      (d.parsed && d.parsed.videoId ? ' · <a href="https://youtu.be/' + lvEsc(d.parsed.videoId) + '" target="_blank" style="color:var(--accent)">' + lvEsc(d.parsed.videoId) + '</a>' : '') + '</div>' +
+      '<div style="color:var(--muted)">HTTP ' + lvEsc(d.httpStatus) + ' · ' + lvEsc(d.kb) + ' KB · final URL: ' + lvEsc(d.finalUrl) + ' · page title: ' + lvEsc(d.pageTitle) + '</div>' +
+      '<div>In verifier sweep list: <strong>' + lvEsc(d.inSweepList) + '</strong> · WTV currently shows live: <strong>' + lvEsc(d.wtvShowsLive) + '</strong></div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:0.3rem 0.9rem;margin:0.4rem 0">' +
+        [flag('watchVideoId', true), flag('channelPageCanonical'), flag('playerResponse', true), flag('isLiveNow_true', true), flag('isLive_true', true),
+         flag('liveMicrodata', true), flag('isUpcoming_true'), flag('endDate'), flag('consentOrBotWall'), flag('headClose'), flag('initialData')].join('') + '</div>' +
+      '<pre style="white-space:pre-wrap;word-break:break-all;background:var(--surface2);padding:0.5rem;border-radius:4px;font-size:0.7rem;max-height:220px;overflow:auto;margin:0">' +
+        lvEsc(JSON.stringify(d, null, 2)) + '</pre>';
+  } catch (e) {
+    resultEl.innerHTML = '<span style="color:var(--red)">✗ Diagnose failed — is the new server.js deployed?</span>';
   }
 }
 

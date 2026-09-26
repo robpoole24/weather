@@ -1,4 +1,4 @@
-// WeatherTV Live Verifier — build.1790391600
+// WeatherTV Live Verifier — build.1790463600
 // Zero-quota secondary live check: loads youtube.com/channel/{id}/live directly
 // and reads the page's own player data to confirm whether the channel is live NOW.
 // Tracks every run + every stream the primary (WebSub/Atom) system missed, and
@@ -17,67 +17,113 @@ const STREAM_RETENTION_DAYS = 30;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-const WATCH_CANON = /<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/;
+// Several independent signals, because YouTube varies page markup by region, A/B bucket and client.
+const VIDEO_ID_PATTERNS = [
+  /<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/,
+  /<meta property="og:url" content="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/,
+  /<link rel="shortlinkUrl" href="https:\/\/youtu\.be\/([\w-]{11})"/,
+  /"videoDetails":\{"videoId":"([\w-]{11})"/,
+];
+// Positive proof the page is the channel homepage (i.e. not live)
+const CHANNEL_PAGE = /<link rel="canonical" href="https:\/\/www\.youtube\.com\/(?:channel\/|@)|<meta property="og:url" content="https:\/\/www\.youtube\.com\/(?:channel\/|@)/;
 
-// ---------- Fetch (streams the page and stops reading as soon as we know) ----------
-// Offline channels get the channel homepage: we stop after </head> (~10% of the page).
-// Live channels: we stop once the player data is in, before the big ytInitialData blob.
-function haveEnough(html, channelId) {
-  if (html.indexOf('</head>') === -1) return false;
-  if (!WATCH_CANON.test(html)) return true; // channel page → offline, done
-  return (html.includes('"isLiveNow":') && html.includes(`"channelId":"${channelId}"`))
-      || html.includes('var ytInitialData');
+function findVideoId(html) {
+  for (const re of VIDEO_ID_PATTERNS) { const m = html.match(re); if (m) return m[1]; }
+  return null;
 }
 
-async function fetchLivePage(channelId, timeoutMs) {
+// Stop reading once the answer is known. Watch page: once the player response is in.
+// Channel page: as soon as its canonical/og:url identifies it (no reliance on </head>).
+function haveEnough(html) {
+  if (findVideoId(html)) {
+    return html.includes('"isLiveNow":') || html.includes('"playabilityStatus"') && html.includes('var ytInitialData');
+  }
+  return CHANNEL_PAGE.test(html);
+}
+
+async function fetchLivePage(channelId, timeoutMs, { full = false } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`https://www.youtube.com/channel/${channelId}/live`, {
       headers: HEADERS, redirect: 'follow', signal: ctrl.signal,
     });
-    if (!res.ok) { res.body?.cancel?.().catch(() => {}); return { code: res.status, bytes: 0 }; }
+    if (!res.ok) { res.body?.cancel?.().catch(() => {}); return { code: res.status, bytes: 0, finalUrl: res.url }; }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let html = '', bytes = 0;
+    let html = '', bytes = 0, stoppedEarly = false;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.length;
       html += dec.decode(value, { stream: true });
-      if (haveEnough(html, channelId) || bytes > MAX_BYTES) { reader.cancel().catch(() => {}); break; }
+      if (bytes > MAX_BYTES || (!full && haveEnough(html))) { stoppedEarly = true; reader.cancel().catch(() => {}); break; }
     }
-    return { code: 200, html, bytes };
+    return { code: 200, html, bytes, finalUrl: res.url, stoppedEarly };
   } finally {
     clearTimeout(t);
   }
 }
 
 // ---------- Parser (pure, testable) ----------
-function parseLivePage(channelId, html) {
-  if (html.includes('consent.youtube.com') || html.includes('google.com/sorry')) return { channelId, status: 'blocked' };
-  const canon = html.match(WATCH_CANON);
-  if (!canon) return { channelId, status: 'offline' };
-  const videoId = canon[1];
-  if (!html.includes(`"channelId":"${channelId}"`)) return { channelId, status: 'offline', videoId, note: 'foreign' };
+function parseLivePage(channelId, html, finalUrl = '') {
+  if (/consent\.(youtube|google)\.com/.test(finalUrl) || html.includes('consent.youtube.com') ||
+      html.includes('google.com/sorry') || html.includes('g-recaptcha')) return { channelId, status: 'blocked' };
+
+  const videoId = findVideoId(html);
+  if (!videoId) return { channelId, status: 'offline' };
+
+  // Ownership: only reject when the player data explicitly names a DIFFERENT channel
+  const owner = html.match(/"videoDetails":\{[^{}]*?"channelId":"(UC[\w-]{22})"/);
+  if (owner && owner[1] !== channelId) return { channelId, status: 'offline', videoId, note: 'foreign' };
+
   const isLiveNow = /"isLiveNow":true/.test(html);
-  const isUpcoming = /"isUpcoming":true/.test(html);
-  const title = html.match(/<meta name="title" content="([^"]*)"/);
+  const isLiveFlag = /"videoDetails":\{[^{}]*?"isLive":true/.test(html);
+  const liveMicrodata = /itemprop="isLiveBroadcast" content="True"/i.test(html) && !/itemprop="endDate"/.test(html);
+  const isUpcoming = /"isUpcoming":true/.test(html) || /"status":"LIVE_STREAM_OFFLINE"/.test(html);
+
+  const title = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<meta property="og:title" content="([^"]*)"/);
   const start = html.match(/"startTimestamp":"([^"]+)"/);
   const base = { channelId, videoId, title: title ? decode(title[1]) : null, startedAt: start ? start[1] : null };
-  if (isLiveNow && !isUpcoming) return { ...base, status: 'live' };
   if (isUpcoming) return { ...base, status: 'upcoming' };
+  if (isLiveNow || isLiveFlag || liveMicrodata) return { ...base, status: 'live' };
   return { ...base, status: 'offline' };
 }
 
 async function checkChannelLive(channelId, timeoutMs = 10000) {
   try {
-    const { code, html, bytes } = await fetchLivePage(channelId, timeoutMs);
+    const { code, html, bytes, finalUrl } = await fetchLivePage(channelId, timeoutMs);
     if (code === 429) return { channelId, status: 'throttled', bytes };
     if (code !== 200) return { channelId, status: 'error', code, bytes };
-    return { ...parseLivePage(channelId, html), bytes };
+    return { ...parseLivePage(channelId, html, finalUrl), bytes };
   } catch (e) {
     return { channelId, status: 'error', error: e.name === 'AbortError' ? 'timeout' : e.message, bytes: 0 };
+  }
+}
+
+// Full-page diagnostic: shows exactly what YouTube served the server and which signals it contains
+async function diagnoseChannel(channelId) {
+  try {
+    const { code, html = '', bytes, finalUrl } = await fetchLivePage(channelId, 15000, { full: true });
+    const has = (re) => (typeof re === 'string' ? html.includes(re) : re.test(html));
+    const snip = (needle, len = 160) => { const i = html.indexOf(needle); return i < 0 ? null : html.slice(i, i + len); };
+    return {
+      channelId, httpStatus: code, finalUrl, kb: Math.round(bytes / 1024),
+      pageTitle: (html.match(/<title>([^<]*)<\/title>/) || [])[1] || null,
+      markers: {
+        headClose: has('</head>'), body: has('<body'),
+        watchVideoId: findVideoId(html), channelPageCanonical: has(CHANNEL_PAGE),
+        playerResponse: has('ytInitialPlayerResponse'), initialData: has('ytInitialData'),
+        isLiveNow_true: has('"isLiveNow":true'), isLiveNow_false: has('"isLiveNow":false'),
+        isLive_true: has('"isLive":true'), isUpcoming_true: has('"isUpcoming":true'),
+        liveMicrodata: has(/itemprop="isLiveBroadcast"/), endDate: has(/itemprop="endDate"/),
+        consentOrBotWall: has('consent.youtube.com') || has('google.com/sorry') || has('g-recaptcha'),
+      },
+      snippets: { canonical: snip('rel="canonical"'), ogUrl: snip('property="og:url"'), liveBroadcastDetails: snip('"liveBroadcastDetails"', 220) },
+      parsed: code === 200 ? parseLivePage(channelId, html, finalUrl) : null,
+    };
+  } catch (e) {
+    return { channelId, error: e.message };
   }
 }
 
@@ -135,6 +181,7 @@ function createLiveVerifier({
 
     const raw = await getChannels();
     const list = raw.map((c) => (typeof c === 'string' ? { id: c, name: c } : { id: c.id || c.channelId, name: c.name || c.id || c.channelId }));
+    names = {};
     list.forEach((c) => { names[c.id] = c.name; });
     list.sort(() => Math.random() - 0.5);
     if (!list.length) { running = false; return { skipped: 'no channels in window' }; } // quiet hours — don't log empty runs
@@ -241,6 +288,13 @@ function createLiveVerifier({
     app.get(`${base}/data`, async (req, res) => { await load(); res.json(snapshot()); });
     app.post(`${base}/run`, (req, res) => { sweep('manual'); res.json({ started: true }); });
     app.get(`${base}/check/:channelId`, async (req, res) => res.json(await checkChannelLive(req.params.channelId)));
+    app.get(`${base}/debug/:channelId`, async (req, res) => {
+      const id = req.params.channelId;
+      const d = await diagnoseChannel(id);
+      d.inSweepList = Object.keys(names).length ? !!names[id] : 'unknown (no sweep yet)';
+      d.wtvShowsLive = isKnownLive ? !!(await isKnownLive(id)) : null;
+      res.json(d);
+    });
     // Check one channel AND update WTV's live status to match (free — no API quota)
     app.post(`${base}/check/:channelId/apply`, async (req, res) => {
       const id = req.params.channelId;
@@ -307,4 +361,4 @@ document.getElementById('run').onclick=async()=>{await fetch(B+'/run',{method:'P
 load();setInterval(load,60000);
 </script></body></html>`;
 
-module.exports = { createLiveVerifier, checkChannelLive, parseLivePage };
+module.exports = { createLiveVerifier, checkChannelLive, parseLivePage, diagnoseChannel };

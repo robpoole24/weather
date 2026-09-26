@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-25T18:00:00Z build.1790388000
+// WeatherTV Server — updated 2026-09-26T22:00:00Z build.1790463600
 const express = require('express');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
 const crypto = require('crypto');
@@ -3213,8 +3213,9 @@ liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data
 
   // Start verifier only after live statuses are restored — otherwise run #1
   // would count every already-live channel as a WebSub miss
-  if (process.env.LIVE_VERIFIER === 'true') liveVerifier.start();
-  else console.log('[LiveVerifier] Disabled (set LIVE_VERIFIER=true to enable)');
+  // Case-insensitive value: true / TRUE / 1 / yes / on all enable it
+  if (/^(true|1|yes|on)$/i.test((process.env.LIVE_VERIFIER || '').trim())) liveVerifier.start();
+  else console.log('[LiveVerifier] Disabled — LIVE_VERIFIER is "' + (process.env.LIVE_VERIFIER || '(unset)') + '" (variable name must be all caps: LIVE_VERIFIER=true)');
 
   // Check if today's scheduled fetch was missed
   // Compare dates not just timestamps to prevent double-fetching on same day
