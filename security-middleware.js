@@ -1,5 +1,5 @@
 // src/security-middleware.js — Altruistic Apps unified security layer
-// Updated: 2026-07-09T05:30:00Z
+// Updated: 2026-09-27T20:00:00Z build.1790560800
 //
 // USAGE (drop into any Altruistic Apps server.js):
 //
@@ -105,6 +105,9 @@ function securityHeaders(req, res, next) {
     "connect-src 'self'" +
       // Internal WeatherTV APIs
       " https://api.anthropic.com" +
+      // Radar Sidecar (forecast-model run info: /meta/models). Tiles themselves
+      // load as images (img-src https:), but the model list is a fetch().
+      " https://tiles.watchweathertv.com" +
       // Firebase SDK + installation service (required for FCM push token registration)
       " https://www.gstatic.com" +
       " https://firebaseinstallations.googleapis.com" +

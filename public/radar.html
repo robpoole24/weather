@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790553600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790560800 -->
 <html lang="en">
 <head>
 <!-- Google tag (gtag.js) -->
@@ -3401,6 +3401,7 @@ function setAppTempMode(mode) {
 
 async function showAppTemp() {
   clearAppTemp();
+  const _seq = _appTempSeq;
   appTempLayer = L.layerGroup().addTo(map);
   const mode = _appTempMode;
   setStatus(`Loading ${mode === 'feelslike' ? 'feels-like' : 'forecast'} temperatures…`);
@@ -3412,7 +3413,7 @@ async function showAppTemp() {
     Promise.all(TEMP_CITIES.map(fetcher))
   ]);
 
-  if (!appTempLayer) return; // cleared while loading
+  if (!appTempLayer || _seq !== _appTempSeq) return; // turned off (or restarted) while loading
   const cities = cityResults.filter(Boolean);
 
   // Build state → avg temp lookup for choropleth
@@ -3504,9 +3505,13 @@ async function showAppTemp() {
 }
 
 function clearAppTemp() {
+  _appTempSeq++;                         // cancels any load still in flight
   if (appTempLayer) { map.removeLayer(appTempLayer); appTempLayer = null; }
+  const tl = document.getElementById('temp-legend');   // the Feels Like color bar
+  if (tl) tl.style.display = 'none';
   hideProductLegend();
 }
+var _appTempSeq = 0;   // var: hoisted, so clearAppTemp() is safe to call at any point during startup
 
 let activePaint = 'reflectivity'; // can become null — "no base layer selected" is now a valid state
 function clearAllPaint(){
