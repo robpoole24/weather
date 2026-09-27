@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-28T01:00:00Z build.1790578800
+// WeatherTV Server — updated 2026-09-28T09:00:00Z build.1790604000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -4668,12 +4668,16 @@ app.get('/api/shop/products', async (req, res) => {
     for (let page = 0; page < 10; page++) {
       const coll = encodeURIComponent((process.env.FOURTHWALL_COLLECTION || 'all').trim().toLowerCase());
       const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections/${coll}/products?storefront_token=${encodeURIComponent(token)}&page=${page}&size=50`));
+      if (!j.results && j.code) console.warn(`[Shop] Fourthwall: collection "${decodeURIComponent(coll)}" — ${j.code} (does it exist and is it public?)`);
       (j.results || []).forEach(p => products.push(_fwProduct(p)));
       if (!j.paging || !j.paging.hasNextPage) break;
     }
-    const data = { enabled: true, shopDomain: await _fwShopDomain(token), products, fetchedAt: Date.now() };
-    _shopCache = { data, ts: Date.now() };
-    res.set('Cache-Control', 'public, max-age=600');
+    const data = { enabled: true, shopDomain: await _fwShopDomain(token), collection: process.env.FOURTHWALL_COLLECTION || 'all', products, fetchedAt: Date.now() };
+    // An empty result is usually a setup issue (collection missing / not public) —
+    // cache it for 1 minute only, so fixing it in Fourthwall shows up quickly.
+    const ttl = products.length ? SHOP_TTL : 60 * 1000;
+    _shopCache = { data, ts: Date.now() - (SHOP_TTL - ttl) };
+    res.set('Cache-Control', `public, max-age=${Math.round(ttl / 1000)}`);
     res.json(data);
   } catch (e) {
     console.warn('[Shop] Fourthwall fetch failed:', e.message);
