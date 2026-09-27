@@ -1,5 +1,5 @@
 // src/security-middleware.js — Altruistic Apps unified security layer
-// Updated: 2026-09-27T20:00:00Z build.1790560800
+// Updated: 2026-09-28T05:00:00Z build.1790589600
 //
 // USAGE (drop into any Altruistic Apps server.js):
 //
@@ -98,7 +98,8 @@ function securityHeaders(req, res, next) {
     "default-src 'self'",
     "media-src 'self' blob:;",
     "worker-src 'self' blob:;",
-    "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://www.gstatic.com",
+    // static.cloudflareinsights.com — Cloudflare Web Analytics beacon (cookieless)
+    "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://www.gstatic.com https://static.cloudflareinsights.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https: blob:",
@@ -108,6 +109,8 @@ function securityHeaders(req, res, next) {
       // Radar Sidecar (forecast-model run info: /meta/models). Tiles themselves
       // load as images (img-src https:), but the model list is a fetch().
       " https://tiles.watchweathertv.com" +
+      // Cloudflare Web Analytics beacon reports page views here (no cookies)
+      " https://cloudflareinsights.com" +
       // Firebase SDK + installation service (required for FCM push token registration)
       " https://www.gstatic.com" +
       " https://firebaseinstallations.googleapis.com" +

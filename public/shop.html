@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<!-- WeatherTV Shop — updated 2026-09-27 build.1790582400 -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#050a0f">
+<title>Support WeatherTV — Shop</title>
+<meta name="description" content="WeatherTV shirts and merch. Every dollar goes toward servers and new features for the free, ad-free WeatherTV app.">
+<link rel="canonical" href="https://www.watchweathertv.com/shop.html">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0e14; --surface: #111820; --surface2: #1a2433; --accent: #00b4d8; --gold: #f4a261;
+    --text: #e8f4fd; --muted: #7a9bb5; --border: rgba(0,180,216,0.2);
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Barlow', system-ui, sans-serif; min-height: 100vh; padding: 2rem 1rem 4rem; }
+  .container { max-width: 1040px; margin: 0 auto; }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .logo { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 1.6rem; letter-spacing: 0.08em; text-decoration: none; }
+  .logo .w { color: var(--accent); } .logo .t { color: var(--gold); }
+  .back { font-family: 'Barlow Condensed', sans-serif; font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); text-decoration: none; }
+  .back:hover { color: var(--accent); }
+  h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 2rem; letter-spacing: 0.04em; margin-bottom: 0.4rem; }
+  .intro { color: var(--muted); line-height: 1.6; max-width: 680px; margin-bottom: 0.6rem; }
+  .privacy-note { font-size: 0.82rem; color: var(--muted); border-left: 3px solid var(--accent); padding: 0.4rem 0.7rem; margin: 1rem 0 2rem; background: var(--surface); border-radius: 0 4px 4px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1.2rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .img-wrap { aspect-ratio: 1 / 1; background: var(--surface2); position: relative; }
+  .img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumbs { display: flex; gap: 4px; padding: 6px 8px 0; }
+  .thumbs button { width: 38px; height: 38px; padding: 0; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: none; cursor: pointer; }
+  .thumbs button.on { border-color: var(--accent); }
+  .thumbs img { width: 100%; height: 100%; object-fit: cover; }
+  .body { padding: 0.8rem; display: flex; flex-direction: column; gap: 0.55rem; flex: 1; }
+  .name { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 1.15rem; letter-spacing: 0.03em; }
+  .price { color: var(--gold); font-weight: 600; }
+  .desc { color: var(--muted); font-size: 0.82rem; line-height: 1.5; white-space: pre-line; }
+  .opts { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .opt { font: 600 0.78rem 'Barlow', sans-serif; min-width: 2.4rem; padding: 0.3rem 0.5rem; border-radius: 4px; cursor: pointer;
+         background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .opt.on { border-color: var(--accent); background: rgba(0,180,216,0.15); }
+  .opt:disabled { opacity: 0.35; cursor: not-allowed; text-decoration: line-through; }
+  .opt-label { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-family: 'Barlow Condensed', sans-serif; }
+  .buy { margin-top: auto; font: 700 0.9rem 'Barlow Condensed', sans-serif; letter-spacing: 0.1em; text-transform: uppercase;
+         padding: 0.6rem; border: none; border-radius: 4px; background: var(--accent); color: #000; cursor: pointer; }
+  .buy:disabled { background: var(--surface2); color: var(--muted); cursor: not-allowed; }
+  .buy:focus-visible, .opt:focus-visible, .thumbs button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .state { text-align: center; color: var(--muted); padding: 3rem 1rem; }
+  footer { margin-top: 2.5rem; text-align: center; font-size: 0.78rem; color: var(--muted); }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="top">
+    <a class="logo" href="/"><span class="w">WEATHER</span><span class="t">TV</span></a>
+    <a class="back" href="/">← Back to WeatherTV</a>
+  </div>
+
+  <h1>Support WeatherTV</h1>
+  <p class="intro">WeatherTV is free, ad-free, and doesn't collect your data — which means no one is paying the server bills but us. If you love the app, grab a shirt and show it off.</p>
+  <p class="intro"><strong>All proceeds go toward keeping WeatherTV running</strong> — servers, data services and new features. Nobody's getting rich here; it just helps keep the lights on so the app stays free for everyone.</p>
+  <div class="privacy-note">🔒 Checkout, payment and shipping are handled by our print partner, Fourthwall. WeatherTV never sees your name, address or payment details.</div>
+
+  <div id="grid" class="grid" aria-live="polite"><div class="state">Loading…</div></div>
+
+  <footer>Printed on demand by Fourthwall · <a href="/privacy.html">Privacy Policy</a></footer>
+</div>
+
+<script>
+(async function () {
+  const grid = document.getElementById('grid');
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const money = (n, cur) => n == null ? '' : new Intl.NumberFormat('en-US', { style: 'currency', currency: cur || 'USD' }).format(n);
+
+  let data;
+  try {
+    const r = await fetch('/api/shop/products');
+    data = await r.json();
+  } catch (e) { data = { error: true }; }
+
+  if (!data || data.enabled === false) { grid.innerHTML = '<div class="state">The shop is coming soon. Thanks for checking!</div>'; return; }
+  if (data.error || !data.products) { grid.innerHTML = '<div class="state">The shop is taking a quick break. Please try again in a few minutes.</div>'; return; }
+  if (!data.products.length) { grid.innerHTML = '<div class="state">New designs are on the way — check back soon!</div>'; return; }
+
+  grid.innerHTML = '';
+  data.products.forEach(p => grid.appendChild(renderCard(p, data.shopDomain)));
+
+  function renderCard(p, domain) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    const sizes = [...new Set(p.variants.map(v => v.size).filter(Boolean))];
+    const colors = [...new Set(p.variants.map(v => v.color).filter(Boolean))];
+    const state = { size: null, color: colors.length === 1 ? colors[0] : null, img: 0 };
+    const priceTxt = p.minPrice == null ? '' : p.minPrice === p.maxPrice ? money(p.minPrice, p.currency) : `${money(p.minPrice, p.currency)} – ${money(p.maxPrice, p.currency)}`;
+
+    el.innerHTML = `
+      <div class="img-wrap"><img alt="${esc(p.name)}" loading="lazy" src="${esc(p.images[0] || '')}"></div>
+      ${p.images.length > 1 ? `<div class="thumbs">${p.images.map((u, i) => `<button type="button" data-i="${i}" aria-label="View image ${i + 1}" class="${i ? '' : 'on'}"><img alt="" loading="lazy" src="${esc(u)}"></button>`).join('')}</div>` : ''}
+      <div class="body">
+        <div class="name">${esc(p.name)}</div>
+        <div class="price">${esc(priceTxt)}</div>
+        ${p.description ? `<div class="desc">${esc(p.description)}</div>` : ''}
+        ${colors.length > 1 ? `<div class="opt-label">Color</div><div class="opts" data-k="color">${colors.map(c => `<button type="button" class="opt" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+        ${sizes.length ? `<div class="opt-label">Size</div><div class="opts" data-k="size">${sizes.map(s => `<button type="button" class="opt" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}
+        <button type="button" class="buy" disabled>Choose a size</button>
+      </div>`;
+
+    const img = el.querySelector('.img-wrap img');
+    const buy = el.querySelector('.buy');
+    const pick = () => p.variants.find(v =>
+      (!sizes.length || v.size === state.size) && (!colors.length || v.color === state.color));
+
+    function refresh() {
+      // Grey out sizes that are sold out for the chosen color
+      el.querySelectorAll('.opts[data-k="size"] .opt').forEach(b => {
+        const ok = p.variants.some(v => v.size === b.dataset.v && (!state.color || v.color === state.color) && v.available);
+        b.disabled = !ok;
+        if (!ok && state.size === b.dataset.v) state.size = null;
+        b.classList.toggle('on', state.size === b.dataset.v);
+      });
+      el.querySelectorAll('.opts[data-k="color"] .opt').forEach(b => b.classList.toggle('on', state.color === b.dataset.v));
+      const v = (sizes.length && !state.size) || (colors.length > 1 && !state.color) ? null : pick();
+      if (v && v.image) img.src = v.image;
+      if (!v) { buy.disabled = true; buy.textContent = colors.length > 1 && !state.color ? 'Choose a color' : 'Choose a size'; }
+      else if (!v.available) { buy.disabled = true; buy.textContent = 'Sold out'; }
+      else if (!domain) { buy.disabled = true; buy.textContent = 'Checkout unavailable'; }
+      else { buy.disabled = false; buy.textContent = `Buy · ${money(v.price, v.currency)}`; }
+    }
+
+    el.addEventListener('click', e => {
+      const opt = e.target.closest('.opt');
+      if (opt && !opt.disabled) { state[opt.parentElement.dataset.k] = opt.dataset.v; refresh(); return; }
+      const th = e.target.closest('.thumbs button');
+      if (th) { img.src = p.images[+th.dataset.i]; el.querySelectorAll('.thumbs button').forEach(b => b.classList.toggle('on', b === th)); return; }
+      if (e.target === buy && !buy.disabled) {
+        const v = pick();
+        // Fourthwall's hosted checkout — opens in a new tab / the system browser in the app
+        window.open(`https://${domain}/cart/checkout?products=${encodeURIComponent(v.id)}:1&currency=${encodeURIComponent(v.currency || 'USD')}`, '_blank', 'noopener');
+      }
+    });
+    // One-size products (stickers, mugs) need no choice
+    if (!sizes.length && colors.length <= 1) state.size = null;
+    refresh();
+    return el;
+  }
+})();
+</script>
+</body>
+</html>

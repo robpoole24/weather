@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-27T18:00:00Z build.1790532000
+// WeatherTV Server — updated 2026-09-28T01:00:00Z build.1790578800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -4602,6 +4602,85 @@ app.get('/weatherstar/images/*', (req, res) => {
 // Mount radar push notification routes BEFORE the catch-all —
 // radar.js registers GET routes that would otherwise be swallowed by app.get('*')
 radar.routes(app);
+
+// ── Shop (Fourthwall Storefront API) ─────────────────────────────────────────
+// GET /api/shop/products — the public product list for /shop.html, cached 10
+// min (and at Cloudflare's edge). Checkout happens on Fourthwall, so buyers'
+// names, addresses and payment details never touch WeatherTV.
+// Env: FOURTHWALL_STOREFRONT_TOKEN (required), FOURTHWALL_SHOP_DOMAIN (e.g.
+// weathertv.fourthwall.com — used for the checkout link), FOURTHWALL_COLLECTION
+// (collection handle to show, e.g. "weathertv"; defaults to "all"). The
+// Fourthwall store is the shared Altruistic Apps shop, so each app's site
+// shows only its own collection.
+const FW_API = 'https://storefront-api.fourthwall.com/v1';
+let _shopCache = { data: null, ts: 0 };
+const SHOP_TTL = 10 * 60 * 1000;
+const SIZE_ORDER = ['XXS','XS','S','M','L','XL','XXL','2XL','XXXL','3XL','4XL','5XL'];
+
+function _fwText(html, max = 400) {
+  const t = String(html || '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\n{3,}/g, '\n\n').trim();
+  return t.length > max ? t.slice(0, max - 1).trimEnd() + '…' : t;
+}
+function _fwMoney(m) { const v = m && (m.value ?? m.amount); return typeof v === 'number' ? v : (v != null ? Number(v) : null); }
+function _fwProduct(p) {
+  const images = (p.images || []).map(i => i.transformedUrl || i.url).filter(Boolean).slice(0, 4);
+  const variants = (p.variants || []).map(v => {
+    const stock = v.stock || {};
+    return {
+      id: v.id,
+      name: v.name || '',
+      size: v.attributes?.size?.name || null,
+      color: v.attributes?.color?.name || null,
+      swatch: v.attributes?.color?.swatch || null,
+      price: _fwMoney(v.unitPrice || v.price),
+      currency: (v.unitPrice || v.price || {}).currency || 'USD',
+      available: !(stock.type === 'LIMITED' && Number(stock.inStock ?? stock.quantity ?? 0) <= 0),
+      image: (v.images || [])[0]?.url || null,
+    };
+  }).filter(v => v.id);
+  variants.sort((a, b) => (SIZE_ORDER.indexOf((a.size || '').toUpperCase()) - SIZE_ORDER.indexOf((b.size || '').toUpperCase())));
+  const prices = variants.map(v => v.price).filter(n => Number.isFinite(n));
+  return {
+    slug: p.slug, name: p.name || 'WeatherTV merch', description: _fwText(p.description),
+    images, variants,
+    minPrice: prices.length ? Math.min(...prices) : null, maxPrice: prices.length ? Math.max(...prices) : null,
+    currency: variants[0]?.currency || 'USD',
+  };
+}
+async function _fwShopDomain(token) {
+  if (process.env.FOURTHWALL_SHOP_DOMAIN) return process.env.FOURTHWALL_SHOP_DOMAIN.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  try {   // fall back to the shop info endpoint if the variable isn't set
+    const shop = JSON.parse(await fetchTextOverHttp(`${FW_API}/shop?storefront_token=${encodeURIComponent(token)}`));
+    const d = shop.publicDomain || shop.domain || shop.primaryDomain || (shop.url || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    return d || null;
+  } catch (_) { return null; }
+}
+app.get('/api/shop/products', async (req, res) => {
+  const token = process.env.FOURTHWALL_STOREFRONT_TOKEN;
+  if (!token) return res.json({ enabled: false, products: [] });
+  if (_shopCache.data && Date.now() - _shopCache.ts < SHOP_TTL) {
+    res.set('Cache-Control', 'public, max-age=600');
+    return res.json(_shopCache.data);
+  }
+  try {
+    const products = [];
+    for (let page = 0; page < 10; page++) {
+      const coll = encodeURIComponent((process.env.FOURTHWALL_COLLECTION || 'all').trim().toLowerCase());
+      const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections/${coll}/products?storefront_token=${encodeURIComponent(token)}&page=${page}&size=50`));
+      (j.results || []).forEach(p => products.push(_fwProduct(p)));
+      if (!j.paging || !j.paging.hasNextPage) break;
+    }
+    const data = { enabled: true, shopDomain: await _fwShopDomain(token), products, fetchedAt: Date.now() };
+    _shopCache = { data, ts: Date.now() };
+    res.set('Cache-Control', 'public, max-age=600');
+    res.json(data);
+  } catch (e) {
+    console.warn('[Shop] Fourthwall fetch failed:', e.message);
+    if (_shopCache.data) return res.json({ ..._shopCache.data, stale: true });
+    res.status(502).json({ enabled: true, error: 'Shop temporarily unavailable', products: [] });
+  }
+});
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
