@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-26T22:00:00Z build.1790463600
+// WeatherTV Server — updated 2026-09-27T16:00:00Z build.1790524800
 const express = require('express');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
 const crypto = require('crypto');
@@ -1837,6 +1837,16 @@ async function _loadWindy(stateCode) {
 }
 
 // GET /api/cameras/coverage
+// Learn camera-proxy allowlist hosts (see camera proxy section below)
+// from every camera list this server returns. Must be registered BEFORE the
+// /api/cameras routes or it never runs.
+// Learn hosts from every camera list this server returns
+app.use('/api/cameras', (req, res, next) => {
+  const origJson = res.json.bind(res);
+  res.json = (body) => { try { _collectCamUrls(body); } catch {} return origJson(body); };
+  next();
+});
+
 // Returns which state codes have camera data available (used by the client
 // to build the state dropdown and mark states as covered vs. unavailable).
 // STATE_DOTS states are included if their key is configured (or no key required).
@@ -1985,9 +1995,111 @@ function restoreGeographicNames(text) {
 
 // GET /api/forecast?lat=&lon= (or ?zip=)
 // Merges Open-Meteo (current + 168h hourly + 7-day daily) + NWS narrative.
-// Free, no key, 15-min server cache. Zip geocoding via Open-Meteo.
-const _forecastCache = new Map();
+//
+// SCALE DESIGN (Sep 2026): Open-Meteo's free tier is ~10,000 calls/day,
+// non-commercial. Upstream calls must scale with PLACES, not USERS:
+//   - Coordinates snap to a shared grid cell (default 0.05° ≈ 5 km; set
+//     FORECAST_GRID_DEG to tune). Everyone in the same cell shares ONE cached
+//     forecast — Open-Meteo's models are 3–13 km anyway, so neighbors within
+//     a cell would get near-identical data. Old key was 0.001° (~110 m), which
+//     made nearly every user a cache miss.
+//   - 15-min TTL (Open-Meteo's own "current" data refreshes every 15 min, so
+//     users see no staler data than before).
+//   - Single-flight: 50 simultaneous misses for one cell = 1 upstream call.
+//   - LRU cache of 1,000 cells (was 30) with O(1) eviction.
+//   - Stale-if-error: if Open-Meteo fails or rate-limits us, serve the last
+//     good forecast for that cell (up to 3h old) instead of an error.
+//   - Zip→coords cached 30 days; NWS /points lookup cached 24h (the forecast
+//     office/grid for a location never changes), halving NWS calls per miss.
+//   - Daily upstream call counters at GET /api/admin/upstream-usage.
+const _forecastCache = new Map();          // cellKey -> { data, ts }   (insertion order = LRU)
+const _forecastInflight = new Map();       // cellKey -> Promise
 const FORECAST_TTL = 15 * 60 * 1000;
+const FORECAST_STALE_MAX = 3 * 60 * 60 * 1000;
+const FORECAST_MAX = 1000;
+const FORECAST_GRID = Number(process.env.FORECAST_GRID_DEG) || 0.05;
+const _geoCache = new Map();               // zip/query -> { lat, lon, name, ts }
+const GEO_TTL = 30 * 24 * 60 * 60 * 1000;
+const _nwsPointsCache = new Map();         // cellKey -> { forecastUrl, ts }
+const NWS_POINTS_TTL = 24 * 60 * 60 * 1000;
+
+// ── Upstream usage counters (reset daily, UTC) ──
+const _upstream = { day: null };
+function upstreamCount(name, n = 1) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_upstream.day !== today) { for (const k of Object.keys(_upstream)) delete _upstream[k]; _upstream.day = today; }
+  _upstream[name] = (_upstream[name] || 0) + n;
+}
+
+function _lruSet(map, key, value, max) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value);
+}
+
+function _snap(v) { return Math.round(v / FORECAST_GRID) * FORECAST_GRID; }
+
+async function _fetchForecastCell(gLat, gLon, cellKey) {
+  const omUrl = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}`
+    + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
+    + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,'
+    + 'precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,'
+    + 'wind_gusts_10m,surface_pressure,visibility,is_day'
+    + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,'
+    + 'weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
+    + 'visibility,cape,lifted_index,freezing_level_height,snowfall,snow_depth,'
+    + 'uv_index,is_day,relative_humidity_2m,dew_point_2m'
+    + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
+    + 'apparent_temperature_max,apparent_temperature_min,'
+    + 'sunrise,sunset,daylight_duration,uv_index_max,'
+    + 'precipitation_sum,snowfall_sum,precipitation_hours,'
+    + 'precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,'
+    + 'wind_direction_10m_dominant'
+    + '&forecast_days=7';
+
+
+  upstreamCount('openMeteoForecast');
+  const omText = await fetchTextOverHttp(omUrl);
+  const om = JSON.parse(omText);
+  if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
+
+  let nwsNarrative = null;
+  try {
+    const NWS_HEADERS = { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' };
+    let forecastUrl;
+    const pc = _nwsPointsCache.get(cellKey);
+    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL) {
+      forecastUrl = pc.forecastUrl;
+    } else {
+      upstreamCount('nwsPoints');
+      const pts = JSON.parse(await fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS));
+      forecastUrl = pts?.properties?.forecast || null;
+      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, ts: Date.now() }, 5000);
+    }
+    if (forecastUrl) {
+      upstreamCount('nwsForecast');
+      const f = JSON.parse(await fetchTextOverHttp(forecastUrl, NWS_HEADERS));
+      nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
+        name:      restoreGeographicNames(p.name),
+        short:     restoreGeographicNames(p.shortForecast),
+        detail:    restoreGeographicNames(p.detailedForecast),
+        isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
+      }));
+    }
+  } catch(e) { /* NWS unavailable outside CONUS — silent fail */ }
+
+  // Location is attached per-request (below), so a shared cell never
+  // shows one user's place name to another user.
+  return {
+    timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
+    utc_offset_seconds: om.utc_offset_seconds,
+    current: om.current, current_units: om.current_units,
+    hourly: om.hourly, hourly_units: om.hourly_units,
+    daily: om.daily, daily_units: om.daily_units,
+    nws: nwsNarrative, generated_at: Date.now(),
+  };
+}
 
 app.get('/api/forecast', async (req, res) => {
   let lat = parseFloat(req.query.lat);
@@ -1995,90 +2107,63 @@ app.get('/api/forecast', async (req, res) => {
   let locationName = req.query.name || null;
 
   if (req.query.zip) {
-    try {
-      const geoText = await fetchTextOverHttp(
-        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`
-      );
-      const geo = JSON.parse(geoText);
-      const r = geo.results?.[0];
-      if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
-      lat = r.latitude; lon = r.longitude;
-      locationName = restoreGeographicNames(locationName || [r.name, r.admin1].filter(Boolean).join(', '));
-    } catch(e) { return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message }); }
+    const q = req.query.zip.trim().toLowerCase();
+    const g = _geoCache.get(q);
+    if (g && Date.now() - g.ts < GEO_TTL) {
+      upstreamCount('geocodeHit');
+      lat = g.lat; lon = g.lon; locationName = locationName || g.name;
+    } else {
+      try {
+        upstreamCount('openMeteoGeocode');
+        const geoText = await fetchTextOverHttp(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`
+        );
+        const geo = JSON.parse(geoText);
+        const r = geo.results?.[0];
+        if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
+        lat = r.latitude; lon = r.longitude;
+        const name = restoreGeographicNames([r.name, r.admin1].filter(Boolean).join(', '));
+        _lruSet(_geoCache, q, { lat, lon, name, ts: Date.now() }, 5000);
+        locationName = locationName ? restoreGeographicNames(locationName) : name;
+      } catch(e) { return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message }); }
+    }
   }
 
   if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat/lon or zip required' });
 
-  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
-  const cached = _forecastCache.get(cacheKey);
+  const gLat = _snap(lat), gLon = _snap(lon);
+  const cellKey = `${gLat.toFixed(3)},${gLon.toFixed(3)}`;
+  const respond = (entry, stale) => {
+    res.set('Cache-Control', stale ? 'public, max-age=120' : 'public, max-age=900');
+    if (stale) res.set('X-Forecast-Stale', '1');
+    res.json({ ...entry.data, location: { lat, lon, name: locationName } });
+  };
+
+  const cached = _forecastCache.get(cellKey);
   if (cached && Date.now() - cached.ts < FORECAST_TTL) {
-    res.set('Cache-Control', 'public, max-age=900');
-    return res.json(cached.data);
+    upstreamCount('forecastCacheHit');
+    _lruSet(_forecastCache, cellKey, cached, FORECAST_MAX); // refresh LRU position
+    return respond(cached, false);
   }
 
   try {
-    const omUrl = 'https://api.open-meteo.com/v1/forecast'
-      + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
-      + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
-      + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,'
-      + 'precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,'
-      + 'wind_gusts_10m,surface_pressure,visibility,is_day'
-      + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,'
-      + 'weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
-      + 'visibility,cape,lifted_index,freezing_level_height,snowfall,snow_depth,'
-      + 'uv_index,is_day,relative_humidity_2m,dew_point_2m'
-      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
-      + 'apparent_temperature_max,apparent_temperature_min,'
-      + 'sunrise,sunset,daylight_duration,uv_index_max,'
-      + 'precipitation_sum,snowfall_sum,precipitation_hours,'
-      + 'precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,'
-      + 'wind_direction_10m_dominant'
-      + '&forecast_days=7';
-
-    const omText = await fetchTextOverHttp(omUrl);
-    const om = JSON.parse(omText);
-    if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
-
-    let nwsNarrative = null;
-    try {
-      const ptsText = await fetchTextOverHttp(
-        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
-        { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-      );
-      const pts = JSON.parse(ptsText);
-      const forecastUrl = pts?.properties?.forecast;
-      if (forecastUrl) {
-        const fText = await fetchTextOverHttp(forecastUrl,
-          { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }
-        );
-        const f = JSON.parse(fText);
-        nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
-          name:      restoreGeographicNames(p.name),
-          short:     restoreGeographicNames(p.shortForecast),
-          detail:    restoreGeographicNames(p.detailedForecast),
-          isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
-        }));
-      }
-    } catch(e) { /* NWS unavailable outside CONUS — silent fail */ }
-
-    const data = {
-      location: { lat, lon, name: locationName },
-      timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
-      utc_offset_seconds: om.utc_offset_seconds,
-      current: om.current, current_units: om.current_units,
-      hourly: om.hourly, hourly_units: om.hourly_units,
-      daily: om.daily, daily_units: om.daily_units,
-      nws: nwsNarrative, generated_at: Date.now(),
-    };
-
-    _forecastCache.set(cacheKey, { data, ts: Date.now() });
-    if (_forecastCache.size > 30) {
-      const oldest = [..._forecastCache.entries()].sort((a,b) => a[1].ts - b[1].ts)[0];
-      if (oldest) _forecastCache.delete(oldest[0]);
+    let p = _forecastInflight.get(cellKey);
+    if (!p) {
+      upstreamCount('forecastCacheMiss');
+      p = _fetchForecastCell(gLat, gLon, cellKey)
+        .then(data => { const entry = { data, ts: Date.now() }; _lruSet(_forecastCache, cellKey, entry, FORECAST_MAX); return entry; })
+        .finally(() => _forecastInflight.delete(cellKey));
+      _forecastInflight.set(cellKey, p);
+    } else {
+      upstreamCount('forecastCoalesced');
     }
-    res.set('Cache-Control', 'public, max-age=900');
-    res.json(data);
+    respond(await p, false);
   } catch(e) {
+    if (cached && Date.now() - cached.ts < FORECAST_STALE_MAX) {
+      upstreamCount('forecastStaleServed');
+      console.warn('[Forecast] Upstream failed, serving stale cell', cellKey, '-', e.message);
+      return respond(cached, true);
+    }
     console.error('[Forecast] Error:', e.message);
     res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
   }
@@ -2198,39 +2283,180 @@ app.get('/api/fire-perimeters', async (req, res) => {
   res.send(empty);
 });
 
+// ── Camera proxy: safety + cost controls (Sep 2026) ──────────────────────────
+// DOT camera servers mostly block direct browser access (CORS / http-only),
+// so images and HLS video are relayed through this server. That makes camera
+// viewing the one feature whose Railway egress grows per viewer-minute, so:
+//   1. Host allowlist. The old proxy relayed ANY public URL — an open proxy
+//      anyone could abuse on our bandwidth bill. Allowed hosts are learned
+//      automatically from the camera lists this server hands out
+//      (/api/cameras/*), plus segment hosts from playlists we already allowed,
+//      plus CAMERA_PROXY_HOSTS (comma-separated) for sources the client loads
+//      elsewhere. Learned hosts persist in Redis.
+//      ROLLOUT: starts in REPORT mode (logs unknown hosts, still serves them).
+//      Check GET /api/admin/upstream-usage for `cameraUnknownHosts`, add any
+//      legit ones to CAMERA_PROXY_HOSTS, then set CAMERA_PROXY_ENFORCE=true.
+//   2. Shared fetches. 50 viewers of one camera = 1 upstream fetch per
+//      segment/image (single-flight), not 50.
+//   3. Hard limits: size caps (image 5 MB, playlist 1 MB, segment 15 MB),
+//      15s timeout, max 3 redirects, private-address check on EVERY redirect
+//      hop (old code only checked the first URL — SSRF via redirect).
+//   4. HLS cache bounded by BYTES (48 MB), not entry count — 500 video
+//      segments could previously pin ~1 GB of RAM.
+//   5. Per-IP rate limit (600 proxy requests/min — a normal viewer uses ~30).
+//   6. Bytes served are counted daily (upstream-usage) so the real cost is visible.
+const CAM_HOSTS_KEY = 'wt:camhosts';
+const CAM_ENFORCE = /^(true|1|yes|on)$/i.test(process.env.CAMERA_PROXY_ENFORCE || '');
+const _camHosts = new Set((process.env.CAMERA_PROXY_HOSTS || '').split(',').map(h => h.trim().toLowerCase()).filter(Boolean));
+const _camUnknown = new Map();   // host -> hits (report mode visibility)
+let _camHostsLoaded = null, _camHostsDirty = false;
+
+function _isPrivateHost(hostname) {
+  const h = String(hostname).toLowerCase().replace(/^\[|\]$/g, '');
+  if (h.includes(':')) return /^(::1?$|fc|fd|fe80|::ffff:(127|10|192\.168|169\.254)\.)/.test(h);
+  return /^(localhost$|0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)
+      || h.endsWith('.internal') || h.endsWith('.local') || h.endsWith('.railway.internal');
+}
+
+function _registerCamHost(u) {
+  try {
+    const h = new URL(u).hostname.toLowerCase();
+    if (h && !_isPrivateHost(h) && !_camHosts.has(h)) { _camHosts.add(h); _camHostsDirty = true; }
+  } catch {}
+}
+
+function _collectCamUrls(obj, depth = 0) {
+  if (!obj || depth > 6) return;
+  if (Array.isArray(obj)) { for (const o of obj) _collectCamUrls(o, depth + 1); return; }
+  if (typeof obj !== 'object') return;
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === 'string') { if (/url$/i.test(k) && /^https?:\/\//i.test(v)) _registerCamHost(v); }
+    else if (v && typeof v === 'object') _collectCamUrls(v, depth + 1);
+  }
+}
+
+function _loadCamHosts() {
+  if (!_camHostsLoaded) {
+    _camHostsLoaded = (async () => {
+      try {
+        const saved = await rGet(CAM_HOSTS_KEY);
+        const arr = Array.isArray(saved) ? saved : (typeof saved === 'string' ? JSON.parse(saved) : []);
+        (arr || []).forEach(h => _camHosts.add(String(h).toLowerCase()));
+      } catch (e) { console.warn('[CamProxy] host list load failed:', e.message); }
+    })();
+  }
+  return _camHostsLoaded;
+}
+setInterval(() => {
+  if (!_camHostsDirty) return;
+  _camHostsDirty = false;
+  rSet(CAM_HOSTS_KEY, [..._camHosts]).catch?.(() => {});
+}, 60 * 1000).unref();
+
+async function _camHostAllowed(hostname) {
+  await _loadCamHosts();
+  const h = hostname.toLowerCase();
+  if (_camHosts.has(h)) return true;
+  _camUnknown.set(h, (_camUnknown.get(h) || 0) + 1);
+  if (_camUnknown.size > 500) _camUnknown.delete(_camUnknown.keys().next().value);
+  return !CAM_ENFORCE;
+}
+
+// Per-IP fixed-window rate limit for the camera proxies
+const _camRate = new Map();
+const CAM_RATE_PER_MIN = Number(process.env.CAMERA_PROXY_RATE_PER_MIN) || 600;
+setInterval(() => _camRate.clear(), 60 * 1000).unref();
+function _clientIp(req) {
+  return req.headers['cf-connecting-ip'] || (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+}
+function _camRateOk(req) {
+  const ip = _clientIp(req);
+  const n = (_camRate.get(ip) || 0) + 1;
+  _camRate.set(ip, n);
+  return n <= CAM_RATE_PER_MIN;
+}
+
+// Fetch with redirect re-validation, size cap and timeout
+function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redirects = 3 } = {}) {
+  return new Promise((resolve, reject) => {
+    let p;
+    try { p = new URL(url); } catch (e) { return reject(e); }
+    if (!['http:', 'https:'].includes(p.protocol)) return reject(new Error('http/https only'));
+    if (_isPrivateHost(p.hostname)) return reject(new Error('private address blocked'));
+    const mod = p.protocol === 'https:' ? require('https') : require('http');
+    const opts = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }, timeout: timeoutMs };
+    const req = mod.get(url, opts, r => {
+      if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
+        r.resume();
+        if (redirects <= 0) return reject(new Error('too many redirects'));
+        const rawLoc = r.headers.location;
+        if (!rawLoc) return reject(new Error('redirect with no location'));
+        let loc;
+        try { loc = new URL(rawLoc, url).href; } catch (_) { return reject(new Error('bad redirect')); }
+        return _fetchBinary(loc, { maxBytes, timeoutMs, redirects: redirects - 1 }).then(resolve, reject);
+      }
+      const declared = Number(r.headers['content-length'] || 0);
+      if (declared > maxBytes) { r.destroy(); return reject(new Error('upstream too large')); }
+      const chunks = []; let total = 0;
+      r.on('data', c => {
+        total += c.length;
+        if (total > maxBytes) { r.destroy(); reject(new Error('upstream too large')); return; }
+        chunks.push(c);
+      });
+      r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] || '', status: r.statusCode }));
+      r.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('upstream timeout')));
+    req.on('error', reject);
+  });
+}
+
 // GET /api/camera-hls?url=...
 // HLS stream proxy — routes M3U8 and .ts segment requests through our server
 // so HLS.js XHR calls stay same-origin and never trigger connect-src CSP.
 // M3U8 playlists are rewritten to route all segment URLs through this proxy.
-const _hlsCache = new Map();
+const _hlsCache = new Map();       // url -> { buf, ct, ts }   (insertion order = oldest first)
+const _hlsInflight = new Map();    // url -> Promise
+let _hlsCacheBytes = 0;
+const HLS_CACHE_MAX_BYTES = 48 * 1024 * 1024;
 const HLS_M3U8_TTL = 4 * 1000;
 const HLS_SEG_TTL  = 30 * 1000;
 
-function _isPrivateHost(hostname) {
-  return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
+function _hlsCachePut(url, entry) {
+  const prev = _hlsCache.get(url);
+  if (prev) { _hlsCacheBytes -= prev.buf.length; _hlsCache.delete(url); }
+  _hlsCache.set(url, entry);
+  _hlsCacheBytes += entry.buf.length;
+  while (_hlsCacheBytes > HLS_CACHE_MAX_BYTES && _hlsCache.size) {
+    const [k, v] = _hlsCache.entries().next().value;
+    _hlsCache.delete(k); _hlsCacheBytes -= v.buf.length;
+  }
 }
 
-function _fetchBinary(url) {
-  return new Promise((resolve, reject) => {
-    let p;
-    try { p = new URL(url); } catch(e) { return reject(e); }
-    const mod = p.protocol === 'https:' ? require('https') : require('http');
-    const opts = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } };
-    mod.get(url, opts, r => {
-      if (r.statusCode === 301 || r.statusCode === 302) {
-        const rawLoc = r.headers.location;
-        if (!rawLoc) return reject(new Error('redirect with no location'));
-        let loc;
-        try { loc = rawLoc.startsWith('http') ? rawLoc : new URL(rawLoc, url).href; }
-        catch(_) { return reject(new Error('bad redirect')); }
-        return _fetchBinary(loc).then(resolve, reject);
-      }
-      const chunks = [];
-      r.on('data', c => chunks.push(c));
-      r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] || '', status: r.statusCode }));
-      r.on('error', reject);
-    }).on('error', reject);
-  });
+async function _hlsFetch(rawUrl, isM3U8) {
+  const { buf, ct, status } = await _fetchBinary(rawUrl, { maxBytes: isM3U8 ? 1024 * 1024 : 15 * 1024 * 1024 });
+  if (status && status >= 400) { const e = new Error('upstream ' + status); e.status = status; throw e; }
+  let outBuf = buf, outCt = ct;
+  if (isM3U8) {
+    const baseUrl = rawUrl.substring(0, rawUrl.lastIndexOf('/') + 1);
+    const text = buf.toString('utf8');
+    const rewritten = text.split('\n').map(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return line;
+      let absUrl;
+      try { absUrl = trimmed.startsWith('http') ? trimmed : new URL(trimmed, baseUrl).href; }
+      catch(_) { return line; }
+      _registerCamHost(absUrl);   // segments/variants from an allowed playlist are allowed
+      return `/api/camera-hls?url=${encodeURIComponent(absUrl)}`;
+    }).join('\n');
+    outBuf = Buffer.from(rewritten, 'utf8');
+    outCt  = 'application/vnd.apple.mpegurl';
+  } else if (!outCt || outCt.includes('text/html')) {
+    outCt = 'video/MP2T';
+  }
+  const entry = { buf: outBuf, ct: outCt, ts: Date.now() };
+  _hlsCachePut(rawUrl, entry);
+  return entry;
 }
 
 app.get('/api/camera-hls', async (req, res) => {
@@ -2240,48 +2466,32 @@ app.get('/api/camera-hls', async (req, res) => {
   try { parsedUrl = new URL(rawUrl); } catch { return res.status(400).send('invalid url'); }
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) return res.status(400).send('http/https only');
   if (_isPrivateHost(parsedUrl.hostname)) return res.status(403).send('private addresses not allowed');
+  if (!_camRateOk(req)) { upstreamCount('cameraRateLimited'); return res.status(429).send('slow down'); }
+  if (!(await _camHostAllowed(parsedUrl.hostname))) { upstreamCount('cameraBlocked'); return res.status(403).send('host not allowed'); }
 
   const isM3U8 = rawUrl.includes('.m3u8') || rawUrl.includes('playlist');
   const ttl = isM3U8 ? HLS_M3U8_TTL : HLS_SEG_TTL;
-  const cached = _hlsCache.get(rawUrl);
-  if (cached && Date.now() - cached.ts < ttl) {
-    res.set('Content-Type', cached.ct);
+  const send = (entry) => {
+    upstreamCount('cameraHlsBytes', entry.buf.length);
+    res.set('Content-Type', entry.ct);
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Cache-Control', isM3U8 ? 'no-cache' : 'public, max-age=30');
-    return res.send(cached.buf);
-  }
+    res.send(entry.buf);
+  };
+
+  const cached = _hlsCache.get(rawUrl);
+  if (cached && Date.now() - cached.ts < ttl) return send(cached);
 
   try {
-    const { buf, ct, status } = await _fetchBinary(rawUrl);
-    if (status && status >= 400) return res.status(status).send('upstream ' + status);
-
-    let outBuf = buf, outCt = ct;
-    if (isM3U8) {
-      const baseUrl = rawUrl.substring(0, rawUrl.lastIndexOf('/') + 1);
-      const text = buf.toString('utf8');
-      const rewritten = text.split('\n').map(line => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) return line;
-        let absUrl;
-        try { absUrl = trimmed.startsWith('http') ? trimmed : new URL(trimmed, baseUrl).href; }
-        catch(_) { return line; }
-        return `/api/camera-hls?url=${encodeURIComponent(absUrl)}`;
-      }).join('\n');
-      outBuf = Buffer.from(rewritten, 'utf8');
-      outCt  = 'application/vnd.apple.mpegurl';
-    } else {
-      if (!outCt || outCt.includes('text/html')) outCt = 'video/MP2T';
+    let p = _hlsInflight.get(rawUrl);
+    if (!p) {
+      upstreamCount('cameraHlsUpstream');
+      p = _hlsFetch(rawUrl, isM3U8).finally(() => _hlsInflight.delete(rawUrl));
+      _hlsInflight.set(rawUrl, p);
     }
-
-    _hlsCache.set(rawUrl, { buf: outBuf, ct: outCt, ts: Date.now() });
-    if (_hlsCache.size > 500) {
-      [..._hlsCache.entries()].sort((a,b) => a[1].ts - b[1].ts).slice(0, 100).forEach(([k]) => _hlsCache.delete(k));
-    }
-    res.set('Content-Type', outCt);
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Cache-Control', isM3U8 ? 'no-cache' : 'public, max-age=30');
-    res.send(outBuf);
+    send(await p);
   } catch(e) {
+    if (e.status) return res.status(e.status).send(e.message);
     console.warn('[HLS Proxy]', e.message);
     res.status(502).send('upstream error');
   }
@@ -2292,68 +2502,66 @@ app.get('/api/camera-hls', async (req, res) => {
 // browser requests with missing CORS headers. We fetch server-side and
 // pipe back the bytes with the correct headers. Cached 25s so repeated
 // refreshes within a poll cycle don't hammer upstream.
+const _imgInflight = new Map();
 app.get('/api/camera-image', async (req, res) => {
   const rawUrl = (req.query.url || '').trim();
   if (!rawUrl) return res.status(400).send('url required');
 
-  // Only allow http/https and block internal addresses — never let this
-  // become an SSRF vector for fetching localhost or Railway internals.
   let parsedUrl;
   try { parsedUrl = new URL(rawUrl); } catch { return res.status(400).send('invalid url'); }
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) return res.status(400).send('http/https only');
-  const host = parsedUrl.hostname;
-  if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) {
-    return res.status(403).send('private addresses not allowed');
-  }
+  if (_isPrivateHost(parsedUrl.hostname)) return res.status(403).send('private addresses not allowed');
+  if (!_camRateOk(req)) { upstreamCount('cameraRateLimited'); return res.status(429).send('slow down'); }
+  if (!(await _camHostAllowed(parsedUrl.hostname))) { upstreamCount('cameraBlocked'); return res.status(403).send('host not allowed'); }
+
+  const send = (entry) => {
+    upstreamCount('cameraImageBytes', entry.buf.length);
+    res.set('Content-Type', entry.ct || 'image/jpeg');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=25');
+    res.send(entry.buf);
+  };
 
   const cached = _imgCache.get(rawUrl);
-  if (cached && Date.now() - cached.ts < IMG_TTL) {
-    res.set('Content-Type', cached.ct || 'image/jpeg');
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Cache-Control', 'public, max-age=25');
-    return res.send(cached.buf);
-  }
+  if (cached && Date.now() - cached.ts < IMG_TTL) return send(cached);
 
   try {
-    const buf = await new Promise((resolve, reject) => {
-      const mod = parsedUrl.protocol === 'https:' ? require('https') : require('http');
-      const options = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } };
-      mod.get(rawUrl, options, r => {
-        if (r.statusCode === 301 || r.statusCode === 302) {
-          const rawLoc = r.headers.location;
-          if (!rawLoc) return reject(new Error('redirect with no location'));
-          let loc;
-          try { loc = rawLoc.startsWith('http') ? rawLoc : new URL(rawLoc, rawUrl).href; }
-          catch(_) { return reject(new Error('unresolvable redirect: ' + rawLoc)); }
-          const mod2 = loc.startsWith('https') ? require('https') : require('http');
-          mod2.get(loc, options, r2 => {
-            const chunks = [];
-            r2.on('data', c => chunks.push(c));
-            r2.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r2.headers['content-type'] }));
-            r2.on('error', reject);
-          }).on('error', reject);
-          return;
-        }
-        const chunks = [];
-        r.on('data', c => chunks.push(c));
-        r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] }));
-        r.on('error', reject);
-      }).on('error', reject);
-    });
-    _imgCache.set(rawUrl, { ...buf, ts: Date.now() });
-    // Prune cache if it grows large (shouldn't happen with 25s TTL but be safe)
-    if (_imgCache.size > 200) {
-      const oldest = [..._imgCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-      if (oldest) _imgCache.delete(oldest[0]);
+    let p = _imgInflight.get(rawUrl);
+    if (!p) {
+      upstreamCount('cameraImageUpstream');
+      p = _fetchBinary(rawUrl, { maxBytes: 5 * 1024 * 1024 }).then(r => {
+        if (r.status && r.status >= 400) { const e = new Error('upstream ' + r.status); e.status = r.status; throw e; }
+        const entry = { buf: r.buf, ct: r.ct, ts: Date.now() };
+        _lruSet(_imgCache, rawUrl, entry, 200);
+        return entry;
+      }).finally(() => _imgInflight.delete(rawUrl));
+      _imgInflight.set(rawUrl, p);
     }
-    res.set('Content-Type', buf.ct || 'image/jpeg');
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Cache-Control', 'public, max-age=25');
-    res.send(buf.buf);
+    send(await p);
   } catch (e) {
+    if (e.status) return res.status(e.status).send(e.message);
     console.warn('[CameraProxy]', e.message);
     res.status(502).send('upstream error');
   }
+});
+
+// GET /api/admin/upstream-usage — today's upstream calls, cache efficiency,
+// camera egress, and camera hosts not yet on the allowlist (admin auth).
+app.get('/api/admin/upstream-usage', async (req, res) => {
+  await _loadCamHosts();
+  const mb = (b) => b ? +(b / 1048576).toFixed(1) : 0;
+  res.json({
+    day: _upstream.day,
+    counts: _upstream,
+    cameraEgressMB: { hls: mb(_upstream.cameraHlsBytes), images: mb(_upstream.cameraImageBytes) },
+    forecastCache: { cells: _forecastCache.size, max: FORECAST_MAX, gridDeg: FORECAST_GRID },
+    camera: {
+      enforce: CAM_ENFORCE,
+      allowedHosts: _camHosts.size,
+      unknownHosts: [..._camUnknown.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([host, hits]) => ({ host, hits })),
+      hlsCacheMB: mb(_hlsCacheBytes),
+    },
+  });
 });
 
 
