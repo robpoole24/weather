@@ -1,6 +1,7 @@
-// Weather TV Service Worker
+// Weather TV Service Worker — build.1790546400
 // Minimal SW — just enough to satisfy PWA requirements
 // Weather TV is a live content platform so we don't cache aggressively
+importScripts('/js/wtv-alerts-core.js');
 
 const CACHE_NAME = 'weathertv-v2';
 const STATIC_ASSETS = ['/'];
@@ -46,12 +47,42 @@ self.addEventListener('fetch', e => {
   );
 });
 
+// ── Weather alert pushes (privacy-first) ────────────────────────────────────
+// The push only says "this warning covers area X". Whether it covers YOU is
+// decided here, against the location saved on this device.
+async function showWeatherAlert(d) {
+  const loc = await WTVAlertsCore.get('location');
+  const here = WTVAlertsCore.atLocation(d, loc);
+  const test = d.test === '1' ? 'TEST: ' : '';
+  const until = d.expires ? ' · until ' + new Date(d.expires).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  const loud = here && d.tier !== 'quiet';
+  const title = here ? `${test}${d.icon || '⚠️'} ${d.displayEvent}` : `${test}${d.displayEvent} nearby`;
+  const body = here
+    ? `${d.area || d.headline}${until}`
+    : `Issued near ${loc && loc.label ? loc.label : 'your location'} — your location is outside the warned area.${until}`;
+  await self.registration.showNotification(title, {
+    body,
+    icon: '/images/icon-192.png',
+    badge: '/images/icon-192.png',
+    tag: 'wtv-' + (d.alertKey || d.event),       // one card per warning, even if sent to several areas
+    renotify: loud,
+    requireInteraction: loud,
+    silent: !here,
+    vibrate: !loud ? undefined : d.tier === 'siren'
+      ? [1200, 300, 1200, 300, 1200, 300, 1200]  // long pulses for tornado-level warnings
+      : [300, 150, 300],
+    data: { url: d.url || '/radar.html' },
+  });
+}
+
 // Handle FCM push notifications
 self.addEventListener('push', e => {
   if (!e.data) return;
   e.waitUntil((async () => {
     try {
       const payload = e.data.json();
+      const wa = payload.data || payload;
+      if (wa && wa.type === 'weather_alert') return showWeatherAlert(wa);
       // FCM V1 sends { notification:{title,body}, data:{event,url,...} }
       // Some paths send title/body at top level — handle both
       const title = payload.notification?.title || payload.title || 'WeatherTV Alert';

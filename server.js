@@ -1,5 +1,6 @@
-// WeatherTV Server — updated 2026-09-27T16:00:00Z build.1790524800
+// WeatherTV Server — updated 2026-09-27T18:00:00Z build.1790532000
 const express = require('express');
+const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -23,6 +24,13 @@ if (fs.existsSync(envPath)) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'channels.json');
+
+// gzip/deflate every compressible response (HTML, JS, CSS, JSON, KML, m3u8).
+// Railway bills bytes sent to Cloudflare, and Cloudflare only compresses what
+// it sends onward to visitors — so without this, every cache miss left
+// Railway uncompressed. Images and video segments are skipped automatically
+// (already compressed). Registered first so it covers every route.
+app.use(compression());
 
 applySecurityMiddleware(app);
 app.use(express.json({ limit: '5mb' })); // 5MB covers the full appData payload sent by saveAll()

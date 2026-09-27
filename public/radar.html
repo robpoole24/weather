@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790553600 -->
 <html lang="en">
 <head>
 <!-- Google tag (gtag.js) -->
@@ -708,6 +709,19 @@
     #radar-minimize-btn { cursor: default !important; }
   }
 </style>
+<script src="/js/wtv-alerts-core.js"></script>
+<script src="/js/wtv-alerts.js"></script>
+<style>
+  #storm-eta { display:none; position:fixed; left:12px; bottom:96px; z-index:850; max-width:min(360px, calc(100vw - 24px));
+    background:rgba(10,14,20,0.92); border:1px solid var(--eta-color, #ff8c00); border-left-width:4px; border-radius:8px;
+    padding:0.5rem 0.7rem; color:#e6edf3; font:600 0.8rem/1.35 'Barlow', system-ui, sans-serif; cursor:pointer;
+    box-shadow:0 4px 18px rgba(0,0,0,0.45); }
+  #storm-eta .eta-main { font-family:'Barlow Condensed', system-ui, sans-serif; font-size:1rem; letter-spacing:0.02em; }
+  #storm-eta .eta-sub { color:#94a3b8; font-weight:500; font-size:0.72rem; margin-top:2px; }
+  #wtv-toast { display:none; position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:2000;
+    background:rgba(10,14,20,0.95); border:1px solid var(--accent, #00b4d8); color:#e6edf3; border-radius:6px;
+    padding:0.5rem 0.9rem; font:600 0.8rem 'Barlow', system-ui, sans-serif; }
+</style>
 </head>
 <body>
 
@@ -723,6 +737,7 @@
     <button type="submit" class="tb-btn">Go</button>
   </form>
   <button class="tb-btn" id="location-btn" onclick="goToMyLocation()">📍 My Location</button>
+  <button class="tb-btn" id="share-btn" onclick="shareRadarView()" title="Share this exact map view">🔗 Share</button>
 
   <div class="tb-div"></div>
   <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
@@ -771,6 +786,8 @@
 </div>
 
 <div id="map"></div>
+<div id="storm-eta" role="status" aria-live="polite" onclick="focusStormEta()"></div>
+<div id="wtv-toast" role="status" aria-live="polite"></div>
 
 <!-- ── Traffic Camera overlay ─────────────────────────────────────────────── -->
 <div id="camera-overlay">
@@ -1959,7 +1976,8 @@ let activeAlertFeatures = [];
 let activeMCDFeatures = [];
 
 async function loadAlerts() {
-  if (!alertsVisible) return;
+  // Always fetch: even with the Alerts layer hidden, the "you're in a warning"
+  // banner and notifications must keep working. (Polygons only draw when visible.)
   const status = document.getElementById('alerts-status');
   status.textContent = 'Updating alerts...';
   try {
@@ -1968,6 +1986,7 @@ async function loadAlerts() {
       { headers:{ 'Accept':'application/geo+json' } }
     );
     lastAlertsData = await res.json();
+    injectTestAlert(lastAlertsData);
     renderAlertLayers();
   } catch(e) {
     status.textContent = 'Alerts unavailable';
@@ -2062,8 +2081,11 @@ async function renderAlertLayers() {
     const props = feature.properties;
     const event = props.event || 'Advisory';
     count++;
-    if (!isAlertTypeEnabled(event)) return; // filtered out by user's type selection
-    shownCount++;
+    // The Alert Types filter controls what's DRAWN. Life-safety warnings still
+    // reach the location banner even if the user hid them from the map.
+    const _typeShown = isAlertTypeEnabled(event);
+    if (!_typeShown && !BANNER_ALWAYS.has(event)) return;
+    if (_typeShown) shownCount++;
 
     const s = ALERT_STYLE[event] || DEFAULT_STYLE;
     const layer = L.geoJSON(geom, {
@@ -2080,7 +2102,7 @@ async function renderAlertLayers() {
         });
       }
     });
-    alertsLayer.addLayer(layer);
+    if (_typeShown) alertsLayer.addLayer(layer);
 
     const expires = props.expires
       ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
@@ -2088,14 +2110,14 @@ async function renderAlertLayers() {
     const fullText = [props.description, props.instruction]
       .filter(Boolean).join('\n\n').replace(/\*/g,'').trim();
 
-    activeAlertFeatures.push({
+    if (_typeShown) activeAlertFeatures.push({
       event, color: s.color, headline: props.headline || event,
       areaDesc: props.areaDesc || '', expires, fullText,
       geometry: geom,
     });
 
     // Check if user is inside this alert polygon
-    if (userLat && userLng && !bannerDismissed) {
+    if (typeof userLat === 'number' && typeof userLng === 'number') {
       const inPoly = geom ? pointInPolygon(userLat, userLng, geom) : false;
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
@@ -2114,13 +2136,11 @@ async function renderAlertLayers() {
         });
         // Fire a browser system notification for this alert (works when tab is
         // open but in background — lock screen, other apps, etc.)
-        maybeNotifyAlert(
-          props.id || (event + props.onset),
-          event,
-          props.headline || '',
-          props.areaDesc || '',
-          s.color
-        );
+        const _aid = props.id || (event + (props.onset||''));
+        if (!dismissedAlertIds.has(_aid)) {
+          maybeNotifyAlert(_aid, event, props.headline || '', props.areaDesc || '', s.color);
+          playAlertSound(_aid, event, props.parameters);
+        }
       }
     }
   });
@@ -2129,8 +2149,8 @@ async function renderAlertLayers() {
   activeAlertFeatures.sort((a, b) => alertPriorityRank(a.event) - alertPriorityRank(b.event));
 
   // Show or hide banner based on whether user is in a zone
-  if (activeBannerAlerts.length > 0 && !bannerDismissed) {
-    showBanner(activeBannerAlerts);
+  if (activeBannerAlerts.length > 0 && overlayState['banner'] !== false) {
+    showBanner(activeBannerAlerts);      // showBanner skips individually dismissed alerts
   } else if (activeBannerAlerts.length === 0) {
     bannerDismissed = false; // reset dismiss if alerts cleared
     dismissedAlertIds.clear(); // clear per-alert dismissals too
@@ -2225,12 +2245,73 @@ let activeBannerAlerts = [];
 // the user dismisses the previous one.
 const dismissedAlertIds = new Set();
 
+// Warnings that always reach the location banner, regardless of the map filter
+const BANNER_ALWAYS = new Set(['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning']);
+
+// ── In-page alert sounds (while the radar is open) ──────────────────────────
+// Outdoor-siren for tornado-level warnings, soft chime for other warnings.
+// Plays once per alert; dismissing the banner stops it. Browsers may block
+// sound until the user has interacted with the page at least once.
+const _soundPlayed = new Set();
+let _alertAudio = null;
+function _soundUrl(name) {
+  const a = document.createElement('audio');
+  return `/sounds/${name}.` + (a.canPlayType('audio/ogg; codecs="vorbis"') ? 'ogg' : 'mp3');
+}
+function playAlertSound(alertId, event, params) {
+  if (localStorage.getItem('wtv-alert-sound') === 'off' || _soundPlayed.has(alertId)) return;
+  const ffCat = ((params && params.flashFloodDamageThreat) || [])[0] === 'CATASTROPHIC';
+  let name = null;
+  if (event === 'Tornado Warning' || event === 'Extreme Wind Warning' || ffCat) name = 'tornado_siren';
+  else if (event === 'Severe Thunderstorm Warning' || event === 'Flash Flood Warning') name = 'alert_chime';
+  if (!name) return;
+  _soundPlayed.add(alertId);
+  try {
+    stopAlertSound();
+    _alertAudio = new Audio(_soundUrl(name));
+    _alertAudio.play().catch(() => {});
+  } catch (_) {}
+}
+function stopAlertSound() {
+  if (_alertAudio) { try { _alertAudio.pause(); } catch (_) {} _alertAudio = null; }
+}
+
+// ── Test mode: radar.html?testAlert=tornado | svr | flood | emergency ───────
+// Drops a clearly-labelled fake warning on your location (or the map center)
+// so the banner, notification and sound can be checked without real weather.
+function injectTestAlert(data) {
+  const kind = new URLSearchParams(location.search).get('testAlert');
+  if (!kind || !data || !Array.isArray(data.features)) return;
+  if (typeof userLat !== 'number' || typeof userLng !== 'number') {
+    const c = map.getCenter(); userLat = c.lat; userLng = c.lng;
+  }
+  const events = { tornado: 'Tornado Warning', emergency: 'Tornado Warning', svr: 'Severe Thunderstorm Warning', flood: 'Flash Flood Warning' };
+  const event = events[kind] || 'Tornado Warning';
+  const d = 0.15;
+  data.features = data.features.filter(f => !String(f.properties?.id || '').startsWith('wtv-test-'));
+  data.features.unshift({
+    type: 'Feature',
+    geometry: { type: 'Polygon', coordinates: [[[userLng - d, userLat - d], [userLng + d, userLat - d], [userLng + d, userLat + d], [userLng - d, userLat + d], [userLng - d, userLat - d]]] },
+    properties: {
+      id: 'wtv-test-' + kind, event,
+      headline: `TEST — ${kind === 'emergency' ? 'TORNADO EMERGENCY' : event} (not a real warning)`,
+      areaDesc: 'WeatherTV test alert — not a real warning',
+      description: 'This is a WeatherTV test of the location banner, notification and alert sound. No real warning is in effect.',
+      instruction: '', onset: new Date().toISOString(),
+      expires: new Date(Date.now() + 30 * 60000).toISOString(),
+      parameters: kind === 'emergency' ? { tornadoDamageThreat: ['CATASTROPHIC'] } : {},
+      geocode: { UGC: [] },
+    },
+  });
+}
+
 function dismissBanner() {
   // Dismiss all currently active banner alerts by ID
   activeBannerAlerts.forEach(a => {
     if (a.id) dismissedAlertIds.add(a.id);
   });
   bannerDismissed = true;
+  stopAlertSound();
   document.getElementById('warning-banner').style.display = 'none';
   document.getElementById('map').classList.remove('banner-visible');
 }
@@ -3490,10 +3571,19 @@ function activateSingleSiteProduct(member) {
 // a whole can now be empty. Click the active layer again to turn it off;
 // click a different one to switch (auto-clearing the previous, same as
 // before).
+function syncTempButtons(){
+  const mode = activePaint === 'apptemp' ? (_appTempMode || 'feelslike') : 'none';
+  if (typeof _mapTempMode !== 'undefined') _mapTempMode = mode;
+  ['none','feelslike','forecast'].forEach(m => {
+    const b = document.getElementById('btn-' + m);
+    if (b) b.className = m === mode ? 'active' : '';
+  });
+}
 function togglePaint(member){
   if (activePaint === member) {
     clearAllPaint();
     activePaint = null;
+    syncTempButtons();
     setStatus('Base layer off');
     hideProductLegend();
     document.getElementById('site-picker').style.display = overlayState['cc'] ? 'block' : 'none';
@@ -3530,6 +3620,7 @@ function setPaint(member){
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
   }
   setStatus(paintStatusText(member));
+  syncTempButtons();
   // Show product color legend for single-site products; hide for others.
   // CC is intentionally excluded here — it manages its own legend via
   // applyOverlay('cc', ...) since it's a toggle, not a paint selection, and
@@ -4350,7 +4441,11 @@ async function refreshStormCells() {
       if (!b.contains([lat, lng])) return;
       const dbz = p.MAX_DBZ || p.max_dbz || 0;
       const color = dbz >= 65 ? '#ff00ff' : dbz >= 55 ? '#ff0000' : dbz >= 45 ? '#ff8c00' : '#ffff00';
-      const spd = p.SKNT || p.storm_speed || 0, dir = p.DRCT || p.storm_drct || 0;
+      const spd = p.SKNT || p.sknt || p.storm_speed || 0;
+      // IEM storm attributes give DRCT as the direction the storm is coming FROM
+      // (a "west" storm moves west→east), so the arrow heading is DRCT + 180.
+      const fromDir = p.DRCT || p.drct || p.storm_drct || 0;
+      const dir = (fromDir + 180) % 360;
       // Vector endpoint 45 min ahead
       const dist = spd * 0.75 * 1.852 / 111; // knots → deg lat
       const endLat = lat + dist * Math.cos(dir * Math.PI / 180);
@@ -4363,9 +4458,9 @@ async function refreshStormCells() {
       const mk = L.circleMarker([lat, lng], { radius: 6, color, fillColor: color, fillOpacity: 0.85, weight: 2 });
       mk.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${color}">🎯 Storm Cell</div>
         <div style="margin-top:4px">Max dBZ: <strong>${dbz}</strong></div>
-        <div>Movement: <strong>${dir}° at ${spd} kt</strong></div>
-        ${(p.TVS||p.tvs) ? '<div style="color:#ff0000;margin-top:2px">⚠ TVS detected</div>' : ''}
-        ${(p.MESO||p.meso) ? '<div style="color:#ff8c00;margin-top:2px">⚠ Meso detected</div>' : ''}
+        <div>Moving toward: <strong>${compassName(dir)} at ${fmtSpeedKt(spd)}</strong></div>
+        ${stormFlag(p.TVS ?? p.tvs) ? '<div style="color:#ff0000;margin-top:2px">⚠ Tornado vortex signature (TVS)</div>' : ''}
+        ${stormFlag(p.MESO ?? p.meso) ? '<div style="color:#ff8c00;margin-top:2px">⚠ Mesocyclone detected</div>' : ''}
         <div class="exp">IEM NEXRAD Storm Attributes</div></div>`, { maxWidth: 240 });
       _stormCellLayer.addLayer(mk);
     });
@@ -6125,56 +6220,113 @@ function onCamSourceToggle() {
 
 const MODELS = {
   hrrr: {
-    label: 'HRRR — Simulated Reflectivity',
-    note:  'High-Resolution Rapid Refresh · 3km · Updates hourly · 15-min steps to +3h. Best for near-term storm timing. The only free forecast reflectivity tile source available — RRFS replaces it August 31, 2026 with improved resolution.',
+    label: 'HRRR — Simulated Reflectivity (0–3h)',
+    note:  'High-Resolution Rapid Refresh · 3 km · updates hourly · 15-min steps to +3h. Best for near-term storm timing.',
     kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
     urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
   },
   hrrrp: {
-    label: 'HRRR — Precipitation Type',
+    label: 'HRRR — Precipitation Type (0–3h)',
     note:  'High-Resolution Rapid Refresh · Same HRRR model data, different color scheme. Color-codes precipitation by type: blue = rain, purple = freezing rain, green = snow, pink = ice pellets. Most useful for winter storms.',
     kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
     urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFP-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
   },
   rrfs: {
-    label: 'RRFS — Coming Aug 31',
-    note:  "Rapid Refresh Forecast System — replaces both HRRR and NAM on August 31, 2026. Higher resolution, better convective physics, sharper storm representation. We will activate it on launch day. HRRR is the best available option until then.",
-    kind:  'soon', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
-    urlFn: () => '',
+    label: 'RRFS — Simulated Reflectivity (0–18h)',
+    note:  "Rapid Refresh Forecast System · 3 km · NOAA's next-generation storm-scale model, replacing NAM and HREF. Running as NOAA's pre-operational parallel feed until its scheduled Oct 14, 2026 launch; the same data source continues after launch. Hourly steps out to 18h.",
+    kind:  'sidecar', model: 'rrfs', maxNativeZoom: 8,
+  },
+  gfs: {
+    label: 'GFS — Simulated Reflectivity (0–48h)',
+    note:  'Global Forecast System · NOAA global model · ~25 km · 3-hour steps to +48h. Coarser than HRRR/RRFS — good for the big picture and timing of large systems, not individual storms.',
+    kind:  'sidecar', model: 'gfs', maxNativeZoom: 6,
+  },
+  ecmwf: {
+    label: 'ECMWF (Euro) — Precipitation Rate (3–48h)',
+    note:  'ECMWF IFS · the "Euro" model · ~25 km · 3-hour steps. Shows precipitation rate (3-hr average), not simulated radar — ECMWF open data does not include reflectivity. Colors: light blue = light, yellow/orange = heavy, red/purple = extreme. Contains ECMWF open data (CC BY 4.0).',
+    kind:  'sidecar', model: 'ecmwf', maxNativeZoom: 6,
+    attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> (CC BY 4.0)',
   },
 };
 let currentModel = 'hrrr';
-function buildForecastFrames(model) {
+let _modelMeta = null, _modelMetaTs = 0, _modelBuildSeq = 0;
+
+async function getModelMeta() {
+  if (_modelMeta && Date.now() - _modelMetaTs < 5 * 60 * 1000) return _modelMeta;
+  const r = await fetch(`${WXTILES_BASE}/meta/models`);
+  if (!r.ok) throw new Error('meta HTTP ' + r.status);
+  _modelMeta = (await r.json()).models || {};
+  _modelMetaTs = Date.now();
+  return _modelMeta;
+}
+
+function _frameLabel(validMs, fh) {
+  const d = new Date(validMs);
+  const day = d.toLocaleDateString([], { weekday: 'short' });
+  const t = d.toLocaleTimeString([], { hour: 'numeric' });
+  return fh == null ? t : `${day} ${t} · F${String(fh).padStart(2, '0')}`;
+}
+
+// Builds the new frame set completely, then swaps it in — so the animation
+// loop never sees an empty or half-built frame list.
+async function buildForecastFrames(model, seq) {
   const cfg = MODELS[model] || MODELS.hrrr;
+  const next = [];
+  if (cfg.kind === 'iem') {
+    for (let m = 0; m <= cfg.maxMins; m += cfg.stepMins) {
+      next.push({ url: cfg.urlFn(m), label: _frameLabel(Date.now() + m * 60000, null), mins: m });
+    }
+  } else if (cfg.kind === 'sidecar') {
+    const info = (await getModelMeta())[cfg.model];
+    if (!info || !info.available) return { ok: false, reason: info && info.error ? info.error : 'no current run published' };
+    const cycleMs = Date.parse(info.cycleIso);
+    const nowMs = Date.now();
+    info.fhours.forEach(fh => {
+      const validMs = cycleMs + fh * 3600000;
+      if (validMs < nowMs - 45 * 60000) return;          // skip hours already in the past
+      next.push({
+        url: `${WXTILES_BASE}/tiles/model/${cfg.model}/${info.cycle}/${fh}/{z}/{x}/{y}.png`,
+        label: _frameLabel(validMs, fh), mins: Math.round((validMs - nowMs) / 60000),
+      });
+    });
+    if (!next.length) return { ok: false, reason: 'latest run has no future hours yet' };
+  }
+  // A newer model choice started while we were waiting — don't clobber its frames
+  if (seq != null && seq !== _modelBuildSeq) return { ok: false, stale: true };
   forecastFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
   forecastFrames.length = 0;
-  if (cfg.kind === 'soon') return;
-  const steps = [];
-  for (let m = 0; m <= cfg.maxMins; m += cfg.stepMins) steps.push(m);
-  steps.forEach((mins, idx) => {
-    const frameTime = new Date(Date.now() + mins * 60000);
-    const label = frameTime.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-    const url = cfg.urlFn(mins);
-    const layer = L.tileLayer(url, {
-      opacity: 0, tileSize: 256, zIndex: 300 + idx,
-      crossOrigin: true, maxNativeZoom: cfg.maxNativeZoom,
+  next.forEach((f, idx) => {
+    const layer = L.tileLayer(f.url, {
+      opacity: 0, tileSize: 256, zIndex: 300 + idx, crossOrigin: true,
+      maxNativeZoom: cfg.maxNativeZoom, attribution: idx === 0 ? (cfg.attribution || '') : '',
     });
     if (idx === 0) layer.addTo(map);
-    forecastFrames.push({ layer, label, mins });
+    forecastFrames.push({ layer, label: f.label, mins: f.mins });
   });
   currentForecastFrame = 0;
+  return { ok: true };
 }
-function onModelChange(model) {
-  if (MODELS[model]?.kind === 'soon') {
-    document.getElementById('model-note').textContent = MODELS[model].note;
-    document.getElementById('model-select').value = currentModel; // revert UI
-    return;
+
+async function onModelChange(model) {
+  const seq = ++_modelBuildSeq;
+  const noteEl = document.getElementById('model-note');
+  const sel = document.getElementById('model-select');
+  noteEl.textContent = MODELS[model].kind === 'sidecar' ? 'Loading latest model run…' : MODELS[model].note;
+  let res;
+  try { res = await buildForecastFrames(model, seq); }
+  catch (e) { res = { ok: false, reason: 'model service unreachable' }; }
+  if (res.stale || seq !== _modelBuildSeq) return;          // user picked another model meanwhile
+  if (!res.ok) {
+    noteEl.textContent = `${MODELS[model].label.split(' —')[0]} is temporarily unavailable (${res.reason}). Showing HRRR instead.`;
+    model = 'hrrr';
+    await buildForecastFrames('hrrr', seq);
+    if (seq !== _modelBuildSeq) return;
+  } else {
+    noteEl.textContent = MODELS[model].note;
   }
   currentModel = model;
-  document.getElementById('model-note').textContent = MODELS[model].note;
-  buildForecastFrames(model);
-  if (radarMode === 'forecast' && activePaint === 'reflectivity') {
-    // Clamp frame index to new frame count
+  sel.value = model;
+  if (radarMode === 'forecast' && activePaint === 'reflectivity' && forecastFrames.length) {
     if (currentForecastFrame >= forecastFrames.length) currentForecastFrame = 0;
     forecastFrames.forEach(f => f.layer.setOpacity(0));
     ensureAttached(forecastFrames[currentForecastFrame].layer);
@@ -6187,6 +6339,7 @@ const BASEMAP_ITEMS=[
   {id:'global-radar', ico:'🌍', name:'Global Radar',       sub:'LibreWXR · global radar · 150+ countries · animated'},
   {id:'reflectivity', ico:'🌧', name:'US Radar (NEXRAD)',  sub:'IEM mosaic · high-res CONUS only'},
   {id:'goes',         ico:'🛰', name:'GOES Satellite',     sub:'Infrared cloud imagery'},
+  {id:'apptemp',      ico:'🌡', name:'Feels Like Temperatures', sub:'Wind chill & heat index · regional/national view'},
 ];
 const RADAR_ITEMS=[
   // Single-site products — require selecting a nearby WSR-88D station.
@@ -6341,7 +6494,7 @@ function resetLayers(){
 (function initModelSelect() {
   const sel = document.getElementById('model-select');
   sel.innerHTML = Object.entries(MODELS).map(([k, v]) =>
-    `<option value="${k}" ${v.kind === 'soon' ? 'disabled' : ''}>${v.label}</option>`
+    `<option value="${k}">${v.label}</option>`
   ).join('');
   sel.value = currentModel;
   document.getElementById('model-note').textContent = MODELS[currentModel].note;
@@ -6377,6 +6530,8 @@ function goToMyLocation() {
     currentSite = null;
     fetchUserZone(lat, lng); // get zone codes for reliable banner triggering
     map.flyTo([lat, lng], 8);
+    startStormEta(); updateStormEta();
+    if (window.WTVAlerts) WTVAlerts.setLocation(lat, lng).catch(() => {});
     updateViewButtons('local');
     if (typeof updateFeelsLike === 'function') updateFeelsLike(lat, lng);
     if (typeof resolveRadarSites === 'function') resolveRadarSites(lat, lng);
@@ -6520,7 +6675,13 @@ window.onFcmToken = function(token) {
 };
 
 async function registerFcmToken() {
-  if (!fcmToken || !userLat || !userLng) return;
+  if (!fcmToken || typeof userLat !== 'number' || typeof userLng !== 'number') return;
+  // Privacy-first: location stays on the device; only topic subscriptions go out
+  try {
+    await WTVAlerts.setLocation(userLat, userLng);
+    await WTVAlerts.sync(fcmToken);
+  } catch (e) { console.warn('[Radar] Alert subscription failed:', e.message); }
+  return;
   try {
     const res = await fetch('/api/radar/register', {
       method: 'POST',
@@ -6579,16 +6740,166 @@ function maybeNotifyAlert(alertId, event, headline, areaDesc, color) {
   }
 }
 
+// ── Small helpers ─────────────────────────────────────────────────────────────
+// IEM sends tvs/meso as "NONE" when absent — a non-empty string, so the old
+// truthiness check flagged EVERY storm cell as having a TVS and a meso.
+function stormFlag(v) { return v != null && v !== '' && v !== 0 && String(v).toUpperCase() !== 'NONE'; }
+function compassName(deg) {
+  return ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+}
+function fmtSpeedKt(kt) { return `${Math.round(kt * 1.15078)} mph`; }
+let _toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('wtv-toast'); if (!t) return;
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(_toastTimer); _toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2600);
+}
+
+// ── Shareable radar links ────────────────────────────────────────────────────
+// ?at=lat,lng,zoom &base=reflectivity &layers=alerts,lightning &mode=forecast
+// &model=rrfs &site=KMKX — opens exactly the view someone was looking at.
+// Only what's on the map is shared; the sharer's own location is never added.
+function buildShareUrl() {
+  const c = map.getCenter();
+  const q = new URLSearchParams();
+  q.set('at', `${c.lat.toFixed(3)},${c.lng.toFixed(3)},${map.getZoom()}`);
+  if (activePaint) q.set('base', activePaint);
+  const on = OVERLAY_ITEMS.filter(o => overlayState[o.id]).map(o => o.id);
+  q.set('layers', on.join(','));
+  if (radarMode === 'forecast') { q.set('mode', 'forecast'); q.set('model', currentModel); }
+  if (currentSite && ((activePaint in SS_PRODUCTS) || overlayState['cc'])) q.set('site', currentSite);
+  return `${location.origin}${location.pathname}?${q.toString()}`;
+}
+async function shareRadarView() {
+  const url = buildShareUrl();
+  try {
+    if (navigator.share && /Mobi|Android/i.test(navigator.userAgent)) {
+      await navigator.share({ title: 'WeatherTV Radar', text: 'Check out this radar view on WeatherTV', url });
+      return;
+    }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(url); showToast('🔗 Link copied — paste it anywhere'); }
+  catch (_) { window.prompt('Copy this link:', url); }
+}
+const _shareParams = new URLSearchParams(location.search);
+const _sharedView = _shareParams.has('at');
+function applySharedView() {
+  const p = _shareParams;
+  if (p.has('at')) {
+    const [lat, lng, z] = p.get('at').split(',').map(Number);
+    if ([lat, lng].every(Number.isFinite) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+      map.setView([lat, lng], Number.isFinite(z) ? Math.min(Math.max(Math.round(z), 3), 12) : 8);
+    }
+  }
+  if (p.has('site') && /^[A-Z0-9]{3,4}$/i.test(p.get('site'))) {
+    currentSite = p.get('site').toUpperCase();
+    const sel = document.getElementById('site-select'); if (sel) sel.value = currentSite;
+  }
+  if (p.has('base')) {
+    const base = p.get('base');
+    const valid = BASEMAP_ITEMS.concat(RADAR_ITEMS).some(i => i.id === base);
+    if (valid && base !== activePaint) setPaint(base);
+  }
+  if (p.has('layers')) {
+    const want = new Set(p.get('layers').split(',').filter(Boolean));
+    OVERLAY_ITEMS.forEach(o => {
+      const on = want.has(o.id);
+      if (!!overlayState[o.id] !== on) { overlayState[o.id] = on; applyOverlay(o.id, on); }
+    });
+    renderPanel();
+  }
+  if (p.get('mode') === 'forecast') {
+    const m = p.get('model');
+    if (m && MODELS[m]) onModelChange(m).then(() => setRadarMode('forecast'));
+    else setRadarMode('forecast');
+  }
+}
+if (_shareParams.has('at') || _shareParams.has('layers') || _shareParams.has('base')) {
+  try { applySharedView(); } catch (e) { console.warn('[Share] Could not apply shared view:', e.message); }
+}
+
+// ── Storm arrival time for your location ─────────────────────────────────────
+// Uses the NWS radar storm-tracking attributes (via IEM): each tracked cell's
+// position, speed and direction. Projects every nearby cell forward and asks:
+// does its path cross your location, and when? Runs in the browser only.
+let _stormEtaTimer = null, _stormEtaTarget = null;
+const STORM_ETA_MAX_MIN = 90;
+async function updateStormEta() {
+  const chip = document.getElementById('storm-eta');
+  if (!chip || typeof userLat !== 'number' || typeof userLng !== 'number') return;
+  try {
+    const data = await (await fetch('https://mesonet.agron.iastate.edu/geojson/nexrad_attr.py')).json();
+    const best = computeStormEta(data.features || [], userLat, userLng);
+    _stormEtaTarget = best;
+    if (!best) { chip.style.display = 'none'; return; }
+    const color = best.dbz >= 60 ? '#ff00ff' : best.dbz >= 50 ? '#ff0000' : '#ff8c00';
+    chip.style.setProperty('--eta-color', color);
+    const when = best.minutes < 5 ? 'arriving now' : `arriving in ~${Math.round(best.minutes / 5) * 5} min`;
+    const tags = [
+      `${best.dbz} dBZ`,
+      best.hail >= 0.75 ? `hail to ${best.hail}"` : null,
+      best.tvs ? 'TORNADO SIGNATURE' : best.meso ? 'rotation' : null,
+    ].filter(Boolean).join(' · ');
+    chip.innerHTML = `<div class="eta-main">${best.tvs ? '🌪' : '⛈'} Storm ${best.direct ? when : `passing ~${Math.round(best.missMi)} mi away, ${when.replace('arriving', 'closest')}`}</div>
+      <div class="eta-sub">${tags} · moving ${compassName(best.heading)} at ${Math.round(best.mph)} mph · radar estimate, storms can change · tap to view</div>`;
+    chip.style.display = 'block';
+  } catch (e) { /* storm tracking unavailable — leave chip as is */ }
+}
+// Pure function (testable): returns the soonest storm whose track crosses near the point
+function computeStormEta(features, lat, lng) {
+  const toRad = Math.PI / 180, kmPerDegLat = 111.2, kmPerDegLng = 111.2 * Math.cos(lat * toRad);
+  let best = null;
+  for (const f of features) {
+    const p = f.properties || {}, c = f.geometry && f.geometry.coordinates;
+    if (!c) continue;
+    const dbz = p.max_dbz ?? p.MAX_DBZ ?? 0, kt = p.sknt ?? p.SKNT ?? 0;
+    if (dbz < 40 || kt < 5) continue;
+    if (p.valid && Date.now() - Date.parse(p.valid) > 20 * 60000) continue;       // stale cell
+    const heading = (((p.drct ?? p.DRCT ?? 0) + 180) % 360);
+    const kmh = kt * 1.852;
+    // You, relative to the storm, in km (east, north)
+    const dx = (lng - c[0]) * kmPerDegLng, dy = (lat - c[1]) * kmPerDegLat;
+    const ux = Math.sin(heading * toRad), uy = Math.cos(heading * toRad);
+    const along = dx * ux + dy * uy;               // km ahead of the storm along its path
+    const cross = Math.abs(dx * uy - dy * ux);     // km off to the side of its path
+    if (along <= -3) continue;                     // storm already past you
+    const minutes = Math.max(0, along) / kmh * 60;
+    if (minutes > STORM_ETA_MAX_MIN) continue;
+    // Storm "width" grows with intensity; tracking error grows with distance
+    const halfWidth = (dbz >= 55 ? 10 : dbz >= 50 ? 8 : 6) + 0.12 * Math.max(0, along);
+    if (cross > halfWidth * 2) continue;
+    const cand = {
+      minutes, dbz, heading, mph: kmh / 1.609, direct: cross <= halfWidth, missMi: cross / 1.609,
+      hail: +(p.max_size ?? 0), tvs: stormFlag(p.tvs ?? p.TVS), meso: stormFlag(p.meso ?? p.MESO),
+      lat: c[1], lng: c[0],
+    };
+    // Prefer storms that hit directly, then the soonest, then the strongest
+    const score = (cand.direct ? 0 : 1000) + cand.minutes - dbz / 10 - (cand.tvs ? 30 : 0);
+    if (!best || score < best._score) best = { ...cand, _score: score };
+  }
+  return best;
+}
+function focusStormEta() {
+  if (!_stormEtaTarget) return;
+  map.setView([_stormEtaTarget.lat, _stormEtaTarget.lng], Math.max(map.getZoom(), 9));
+}
+function startStormEta() {
+  if (_stormEtaTimer) return;
+  updateStormEta();
+  _stormEtaTimer = setInterval(() => { if (!document.hidden) updateStormEta(); }, 2 * 60 * 1000);
+}
+
 // ── AUTO GEOLOCATE ON LOAD ───────────────────────────────────────────────────
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     pos => {
       userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-      map.setView([userLat, userLng], 8);
-      updateViewButtons('local');
+      if (!_sharedView) { map.setView([userLat, userLng], 8); updateViewButtons('local'); } // a shared link keeps its own view
+      startStormEta();
       fetchUserZone(userLat, userLng);
       loadAlerts();
-      registerFcmToken(); // register now that we have location
+      registerFcmToken(); // Android app bridge: subscribe the app's token to this area
+      if (window.WTVAlerts) WTVAlerts.setLocation(userLat, userLng).catch(() => {}); // keep device-side alert location current
       requestNotificationPermission(); // ask for browser notification permission
       if (typeof updateFeelsLike === 'function') updateFeelsLike(userLat, userLng);
     },
