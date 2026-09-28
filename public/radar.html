@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790589600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790618400 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -1041,7 +1041,7 @@
   <div class="lp-section" style="border-bottom:none;">
     <div class="lp-section-label">Models (forecast mode)</div>
     <label class="lp-select-label">Forecast model</label>
-    <select id="model-select" class="lp-select" onchange="onModelChange(this.value)"></select>
+    <select id="model-select" class="lp-select" onchange="pickForecastModel(this.value)"></select>
     <div id="model-note" style="font-size:0.64rem;color:var(--muted);margin-top:0.4rem;line-height:1.5;"></div>
   </div>
 
@@ -6303,6 +6303,19 @@ async function buildForecastFrames(model, seq) {
   });
   currentForecastFrame = 0;
   return { ok: true };
+}
+
+// Picking a model from the dropdown clearly means "show me this forecast":
+// turn on the radar layer and switch to Future mode instead of silently
+// loading frames that stay hidden (the old behavior in Past mode or with radar off).
+async function pickForecastModel(model) {
+  await onModelChange(model);
+  if (activePaint !== 'reflectivity') setPaint('reflectivity');
+  if (radarMode !== 'forecast') setRadarMode('forecast');
+  const note = document.getElementById('model-note');
+  if (forecastFrames.length && note && !/unavailable/.test(note.textContent)) {
+    setStatus(`${MODELS[currentModel].label.split(' —')[0]} forecast · ${forecastFrames.length} frames · press ▶ Play to animate`);
+  }
 }
 
 async function onModelChange(model) {
