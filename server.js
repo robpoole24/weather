@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-28T09:00:00Z build.1790604000
+// WeatherTV Server — updated 2026-09-28T11:00:00Z build.1790611200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -4624,7 +4624,12 @@ function _fwText(html, max = 400) {
 }
 function _fwMoney(m) { const v = m && (m.value ?? m.amount); return typeof v === 'number' ? v : (v != null ? Number(v) : null); }
 function _fwProduct(p) {
-  const images = (p.images || []).map(i => i.transformedUrl || i.url).filter(Boolean).slice(0, 4);
+  // Every product photo, including Fourthwall's model/lifestyle previews, plus
+  // any extra per-variant photos (deduped). Capped so one product can't bloat the list.
+  const images = [...new Set([
+    ...(p.images || []).map(i => i.transformedUrl || i.url),
+    ...(p.variants || []).flatMap(v => (v.images || []).map(i => i.transformedUrl || i.url)),
+  ].filter(Boolean))].slice(0, 16);
   const variants = (p.variants || []).map(v => {
     const stock = v.stock || {};
     return {
