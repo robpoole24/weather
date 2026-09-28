@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-28T14:00:00Z build.1790632800
+// WeatherTV Server — updated 2026-09-28T17:00:00Z build.1790643600
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1295,6 +1295,57 @@ app.get('/api/canada-radar/capabilities', async (req, res) => {
     console.warn('[CanadaRadar] GetCapabilities proxy failed:', e.message);
     res.status(502).json({ error: 'Could not reach geo.weather.gc.ca' });
   }
+});
+
+// GET /api/geomet/precip-layers
+// GeoMet renames model layers over time (e.g. RDPS.ETA_* → RDPS_10km_*), so
+// instead of hard-coding names we read GeoMet's own layer list once a day and
+// return every precipitation layer for the Canadian models. The full list is
+// ~40 MB, so it's STREAMED: only Name/Title pairs mentioning precipitation are
+// kept (a few KB), never the whole document.
+let _geometPrecip = { data: null, ts: 0, pending: null };
+function _scanGeometCapabilities() {
+  return new Promise((resolve, reject) => {
+    const https = require('https');
+    const found = new Map();
+    let tail = '';
+    const re = /<Name>([^<]{2,120})<\/Name>\s*<Title>([^<]{2,300})<\/Title>/g;
+    const req = https.get('https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&lang=en',
+      { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }, timeout: 90000 }, r => {
+        if (r.statusCode !== 200) { r.resume(); return reject(new Error('GeoMet HTTP ' + r.statusCode)); }
+        r.setEncoding('utf8');
+        r.on('data', chunk => {
+          const buf = tail + chunk;
+          let m, last = 0;
+          re.lastIndex = 0;
+          while ((m = re.exec(buf))) {
+            last = re.lastIndex;
+            const [, name, title] = m;
+            if (/^(RDPS|HRDPS|GDPS)/i.test(name) && /precip|rain|taux|pr[ée]cip/i.test(title + ' ' + name)) found.set(name.trim(), title.trim());
+          }
+          tail = buf.slice(Math.max(last, buf.length - 2000));   // keep a little overlap for tags split across chunks
+        });
+        r.on('end', () => resolve([...found].map(([name, title]) => ({ name, title }))));
+        r.on('error', reject);
+      });
+    req.on('timeout', () => req.destroy(new Error('GeoMet capabilities timeout')));
+    req.on('error', reject);
+  });
+}
+app.get('/api/geomet/precip-layers', async (req, res) => {
+  const fresh = _geometPrecip.data && Date.now() - _geometPrecip.ts < 24 * 3600 * 1000;
+  if (!fresh) {
+    if (!_geometPrecip.pending) {
+      _geometPrecip.pending = _scanGeometCapabilities()
+        .then(list => { if (list.length) _geometPrecip = { data: list, ts: Date.now(), pending: null }; else _geometPrecip.pending = null; return list; })
+        .catch(e => { _geometPrecip.pending = null; throw e; });
+    }
+    try { await _geometPrecip.pending; } catch (e) {
+      if (!_geometPrecip.data) return res.status(502).json({ error: 'GeoMet layer list unavailable', detail: e.message });
+    }
+  }
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({ layers: _geometPrecip.data || [], fetchedAt: _geometPrecip.ts });
 });
 
 // ── TRAFFIC CAMERAS ─────────────────────────────────────────────────────────

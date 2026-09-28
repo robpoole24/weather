@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790632800 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790643600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -6401,13 +6401,13 @@ const MODELS = {
   rdps: {
     label: 'Canadian RDPS (GEM Regional) — Precipitation (0–84h)',
     note:  "Environment Canada's regional model · ~10 km · covers Canada and the US · served directly by MSC GeoMet (no load on our servers).",
-    kind:  'geomet', layers: ['RDPS.ETA_RT', 'RDPS.ETA_PR'], maxFrames: 24,
+    kind:  'geomet', prefix: /^RDPS[._]/i, layers: ['RDPS.ETA_RT', 'RDPS.ETA_PR'], maxFrames: 24,
     attribution: 'Forecast: <a href="https://eccc-msc.github.io/open-data/">ECCC MSC GeoMet</a>',
   },
   hrdps: {
     label: 'Canadian HRDPS (2.5 km) — Precipitation (0–48h)',
     note:  "Environment Canada's high-resolution model · 2.5 km · covers Canada and areas along the US border only · served directly by MSC GeoMet.",
-    kind:  'geomet', layers: ['HRDPS.CONTINENTAL_RT', 'HRDPS.CONTINENTAL_PR'], maxFrames: 24,
+    kind:  'geomet', prefix: /^HRDPS[._-]/i, layers: ['HRDPS.CONTINENTAL_RT', 'HRDPS.CONTINENTAL_PR'], maxFrames: 24,
     attribution: 'Forecast: <a href="https://eccc-msc.github.io/open-data/">ECCC MSC GeoMet</a>',
   },
 };
@@ -6429,8 +6429,28 @@ function _parseWmsTimes(text) {
   });
   return out.filter(Number.isFinite);
 }
+// Rank GeoMet's own precipitation layers for a model: a precipitation RATE on
+// the current grid first, accumulations only as a fallback.
+function _rankGeometLayers(list, cfg) {
+  const score = l => {
+    const t = (l.title + ' ' + l.name).toLowerCase();
+    let sc = 0;
+    if (/rate|taux|mm\/h/.test(t)) sc += 10;
+    if (/accum/.test(t)) sc -= 4;
+    if (/\d+(\.\d+)?km/.test(l.name)) sc += 3;                       // current-generation names (RDPS_10km_…)
+    if (/prob|pctl|percent|contour|ens|type|snow|rain_|freezing|ice/.test(t)) sc -= 20;
+    return sc;
+  };
+  return list.filter(l => cfg.prefix.test(l.name)).sort((a, b) => score(b) - score(a)).map(l => l.name);
+}
 async function _geometLayerInfo(cfg) {
-  for (const name of cfg.layers) {
+  let names = [];
+  try {
+    const r = await fetch('/api/geomet/precip-layers');
+    if (r.ok) names = _rankGeometLayers((await r.json()).layers || [], cfg).slice(0, 4);
+  } catch (_) { /* fall back to the known names below */ }
+  names = [...new Set([...names, ...cfg.layers])];
+  for (const name of names) {
     try {
       const txt = await (await fetch(`/api/canada-radar/capabilities?layer=${encodeURIComponent(name)}`)).text();
       const xml = new DOMParser().parseFromString(txt, 'text/xml');
