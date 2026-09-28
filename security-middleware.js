@@ -111,6 +111,8 @@ function securityHeaders(req, res, next) {
       " https://tiles.watchweathertv.com" +
       // Cloudflare Web Analytics beacon reports page views here (no cookies)
       " https://cloudflareinsights.com" +
+      // Self-hosted WeatherStar 3000/4000: location search + radar/NWS data
+      " https://geocode.arcgis.com https://radar.weather.gov" +
       // Firebase SDK + installation service (required for FCM push token registration)
       " https://www.gstatic.com" +
       " https://firebaseinstallations.googleapis.com" +
@@ -146,8 +148,7 @@ function securityHeaders(req, res, next) {
       // Altruistic Apps / Aporia quote APIs
       " https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
     // frame-src: allow YouTube and Twitch video embeds
-    // weatherstar3000.netbymatt.com — WeatherStar 3000 player (index.html WS_BASES['3000'])
-    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com https://weatherstar3000.netbymatt.com",
+    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com",
     "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header

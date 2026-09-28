@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790650800 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790661600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -762,7 +762,29 @@
       min-width:240px;box-shadow:0 4px 16px rgba(0,0,0,0.5);font-family:'Barlow',sans-serif;"></div>
   </div>
   <button class="tb-btn"         id="btn-spc"    onclick="toggleSPC()" title="SPC Convective Outlook" style="display:none;">🗺 SPC Outlook</button>
-  <button class="tb-btn"         id="btn-mcd"    onclick="toggleMCD()" title="SPC Mesoscale Discussions" style="display:none;">💬 Mesoscale Discussions</button>
+  <div style="position:relative;display:inline-block;">
+    <button class="tb-btn" id="btn-meso" onclick="toggleMesoMenu()" title="SPC Mesoscale Discussions and Mesoscale Analysis" aria-expanded="false" aria-controls="meso-menu">📡 Mesoscale Updates</button>
+    <div id="meso-menu" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:1000;background:#101826;border:1px solid rgba(255,255,255,0.12);
+         border-radius:6px;padding:0.45rem;box-shadow:0 4px 16px rgba(0,0,0,0.5);min-width:260px;">
+      <div style="display:flex;gap:0.35rem;">
+        <button class="tb-btn" id="btn-mcd" onclick="toggleOverlayFromToolbar('mcd')" title="SPC Mesoscale Discussions" style="flex:1;">💬 Discussions</button>
+        <button class="tb-btn" id="btn-mesoanalysis" onclick="toggleOverlayFromToolbar('mesoanalysis')" title="Severe-weather ingredients from the latest HRRR hour" style="flex:1;">📈 Analysis</button>
+      </div>
+      <div id="meso-analysis-opts" style="display:none;margin-top:0.45rem;">
+        <select id="meso-param" class="lp-select" onchange="setMesoParam(this.value)" style="width:100%;margin:0 0 0.35rem;">
+          <option value="mlcape">Instability — Mixed-layer CAPE</option>
+          <option value="sbcape">Instability — Surface-based CAPE</option>
+          <option value="srh01">Spin — 0–1 km helicity</option>
+          <option value="srh03">Spin — 0–3 km helicity</option>
+          <option value="shear06">Organization — 0–6 km bulk shear</option>
+          <option value="stp">Tornado potential — Significant Tornado Parameter</option>
+        </select>
+        <div id="meso-legend" style="display:flex;height:8px;border-radius:2px;overflow:hidden;"></div>
+        <div id="meso-legend-labels" style="display:flex;justify-content:space-between;font-size:0.62rem;color:#7a9bb5;margin-top:2px;font-family:'Barlow',sans-serif;"></div>
+        <div id="meso-valid" style="font-size:0.66rem;color:#7a9bb5;margin-top:0.3rem;font-family:'Barlow',sans-serif;line-height:1.35;"></div>
+      </div>
+    </div>
+  </div>
   <div class="tb-div"></div>
 
   <!-- SPC Day selector — shown when SPC is active -->
@@ -1016,6 +1038,11 @@
   <div class="lp-section">
     <div class="lp-section-label">Alerts &amp; Warnings</div>
     <div id="lp-alerts"></div>
+  </div>
+
+  <div class="lp-section">
+    <div class="lp-section-label">Mesoscale</div>
+    <div id="lp-meso"></div>
   </div>
 
   <div class="lp-section">
@@ -1411,8 +1438,7 @@ map.on('popupopen', function(e) {
   });
 });
 
-// Show MCD button — always visible since MCDs are fetched on demand
-document.getElementById('btn-mcd').style.display = '';
+// (Mesoscale Discussions now live inside the "Mesoscale Updates" menu.)
 updateZoomIndicator();
 
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -1834,6 +1860,77 @@ async function loadSPC() {
     console.error('[SPC]', e);
     document.getElementById('alerts-status').textContent = 'SPC data unavailable';
   }
+}
+
+// ── MESOSCALE UPDATES menu (Discussions + Analysis) ─────────────────────────
+function toggleMesoMenu() {
+  const m = document.getElementById('meso-menu');
+  const open = m.style.display === 'none';
+  m.style.display = open ? 'block' : 'none';
+  document.getElementById('btn-meso').setAttribute('aria-expanded', String(open));
+}
+// Toolbar buttons go through the same overlay state as the Layers panel, so
+// the two always agree.
+function toggleOverlayFromToolbar(id) {
+  const on = !overlayState[id];
+  overlayState[id] = on;
+  applyOverlay(id, on);
+  renderPanel();
+}
+function syncMesoButtons() {
+  const d = !!overlayState['mcd'], a = !!overlayState['mesoanalysis'];
+  const set = (id, on) => { const b = document.getElementById(id); if (b) b.className = 'tb-btn' + (on ? ' on' : ''); };
+  set('btn-mcd', d); set('btn-mesoanalysis', a); set('btn-meso', d || a);   // parent lights up when either is on
+  const opts = document.getElementById('meso-analysis-opts'); if (opts) opts.style.display = a ? 'block' : 'none';
+}
+
+// ── MESOSCALE ANALYSIS (HRRR ingredients rendered by the Radar Sidecar) ──────
+let mesoLayer = null, mesoParam = 'mlcape', mesoMeta = null, mesoTimer = null;
+async function startMesoAnalysis() {
+  try {
+    const r = await fetch(`${WXTILES_BASE}/meta/meso`);
+    mesoMeta = await r.json();
+  } catch (_) { mesoMeta = null; }
+  const valid = document.getElementById('meso-valid');
+  if (!mesoMeta || !mesoMeta.available) {
+    if (valid) valid.textContent = 'Mesoscale Analysis is temporarily unavailable. Try again in a few minutes.';
+    return;
+  }
+  drawMesoLayer();
+  clearInterval(mesoTimer);
+  mesoTimer = setInterval(async () => {          // new HRRR hour → refresh
+    if (document.hidden || !overlayState['mesoanalysis']) return;
+    try {
+      const m = await (await fetch(`${WXTILES_BASE}/meta/meso`)).json();
+      if (m.available && m.cycle !== (mesoMeta && mesoMeta.cycle)) { mesoMeta = m; drawMesoLayer(); }
+    } catch (_) {}
+  }, 10 * 60 * 1000);
+}
+function drawMesoLayer() {
+  if (mesoLayer) { map.removeLayer(mesoLayer); mesoLayer = null; }
+  if (!mesoMeta || !mesoMeta.available) return;
+  mesoLayer = L.tileLayer(`${WXTILES_BASE}/tiles/meso/${mesoParam}/${mesoMeta.cycle}/{z}/{x}/{y}.png`, {
+    opacity: 0.75, zIndex: 250, maxNativeZoom: 8, crossOrigin: true,
+    attribution: 'Mesoscale analysis: NOAA HRRR',
+  }).addTo(map);
+  const p = mesoMeta.params[mesoParam];
+  document.getElementById('meso-legend').innerHTML = p.colors.map(c => `<span style="flex:1;background:${c}"></span>`).join('');
+  document.getElementById('meso-legend-labels').innerHTML = `<span>${p.stops[0]}</span><span>${p.stops[Math.floor(p.stops.length / 2)]}</span><span>${p.stops[p.stops.length - 1]}+ ${p.units}</span>`;
+  const t = new Date(mesoMeta.validIso);
+  const help = {
+    mlcape: 'Energy available for rising air. 1,000+ supports strong storms; 2,500+ is very unstable.',
+    sbcape: 'Instability for air lifted from the surface. Can overstate things when the surface is capped.',
+    srh01: 'Low-level spin a storm can tap. 100+ supports tornadoes; 200+ is significant.',
+    srh03: 'Spin through the lowest 3 km. 150+ favors rotating supercells.',
+    shear06: 'Change in wind through 6 km. 40+ kt organizes storms into supercells.',
+    stp: 'Combines instability, spin, shear and cloud base. Above 1 marks environments where significant tornadoes become more likely.',
+  }[mesoParam];
+  document.getElementById('meso-valid').textContent = `${p.label} · HRRR analysis for ${t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. ${help}`;
+}
+function setMesoParam(v) { mesoParam = v; drawMesoLayer(); }
+function stopMesoAnalysis() {
+  clearInterval(mesoTimer); mesoTimer = null;
+  if (mesoLayer) { map.removeLayer(mesoLayer); mesoLayer = null; }
 }
 
 // ── MESOSCALE DISCUSSIONS ─────────────────────────────────────────────────────
@@ -6616,7 +6713,6 @@ const ALERT_ITEMS=[
 ];
 const CHASER_ITEMS=[
   {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
-  {id:'mcd',       ico:'💬', name:'Mesoscale Discussions',  sub:'Active MCDs',                     def:false},
   {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
   {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
   {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
@@ -6642,7 +6738,11 @@ const FIRE_ITEMS=[
 const CAM_ITEMS=[
   {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
+const MESO_ITEMS=[
+  {id:'mcd',          ico:'💬', name:'Mesoscale Discussions', sub:'SPC forecaster updates · active MCDs', def:false},
+  {id:'mesoanalysis', ico:'📈', name:'Mesoscale Analysis',    sub:'CAPE · helicity · shear · tornado parameter (HRRR, hourly)', def:false},
+];
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(MESO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -6666,7 +6766,8 @@ function applyOverlay(id,on){
   switch(id){
     case 'alerts':    if (on!==alertsVisible) toggleAlerts(); break;
     case 'spc':       if (on!==spcVisible) toggleSPC(); break;
-    case 'mcd':       if (on!==mcdVisible) toggleMCD(); break;
+    case 'mcd':       if (on!==mcdVisible) toggleMCD(); syncMesoButtons(); break;
+    case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
@@ -6713,6 +6814,7 @@ function renderPanel(){
   document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-meso').innerHTML=MESO_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
   // Vibration sub-row under the lightning toggle
   const _vr = document.createElement('div');

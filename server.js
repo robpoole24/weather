@@ -4712,12 +4712,17 @@ app.get('/api/lightning', (req, res) => {
 // Local Radar display. Map it directly to where the files actually live.
 app.use('/images/maps/radar', express.static(path.join(__dirname, 'public', 'weatherstar', 'images', 'maps', 'radar')));
 
-// ── WS4KP icon fallback ───────────────────────────────────────────────────────
-// Weather condition GIFs are large binary assets; if missing locally, redirect to
-// Matt's server. Strip the /weatherstar/ path prefix — Matt serves at /images/...
-app.get('/weatherstar/images/*', (req, res) => {
-  const imagePath = req.path.replace(/^\/weatherstar/, '');
-  res.redirect(302, `https://weatherstar.netbymatt.com${imagePath}`);
+// ── WeatherStar missing-image handler ─────────────────────────────────────────
+// WeatherStar 3000/4000 are fully self-hosted. This used to redirect missing
+// images to netbymatt.com; now a missing file is a plain 404 and gets logged
+// once, so it can be added to /public/weatherstar/images instead.
+const _wsMissingLogged = new Set();
+app.get(['/weatherstar/images/*', '/weatherstar3000/images/*'], (req, res) => {
+  if (!_wsMissingLogged.has(req.path) && _wsMissingLogged.size < 200) {
+    _wsMissingLogged.add(req.path);
+    console.warn('[WeatherStar] Missing image (add it to public):', req.path);
+  }
+  res.status(404).send('Not found');
 });
 
 // ── Serve index for all other routes ──
