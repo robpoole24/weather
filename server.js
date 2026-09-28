@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-28T20:00:00Z build.1790654400
+// WeatherTV Server — updated 2026-09-29T00:00:00Z build.1790668800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1033,6 +1033,95 @@ app.get('/api/chasers', (req, res) => {
   });
 
   res.json({ updatedAt: chaserCache.updatedAt, chasers: enriched });
+});
+
+// ── Live near this warning ───────────────────────────────────────────────────
+// GET /api/live-near-warnings — active storm warnings that have a LIVE WeatherTV
+// chaser inside them or within 10 miles, sorted by severity.
+// Chasers need a Spotter Network ↔ channel mapping (admin) to be placed.
+// Each chaser appears under ONE warning: the one they're inside (or closest
+// to), so three chasers on three storms show up as three separate entries.
+const NEAR_WARNING_MI = 10;
+const WARNING_RANK = { 'TORNADO EMERGENCY': 0, 'PDS Tornado Warning': 1, 'Tornado Warning': 2, 'FLASH FLOOD EMERGENCY': 3,
+                       'Extreme Wind Warning': 4, 'Severe Thunderstorm Warning': 5, 'Flash Flood Warning': 6 };
+let _nearWarnCache = { data: null, ts: 0 };
+
+function _rings(geom) {
+  if (!geom) return [];
+  if (geom.type === 'Polygon') return [geom.coordinates[0]];
+  if (geom.type === 'MultiPolygon') return geom.coordinates.map(p => p[0]);
+  return [];
+}
+function _inRing(lat, lng, ring) {           // ring: [[lng,lat],…]
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function _milesToRing(lat, lng, ring) {       // shortest distance to the outline, miles
+  const kx = 69.17 * Math.cos(lat * Math.PI / 180), ky = 69.05;
+  let best = Infinity;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const ax = (ring[i][0] - lng) * kx, ay = (ring[i][1] - lat) * ky;
+    const bx = (ring[i + 1][0] - lng) * kx, by = (ring[i + 1][1] - lat) * ky;
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}
+
+function buildLiveNearWarnings() {
+  const { list: warnings, updatedAt } = radar.getActiveStormWarnings();
+  const data = loadData();
+  const chaserMap = data.chaserMap || {};
+  const channelById = {};
+  (data.groups || []).forEach(g => (g.channels || []).forEach(ch => { channelById[ch.id] = ch; }));
+
+  // Live WeatherTV chasers who have a Spotter Network position right now
+  const liveChasers = chaserCache.chasers.map(c => {
+    const channelId = chaserMap[c.id];
+    const live = channelId && cache.liveStatuses[channelId];
+    if (!live || !live.isLive) return null;
+    return { snId: c.id, lat: c.lat, lng: c.lng, channelId, channelName: channelById[channelId]?.name || c.name,
+             videoId: live.videoId || null, movement: c.movement, positionTime: c.positionTime };
+  }).filter(Boolean);
+
+  const byWarning = new Map();
+  for (const ch of liveChasers) {
+    let best = null;
+    for (const w of warnings) {
+      const rings = _rings(w.geometry);
+      if (!rings.length) continue;
+      const inside = rings.some(r => _inRing(ch.lat, ch.lng, r));
+      const miles = inside ? 0 : Math.min(...rings.map(r => _milesToRing(ch.lat, ch.lng, r)));
+      if (!inside && miles > NEAR_WARNING_MI) continue;
+      const rank = WARNING_RANK[w.displayEvent] ?? 9;
+      // inside beats nearby; then the more dangerous warning; then the closer one
+      const score = (inside ? 0 : 1000) + rank * 50 + miles;
+      if (!best || score < best.score) best = { w, inside, miles, score };
+    }
+    if (!best) continue;
+    const entry = byWarning.get(best.w.id) || { ...best.w, chasers: [] };
+    entry.chasers.push({ channelId: ch.channelId, name: ch.channelName, videoId: ch.videoId, inside: best.inside,
+                         distanceMi: Math.round(best.miles * 10) / 10, lat: ch.lat, lng: ch.lng, movement: ch.movement });
+    byWarning.set(best.w.id, entry);
+  }
+  const out = [...byWarning.values()]
+    .map(w => ({ ...w, chasers: w.chasers.sort((a, b) => a.distanceMi - b.distanceMi) }))
+    .sort((a, b) => (WARNING_RANK[a.displayEvent] ?? 9) - (WARNING_RANK[b.displayEvent] ?? 9) || b.chasers.length - a.chasers.length);
+  return { updatedAt, activeWarnings: warnings.length, liveMappedChasers: liveChasers.length, warnings: out };
+}
+
+app.get('/api/live-near-warnings', (req, res) => {
+  if (!_nearWarnCache.data || Date.now() - _nearWarnCache.ts > 60 * 1000) {
+    try { _nearWarnCache = { data: buildLiveNearWarnings(), ts: Date.now() }; }
+    catch (e) { console.warn('[NearWarnings]', e.message); if (!_nearWarnCache.data) return res.status(500).json({ error: 'unavailable' }); }
+  }
+  res.set('Cache-Control', 'public, max-age=60');
+  res.json(_nearWarnCache.data);
 });
 
 // Admin — same data, used by the Chaser Mapping panel

@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790658000 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790672400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2624,6 +2624,12 @@ function buildWSPanel() {
         <option value="wide"     ${s.viewMode==='wide'    ?'selected':''}>📐 16:9</option>
       </select>
 
+      <!-- Previous / Play-Pause / Next — WeatherStar hides its own control bar in
+           kiosk mode, so these press its buttons directly (same origin now). -->
+      <button onclick="wsNav('NavigatePrevious')" title="Previous screen" aria-label="Previous screen" style="${smBtn}${accentOff}">⏮</button>
+      <button id="ws-play-btn" onclick="wsNav('NavigatePlay')" title="Pause / play the screen rotation" aria-label="Pause or play" style="${smBtn}${accentOff}">⏯</button>
+      <button onclick="wsNav('NavigateNext')" title="Next screen" aria-label="Next screen" style="${smBtn}${accentOff}">⏭</button>
+
       <!-- Scan lines -->
       <button id="ws-scanlines-btn" onclick="wsToggleScanLines()" title="Scan lines"
         style="${smBtn}${s.scanLines ? accentOn : accentOff}">
@@ -2688,10 +2694,52 @@ function wsToggleDisplay(key) {
   }
 }
 
+// Press one of WeatherStar's own navigation buttons inside the (same-origin) player
+function wsNav(id) {
+  const f = document.getElementById('video-frame');
+  let doc = null;
+  try { doc = f && f.contentDocument; } catch (_) { doc = null; }
+  const el = doc && doc.getElementById(id);
+  if (!el) { if (typeof showToast === 'function') showToast('Start WeatherStar first'); return; }
+  el.click();
+  if (id === 'NavigatePlay') {
+    // WeatherStar swaps its button image between play and pause; mirror that
+    setTimeout(() => {
+      const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+      const paused = img && /play_arrow/.test(img.getAttribute('src') || '');
+      const b = document.getElementById('ws-play-btn');
+      if (b) b.textContent = paused ? '▶' : '⏸';
+      if (b) b.title = paused ? 'Resume the screen rotation' : 'Pause the screen rotation';
+    }, 150);
+  }
+}
+
+// WS3000 has no scanlines feature of its own (WS4000 does), so for 3000 the
+// effect is drawn by WeatherTV as a see-through overlay on top of the player.
+function wsApplyScanlineOverlay() {
+  const wrapper = document.getElementById('video-wrapper');
+  const frame = document.getElementById('video-frame');
+  if (!wrapper || !frame) return;
+  let ov = document.getElementById('ws-scanlines-overlay');
+  const src = frame.getAttribute('src') || '';
+  const on = src.includes('weatherstar3000') && wsAllSettings['3000'] && wsAllSettings['3000'].scanLines;
+  if (!on) { if (ov) ov.style.display = 'none'; return; }
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'ws-scanlines-overlay';
+    ov.setAttribute('aria-hidden', 'true');
+    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5;' +
+      'background:repeating-linear-gradient(to bottom, rgba(0,0,0,0.32) 0px, rgba(0,0,0,0.32) 1px, rgba(0,0,0,0) 2px, rgba(0,0,0,0) 3px);';
+    wrapper.appendChild(ov);
+  }
+  ov.style.display = 'block';
+}
+
 function wsToggleScanLines() {
   const s = wsAllSettings[wsActiveVersion];
   s.scanLines = !s.scanLines;
   saveWSSettings();
+  wsApplyScanlineOverlay();   // WS3000: takes effect immediately (WS4000 applies on Restart)
   const btn = document.getElementById('ws-scanlines-btn');
   if (!btn) return;
   btn.style.background   = s.scanLines ? 'rgba(0,180,216,0.18)' : 'transparent';
@@ -3025,6 +3073,8 @@ function loadIframe(src, label, isLive) {
   newFrame.style.display = 'block';
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
+  wsApplyScanlineOverlay();
+  const _pb = document.getElementById('ws-play-btn'); if (_pb) _pb.textContent = '⏯';
 
   const badge = document.getElementById('live-badge');
   const labelEl = document.getElementById('channel-label');

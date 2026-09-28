@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790661600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790668800 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -736,6 +736,30 @@
   .fpm-agree { font:700 0.62rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; padding:0.1rem 0.35rem; border-radius:3px; }
   .fpm-foot { font-size:0.62rem; color:var(--muted); margin-top:0.4rem; }
 </style>
+<style>
+  #lnw-chip { display:none; position:fixed; right:12px; top:92px; z-index:860; background:#b0101e; color:#fff; border:none; border-radius:999px;
+    padding:0.4rem 0.8rem; font:700 0.78rem 'Barlow Condensed', sans-serif; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer;
+    box-shadow:0 4px 16px rgba(0,0,0,0.5); }
+  #lnw-chip .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#fff; margin-right:0.4rem; animation:lnwPulse 1.2s infinite; }
+  @keyframes lnwPulse { 50% { opacity:0.25; } }
+  #lnw-panel { display:none; position:fixed; right:12px; top:128px; z-index:860; width:min(340px, calc(100vw - 24px)); max-height:60vh; overflow-y:auto;
+    background:rgba(10,14,20,0.97); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:0.6rem; box-shadow:0 8px 28px rgba(0,0,0,0.6);
+    font-family:'Barlow', system-ui, sans-serif; color:#e6edf3; }
+  .lnw-w { border-left:4px solid var(--c, #ff8c00); padding:0.35rem 0.5rem; margin-bottom:0.6rem; background:rgba(255,255,255,0.03); border-radius:0 6px 6px 0; }
+  .lnw-w h4 { margin:0; font:700 0.9rem 'Barlow Condensed', sans-serif; letter-spacing:0.04em; color:var(--c, #ff8c00); cursor:pointer; }
+  .lnw-w .area { font-size:0.7rem; color:#7a9bb5; margin:0.1rem 0 0.35rem; line-height:1.3; }
+  .lnw-c { display:flex; align-items:center; gap:0.4rem; padding:0.25rem 0; border-top:1px solid rgba(255,255,255,0.06); font-size:0.78rem; }
+  .lnw-c .nm { flex:1; font-weight:600; }
+  .lnw-c .where { font-size:0.68rem; color:#94a3b8; }
+  .lnw-c button { border:none; border-radius:4px; cursor:pointer; font:700 0.68rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; padding:0.25rem 0.45rem; }
+  .lnw-watch { background:#e11d48; color:#fff; } .lnw-find { background:rgba(255,255,255,0.1); color:#e6edf3; }
+  #lnw-player { display:none; position:fixed; right:12px; bottom:96px; z-index:870; width:min(400px, calc(100vw - 24px)); background:#000;
+    border:1px solid rgba(255,255,255,0.15); border-radius:8px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,0.6); }
+  #lnw-player .bar { display:flex; justify-content:space-between; align-items:center; padding:0.3rem 0.5rem; background:#101826;
+    font:700 0.75rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; color:#e6edf3; }
+  #lnw-player .bar button { background:none; border:none; color:#e6edf3; font-size:1.1rem; cursor:pointer; }
+  #lnw-player iframe { width:100%; aspect-ratio:16/9; border:0; display:block; }
+</style>
 </head>
 <body>
 
@@ -823,6 +847,9 @@
 
 <div id="map"></div>
 <div id="storm-eta" role="status" aria-live="polite" onclick="focusStormEta()"></div>
+<button id="lnw-chip" type="button" onclick="toggleLnwPanel()" aria-expanded="false" aria-controls="lnw-panel"><span class="dot"></span><span id="lnw-chip-text"></span></button>
+<div id="lnw-panel" role="region" aria-label="Live chasers in warnings"></div>
+<div id="lnw-player" role="dialog" aria-label="Live chaser stream"><div class="bar"><span id="lnw-player-title"></span><button type="button" onclick="closeLnwPlayer()" aria-label="Close">×</button></div><iframe id="lnw-frame" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen title="Live chaser stream"></iframe></div>
 <div id="wtv-toast" role="status" aria-live="polite"></div>
 
 <!-- ── Traffic Camera overlay ─────────────────────────────────────────────── -->
@@ -1860,6 +1887,97 @@ async function loadSPC() {
     console.error('[SPC]', e);
     document.getElementById('alerts-status').textContent = 'SPC data unavailable';
   }
+}
+
+// ── LIVE NEAR THIS WARNING ──────────────────────────────────────────────────
+// Shows which WeatherTV chasers are streaming inside (or within 10 mi of) an
+// active storm warning, grouped by warning and sorted by severity. Appears
+// only when there's something to show.
+const LNW_COLORS = { 'TORNADO EMERGENCY':'#ff00ff', 'PDS Tornado Warning':'#ff1493', 'Tornado Warning':'#ff2a2a',
+  'FLASH FLOOD EMERGENCY':'#00ff7f', 'Extreme Wind Warning':'#ff6a00', 'Severe Thunderstorm Warning':'#ffa500', 'Flash Flood Warning':'#2ecc71' };
+let _lnwTimer = null, _lnwData = null, _lnwOutline = null;
+function _lnwEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+async function refreshLiveNear() {
+  // Test mode: radar.html?testLiveNear=1 — fake warnings + chasers around the map center
+  if (new URLSearchParams(location.search).has('testLiveNear')) {
+    const c = map.getCenter(), d = 0.25;
+    const box = (dy, dx) => ({ type: 'Polygon', coordinates: [[[c.lng + dx - d, c.lat + dy - d], [c.lng + dx + d, c.lat + dy - d], [c.lng + dx + d, c.lat + dy + d], [c.lng + dx - d, c.lat + dy + d], [c.lng + dx - d, c.lat + dy - d]]] });
+    _lnwData = { warnings: [
+      { id: 't1', displayEvent: 'PDS Tornado Warning', area: 'TEST — not a real warning', expires: new Date(Date.now() + 1800e3).toISOString(), geometry: box(0, 0),
+        chasers: [{ name: 'Test Chaser One', videoId: null, inside: true, distanceMi: 0, lat: c.lat, lng: c.lng, movement: 'NE (45)' },
+                  { name: 'Test Chaser Two', videoId: null, inside: false, distanceMi: 4.2, lat: c.lat + 0.3, lng: c.lng, movement: 'Stationary' }] },
+      { id: 't2', displayEvent: 'Severe Thunderstorm Warning', area: 'TEST — not a real warning', expires: new Date(Date.now() + 2700e3).toISOString(), geometry: box(0.6, 0.8),
+        chasers: [{ name: 'Test Chaser Three', videoId: null, inside: true, distanceMi: 0, lat: c.lat + 0.6, lng: c.lng + 0.8, movement: 'E (90)' }] },
+    ] };
+    renderLiveNear();
+    return;
+  }
+  try {
+    const r = await fetch('/api/live-near-warnings');
+    if (!r.ok) return;
+    _lnwData = await r.json();
+    renderLiveNear();
+  } catch (_) { /* keep last state */ }
+}
+function renderLiveNear() {
+  const chip = document.getElementById('lnw-chip'), panel = document.getElementById('lnw-panel');
+  const ws = (_lnwData && _lnwData.warnings) || [];
+  const n = ws.reduce((k, w) => k + w.chasers.length, 0);
+  if (!n) { chip.style.display = 'none'; panel.style.display = 'none'; return; }
+  const top = ws[0].displayEvent;
+  chip.style.display = 'block';
+  chip.style.background = /TORNADO|Tornado/.test(top) ? '#b0101e' : '#b45309';
+  document.getElementById('lnw-chip-text').textContent = `${n} chaser${n > 1 ? 's' : ''} live in ${ws.length > 1 ? ws.length + ' warnings' : 'a warning'}`;
+  panel.innerHTML = ws.map((w, i) => {
+    const col = LNW_COLORS[w.displayEvent] || '#ffa500';
+    const until = w.expires ? ' · until ' + new Date(w.expires).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    return `<div class="lnw-w" style="--c:${col}"><h4 onclick="focusLnwWarning(${i})" title="Show on map">${_lnwEsc(w.displayEvent)}</h4>
+      <div class="area">${_lnwEsc(w.area)}${until}</div>` +
+      w.chasers.map((c, j) => `<div class="lnw-c"><span class="nm">${_lnwEsc(c.name)}<br><span class="where">${c.inside ? 'Inside the warning' : c.distanceMi + ' mi away'}${c.movement && c.movement !== 'Stationary' ? ' · moving ' + _lnwEsc(c.movement) : ''}</span></span>
+        ${c.videoId ? `<button class="lnw-watch" type="button" onclick="openLnwPlayer(${i},${j})">▶ Watch</button>` : ''}
+        <button class="lnw-find" type="button" onclick="focusLnwChaser(${i},${j})" aria-label="Show ${_lnwEsc(c.name)} on the map">📍</button></div>`).join('') + '</div>';
+  }).join('') + `<div style="font-size:0.62rem;color:#7a9bb5;">Chaser positions from Spotter Network · updates every minute</div>`;
+}
+function toggleLnwPanel() {
+  const p = document.getElementById('lnw-panel');
+  const open = p.style.display !== 'block';
+  p.style.display = open ? 'block' : 'none';
+  document.getElementById('lnw-chip').setAttribute('aria-expanded', String(open));
+}
+function _lnwShowOutline(w) {
+  if (_lnwOutline) map.removeLayer(_lnwOutline);
+  _lnwOutline = L.geoJSON(w.geometry, { style: { color: LNW_COLORS[w.displayEvent] || '#ffa500', weight: 4, fillOpacity: 0.08 } }).addTo(map);
+  return _lnwOutline;
+}
+function focusLnwWarning(i) {
+  const w = _lnwData.warnings[i];
+  map.fitBounds(_lnwShowOutline(w).getBounds(), { padding: [40, 40], maxZoom: 10 });
+}
+function focusLnwChaser(i, j) {
+  const w = _lnwData.warnings[i], c = w.chasers[j];
+  _lnwShowOutline(w);
+  map.setView([c.lat, c.lng], Math.max(map.getZoom(), 10));
+}
+function openLnwPlayer(i, j) {
+  const c = _lnwData.warnings[i].chasers[j];
+  document.getElementById('lnw-player-title').textContent = `🔴 ${c.name} · ${_lnwData.warnings[i].displayEvent}`;
+  document.getElementById('lnw-frame').src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(c.videoId)}?autoplay=1&mute=1&playsinline=1`;
+  document.getElementById('lnw-player').style.display = 'block';
+  focusLnwChaser(i, j);
+}
+function closeLnwPlayer() {
+  document.getElementById('lnw-frame').src = 'about:blank';   // stop the stream, not just hide it
+  document.getElementById('lnw-player').style.display = 'none';
+}
+function startLiveNear() {
+  if (_lnwTimer) return;
+  refreshLiveNear();
+  _lnwTimer = setInterval(() => { if (!document.hidden) refreshLiveNear(); }, 60 * 1000);
+}
+function stopLiveNear() {
+  clearInterval(_lnwTimer); _lnwTimer = null; _lnwData = null;
+  if (_lnwOutline) { map.removeLayer(_lnwOutline); _lnwOutline = null; }
+  renderLiveNear();
 }
 
 // ── MESOSCALE UPDATES menu (Discussions + Analysis) ─────────────────────────
@@ -6713,6 +6831,7 @@ const ALERT_ITEMS=[
 ];
 const CHASER_ITEMS=[
   {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
+  {id:'live-near',  ico:'🔴', name:'Live Near Warnings',     sub:'Chasers streaming inside or near a warning', def:true},
   {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
   {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
   {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
@@ -6768,6 +6887,7 @@ function applyOverlay(id,on){
     case 'spc':       if (on!==spcVisible) toggleSPC(); break;
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); syncMesoButtons(); break;
     case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
+    case 'live-near':    if (on) startLiveNear(); else stopLiveNear(); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;

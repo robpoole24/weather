@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
 // radar.js — WeatherTV NWS Alert Push Notifications (privacy-first)
-// build.1790546400
+// build.1790668800
 // ═══════════════════════════════════════════════════════════════════
 // HOW IT WORKS — the server never learns or stores where anyone is:
 //
@@ -75,6 +75,9 @@ const NWS_HEADERS = { 'User-Agent': 'WeatherTV/1.0 contact@altruisticapps.com', 
 // ── State ────────────────────────────────────────────────────────────────────
 let redisClient = null;
 let pollTimer = null;
+// Latest storm-based warnings with polygons, for "Live near this warning"
+let activeStormWarnings = { updatedAt: null, list: [] };
+const STORM_WARNING_EVENTS = new Set(['Tornado Warning', 'Severe Thunderstorm Warning', 'Extreme Wind Warning', 'Flash Flood Warning']);
 const SENT_PREFIX = 'wt:alertpush:sent:';
 const stats = { day: null, polls: 0, alertsSent: 0, messages: 0, errors: 0, subscribeCalls: 0, lastPoll: null, lastError: null, recent: [] };
 function bump(k, n = 1) {
@@ -154,13 +157,29 @@ function classify(props) {
 
 // ── Polling + sending ────────────────────────────────────────────────────────
 async function pollAlerts() {
-  if (!firebaseApp || !redisClient) return;
+  if (!redisClient) return;   // (warnings are still cached for "Live near this warning" even if push is off)
   bump('polls');
   stats.lastPoll = new Date().toISOString();
   try {
     const res = await fetch('https://api.weather.gov/alerts/active?status=actual&region_type=land', { headers: NWS_HEADERS });
     if (!res.ok) throw new Error('NWS HTTP ' + res.status);
     const features = (await res.json()).features || [];
+    activeStormWarnings = {
+      updatedAt: new Date().toISOString(),
+      list: features.filter(f => f.geometry && STORM_WARNING_EVENTS.has(f.properties?.event)
+                              && (!f.properties.expires || Date.parse(f.properties.expires) > Date.now()))
+        .map(f => {
+          const p = f.properties;
+          const tor = (p.parameters?.tornadoDamageThreat || [])[0] || '';
+          const ff = (p.parameters?.flashFloodDamageThreat || [])[0] || '';
+          const displayEvent = p.event === 'Tornado Warning' && tor === 'CATASTROPHIC' ? 'TORNADO EMERGENCY'
+            : p.event === 'Tornado Warning' && tor === 'CONSIDERABLE' ? 'PDS Tornado Warning'
+            : p.event === 'Flash Flood Warning' && ff === 'CATASTROPHIC' ? 'FLASH FLOOD EMERGENCY' : p.event;
+          return { id: p.id, event: p.event, displayEvent, expires: p.expires, area: restoreGeographicNames(p.areaDesc || ''),
+                   geometry: f.geometry };
+        }),
+    };
+    if (!firebaseApp) return;
     for (const f of features) {
       const props = f.properties || {};
       const c = classify(props);
@@ -299,4 +318,6 @@ function routes(app) {
   });
 }
 
-module.exports = { init, routes, pollAlerts, ALERT_META, DEFAULT_ALERT_TYPES, encodePolygon, classify, vtecKey, TOPIC_RE };
+function getActiveStormWarnings() { return activeStormWarnings; }
+
+module.exports = { init, routes, pollAlerts, getActiveStormWarnings, ALERT_META, DEFAULT_ALERT_TYPES, encodePolygon, classify, vtecKey, TOPIC_RE };
