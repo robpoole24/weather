@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790679600 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790690400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2635,6 +2635,7 @@ function buildWSPanel() {
       <button onclick="wsNav('NavigatePrevious')" title="Previous screen" aria-label="Previous screen" style="${smBtn}${accentOff}">⏮</button>
       <button id="ws-play-btn" onclick="wsNav('NavigatePlay')" title="Pause / play the screen rotation" aria-label="Pause or play" style="${smBtn}${accentOff}">⏯</button>
       <button onclick="wsNav('NavigateNext')" title="Next screen" aria-label="Next screen" style="${smBtn}${accentOff}">⏭</button>
+      <button onclick="wsDiagnose()" title="Which screens are ready, and why others are being skipped" aria-label="Screen status" style="${smBtn}${accentOff}">🩺</button>
 
       <!-- Scan lines -->
       <button id="ws-scanlines-btn" onclick="wsToggleScanLines()" title="Scan lines"
@@ -2698,6 +2699,44 @@ function wsToggleDisplay(key) {
     btn.style.borderColor = 'var(--border)';
     btn.style.color = 'var(--muted)';
   }
+}
+
+// ── WeatherStar screen diagnostics ──────────────────────────────────────────
+// WeatherStar only rotates through screens whose data finished loading; any
+// screen that failed, has no data, or is still loading is silently skipped.
+// This reads each screen's real status from inside the player (same origin)
+// and explains in plain words why a selected screen isn't showing.
+function wsDiagnose() {
+  const f = document.getElementById('video-frame');
+  let w = null;
+  try { w = f && f.contentWindow; void w.document; } catch (_) { w = null; }
+  const chunks = w && w.webpackChunkws4kp;
+  if (!chunks) { alert('Start WeatherStar 4000 first, then press 🩺 again.'); return; }
+  let req;
+  chunks.push([[Date.now()], {}, (r) => { req = r; }]);
+  const nav = req(211), ST = req(592).Ay;
+  const why = {
+    loaded: '✅ Ready — will play',
+    loading: '⏳ Still loading',
+    retrying: '🔁 Retrying (weather service slow)',
+    failed: '❌ Failed to load data',
+    noData: '➖ No data right now (skipped)',
+    disabled: '⚪ Not selected',
+  };
+  const nameOf = (st) => Object.keys(ST).find((k) => ST[k] === st) || '?';
+  const selected = (wsAllSettings['4000'] && wsAllSettings['4000'].displays) || {};
+  const rows = [];
+  for (let id = 0; id < 30; id++) {
+    const d = nav.pv(id);
+    if (!d) continue;
+    const st = nameOf(d.status);
+    const empty = st === 'loaded' && d.timing && d.timing.totalScreens === 0 ? ' (nothing to show — e.g. no active hazards)' : '';
+    const picked = selected[d.elemId] ? '' : ' · not selected in WeatherTV';
+    rows.push(`${String(id).padStart(2)}  ${d.name || d.elemId}: ${why[st] || st}${empty}${st === 'disabled' ? '' : picked}`);
+  }
+  const text = rows.join('\n');
+  console.log('[WeatherStar screens]\n' + text);
+  alert('WeatherStar screen status\n\n' + text + '\n\n(Also printed to the browser console — copy it from there to share.)');
 }
 
 // Press one of WeatherStar's own navigation buttons inside the (same-origin) player
