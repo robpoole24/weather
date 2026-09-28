@@ -1,5 +1,5 @@
 // src/security-middleware.js — Altruistic Apps unified security layer
-// Updated: 2026-09-28T05:00:00Z build.1790589600
+// Updated: 2026-09-28T20:00:00Z build.1790654400
 //
 // USAGE (drop into any Altruistic Apps server.js):
 //
@@ -146,7 +146,8 @@ function securityHeaders(req, res, next) {
       // Altruistic Apps / Aporia quote APIs
       " https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
     // frame-src: allow YouTube and Twitch video embeds
-    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com",
+    // weatherstar3000.netbymatt.com — WeatherStar 3000 player (index.html WS_BASES['3000'])
+    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com https://weatherstar3000.netbymatt.com",
     "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header

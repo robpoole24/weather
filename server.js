@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-28T17:00:00Z build.1790643600
+// WeatherTV Server — updated 2026-09-28T20:00:00Z build.1790654400
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2341,10 +2341,13 @@ app.get('/api/hms-smoke', async (req, res) => {
   }
   try {
     const kml = await fetchTextOverHttp(HMS_KML_URL);
-    if (!kml.includes('<Placemark')) throw new Error('No Placemark elements in KML response');
+    if (!/<kml[\s>]/i.test(kml)) throw new Error('Response is not KML');
+    // A valid KML with no Placemarks just means no smoke has been analyzed yet
+    // (common early in the UTC day, and on smoke-free days) — that's an empty
+    // map, not an error. Cache "no smoke" briefly so new analyses show up soon.
     const geojson = parseHMSKML(kml);
     _hmsSmokeCache.data = geojson;
-    _hmsSmokeCache.ts = Date.now();
+    _hmsSmokeCache.ts = geojson.features.length ? Date.now() : Date.now() - HMS_TTL + 20 * 60 * 1000;
     console.log(`[HMS Smoke] Loaded ${geojson.features.length} smoke polygons from OSPO KML`);
     res.set('Content-Type', 'application/json');
     res.set('Cache-Control', 'public, max-age=7200');
