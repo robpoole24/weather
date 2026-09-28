@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790643600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790650800 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -6397,6 +6397,12 @@ const MODELS = {
     note:  'ECMWF IFS · the "Euro" model · ~25 km · 3-hour steps. Shows precipitation rate (3-hr average), not simulated radar — ECMWF open data does not include reflectivity. Colors: light blue = light, yellow/orange = heavy, red/purple = extreme. Contains ECMWF open data (CC BY 4.0).',
     kind:  'sidecar', model: 'ecmwf', maxNativeZoom: 6,
     attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> (CC BY 4.0)',
+  },
+  aifs: {
+    label: 'ECMWF AI (AIFS) — Precipitation Rate (6–48h)',
+    note:  "ECMWF's machine-learning forecast model — trained on decades of weather data instead of solving physics equations, and competitive with the physics-based Euro. ~25 km · 6-hour steps · precipitation rate. Contains ECMWF open data (CC BY 4.0).",
+    kind:  'sidecar', model: 'aifs', maxNativeZoom: 6,
+    attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> AIFS (CC BY 4.0)',
   },
   rdps: {
     label: 'Canadian RDPS (GEM Regional) — Precipitation (0–84h)',
