@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790697600
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790704800
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
@@ -19,7 +19,23 @@
   9001(module, exports, require) {
     const WeatherDisplay = require(24).A;
     const STATUS = require(592).Ay;
-    const registerDisplay = require(211).Kb;
+    const nav = require(211);
+    const registerDisplay = nav.Kb;
+    const getDisplay = nav.pv;
+
+    // ── Neutralize the OLD custom screens if the page still loads them ───────
+    // They register through window.wtvRegisterDisplay at page load, AFTER this
+    // file runs — and WeatherStar lets a later registration overwrite an earlier
+    // one ("nav ID 13 already in use"), so they silently replaced these screens.
+    // Only real WeatherStar displays get through now; the imitations are ignored.
+    if (typeof window.wtvRegisterDisplay === 'function') {
+      const passThrough = window.wtvRegisterDisplay;
+      window.wtvRegisterDisplay = (d) => {
+        if (d instanceof WeatherDisplay) return passThrough(d);
+        console.info('[WTV] Ignored legacy custom screen:', d && d.elemId);
+        return undefined;
+      };
+    }
 
     const FONT = "'Star4000', monospace";
     const BLUE = '#7ec8e3', GOLD = '#f4d03f', RED = '#ff5a4a', GREEN = '#2ecc71', MUTED = '#a8c6d6', ORANGE = '#ff9a2e';
@@ -35,19 +51,22 @@
     ];
     function injectMarkup() {
       const container = document.querySelector('#container');
-      if (!container || document.querySelector('#aqi-ws-html')) return;
+      if (!container || document.getElementById('wtv-screens-style')) return;
       const before = container.querySelector(':scope > .scroll');
       SCREENS.forEach((s) => {
-        const div = document.createElement('div');
+        // Reuse a container left over from the old custom screens if the page
+        // still has one; otherwise create it. Either way, give it our layout.
+        let div = document.getElementById(`${s.id}-html`);
+        if (!div) { div = document.createElement('div'); container.insertBefore(div, before || null); }
         div.id = `${s.id}-html`;
         div.className = 'weather-display';
         div.innerHTML = `<div class="header"><div class="logo"><img src="images/logos/logo-corner.png"></div>
           <div class="title dual"><div class="top">${s.top}</div><div class="bottom">${s.bottom}</div></div>
           <div class="date-time date"></div><div class="date-time time"></div></div>
           <div class="main has-box wtv-custom"><div class="wtv-content"></div></div>`;
-        container.insertBefore(div, before || null);
       });
       const style = document.createElement('style');
+      style.id = 'wtv-screens-style';
       style.textContent = `
         .wtv-custom .wtv-content { font-family:${FONT}; color:#fff; font-size:20px; line-height:1.25; padding:8px 18px;
           height:100%; box-sizing:border-box; overflow:hidden; text-shadow:3px 3px 0 #000; }
@@ -216,11 +235,15 @@
       }
     }
 
-    // navIds 13–16 follow WeatherStar's built-in screens; elemIds keep the
-    // original names so saved choices and WeatherTV's URLs keep working.
-    registerDisplay(new AirQuality(13, 'aqi-ws', 'Air Quality'));
-    registerDisplay(new SmokeFire(14, 'smoke-ws', 'Smoke & Wildfire'));
-    registerDisplay(new Tropical(15, 'hurricane-ws', 'Tropical Storms'));
-    registerDisplay(new Outdoor(16, 'astronomy-ws', 'UV & Outdoor'));
+    // Slots right after WeatherStar's built-in screens (13+). If an older copy of
+    // the custom screens already took some (WeatherStar refuses duplicate slots
+    // — "nav ID 13 already in use"), take the next free ones. Slots stay
+    // back-to-back: a gap in the list breaks WeatherStar's rotation.
+    let nextId = 13;
+    const freeId = () => { while (getDisplay(nextId)) nextId += 1; return nextId++; };
+    registerDisplay(new AirQuality(freeId(), 'aqi-ws', 'Air Quality'));
+    registerDisplay(new SmokeFire(freeId(), 'smoke-ws', 'Smoke & Wildfire'));
+    registerDisplay(new Tropical(freeId(), 'hurricane-ws', 'Tropical Storms'));
+    registerDisplay(new Outdoor(freeId(), 'astronomy-ws', 'UV & Outdoor'));
   },
 }, (rt) => rt(rt.s = 9001)]);

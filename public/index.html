@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790701200 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790708400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1748,6 +1748,17 @@ function showPanel(name, e) {
   // Close any recent overlay
   closeRecentOverlay();
 
+  // TOP-LEVEL destinations — WeatherStar, Live Radar, Weather Playlist — always
+  // take over the player and close whatever channel was playing. Group buttons
+  // (Forecasters, Chasers, Creators, Live Now, Highlights, Favorites) only open
+  // their channel list; the player keeps going until a channel/video is picked.
+  if (name === 'playlist') {
+    const f = document.getElementById('video-frame');
+    const src = (f && f.getAttribute('src')) || '';
+    if (/youtube\.com|youtube-nocookie\.com|twitch\.tv/.test(src)) clearVideo();
+    leaveChannelExtras();
+  }
+
   // Auto-actions when switching to certain panels
   if (name === 'weatherstar') {
     launchWeatherStar();
@@ -3030,7 +3041,9 @@ async function launchWeatherStar() {
     await ws4kpGeocode();
     buildWSPanel();
   }
-  if (!wsIsLaunched) ws4kpLaunch();
+  const f = document.getElementById('video-frame');
+  const showingWS = !!(f && /\/weatherstar/.test(f.getAttribute('src') || ''));
+  if (!wsIsLaunched || !showingWS) ws4kpLaunch();
 }
 
 function showWSPanel() { launchWeatherStar(); }
@@ -3132,6 +3145,12 @@ function loadIframe(src, label, isLive) {
   newFrame.style.display = 'block';
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
+  // Anything that isn't WeatherStar replaces it, so WeatherStar must relaunch
+  // next time (this stale flag is why Radar → WeatherStar needed a Reset).
+  if (!isWeatherStar) wsIsLaunched = false;
+  // Live chat, the chat button and the chaser map belong to a live channel —
+  // tear them down whenever something else takes over the player.
+  if (!isLive) leaveChannelExtras();
   wsApplyScanlineOverlay();
   const _pb = document.getElementById('ws-play-btn'); if (_pb) _pb.textContent = '⏯';
 
@@ -3152,6 +3171,15 @@ function loadIframe(src, label, isLive) {
   }
 
   currentChannel = label;
+}
+
+// Remove everything that only makes sense while a live channel is playing
+function leaveChannelExtras() {
+  try { closeLiveChat(); } catch (_) {}
+  const chatBtn = document.getElementById('chat-toggle-btn');
+  if (chatBtn) chatBtn.remove();
+  currentLiveCh = null;
+  if (typeof _teardownChaserMap === 'function') _teardownChaserMap();
 }
 
 function clearVideo() {
