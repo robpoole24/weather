@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-28T11:00:00Z build.1790611200
+// WeatherTV Server — updated 2026-09-28T14:00:00Z build.1790632800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2174,6 +2174,74 @@ app.get('/api/forecast', async (req, res) => {
     }
     console.error('[Forecast] Error:', e.message);
     res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
+  }
+});
+
+// GET /api/forecast/models?lat=&lon=
+// Same spot, eight forecast models side by side (Open-Meteo multi-model).
+// Shares the forecast grid cells (~5 km), cached 60 min — models only update
+// every 6–12 h, so this costs a handful of upstream calls per place per day.
+// Only requested when a user opens "Compare models", never on page load.
+const MM_MODELS = [
+  ['ecmwf_ifs025', 'ECMWF (Euro)'], ['ecmwf_aifs025_single', 'ECMWF AI (AIFS)'],
+  ['gfs_seamless', 'GFS (US)'], ['icon_seamless', 'ICON (Germany)'],
+  ['gem_seamless', 'GEM (Canada)'], ['ukmo_seamless', 'UK Met Office'],
+  ['jma_seamless', 'JMA (Japan)'], ['meteofrance_seamless', 'Météo-France'],
+];
+const _mmCache = new Map();
+const _mmInflight = new Map();
+const MM_TTL = 60 * 60 * 1000;
+
+async function _fetchModelCompare(gLat, gLon, ids) {
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}`
+    + '&timezone=auto&temperature_unit=fahrenheit&precipitation_unit=inch&forecast_days=7'
+    + '&hourly=temperature_2m,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum'
+    + `&models=${ids.join(',')}`;
+  upstreamCount('openMeteoModels');
+  const j = JSON.parse(await fetchTextOverHttp(url));
+  if (j.error) {
+    // If Open-Meteo rejects a model id (renamed/retired), drop it and retry once
+    const bad = ids.filter(id => String(j.reason || '').includes(id));
+    if (bad.length && bad.length < ids.length) return _fetchModelCompare(gLat, gLon, ids.filter(id => !bad.includes(id)));
+    throw new Error(`Open-Meteo: ${j.reason || j.error}`);
+  }
+  const h = j.hourly || {}, d = j.daily || {};
+  const models = MM_MODELS.filter(([id]) => ids.includes(id)).map(([id, label]) => ({
+    id, label,
+    hourly: { temp: h[`temperature_2m_${id}`] || null, precip: h[`precipitation_${id}`] || null },
+    daily: { max: d[`temperature_2m_max_${id}`] || null, min: d[`temperature_2m_min_${id}`] || null, precip: d[`precipitation_sum_${id}`] || null },
+  })).filter(m => Array.isArray(m.hourly.temp) && m.hourly.temp.some(v => v != null));
+  return { utc_offset_seconds: j.utc_offset_seconds || 0, timezone: j.timezone, hourlyTime: h.time || [], dailyTime: d.time || [], models, generated_at: Date.now() };
+}
+
+app.get('/api/forecast/models', async (req, res) => {
+  const lat = parseFloat(req.query.lat), lon = parseFloat(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return res.status(400).json({ error: 'lat/lon required' });
+  }
+  const gLat = _snap(lat), gLon = _snap(lon);
+  const key = `${gLat.toFixed(3)},${gLon.toFixed(3)}`;
+  const hit = _mmCache.get(key);
+  if (hit && Date.now() - hit.ts < MM_TTL) {
+    res.set('Cache-Control', 'public, max-age=1800');
+    return res.json(hit.data);
+  }
+  try {
+    let p = _mmInflight.get(key);
+    if (!p) {
+      p = _fetchModelCompare(gLat, gLon, MM_MODELS.map(([id]) => id))
+        .then(data => { _lruSet(_mmCache, key, { data, ts: Date.now() }, 500); return data; })
+        .finally(() => _mmInflight.delete(key));
+      _mmInflight.set(key, p);
+    }
+    const data = await p;
+    res.set('Cache-Control', 'public, max-age=1800');
+    res.json(data);
+  } catch (e) {
+    if (hit) return res.json({ ...hit.data, stale: true });
+    console.warn('[ModelCompare]', e.message);
+    res.status(502).json({ error: 'Model comparison unavailable' });
   }
 });
 

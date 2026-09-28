@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-25 build.1790463600 -->
+<!-- WeatherTV Admin — updated 2026-09-28 build.1790625600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -584,6 +584,55 @@
             <div id="burn-archive-bar" style="background:var(--border);border-radius:4px;height:8px;margin-bottom:0.3rem"><div id="burn-archive-fill" style="background:var(--gold);height:100%;border-radius:4px;width:0%"></div></div>
             <div id="burn-archive-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 10,000 units</div>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alert Tests — banner/sound test + real push test + push system status -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">🚨 Alert Tests</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadPushStatus()">Refresh</button>
+    </div>
+    <div class="section-body">
+
+      <!-- 1. Banner + sound + on-screen notification (no real warning needed) -->
+      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Radar banner &amp; sound test</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Opens the Live Radar in a new tab with a clearly labelled <strong>fake</strong> warning drawn over your location (or the map center if location is off). Shows the bottom warning banner, the browser notification and the alert sound. Only you see it. <strong style="color:var(--gold)">Click anywhere on the radar page once</strong> so the browser allows sound.</div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="openBannerTest('tornado')">🌪️ Tornado Warning</button>
+          <button class="btn btn-primary btn-sm" onclick="openBannerTest('emergency')">🌪️ Tornado Emergency</button>
+          <button class="btn btn-primary btn-sm" onclick="openBannerTest('svr')">⛈️ Severe T-Storm Warning</button>
+          <button class="btn btn-primary btn-sm" onclick="openBannerTest('flood')">🌊 Flash Flood Warning</button>
+        </div>
+      </div>
+
+      <!-- 2. Real push through Firebase to everyone subscribed to one area + type -->
+      <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Push notification test</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Sends a real push, marked <strong>TEST</strong>, through the same path real warnings use. It reaches every device subscribed to that area and alert type — normally just you, if you use your own county. To receive it: open watchweathertv.com on this device, allow notifications, and set your location first.</div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.5rem;">
+          <input id="pt-ugc" type="text" placeholder="Area code, e.g. WIC079" maxlength="6" style="width:170px;font-family:monospace;font-size:0.82rem;text-transform:uppercase;margin:0;">
+          <button class="btn btn-ghost btn-sm" onclick="fillMyAreaCodes()">📍 Use my location</button>
+          <select id="pt-type" style="font-size:0.82rem;margin:0;min-width:220px;"></select>
+          <button class="btn btn-primary btn-sm" id="pt-send" onclick="sendTestPush()">Send test push</button>
+        </div>
+        <div id="pt-areas" style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.4rem;"></div>
+        <div id="pt-result" style="font-size:0.82rem;color:var(--muted)"></div>
+      </div>
+
+      <!-- 3. What the push system has been doing -->
+      <div>
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Push system status</div>
+        <div id="ps-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);margin-bottom:0.6rem">Loading...</div>
+        <div id="ps-pills" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.8rem"></div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+            <thead><tr style="background:var(--surface2);"><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Sent</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Alert</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Areas</th><th style="padding:0.4rem 0.75rem;text-align:left;border-bottom:1px solid var(--border)">Where</th></tr></thead>
+            <tbody id="ps-recent"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -2914,6 +2963,86 @@ async function manualMarkOffline() {
   } catch(e) { resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>'; }
 }
 
+// ── Alert Tests ──────────────────────────────────────────────────────────────
+function openBannerTest(kind) {
+  window.open('/radar.html?testAlert=' + encodeURIComponent(kind), '_blank', 'noopener');
+}
+
+async function loadAlertTypesForTest() {
+  const sel = document.getElementById('pt-type');
+  try {
+    const d = await (await fetch('/api/radar/alert-types')).json();
+    sel.innerHTML = d.types.map(t => '<option value="' + lvEsc(t.event) + '">' + t.icon + ' ' + lvEsc(t.event) +
+      (t.tier === 'siren' ? ' (siren)' : t.tier === 'chime' ? ' (chime)' : '') + '</option>').join('');
+  } catch (e) {
+    sel.innerHTML = '<option>Tornado Warning</option>';
+  }
+}
+
+// Browser location -> NWS county + forecast zone codes (nothing sent to our server)
+function fillMyAreaCodes() {
+  const out = document.getElementById('pt-areas');
+  const res = document.getElementById('pt-result');
+  if (!navigator.geolocation) { res.textContent = 'Location is not available in this browser.'; return; }
+  res.textContent = 'Finding your location…';
+  navigator.geolocation.getCurrentPosition(async pos => {
+    try {
+      const { latitude: la, longitude: lo } = pos.coords;
+      const r = await fetch('https://api.weather.gov/points/' + la.toFixed(4) + ',' + lo.toFixed(4), { headers: { Accept: 'application/geo+json' } });
+      const p = (await r.json()).properties || {};
+      const codes = [['County', p.county], ['Forecast zone', p.forecastZone]]
+        .filter(([, u]) => u).map(([label, u]) => [label, u.split('/').pop()]);
+      if (!codes.length) throw new Error('no NWS area here');
+      out.innerHTML = codes.map(([label, c]) =>
+        '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'pt-ugc\').value=\'' + c + '\'">' + label + ': <strong>' + c + '</strong></button>').join('');
+      document.getElementById('pt-ugc').value = codes[0][1];
+      const rl = p.relativeLocation && p.relativeLocation.properties;
+      res.textContent = 'Area codes for ' + (rl ? rl.city + ', ' + rl.state : 'your location') +
+        '. Storm warnings (tornado, severe t-storm) use the county code; winter/heat/flood alerts often use the zone code.';
+    } catch (e) { res.textContent = '✗ Could not look up your area: ' + e.message; }
+  }, err => { res.textContent = '✗ Location permission denied — type the code instead (e.g. WIC079).'; }, { timeout: 10000 });
+}
+
+async function sendTestPush() {
+  const ugc = document.getElementById('pt-ugc').value.trim().toUpperCase();
+  const type = document.getElementById('pt-type').value;
+  const res = document.getElementById('pt-result');
+  const btn = document.getElementById('pt-send');
+  if (!/^[A-Z]{2}[CZ]\d{3}$/.test(ugc)) { res.innerHTML = '<span style="color:var(--red)">Area code should look like WIC079 or WIZ066.</span>'; return; }
+  btn.disabled = true; res.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/admin/radar/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ugc, type }) });
+    const j = await r.json();
+    if (r.ok && j.ok) {
+      res.innerHTML = '<span style="color:var(--green)">✓ Test push sent to ' + ugc + ' · ' + lvEsc(type) + '.</span> It should arrive within a few seconds on devices subscribed to that area. Nothing arrived? Check that notifications are allowed and the location on the main site is in that area.';
+      loadPushStatus();
+    } else {
+      res.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(j.error || 'Send failed') + '</span>' + (r.status === 503 ? ' — push is disabled because FCM_SERVICE_ACCOUNT is not set on the server.' : '');
+    }
+  } catch (e) { res.innerHTML = '<span style="color:var(--red)">✗ Request failed — is the new server deployed?</span>'; }
+  btn.disabled = false;
+}
+
+async function loadPushStatus() {
+  const st = document.getElementById('ps-status');
+  try {
+    const d = await (await fetch('/api/admin/radar/status')).json();
+    st.innerHTML = (d.enabled ? '<span style="color:var(--green)">● Push active</span>' : '<span style="color:var(--red)">● Push disabled (FCM_SERVICE_ACCOUNT not set)</span>') +
+      ' · Last NWS check ' + fmtTs(d.lastPoll) + ' · checks every 60s · stored device records: ' + (d.deviceRecordsStored || 0);
+    document.getElementById('ps-pills').innerHTML = [
+      pill((d.alertsSent || 0) + ' alerts pushed today', d.alertsSent ? 'var(--accent)' : 'var(--muted)'),
+      pill((d.messages || 0) + ' messages', 'var(--muted)'),
+      pill((d.subscribeCalls || 0) + ' subscription updates', 'var(--muted)'),
+      pill((d.errors || 0) + ' errors', d.errors ? 'var(--red)' : 'var(--green)'),
+    ].join('') + (d.lastError ? '<span style="font-size:0.75rem;color:var(--red)">Last error: ' + lvEsc(d.lastError) + '</span>' : '');
+    document.getElementById('ps-recent').innerHTML = (d.recent || []).slice(0, 10).map(a =>
+      '<tr style="border-bottom:1px solid var(--border)"><td style="' + LV_TD + 'color:var(--muted);white-space:nowrap">' + fmtTs(a.at) + '</td>' +
+      '<td style="' + LV_TD + 'font-weight:600">' + lvEsc(a.event) + '</td><td style="' + LV_TD + '">' + a.areas + '</td>' +
+      '<td style="' + LV_TD + 'color:var(--muted)">' + lvEsc(a.area) + '</td></tr>').join('') ||
+      '<tr><td colspan="4" style="' + LV_TD + 'color:var(--muted)">No alerts pushed today yet</td></tr>';
+  } catch (e) { st.innerHTML = '<span style="color:var(--red)">✗ Could not load push status — is the new server deployed?</span>'; }
+}
+
 // ── Live Verifier panel ──────────────────────────────────────────────────────
 function lvEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 const LV_TD = 'padding:0.35rem 0.75rem;';
@@ -3119,10 +3248,13 @@ loadSystemHealth();
 loadWebSubHealth();
 loadFetchErrors();
 loadLiveVerifier();
+loadAlertTypesForTest();
+loadPushStatus();
 setInterval(loadSystemHealth, 60000);
 setInterval(loadWebSubHealth, 120000);
 setInterval(loadFetchErrors, 60000);
 setInterval(loadLiveVerifier, 60000);
+setInterval(loadPushStatus, 60000);
 </script>
 </body>
 </html>

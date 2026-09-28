@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790618400 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790632800 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -715,6 +715,27 @@
     background:rgba(10,14,20,0.95); border:1px solid var(--accent, #00b4d8); color:#e6edf3; border-radius:6px;
     padding:0.5rem 0.9rem; font:600 0.8rem 'Barlow', system-ui, sans-serif; }
 </style>
+<style>
+  .fpm-intro { font-size:0.72rem; color:var(--muted); line-height:1.45; margin-bottom:0.5rem; }
+  .fpm-btn { width:100%; padding:0.5rem; border-radius:6px; border:1px solid var(--accent, #00b4d8); background:transparent; color:var(--accent, #00b4d8);
+             font:700 0.78rem 'Barlow Condensed', sans-serif; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; }
+  .fpm-btn:hover { background:rgba(0,180,216,0.12); }
+  .fpm-tabs { display:flex; gap:0.3rem; margin-bottom:0.4rem; }
+  .fpm-tabs button { flex:1; padding:0.3rem; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--muted);
+                     font:600 0.72rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; }
+  .fpm-tabs button.on { color:#fff; border-color:var(--accent, #00b4d8); background:rgba(0,180,216,0.15); }
+  #fp-models-chart svg { width:100%; height:auto; display:block; }
+  .fpm-legend { display:flex; flex-wrap:wrap; gap:0.25rem 0.5rem; margin:0.35rem 0 0.5rem; }
+  .fpm-legend button { display:flex; align-items:center; gap:0.3rem; background:none; border:none; color:var(--text, #e6edf3); cursor:pointer;
+                       font:500 0.7rem 'Barlow', sans-serif; padding:0.1rem 0; }
+  .fpm-legend button.off { opacity:0.35; }
+  .fpm-legend i { width:14px; height:3px; border-radius:2px; display:inline-block; }
+  .fpm-days { display:flex; flex-direction:column; gap:0.2rem; }
+  .fpm-day { display:grid; grid-template-columns:3.2rem 1fr auto; gap:0.4rem; align-items:center; font-size:0.72rem; padding:0.25rem 0; border-bottom:1px solid var(--border); }
+  .fpm-day b { font-family:'Barlow Condensed', sans-serif; font-size:0.8rem; }
+  .fpm-agree { font:700 0.62rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; padding:0.1rem 0.35rem; border-radius:3px; }
+  .fpm-foot { font-size:0.62rem; color:var(--muted); margin-top:0.4rem; }
+</style>
 </head>
 <body>
 
@@ -895,6 +916,23 @@
     <div id="fp-daily-wrap" style="display:none;">
       <div class="fp-section-label">7-Day Forecast</div>
       <div id="fp-daily" class="fp-daily-list"></div>
+    </div>
+
+    <!-- ── Model comparison (loads only when asked) ── -->
+    <div id="fp-models-wrap" style="display:none;">
+      <div class="fp-section-label">Model Comparison</div>
+      <div class="fpm-intro">What each forecast model predicts for this spot. Lines close together = high confidence; spread apart = uncertain forecast.</div>
+      <button type="button" id="fp-models-btn" class="fpm-btn" onclick="loadModelComparison()">Compare 8 forecast models</button>
+      <div id="fp-models-body" style="display:none;">
+        <div class="fpm-tabs" role="tablist">
+          <button type="button" data-v="temp" class="on" onclick="setModelView('temp')">Temperature</button>
+          <button type="button" data-v="precip" onclick="setModelView('precip')">Total precipitation</button>
+        </div>
+        <div id="fp-models-chart"></div>
+        <div id="fp-models-legend" class="fpm-legend"></div>
+        <div id="fp-models-days" class="fpm-days"></div>
+        <div class="fpm-foot">Models: ECMWF, ECMWF AI, GFS, ICON, GEM, UK Met Office, JMA, Météo-France · via Open-Meteo</div>
+      </div>
     </div>
 
     <!-- ── Storm indicators ── -->
@@ -2431,9 +2469,13 @@ let canadaFrameLayers = [];
 let canadaFrameIdx    = 0;
 let canadaAnimTimer   = null;
 
+// Handles P1D, PT1H, PT3H, PT10M, PT1H30M. (The old version only understood
+// minutes, so hourly model steps like PT1H silently became 10 minutes.)
 function parseISO8601Duration(dur) {
-  const m = dur.match(/PT?(\d+)M/i);
-  return m ? parseInt(m[1]) * 60 * 1000 : 10 * 60 * 1000;
+  const m = String(dur || '').match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/i);
+  if (!m) return 10 * 60 * 1000;
+  const ms = ((+m[1] || 0) * 1440 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 60 * 1000;
+  return ms || 10 * 60 * 1000;
 }
 
 async function getCanadaTimestamps() {
@@ -5605,6 +5647,111 @@ async function updateFeelsLike(lat, lng) {
 let _forecastPanelOpen = false;
 let _forecastAutoLoaded = false;
 let _forecastData = null;
+
+// ── Model comparison ─────────────────────────────────────────────────────────
+const MM_COLORS = { ecmwf_ifs025:'#ff3b84', ecmwf_aifs025_single:'#f4a261', gfs_seamless:'#00b4d8', icon_seamless:'#a78bfa',
+                    gem_seamless:'#ef4444', ukmo_seamless:'#22c55e', jma_seamless:'#facc15', meteofrance_seamless:'#60a5fa' };
+let _mmData = null, _mmView = 'temp';
+const _mmHidden = new Set();
+
+async function loadModelComparison() {
+  const loc = _forecastData && _forecastData.location;
+  const btn = document.getElementById('fp-models-btn');
+  if (!loc || !Number.isFinite(loc.lat)) return;
+  btn.disabled = true; btn.textContent = 'Loading models…';
+  try {
+    const r = await fetch(`/api/forecast/models?lat=${loc.lat.toFixed(4)}&lon=${loc.lon.toFixed(4)}`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _mmData = await r.json();
+    if (!_mmData.models || !_mmData.models.length) throw new Error('no model data');
+    btn.style.display = 'none';
+    document.getElementById('fp-models-body').style.display = 'block';
+    renderModelComparison();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Model comparison unavailable — tap to retry';
+  }
+}
+function setModelView(v) {
+  _mmView = v;
+  document.querySelectorAll('.fpm-tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  renderModelComparison();
+}
+function toggleModelLine(id) {
+  if (_mmHidden.has(id)) _mmHidden.delete(id); else _mmHidden.add(id);
+  renderModelComparison();
+}
+function renderModelComparison() {
+  const d = _mmData; if (!d) return;
+  // Open-Meteo times are local to the forecast location; compare in that clock
+  const nowLocal = Date.now() + (d.utc_offset_seconds || 0) * 1000;
+  const tms = d.hourlyTime.map(t => Date.parse(t + 'Z'));
+  let i0 = tms.findIndex(t => t >= nowLocal - 30 * 60000); if (i0 < 0) i0 = 0;
+  const N = Math.min(tms.length - i0, 168);
+  const shown = d.models.filter(m => !_mmHidden.has(m.id));
+  // Series: temperature, or running precipitation total from now
+  const series = shown.map(m => {
+    const src = _mmView === 'temp' ? m.hourly.temp : m.hourly.precip;
+    let acc = 0;
+    const vals = [];
+    for (let k = 0; k < N; k++) {
+      const v = src ? src[i0 + k] : null;
+      if (_mmView === 'temp') vals.push(v);
+      else { if (v != null) acc += v; vals.push(src ? +acc.toFixed(2) : null); }
+    }
+    return { m, vals };
+  });
+  const all = series.flatMap(s => s.vals).filter(v => v != null);
+  const W = 340, H = 170, L = 30, R = 334, T = 10, B = 140;
+  let lo = all.length ? Math.min(...all) : 0, hi = all.length ? Math.max(...all) : 1;
+  if (_mmView === 'precip') { lo = 0; hi = Math.max(hi, 0.25); } else { lo = Math.floor(lo / 5) * 5; hi = Math.ceil(hi / 5) * 5; if (hi === lo) hi = lo + 5; }
+  const x = k => L + (R - L) * k / Math.max(1, N - 1);
+  const y = v => B - (B - T) * (v - lo) / (hi - lo);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${_mmView === 'temp' ? 'Temperature' : 'Precipitation total'} by forecast model">`;
+  // gridlines + y labels
+  for (let g = 0; g <= 4; g++) {
+    const v = lo + (hi - lo) * g / 4, yy = y(v);
+    svg += `<line x1="${L}" x2="${R}" y1="${yy}" y2="${yy}" stroke="rgba(255,255,255,0.07)"/>`;
+    svg += `<text x="${L - 4}" y="${yy + 3}" fill="#7a9bb5" font-size="8" text-anchor="end">${_mmView === 'temp' ? Math.round(v) + '°' : v.toFixed(v < 1 ? 2 : 1) + '"'}</text>`;
+  }
+  // day separators + labels (local midnight)
+  for (let k = 1; k < N; k++) {
+    const t = new Date(tms[i0 + k]);
+    if (t.getUTCHours() === 0) {
+      svg += `<line x1="${x(k)}" x2="${x(k)}" y1="${T}" y2="${B}" stroke="rgba(255,255,255,0.10)" stroke-dasharray="2 3"/>`;
+      if (x(k) < R - 14) svg += `<text x="${x(k) + 3}" y="${B + 12}" fill="#7a9bb5" font-size="8">${t.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</text>`;
+    }
+  }
+  series.forEach(({ m, vals }) => {
+    let path = '', pen = false;
+    vals.forEach((v, k) => { if (v == null) { pen = false; return; } path += (pen ? 'L' : 'M') + x(k).toFixed(1) + ',' + y(v).toFixed(1); pen = true; });
+    svg += `<path d="${path}" fill="none" stroke="${MM_COLORS[m.id] || '#ccc'}" stroke-width="1.6" stroke-linejoin="round" opacity="0.95"/>`;
+  });
+  svg += `<text x="${L}" y="${H - 4}" fill="#7a9bb5" font-size="8">Now</text>`;
+  svg += `<text x="${R}" y="${H - 4}" fill="#7a9bb5" font-size="8" text-anchor="end">+7 days</text></svg>`;
+  document.getElementById('fp-models-chart').innerHTML = svg;
+
+  document.getElementById('fp-models-legend').innerHTML = d.models.map(m =>
+    `<button type="button" class="${_mmHidden.has(m.id) ? 'off' : ''}" onclick="toggleModelLine('${m.id}')" aria-pressed="${!_mmHidden.has(m.id)}"><i style="background:${MM_COLORS[m.id] || '#ccc'}"></i>${m.label}</button>`).join('');
+
+  // Day-by-day range across models, with an agreement badge
+  const nowDay = new Date(nowLocal).toISOString().slice(0, 10);
+  const rows = [];
+  d.dailyTime.forEach((day, k) => {
+    if (day < nowDay || rows.length >= 6) return;
+    const hiV = shown.map(m => m.daily.max && m.daily.max[k]).filter(v => v != null);
+    const loV = shown.map(m => m.daily.min && m.daily.min[k]).filter(v => v != null);
+    const pV  = shown.map(m => m.daily.precip && m.daily.precip[k]).filter(v => v != null);
+    if (!hiV.length) return;
+    const spread = Math.max(...hiV) - Math.min(...hiV);
+    const [txt, col] = spread <= 3 ? ['Agree', '#22c55e'] : spread <= 7 ? ['Some spread', '#f4a261'] : ['Disagree', '#ef4444'];
+    const label = k === 0 || day === nowDay ? 'Today' : new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+    const rng = (a, f) => { const mn = Math.min(...a), mx = Math.max(...a); return f(mn) === f(mx) ? f(mn) : `${f(mn)}–${f(mx)}`; };
+    rows.push(`<div class="fpm-day"><b>${label}</b><span>H ${rng(hiV, v => Math.round(v))}° · L ${rng(loV, v => Math.round(v))}°` +
+      (pV.length && Math.max(...pV) >= 0.01 ? ` · ${rng(pV, v => v.toFixed(2))}"` : '') +
+      `</span><span class="fpm-agree" style="color:${col};border:1px solid ${col}">${txt}</span></div>`);
+  });
+  document.getElementById('fp-models-days').innerHTML = rows.join('');
+}
 let _mapTempMode = 'none'; // 'none' | 'feelslike' | 'forecast'
 
 function toggleForecastPanel(force) {
@@ -6157,6 +6304,12 @@ function renderForecast(data) {
     dailyEl.appendChild(row);
   });
   document.getElementById('fp-daily-wrap').style.display = 'block';
+  // New location → offer the comparison again (loads only if the user asks)
+  _mmData = null;
+  document.getElementById('fp-models-wrap').style.display = 'block';
+  document.getElementById('fp-models-body').style.display = 'none';
+  const _mmBtn = document.getElementById('fp-models-btn');
+  _mmBtn.style.display = ''; _mmBtn.disabled = false; _mmBtn.textContent = 'Compare 8 forecast models';
 
   // ── Storm indicators ──────────────────────────────────────────────────────
   const futureIdx = Math.min(startIdx + 12, times.length);
@@ -6245,7 +6398,54 @@ const MODELS = {
     kind:  'sidecar', model: 'ecmwf', maxNativeZoom: 6,
     attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> (CC BY 4.0)',
   },
+  rdps: {
+    label: 'Canadian RDPS (GEM Regional) — Precipitation (0–84h)',
+    note:  "Environment Canada's regional model · ~10 km · covers Canada and the US · served directly by MSC GeoMet (no load on our servers).",
+    kind:  'geomet', layers: ['RDPS.ETA_RT', 'RDPS.ETA_PR'], maxFrames: 24,
+    attribution: 'Forecast: <a href="https://eccc-msc.github.io/open-data/">ECCC MSC GeoMet</a>',
+  },
+  hrdps: {
+    label: 'Canadian HRDPS (2.5 km) — Precipitation (0–48h)',
+    note:  "Environment Canada's high-resolution model · 2.5 km · covers Canada and areas along the US border only · served directly by MSC GeoMet.",
+    kind:  'geomet', layers: ['HRDPS.CONTINENTAL_RT', 'HRDPS.CONTINENTAL_PR'], maxFrames: 24,
+    attribution: 'Forecast: <a href="https://eccc-msc.github.io/open-data/">ECCC MSC GeoMet</a>',
+  },
 };
+
+// ── MSC GeoMet (Canadian models) ─────────────────────────────────────────────
+// Layer names have changed over the years, so each model lists candidates and
+// uses the first one GeoMet actually publishes. The layer's own title (e.g.
+// "Precipitation rate [mm/h]") is shown in the note so it's clear what's drawn.
+// GetCapabilities goes through our existing cached proxy; the map tiles load
+// straight from geo.weather.gc.ca.
+function _parseWmsTimes(text) {
+  const out = [];
+  String(text || '').trim().split(',').forEach(part => {
+    const bits = part.trim().split('/');
+    if (bits.length >= 2) {
+      const step = parseISO8601Duration(bits[2] || 'PT1H');
+      for (let t = Date.parse(bits[0]), end = Date.parse(bits[1]); t <= end && out.length < 2000; t += step) out.push(t);
+    } else if (bits[0]) out.push(Date.parse(bits[0]));
+  });
+  return out.filter(Number.isFinite);
+}
+async function _geometLayerInfo(cfg) {
+  for (const name of cfg.layers) {
+    try {
+      const txt = await (await fetch(`/api/canada-radar/capabilities?layer=${encodeURIComponent(name)}`)).text();
+      const xml = new DOMParser().parseFromString(txt, 'text/xml');
+      const layer = [...xml.getElementsByTagName('Layer')].find(l => {
+        const n = [...l.children].find(c => c.tagName === 'Name'); return n && n.textContent.trim() === name;
+      });
+      if (!layer) continue;
+      const title = ([...layer.children].find(c => c.tagName === 'Title') || {}).textContent || name;
+      const dim = [...layer.getElementsByTagName('Dimension')].find(dd => (dd.getAttribute('name') || '').toLowerCase() === 'time');
+      const times = dim ? _parseWmsTimes(dim.textContent) : [];
+      if (times.length) return { name, title: title.trim(), times };
+    } catch (_) { /* try the next candidate */ }
+  }
+  return null;
+}
 let currentModel = 'hrrr';
 let _modelMeta = null, _modelMetaTs = 0, _modelBuildSeq = 0;
 
@@ -6288,16 +6488,34 @@ async function buildForecastFrames(model, seq) {
       });
     });
     if (!next.length) return { ok: false, reason: 'latest run has no future hours yet' };
+  } else if (cfg.kind === 'geomet') {
+    const info = await _geometLayerInfo(cfg);
+    if (!info) return { ok: false, reason: 'GeoMet layer not found' };
+    const nowMs = Date.now();
+    let future = info.times.filter(t => t >= nowMs - 45 * 60000);
+    const stride = Math.max(1, Math.ceil(future.length / (cfg.maxFrames || 24)));   // keep the loop a sensible length
+    future = future.filter((_, k) => k % stride === 0);
+    if (!future.length) return { ok: false, reason: 'no future times published' };
+    cfg._layerTitle = info.title;
+    future.forEach(t => next.push({
+      wms: { layer: info.name, time: new Date(t).toISOString().split('.')[0] + 'Z' },
+      label: _frameLabel(t, Math.round((t - future[0]) / 3600000)), mins: Math.round((t - nowMs) / 60000),
+    }));
   }
   // A newer model choice started while we were waiting — don't clobber its frames
   if (seq != null && seq !== _modelBuildSeq) return { ok: false, stale: true };
   forecastFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
   forecastFrames.length = 0;
   next.forEach((f, idx) => {
-    const layer = L.tileLayer(f.url, {
-      opacity: 0, tileSize: 256, zIndex: 300 + idx, crossOrigin: true,
-      maxNativeZoom: cfg.maxNativeZoom, attribution: idx === 0 ? (cfg.attribution || '') : '',
-    });
+    const layer = f.wms
+      ? L.tileLayer.wms('https://geo.weather.gc.ca/geomet', {
+          layers: f.wms.layer, TIME: f.wms.time, format: 'image/png', transparent: true, version: '1.3.0',
+          opacity: 0, zIndex: 300 + idx, attribution: idx === 0 ? (cfg.attribution || '') : '',
+        })
+      : L.tileLayer(f.url, {
+          opacity: 0, tileSize: 256, zIndex: 300 + idx, crossOrigin: true,
+          maxNativeZoom: cfg.maxNativeZoom, attribution: idx === 0 ? (cfg.attribution || '') : '',
+        });
     if (idx === 0) layer.addTo(map);
     forecastFrames.push({ layer, label: f.label, mins: f.mins });
   });
@@ -6333,7 +6551,7 @@ async function onModelChange(model) {
     await buildForecastFrames('hrrr', seq);
     if (seq !== _modelBuildSeq) return;
   } else {
-    noteEl.textContent = MODELS[model].note;
+    noteEl.textContent = MODELS[model].note + (MODELS[model]._layerTitle ? ` Showing: ${MODELS[model]._layerTitle}.` : '');
   }
   currentModel = model;
   sel.value = model;
