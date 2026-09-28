@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790690400 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790694000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2452,7 +2452,10 @@ const WS_BASES = {
 };
 
 // WS4000 displays — plain param names (no -checkbox suffix)
+// Listed in WeatherStar's own play order (its navIds 0–16), so the chips read
+// left-to-right the way the screens actually rotate.
 const WS4000_DISPLAYS = [
+  { key:'hazards',             label:'🚨 Hazards (only when alerts are active)', def:false },
   { key:'current-weather',     label:'🌡 Current Conditions', def:true  },
   { key:'latest-observations', label:'📊 Latest Observations',def:true  },
   { key:'local-forecast',      label:'📅 Local Forecast',     def:true  },
@@ -2465,7 +2468,6 @@ const WS4000_DISPLAYS = [
   { key:'travel-international',label:'🌍 International Travel',def:false },
   { key:'almanac',             label:'📚 Almanac',            def:false },
   { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
-  { key:'hazards',             label:'🚨 Hazards',            def:false },
   // WeatherTV custom screens (weatherstar/scripts/custom.js). Screens with
   // nothing to show — no smoke nearby, no tropical storms — skip themselves.
   { key:'aqi-ws',              label:'😷 Air Quality',        def:false },
@@ -2730,6 +2732,10 @@ function wsDiagnose() {
     const d = nav.pv(id);
     if (!d) continue;
     const st = nameOf(d.status);
+    if (st === '?' && /-html$/.test(d.elemId || '')) {
+      rows.push(`${String(id).padStart(2)}  ${d.elemId}: ⚠ OLD custom screen code is running — deploy the new weatherstar/scripts/custom.js and purge the Cloudflare cache`);
+      continue;
+    }
     const empty = st === 'loaded' && d.timing && d.timing.totalScreens === 0 ? ' (nothing to show — e.g. no active hazards)' : '';
     const picked = selected[d.elemId] ? '' : ' · not selected in WeatherTV';
     rows.push(`${String(id).padStart(2)}  ${d.name || d.elemId}: ${why[st] || st}${empty}${st === 'disabled' ? '' : picked}`);
