@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790694000 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790697600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2468,7 +2468,7 @@ const WS4000_DISPLAYS = [
   { key:'travel-international',label:'🌍 International Travel',def:false },
   { key:'almanac',             label:'📚 Almanac',            def:false },
   { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
-  // WeatherTV custom screens (weatherstar/scripts/custom.js). Screens with
+  // WeatherTV custom screens (weatherstar/scripts/wtv-screens.js). Screens with
   // nothing to show — no smoke nearby, no tropical storms — skip themselves.
   { key:'aqi-ws',              label:'😷 Air Quality',        def:false },
   { key:'smoke-ws',            label:'🔥 Smoke & Wildfire',   def:false },
@@ -2733,7 +2733,7 @@ function wsDiagnose() {
     if (!d) continue;
     const st = nameOf(d.status);
     if (st === '?' && /-html$/.test(d.elemId || '')) {
-      rows.push(`${String(id).padStart(2)}  ${d.elemId}: ⚠ OLD custom screen code is running — deploy the new weatherstar/scripts/custom.js and purge the Cloudflare cache`);
+      rows.push(`${String(id).padStart(2)}  ${d.elemId}: ⚠ OLD custom screen code is running — deploy weatherstar/index.html + weatherstar/scripts/wtv-screens.js`);
       continue;
     }
     const empty = st === 'loaded' && d.timing && d.timing.totalScreens === 0 ? ' (nothing to show — e.g. no active hazards)' : '';
