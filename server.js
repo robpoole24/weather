@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-29T00:00:00Z build.1790668800
+// WeatherTV Server — updated 2026-09-29T08:00:00Z build.1790697600
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1906,8 +1906,18 @@ const STATE_BBOX = {
   DC:[39.0,-77.1,38.8,-77.0],
 };
 
+function _windyPlayerUrl(w) {
+  const p = w.player || {};
+  const pick = (v) => (typeof v === 'string' ? v : (v && typeof v.embed === 'string' ? v.embed : null));
+  for (const view of ['live', 'day', 'month', 'year', 'lifetime']) {
+    const u = pick(p[view]);
+    if (u && /^https:\/\//.test(u) && !u.includes('/we_player/')) return u;   // skip old v2-style links
+  }
+  return w.webcamId ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}/day` : null;
+}
+
 const _windyCache = new Map();
-const WINDY_TTL = 12 * 60 * 1000; // 12 min — images expire at 15 min
+const WINDY_TTL = 8 * 60 * 1000; // 8 min — free-tier image tokens expire after 10 min (Windy v3 docs)
 
 async function _loadWindy(stateCode) {
   const key = process.env.WINDY_WEBCAM_KEY;
@@ -1961,11 +1971,10 @@ async function _loadWindy(stateCode) {
           lat, lng,
           imageUrl:  w.images?.current?.preview || w.image?.current?.preview || null,
           videoUrl:  null,
-          // Always construct from webcamId — API's player.day.embed returns
-          // a broken V2 /we_player/ URL that 404s. The V3 embed URL works reliably.
-          playerUrl: w.webcamId
-                     ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}`
-                     : null,
+          // Use the player URL Windy returns (v3: player.live/day/… are URL
+          // strings). The old hand-built `/embed/player/{id}` had no view on the
+          // end, so Windy answered with JSON instead of a player.
+          playerUrl: _windyPlayerUrl(w),
           windyId:   w.webcamId,
           direction: null,
           source:    'windy',
