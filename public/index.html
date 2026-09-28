@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790672400 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790679600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2466,6 +2466,12 @@ const WS4000_DISPLAYS = [
   { key:'almanac',             label:'📚 Almanac',            def:false },
   { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
   { key:'hazards',             label:'🚨 Hazards',            def:false },
+  // WeatherTV custom screens (weatherstar/scripts/custom.js). Screens with
+  // nothing to show — no smoke nearby, no tropical storms — skip themselves.
+  { key:'aqi-ws',              label:'😷 Air Quality',        def:false },
+  { key:'smoke-ws',            label:'🔥 Smoke & Wildfire',   def:false },
+  { key:'hurricane-ws',        label:'🌀 Tropical Storms',    def:false },
+  { key:'astronomy-ws',        label:'☀ UV & Outdoor',        def:false },
 ];
 
 // WS3000 displays — uses -checkbox suffix in URL

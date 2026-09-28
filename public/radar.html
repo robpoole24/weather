@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790668800 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790686800 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -1480,7 +1480,7 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // but all are opacity:0 except the active one. This keeps tiles loaded
 // in the browser cache so switching is instant with no flash.
 
-const frameLayers = FRAMES.map((f, idx) => {
+function makeRawFrameLayer(f, idx) {
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
     {
@@ -1512,7 +1512,10 @@ const frameLayers = FRAMES.map((f, idx) => {
     }
   );
   return layer;
-});
+}
+const frameLayers = FRAMES.map((f, idx) => makeRawFrameLayer(f, idx));
+// (Past-mode frames start as raw NEXRAD and are swapped to the filtered
+//  "weather only" MRMS mosaic right after load — see setRadarSource below.)
 
 // Resource-safe: only the ACTIVE frame layer stays attached to the map.
 // Others are detached during pan/zoom (see movestart/moveend below) and
@@ -1522,6 +1525,73 @@ const frameLayers = FRAMES.map((f, idx) => {
 frameLayers[FRAMES.length - 1].addTo(map);
 
 let currentFrame = FRAMES.length - 1;
+
+// ── RADAR SOURCE: weather-only (default) vs raw "birds & bugs" ───────────────
+// IEM's NEXRAD mosaic is raw base reflectivity: at night, especially during
+// spring/fall migration, radars also see birds and insects, painting green
+// circles around every radar site. NOAA's MRMS mosaic is quality-controlled
+// (non-weather echoes removed) and time-enabled for the past 4 hours, so it
+// becomes the default. The raw view stays one toggle away — migration nights
+// are genuinely interesting and often in the news.
+const MRMS_WMS = 'https://mapservices.weather.noaa.gov/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer';
+let radarRaw = false, _mrmsInfo = null, _rawLabels = FRAMES.map(f => f.label);
+async function _mrmsCapabilities() {
+  if (_mrmsInfo && Date.now() - _mrmsInfo.ts < 5 * 60000) return _mrmsInfo;
+  const txt = await (await fetch(`${MRMS_WMS}?request=GetCapabilities&service=WMS&version=1.3.0`)).text();
+  const xml = new DOMParser().parseFromString(txt, 'text/xml');
+  const layer = [...xml.getElementsByTagName('Layer')].find(l =>
+    [...l.children].some(c => c.tagName === 'Name') &&
+    [...l.getElementsByTagName('Dimension')].some(d => (d.getAttribute('name') || '').toLowerCase() === 'time'));
+  if (!layer) throw new Error('MRMS layer not found');
+  const name = [...layer.children].find(c => c.tagName === 'Name').textContent.trim();
+  const dim = [...layer.getElementsByTagName('Dimension')].find(d => (d.getAttribute('name') || '').toLowerCase() === 'time');
+  const times = _parseWmsTimes(dim.textContent).sort((a, b) => a - b);
+  if (!times.length) throw new Error('MRMS has no times');
+  _mrmsInfo = { name, times, ts: Date.now() };
+  return _mrmsInfo;
+}
+function _pastRadarVisible() { return radarVisible && radarMode === 'past' && activePaint === 'reflectivity'; }
+function _swapFrameLayers(newLayers) {
+  frameLayers.forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+  frameLayers.length = 0;
+  newLayers.forEach(l => frameLayers.push(l));
+  if (_pastRadarVisible()) { ensureAttached(frameLayers[currentFrame]); frameLayers[currentFrame].setOpacity(0.72); }
+}
+async function setRadarSource(raw) {
+  radarRaw = !!raw;
+  if (radarRaw) {
+    FRAMES.forEach((f, i) => { f.label = _rawLabels[i]; });
+    _swapFrameLayers(FRAMES.map((f, idx) => makeRawFrameLayer(f, idx)));
+  } else {
+    let info;
+    try { info = await _mrmsCapabilities(); }
+    catch (e) {
+      console.warn('[Radar] Filtered MRMS unavailable, showing raw NEXRAD:', e.message);
+      radarRaw = true;
+      if (_pastRadarVisible()) { ensureAttached(frameLayers[currentFrame]); frameLayers[currentFrame].setOpacity(0.72); }
+      return;
+    }
+    if (radarRaw) return;   // user switched back while we were loading
+    // Match each of the 12 animation slots to the closest earlier MRMS time
+    const now = Date.now();
+    const layers = FRAMES.map((f, idx) => {
+      const target = now - (FRAMES.length - 1 - idx) * 5 * 60000;
+      const t = [...info.times].reverse().find(x => x <= target) || info.times[0];
+      f.label = new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return L.tileLayer.wms(MRMS_WMS, {
+        layers: info.name, TIME: new Date(t).toISOString().split('.')[0] + 'Z', format: 'image/png', transparent: true,
+        version: '1.3.0', opacity: 0, zIndex: 200 + idx, maxNativeZoom: 9, keepBuffer: 1, updateWhenIdle: true,
+        updateWhenZooming: false, crossOrigin: true,
+        attribution: idx === 0 ? 'Radar: NOAA MRMS (quality-controlled)' : '',
+      });
+    });
+    _swapFrameLayers(layers);
+  }
+  if (typeof updateFrameLabel === 'function') updateFrameLabel();
+}
+// Start in weather-only mode; hide the raw frame meanwhile so birds don't flash up
+frameLayers[currentFrame].setOpacity(0);
+setTimeout(() => setRadarSource(false), 0);
 let radarVisible = true;
 let isPlaying = false;
 let playTimer = null;
@@ -6820,6 +6890,7 @@ const RADAR_ITEMS=[
 ];
 const CC_ITEMS=[
   {id:'cc',ico:'💧',name:'Correlation Coefficient',sub:'Dual-pol · debris signature',def:false},
+  {id:'raw-radar',ico:'🐦',name:'Birds & Bugs (Raw Radar)',sub:'Unfiltered NEXRAD · migrations, insects & clutter',def:false},
 ];
 const EXTENDED_ITEMS=[
   {id:'canada',    ico:'🇨🇦',name:'Canadian Radar',         sub:'MSC GeoMet composite — animated',              def:false},
@@ -6888,6 +6959,7 @@ function applyOverlay(id,on){
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); syncMesoButtons(); break;
     case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
     case 'live-near':    if (on) startLiveNear(); else stopLiveNear(); break;
+    case 'raw-radar':    setRadarSource(on); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
