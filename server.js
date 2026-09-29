@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-01T00:00:00Z build.1790848800
+// WeatherTV Server — updated 2026-10-01T06:00:00Z build.1790870400
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1553,6 +1553,39 @@ const STATE_DOTS = [
     parse: _parseIBI511,
   },
 
+  // ── Waiting on keys: these stay OFF until their variable is set ─────────
+  // New York — 511NY (older v1 API: Url/VideoUrl on each camera). NY_511_KEY
+  { id:'ny', label:'New York 511', url:'https://511ny.org/api/getcameras?format=json', envKey:'NY_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Virginia — VDOT SmarterRoads. The camera feed address is shown in your
+  // SmarterRoads account once approved: set VA_511_URL to it and VA_511_KEY to
+  // the token (sent as ?token=, change with VA_511_AUTH_PARAM). Fields are
+  // detected automatically.
+  { id:'va', label:'Virginia DOT (SmarterRoads)', cacheTTL:10*60*1000,
+    load: async (dot) => {
+      const key = process.env.VA_511_KEY, url = process.env.VA_511_URL;
+      if (!key || !url) return [];
+      const param = process.env.VA_511_AUTH_PARAM || 'token';
+      const full = url + (url.includes('?') ? '&' : '?') + `${param}=${encodeURIComponent(key)}`;
+      return _parseGenericCameraJSON(JSON.parse(await fetchTextOverHttp(full)), dot);
+    } },
+
+  // ── ArcGIS open-data layers (no key) ───────────────────────────────────
+  // Florida: statewide from FL511 once FL_511_KEY is set (same platform as
+  // GA/NC). Until then, a public ArcGIS copy of FL511 cameras (partial —
+  // mostly east-central/southeast Florida, last updated July 2026).
+  { id:'fl', label:'Florida 511', cacheTTL:15*60*1000,
+    load: async (dot) => {
+      if (process.env.FL_511_KEY) {
+        const txt = await fetchTextOverHttp(`https://fl511.com/api/v2/get/cameras?format=json&key=${encodeURIComponent(process.env.FL_511_KEY)}`);
+        return _parseIBI511(JSON.parse(txt), 'fl', { url: 'https://fl511.com/api/v2/get/cameras' });
+      }
+      return _loadArcGISLayer({ id: 'fl', arcgisLayer: 'https://services.arcgis.com/3wFbqsFPLeKqOlIK/arcgis/rest/services/FL511_Traffic_Cameras/FeatureServer/0' });
+    } },
+  // Illinois: IDOT Open Data "Gateway Traffic Camera Locations" (SnapShot = public image; TooOld skipped)
+  { id:'il', label:'Illinois DOT', cacheTTL:15*60*1000, arcgisItem:'8a885da23dfb46caaa1827ad920fb5b1', load: _loadArcGISLayer },
+  // Iowa: Iowa DOT Open Data "Traffic Cameras" (static image + video where available; list updated daily)
+  { id:'ia', label:'Iowa DOT', cacheTTL:60*60*1000, arcgisItem:'c4063f200a7b4da5826e2ac86c677cf5', load: _loadArcGISLayer },
+
   // ── Pennsylvania ─────────────────────────────────────────────────────────
   // PA uses ASP.NET map layer markers per Road511's article — non-standard
   // format, needs investigation before building a parser.
@@ -1638,7 +1671,10 @@ function _parseIBI511(raw, sourceId, dot) {
   for (const cam of raw) {
     const lat = parseFloat(cam.Latitude), lng = parseFloat(cam.Longitude);
     if (!isFinite(lat) || !isFinite(lng)) continue;
-    const views = Array.isArray(cam.Views) ? cam.Views : [];
+    // v2: cam.Views[] · v1 (e.g. 511NY /api/getcameras): Url/VideoUrl on the camera itself
+    const views = Array.isArray(cam.Views) ? cam.Views
+      : (cam.Url || cam.VideoUrl) ? [{ Id: cam.ID || cam.Id, Url: cam.Url, VideoUrl: cam.VideoUrl,
+          Status: (cam.Disabled || cam.Blocked) ? 'Disabled' : 'Enabled', Description: cam.Name }] : [];
     const view = views.find(v => v.Status === 'Enabled') || views[0];
     if (!view) continue;
     // Skip cameras where ALL views are disabled — their images redirect to /notfound
@@ -1654,7 +1690,7 @@ function _parseIBI511(raw, sourceId, dot) {
       || (baseUrl && view.Id ? `${baseUrl}/map/Cctv/${view.Id}` : null);
     cameras.push({
       id: `${sourceId}-${cam.Id}`,
-      name: cam.Location || cam.Roadway || 'Traffic Camera',
+      name: cam.Location || cam.Name || cam.Roadway || cam.RoadwayName || 'Traffic Camera',
       lat, lng,
       imageUrl,
       videoUrl,
@@ -1741,9 +1777,120 @@ function _parseILGateway(raw, sourceId) {
   }).filter(Boolean);
 }
 
+// ── Generic camera-record reader (ArcGIS layers, and feeds like VA SmarterRoads)
+// Works out which field is the latitude, longitude, image, video, name and
+// direction by name and by value, so a new state's layer usually needs no code.
+function _pickField(obj, keyRe, valueTest) {
+  let best = null, bestScore = -1;
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v == null || v === '') continue;
+    let score = keyRe.test(k) ? 2 : 0;
+    if (valueTest) { const t = valueTest(v, k); if (t < 0) continue; score += t; }
+    if (score > bestScore && score > 0) { best = k; bestScore = score; }
+  }
+  return best;
+}
+const _isHttp = (v) => typeof v === 'string' && /^https?:\/\//i.test(v.trim());
+function _detectCamFields(sample) {
+  const imgTest = (v, k) => {
+    if (!_isHttp(v) || /\.m3u8(\?|$)/i.test(v) || /\.(jsp|html?|aspx?|php)(\?|$)/i.test(v)) return -1;
+    let t = /\.(jpe?g|png|gif|webp)(\?|$)/i.test(v) ? 3 : 0;
+    if (/snap|image|img|still|photo|jpg|cctv|cam/i.test(v)) t += 1;
+    if (/snap ?shot/i.test(k)) t += 2;
+    return t;
+  };
+  return {
+    // Latitude/longitude fields must be NAMED like one (a small number such as
+    // OBJECTID would otherwise pass); without one, the record's map point is used.
+    lat: _pickField(sample, /^(lat|latitude|y|lat_dd|ycoord)$/i, (v, k) => (/^(lat|latitude|y|lat_dd|ycoord)$/i.test(k) && Number.isFinite(+v) && Math.abs(+v) <= 90 ? 0.5 : -1)),
+    lng: _pickField(sample, /^(lon|lng|long|longitude|x|lon_dd|xcoord)$/i, (v, k) => (/^(lon|lng|long|longitude|x|lon_dd|xcoord)$/i.test(k) && Number.isFinite(+v) && Math.abs(+v) <= 180 ? 0.5 : -1)),
+    image: _pickField(sample, /snap ?shot|image|img|still|photo|picture|jpeg|jpg/i, imgTest),
+    video: _pickField(sample, /video|stream|hls|m3u8/i, (v) => (_isHttp(v) && /\.m3u8(\?|$)/i.test(v) ? 3 : -1)),
+    name: _pickField(sample, /^(name|title|label|descript(ion)?|location|cameralocation|camera_name|cameraname|site|description1)$/i,
+                     (v) => (typeof v === 'string' && !_isHttp(v) && v.length >= 3 ? 0.5 : -1)),
+    dir: _pickField(sample, /direction|facing|^dir$|cameradirection|heading/i, (v) => (typeof v === 'string' && v.length <= 20 ? 0.2 : -1)),
+  };
+}
+function _recordsToCameras(records, prefix, stateCode) {
+  if (!records.length) return [];
+  // Detect fields across a few records (the first may have blanks)
+  const merged = Object.assign({}, ...records.slice(0, 25).reverse());
+  const f = _detectCamFields(merged);
+  if (!f.image && !f.video) { console.warn(`[Cameras] ${prefix}: no image or video field found in: ${Object.keys(merged).join(', ')}`); return []; }
+  console.log(`[Cameras] ${prefix}: fields → lat=${f.lat || 'geometry'} lng=${f.lng || 'geometry'} image=${f.image} video=${f.video} name=${f.name} dir=${f.dir}`);
+  const out = [];
+  records.forEach((r, i) => {
+    if (String(r.TooOld).toLowerCase() === 'true') return;               // Illinois: image over 30 min old
+    // Map point first (always correct for ArcGIS/GeoJSON), then the named fields
+    let lat = parseFloat(r.__lat), lng = parseFloat(r.__lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) { lat = parseFloat(f.lat && r[f.lat]); lng = parseFloat(f.lng && r[f.lng]); }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return;
+    const img = f.image && _isHttp(r[f.image]) ? r[f.image].trim() : null;
+    const vid = f.video && _isHttp(r[f.video]) ? r[f.video].trim() : null;
+    if (!img && !vid) return;
+    out.push({ id: `${prefix}-${r.OBJECTID || r.OBJECTID_1 || r.ID || r.id || i}`, name: String((f.name && r[f.name]) || 'Traffic camera').slice(0, 120),
+               lat, lng, imageUrl: img, videoUrl: vid, direction: (f.dir && r[f.dir]) || null, source: stateCode.toLowerCase() });
+  });
+  return out;
+}
+
+// ArcGIS Feature/Map layer → cameras. Accepts a layer URL, or an ArcGIS item id
+// (resolved through ArcGIS Online's public catalog — survives service renames).
+const _arcgisItemUrl = new Map();
+async function _loadArcGISLayer(dot) {
+  let layerUrl = dot.arcgisLayer;
+  if (!layerUrl && dot.arcgisItem) {
+    if (!_arcgisItemUrl.has(dot.arcgisItem)) {
+      const it = JSON.parse(await fetchTextOverHttp(`https://www.arcgis.com/sharing/rest/content/items/${dot.arcgisItem}?f=json`));
+      if (!it.url) throw new Error(`ArcGIS item ${dot.arcgisItem} has no service URL`);
+      _arcgisItemUrl.set(dot.arcgisItem, it.url.replace(/\/+$/, ''));
+    }
+    const base = _arcgisItemUrl.get(dot.arcgisItem);
+    layerUrl = /\/\d+$/.test(base) ? base : `${base}/${dot.arcgisLayerIndex || 0}`;
+  }
+  const records = [];
+  for (let offset = 0, page = 0; page < 20; page++) {
+    const q = `${layerUrl}/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=json&resultOffset=${offset}&resultRecordCount=1000`;
+    const j = JSON.parse(await fetchTextOverHttp(q));
+    if (j.error) throw new Error(j.error.message || 'ArcGIS query failed');
+    for (const ft of j.features || []) {
+      const a = { ...(ft.attributes || {}) };
+      if (ft.geometry && Number.isFinite(ft.geometry.x)) { a.__lng = ft.geometry.x; a.__lat = ft.geometry.y; }
+      records.push(a);
+    }
+    if (!j.exceededTransferLimit || !(j.features || []).length) break;
+    offset += (j.features || []).length;
+  }
+  return _recordsToCameras(records, dot.id, dot.id);
+}
+
+// Any JSON feed (array, {data:[…]}, GeoJSON) → cameras, with field detection
+function _parseGenericCameraJSON(raw, dot) {
+  let recs = Array.isArray(raw) ? raw : raw && (raw.features || raw.data || raw.cameras || raw.items || raw.results || []);
+  if (!Array.isArray(recs)) recs = [];
+  recs = recs.map(r => {
+    if (r && r.type === 'Feature') {
+      const a = { ...(r.properties || {}) };
+      if (r.geometry && Array.isArray(r.geometry.coordinates)) { a.__lng = r.geometry.coordinates[0]; a.__lat = r.geometry.coordinates[1]; }
+      return a;
+    }
+    return r;
+  });
+  return _recordsToCameras(recs, dot.id, dot.id);
+}
+
 async function _loadStateDOT(dot) {
   const cached = _stateDOTCache.get(dot.id);
   if (cached && Date.now() - cached.ts < dot.cacheTTL) return cached.cameras;
+
+  // Custom loaders (ArcGIS layers, key-or-fallback states)
+  if (dot.load) {
+    let cameras = [];
+    try { cameras = await dot.load(dot); console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`); }
+    catch (e) { console.warn(`[Cameras] ${dot.label} failed:`, e.message); }
+    _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
+    return cameras;
+  }
 
   // Skip if this DOT requires a key and it's not configured
   if (dot.envKey && !process.env[dot.envKey]) return [];
