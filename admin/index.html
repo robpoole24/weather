@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-01 build.1790899200 -->
+<!-- WeatherTV Admin — updated 2026-10-01 build.1790906400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3166,11 +3166,27 @@ function ccPickerUse() {
   document.getElementById('cc-picker').style.display = 'none';
 }
 
+// Imports run as background jobs (big ones take minutes — longer than
+// Cloudflare's 100 s limit). Start the job, then poll it for progress.
+async function ccRunJob(path, body, out) {
+  const start = await ccPost(path, body);
+  if (!start.jobId) return start;                       // older server: finished inline
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2000));
+    let job;
+    try { job = await (await fetch('/api/admin/community/job/' + start.jobId)).json(); }
+    catch (e) { out.textContent = 'Still working… (checking progress)'; continue; }
+    if (job.error && !job.status) throw new Error(job.error);
+    if (job.status === 'running') { out.textContent = '⏳ ' + (job.progress || 'Working…') + ` · ${Math.round((Date.now() - job.started) / 1000)} s`; continue; }
+    if (job.status === 'error') throw new Error((job.result && job.result.error) || 'Import failed');
+    return job.result;
+  }
+}
 async function ccBulk() {
   const out = document.getElementById('cc-bulk-result'), btn = document.getElementById('cc-bulk-btn');
-  btn.disabled = true; out.textContent = 'Importing — each place is looked up (about 1 per second)…';
+  btn.disabled = true; out.textContent = 'Starting import…';
   try {
-    const j = await ccPost('import', { text: document.getElementById('cc-bulk').value });
+    const j = await ccRunJob('import', { text: document.getElementById('cc-bulk').value }, out);
     out.textContent = `Queued ${j.queued} · skipped ${j.skipped}` + (j.noPlace ? ` · ${j.noPlace} need a location set by hand` : '') + '\n\n' + j.report.join('\n');
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }
@@ -3178,9 +3194,9 @@ async function ccBulk() {
 }
 async function ccChannel() {
   const out = document.getElementById('cc-chan-result'), btn = document.getElementById('cc-chan-btn');
-  btn.disabled = true; out.textContent = 'Fetching the channel\'s live streams and looking up places…';
+  btn.disabled = true; out.textContent = 'Starting channel import…';
   try {
-    const j = await ccPost('import-channel', { channel: document.getElementById('cc-chan').value });
+    const j = await ccRunJob('import-channel', { channel: document.getElementById('cc-chan').value }, out);
     out.textContent = `${j.channelTitle}: queued ${j.queued}, skipped ${j.skipped} (already listed) · used ${j.unitsUsed} quota units\n\n` + j.report.join('\n');
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }

@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790708400 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790913600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3143,6 +3143,9 @@ function loadIframe(src, label, isLive) {
   }
   newFrame.style.border = 'none';
   newFrame.style.display = 'block';
+  // TV remote: the embedded radar (same site, same remote script) can take the
+  // highlight; YouTube/Twitch/WeatherStar players can't (they'd trap the remote)
+  if (/^\/radar\.html/.test(src)) newFrame.setAttribute('data-tv-frame', ''); else newFrame.removeAttribute('data-tv-frame');
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
   // Anything that isn't WeatherStar replaces it, so WeatherStar must relaunch
@@ -4642,5 +4645,21 @@ init();
   </div>
 </div>
 
+<!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
+<script src="/js/wtv-tv.js?v=1790913600"></script>
+<script>
+  if (window.WTV_TV && WTV_TV.active) {
+    // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing
+    WTV_TV.onMedia((a) => {
+      const f = document.getElementById('video-frame');
+      const src = (f && f.getAttribute('src')) || '';
+      if (/\/weatherstar/.test(src)) {
+        if (a === 'playpause' || a === 'play' || a === 'pause') wsNav('NavigatePlay');
+        else if (a === 'next') wsNav('NavigateNext');
+        else if (a === 'prev') wsNav('NavigatePrevious');
+      }
+    });
+  }
+</script>
 </body>
 </html>

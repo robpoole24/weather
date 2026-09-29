@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790877600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790913600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -6894,7 +6894,10 @@ function _frameLabel(validMs, fh) {
   const d = new Date(validMs);
   const day = d.toLocaleDateString([], { weekday: 'short' });
   const t = d.toLocaleTimeString([], { hour: 'numeric' });
-  return fh == null ? t : `${day} ${t} · F${String(fh).padStart(2, '0')}`;
+  // Day + time is what viewers need; the model's forecast-hour number ("F11")
+  // meant nothing to most people, so it's no longer shown.
+  void fh;
+  return `${day} ${t}`;
 }
 
 // Builds the new frame set completely, then swaps it in — so the animation
@@ -7581,6 +7584,27 @@ if (navigator.geolocation) {
     { timeout:6000 }
   );
 }
+</script>
+<!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
+<script src="/js/wtv-tv.js?v=1790913600"></script>
+<script>
+  if (window.WTV_TV && WTV_TV.active) {
+    window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
+    // Back closes the most recently opened thing first
+    WTV_TV.onBack(() => {
+      const ov = document.getElementById('camera-overlay');
+      if (ov && ov.classList.contains('cam-big')) { toggleCameraExpand(false); return true; }
+      const meso = document.getElementById('meso-menu');
+      if (meso && meso.style.display === 'block') { toggleMesoMenu(); return true; }
+      const lnw = document.getElementById('lnw-panel');
+      if (lnw && lnw.style.display === 'block') { toggleLnwPanel(); return true; }
+      const pl = document.getElementById('lnw-player');
+      if (pl && pl.style.display === 'block') { closeLnwPlayer(); return true; }
+      return false;
+    });
+    // ▶❚❚ on the remote plays/pauses the radar loop
+    WTV_TV.onMedia((a) => { if (a === 'playpause' || a === 'play' || a === 'pause') togglePlay(); else if (a === 'next') stepFrame(1); else if (a === 'prev') stepFrame(-1); });
+  }
 </script>
 </body>
 </html>

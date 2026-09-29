@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1790848800
+// WeatherTV Community Cams — build.1790906400
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -374,16 +374,43 @@ module.exports = function setupCommunityCams(app, deps) {
       res.json({ ok: true, ...r });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
+  // ── Background jobs ────────────────────────────────────────────────────────
+  // Big imports take minutes (uploads scan + place lookups at 1/second), but
+  // Cloudflare ends any request after 100 s with a 524. So imports start here,
+  // answer at once with a job id, and the admin page polls for progress.
+  const jobs = new Map();
+  function background(path, handler) {
+    app.post(path, (req, res) => {
+      const job = { id: uid(), status: 'running', started: Date.now(), progress: 'Starting…', result: null };
+      jobs.set(job.id, job);
+      if (jobs.size > 50) jobs.delete(jobs.keys().next().value);
+      const fakeRes = {
+        status() { return fakeRes; },
+        json(o) { job.result = o; job.status = o && o.error ? 'error' : 'done'; job.finished = Date.now(); return fakeRes; },
+      };
+      Promise.resolve(handler(Object.assign(Object.create(req), { body: req.body, _job: job }), fakeRes))
+        .catch(e => { job.status = 'error'; job.result = { error: e.message }; job.finished = Date.now(); });
+      res.json({ ok: true, jobId: job.id });
+    });
+  }
+  app.get('/api/admin/community/job/:id', (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found (the server may have restarted)' });
+    res.json(job);
+  });
+
   // Bulk import: pasted text with a place line followed by one or more links.
   // Each link is looked up by its place and queued with the location filled in.
-  app.post('/api/admin/community/import', async (req, res) => {
+  background('/api/admin/community/import', async (req, res) => {
     try {
       await load();
       const lines = String((req.body || {}).text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 400);
       let place = '', queued = 0, skipped = 0, noPlace = 0;
       const report = [];
+      const totalLinks = lines.filter(l => /^https?:\/\//i.test(l)).length;
       for (const line of lines) {
         if (!/^https?:\/\//i.test(line)) { place = line; continue; }
+        if (req._job) req._job.progress = `Looking up ${queued + skipped + 1} of ${totalLinks}: ${place || line.slice(0, 40)}`;
         let p;
         try { p = await parseUrl(line); } catch (e) { report.push(`✗ ${line.slice(0, 60)} — ${e.message}`); skipped++; continue; }
         if (known(p.ref)) { report.push(`• already listed: ${place || line.slice(0, 40)}`); skipped++; continue; }
@@ -407,7 +434,7 @@ module.exports = function setupCommunityCams(app, deps) {
 
   // Channel import: every stream a channel has LIVE right now (YouTube API:
   // 100 units per 50 streams). The place is read from each title and looked up.
-  app.post('/api/admin/community/import-channel', async (req, res) => {
+  background('/api/admin/community/import-channel', async (req, res) => {
     try {
       await load();
       if (!youtubeKey) throw new Error('YOUTUBE_API_KEY not set');
@@ -446,6 +473,7 @@ module.exports = function setupCommunityCams(app, deps) {
           if (pl.error) throw new Error(pl.error.message);
           const ids = (pl.items || []).map(i => i.contentDetails && i.contentDetails.videoId).filter(id => id && !found.has(id));
           scanned += (pl.items || []).length;
+          if (req._job) req._job.progress = `Checking uploads for live streams: ${scanned} checked, ${found.size} live so far`;
           if (ids.length) {
             const vj = JSON.parse(await fetchTextOverHttp(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${ids.join(',')}&key=${encodeURIComponent(youtubeKey)}`));
             units += 1;
@@ -458,8 +486,10 @@ module.exports = function setupCommunityCams(app, deps) {
         } while (ptok && ppages < 60);   // up to 3,000 uploads, ~120 units
       } catch (e) { report.push(`(uploads scan stopped: ${e.message})`); }
 
+      let n = 0;
       for (const [id, v] of found) {
         channelTitle = v.channelTitle || channelTitle;
+        if (req._job) req._job.progress = `Placing stream ${++n} of ${found.size}: ${String(v.title || '').slice(0, 60)}`;
         if (known(id)) { skipped++; continue; }
         const place = placeFromTitle(v.title, v.channelTitle);
         const hit = place.length >= 3 ? (await geocode(place))[0] : null;
