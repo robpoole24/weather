@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-01 build.1790848800 -->
+<!-- WeatherTV Admin — updated 2026-10-01 build.1790899200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -380,6 +380,7 @@
       <div style="display:flex;gap:0.4rem;margin-bottom:1rem;border-bottom:1px solid var(--border);">
         <button class="btn btn-ghost btn-sm chaser-tab active" data-tab="mapped" onclick="setChaserTab('mapped')">Mapped <span id="ct-count-mapped" class="chaser-tab-badge"></span></button>
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="suggestions" onclick="setChaserTab('suggestions')">Suggestions <span id="ct-count-suggestions" class="chaser-tab-badge"></span></button>
+        <button class="btn btn-ghost btn-sm chaser-tab" data-tab="timing" onclick="setChaserTab('timing')">⏱ Timing Matches <span id="ct-count-timing" class="chaser-tab-badge"></span></button>
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="newfound" onclick="setChaserTab('newfound')">New Chasers Found <span id="ct-count-newfound" class="chaser-tab-badge"></span></button>
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="manual" onclick="setChaserTab('manual')">Manual Map</button>
         <button class="btn btn-ghost btn-sm chaser-tab" data-tab="allknown" onclick="setChaserTab('allknown')">All Known <span id="ct-count-allknown" class="chaser-tab-badge"></span></button>
@@ -394,6 +395,17 @@
           Exact name matches are mapped automatically on every refresh. These are the partial/uncertain matches that need your eyes — confirm to map, or leave alone if it's a coincidence.
         </p>
         <div id="chaser-suggestions-list"></div>
+      </div>
+
+      <!-- Timing Matches tab -->
+      <div id="chaser-tab-timing" class="chaser-tab-panel" style="display:none;">
+        <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.75rem;line-height:1.5">
+          Matches by <strong>behaviour</strong>, not names: every 10 minutes the server notes which chaser channels are live and which Spotter Network trackers are active.
+          A real pair lines up chase after chase. <strong style="color:var(--green)">Strong</strong> = the tracker was active for 80%+ of the channel's live time across 3+ separate chases, and far ahead of any other tracker.
+          <strong style="color:var(--gold)">Likely</strong> = worth a look. Needs a few chase days to build up.
+        </p>
+        <div id="chaser-timing-status" style="font-size:0.72rem;color:var(--muted);margin-bottom:0.6rem"></div>
+        <div id="chaser-timing-list"></div>
       </div>
 
       <!-- New Chasers Found tab -->
@@ -2346,6 +2358,36 @@ function setChaserTab(tab) {
   });
   if (tab === 'manual') populateManualChaserChannelSelect();
   if (tab === 'allknown') loadAllKnownChasers();
+  if (tab === 'timing') loadTimingMatches();
+}
+
+async function loadTimingMatches() {
+  const list = document.getElementById('chaser-timing-list'), stat = document.getElementById('chaser-timing-status');
+  let d;
+  try { d = await (await fetch('/api/admin/chasers/timing-matches')).json(); }
+  catch (e) { stat.innerHTML = '<span style="color:var(--red)">✗ Could not load — is the new server deployed?</span>'; return; }
+  const badge = document.getElementById('ct-count-timing');
+  if (badge) badge.textContent = d.matches.length || '';
+  stat.textContent = `Watching for ${d.observedDays} day(s) (${d.observedHours} h) · ${d.channelsSeenLive} channels seen live · ${d.trackersSeen} trackers seen`;
+  list.innerHTML = d.matches.length ? d.matches.map(m => `
+    <div style="display:flex;gap:0.75rem;align-items:center;padding:0.55rem 0.7rem;border:1px solid var(--border);border-radius:6px;margin-bottom:0.45rem;font-size:0.8rem;">
+      <span style="font-weight:700;min-width:4.5rem;color:${m.level === 'strong' ? 'var(--green)' : 'var(--gold)'}">${m.level === 'strong' ? '● Strong' : '● Likely'}</span>
+      <div style="flex:1;min-width:0;">
+        <div><strong>${lvEsc(m.channelName)}</strong> ↔ ${lvEsc(m.spotterName)} <span style="color:var(--muted)">(SN #${lvEsc(m.spotterNetworkId)})</span></div>
+        <div style="color:var(--muted);font-size:0.74rem">Tracker active for ${m.coveragePct}% of the channel's live time · ${m.hoursTogether} h together over ${m.sessions} separate chases · ${m.lift}× more than usual` +
+          `${m.runnerUp ? ` · next best: ${lvEsc(m.runnerUp.name)} (${m.runnerUp.coveragePct}%)` : ''}</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="timingDecide('${lvEsc(m.spotterNetworkId)}','${lvEsc(m.channelId)}',true)">Confirm</button>
+      <button class="btn btn-ghost btn-sm" onclick="timingDecide('${lvEsc(m.spotterNetworkId)}','${lvEsc(m.channelId)}',false)">Not a match</button>
+    </div>`).join('')
+    : '<div style="font-size:0.8rem;color:var(--muted)">No confident matches yet. They appear after a chaser has streamed while their tracker was on during a few separate chases.</div>';
+}
+async function timingDecide(spotterNetworkId, channelId, yes) {
+  const url = yes ? '/api/admin/chasers/map' : '/api/admin/chasers/dismiss-suggestion';
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spotterNetworkId, channelId }) });
+  if (!r.ok) { alert('Could not save — ' + r.status); return; }
+  loadTimingMatches();
+  if (yes && typeof refreshChaserData === 'function') refreshChaserData();
 }
 
 async function loadAllKnownChasers(force) {

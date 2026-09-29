@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-01T06:00:00Z build.1790870400
+// WeatherTV Server — updated 2026-10-01T14:00:00Z build.1790899200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1122,6 +1122,22 @@ app.get('/api/live-near-warnings', (req, res) => {
   }
   res.set('Cache-Control', 'public, max-age=60');
   res.json(_nearWarnCache.data);
+});
+
+// ── Timing-based chaser matching (chaser-timing.js) ─────────────────────────
+function _spotterTimeMs(t) {
+  if (!t) return NaN;
+  const iso = String(t).trim().replace(' UTC', 'Z').replace(/^(\d{4}-\d{2}-\d{2}) /, '$1T');
+  return Date.parse(iso);
+}
+require('./chaser-timing')(app, {
+  rGet, rSet, loadData, saveData,
+  getLiveChannelIds: () => Object.entries(cache.liveStatuses || {}).filter(([, v]) => v && v.isLive).map(([id]) => id),
+  // Active = pinged within the last 30 min (or present in the live feed when its time can't be read)
+  getActiveTrackerIds: () => chaserCache.chasers.filter(c => {
+    const t = _spotterTimeMs(c.positionTime);
+    return !Number.isFinite(t) || Date.now() - t < 30 * 60 * 1000;
+  }).map(c => String(c.id)),
 });
 
 // Admin — same data, used by the Chaser Mapping panel

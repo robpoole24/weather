@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790848800 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790877600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -6791,6 +6791,18 @@ const MODELS = {
     note:  'ECMWF IFS · the "Euro" model · ~25 km · 3-hour steps. Shows precipitation rate (3-hr average), not simulated radar — ECMWF open data does not include reflectivity. Colors: light blue = light, yellow/orange = heavy, red/purple = extreme. Contains ECMWF open data (CC BY 4.0).',
     kind:  'sidecar', model: 'ecmwf', maxNativeZoom: 6,
     attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> (CC BY 4.0)',
+  },
+  refs: {
+    label: 'REFS ensemble — Most Likely Radar (1–48h)',
+    note:  "NOAA's new storm-scale ensemble (replaces the HREF): many RRFS runs combined into one 'most likely' radar picture (probability-matched mean) — sharper than a simple average. 3 km · hourly. Becomes operational Oct 14, 2026; shown from NOAA's parallel feed until then.",
+    kind:  'sidecar', model: 'refs', maxNativeZoom: 8,
+    attribution: 'Forecast: NOAA/NCEP REFS',
+  },
+  refsprob: {
+    label: 'REFS ensemble — Chance of Strong Storms (1–48h)',
+    note:  "Percent of REFS ensemble members showing radar of 40 dBZ or more (heavy rain / strong storms) at each spot. Green 10–30% · yellow–orange 40–60% · red–purple 70%+. The higher the number, the more the models agree a storm will be there.",
+    kind:  'sidecar', model: 'refsprob', maxNativeZoom: 8,
+    attribution: 'Forecast: NOAA/NCEP REFS',
   },
   aifs: {
     label: 'ECMWF AI (AIFS) — Precipitation Rate (6–48h)',
