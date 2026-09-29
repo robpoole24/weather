@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-30T18:00:00Z build.1790827200
+// WeatherTV Server — updated 2026-10-01T00:00:00Z build.1790848800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1912,9 +1912,12 @@ const STATE_BBOX = {
   DC:[39.0,-77.1,38.8,-77.0],
   // Territories — Caribbean coverage for tropical storms
   PR:[18.6,-67.95,17.85,-65.2], VI:[18.45,-65.1,17.65,-64.55],
-  // Camera-only regions outside the US (Community Cams): Canada, Caribbean
-  CAN:[60.0,-141.0,41.6,-52.6], CAR:[27.3,-86.0,10.0,-59.4],
+  // Camera-only regions outside the US (Community Cams) — the whole world is covered
+  CAN:[60.0,-141.0,41.6,-52.6], CAR:[27.3,-86.0,10.0,-59.4], MEX:[33.0,-118.0,5.0,-77.0],
+  SAM:[13.0,-82.0,-56.0,-34.0], EUR:[72.0,-25.0,34.0,45.0], MEA:[42.0,-20.0,-35.0,63.0],
+  ASI:[60.0,45.0,-11.0,150.0], OCE:[0.0,110.0,-50.0,180.0], WLD:[75.0,-180.0,-60.0,180.0],
 };
+const CAMERA_REGIONS = new Set(['CAN', 'CAR', 'MEX', 'SAM', 'EUR', 'MEA', 'ASI', 'OCE', 'WLD']);
 
 function _windyPlayerUrl(w) {
   const p = w.player || {};
@@ -2265,10 +2268,16 @@ function _stateForPoint(lat, lng) {
   // On the water / a beach: nearest state outline within ~8 miles
   const near = Object.keys(_stateShapes).find(code => _inState(code, lat, lng, 8));
   if (near) return near;
-  // Outside the US: Canada or the Caribbean (camera-only regions)
-  if (lat >= 41.6 && lat <= 83 && lng >= -141 && lng <= -52) return 'CAN';
-  if (lat >= 10 && lat <= 27.3 && lng >= -86 && lng <= -59.4) return 'CAR';
-  return null;
+  // Outside the US: a world region (order matters where boxes overlap)
+  if (lat >= 10 && lat <= 27.3 && lng >= -86 && lng <= -59.4) return 'CAR';   // Caribbean
+  if (lat >= 5 && lat <= 33 && lng >= -118 && lng <= -77) return 'MEX';       // Mexico & Central America
+  if (lat >= 41.6 && lat <= 84 && lng >= -141 && lng <= -52) return 'CAN';    // Canada
+  if (lat >= -56 && lat <= 13 && lng >= -82 && lng <= -34) return 'SAM';      // South America
+  if (lat >= 34 && lat <= 72 && lng >= -32 && lng <= 45) return 'EUR';        // Europe (incl. Iceland, Turkey)
+  if (lat >= -35 && lat <= 42 && lng >= -20 && lng <= 63) return 'MEA';       // Middle East & Africa
+  if (lat >= -11 && lat <= 78 && lng >= 45 && lng <= 180) return 'ASI';       // Asia
+  if ((lat >= -50 && lat <= 0 && lng >= 110) || (lat >= -30 && lat <= 30 && (lng >= 150 || lng <= -130))) return 'OCE';   // Oceania & Pacific
+  return 'WLD';                                                               // anywhere else
 }
 const community = require('./community-cams')(app, {
   rGet, rSet, fetchTextOverHttp, youtubeKey: process.env.YOUTUBE_API_KEY, stateFor: _stateForPoint, upstreamCount,
@@ -2281,7 +2290,7 @@ const community = require('./community-cams')(app, {
 // cameras, which loads fast and doesn't lock up the map.
 app.get('/api/cameras/state/:code', async (req, res) => {
   const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');
-  const REGION = code === 'CAN' || code === 'CAR';   // Canada / Caribbean — Community Cams only
+  const REGION = CAMERA_REGIONS.has(code);   // world regions — Community Cams only
   if (code.length !== 2 && !REGION) return res.status(400).json({ error: 'Invalid state code' });
 
   try {

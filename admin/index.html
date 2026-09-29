@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-30 build.1790827200 -->
+<!-- WeatherTV Admin — updated 2026-10-01 build.1790848800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3198,7 +3198,13 @@ async function ccAct(action, id) {
       body.name = v('ccq-name-' + id); body.lat = v('ccq-lat-' + id); body.lng = v('ccq-lng-' + id);
     }
     if (action === 'remove' && !confirm('Remove this camera from the map?')) return;
-    await ccPost(action, body);
+    const j = await ccPost(action, body);
+    if (action === 'check' && j.cam) {   // say what the check found
+      const c = j.cam;
+      alert(`${c.name}\n\n` + (c.live ? '● Live now — showing on the map.'
+        : c.live === false ? '● Not live: ' + (c.lastError || 'offline') + (c.lastLive ? '' : '\nHidden from the map until it is live.')
+        : '● Could not confirm (' + (c.lastError || 'unknown') + ') — still shown on the map.'));
+    }
     loadCommunity();
   } catch (e) { alert(e.message); }
 }

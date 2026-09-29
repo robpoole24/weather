@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1790827200
+// WeatherTV Community Cams — build.1790848800
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -90,7 +90,11 @@ module.exports = function setupCommunityCams(app, deps) {
       if (ch) return { kind: 'yt-channel', ref: ch[1] };
       if (/^\/@[^/]+/.test(u.pathname)) {   // @handle → channel id, read from the public page (no quota)
         const html = await fetchTextOverHttp(`https://www.youtube.com/${u.pathname.split('/')[1]}`);
-        const id = (html.match(/"(?:channelId|externalId)":"(UC[A-Za-z0-9_-]{22})"/) || [])[1];
+        // The page mentions OTHER channels too (featured, collaborations), so take
+        // the channel's own id: externalId, then the canonical link, then browseId.
+        const id = (html.match(/"externalId":"(UC[A-Za-z0-9_-]{22})"/) || [])[1]
+          || (html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/channel\/(UC[A-Za-z0-9_-]{22})"/) || [])[1]
+          || (html.match(/"browseId":"(UC[A-Za-z0-9_-]{22})"/) || [])[1];
         if (!id) throw new Error('Could not find that YouTube channel');
         return { kind: 'yt-channel', ref: id };
       }
@@ -114,14 +118,14 @@ module.exports = function setupCommunityCams(app, deps) {
       let out = [];
       try {
         const txt = await fetchTextOverHttp('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5'
-          + '&countrycodes=us,pr,vi,gu,as,mp,ca,jm,bs,tc,ky,cu,ht,do,vg,ai,kn,ag,dm,lc,vc,bb,gd,tt,aw,cw,bq,sx,mf,bl,gp,mq,bm,mx,bz'
+          + ''
           + `&q=${encodeURIComponent(q)}`, { 'User-Agent': 'WeatherTV/1.0 (https://watchweathertv.com)', 'Accept-Language': 'en' });
         out = (JSON.parse(txt) || []).map(r => ({ lat: +r.lat, lng: +r.lon, label: r.display_name, source: 'OpenStreetMap' }));
       } catch (_) { /* fall through */ }
       if (!out.length) {
         try {
           const j = JSON.parse(await fetchTextOverHttp(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en&format=json`));
-          out = (j.results || []).filter(r => !['GB', 'IE', 'AU', 'NZ'].includes(r.country_code))
+          out = (j.results || [])
             .map(r => ({ lat: r.latitude, lng: r.longitude, label: [r.name, r.admin1, r.country_code].filter(Boolean).join(', '), source: 'Open-Meteo' }));
         } catch (_) { /* nothing found */ }
       }
@@ -320,7 +324,7 @@ module.exports = function setupCommunityCams(app, deps) {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Set a latitude and longitude first (e.g. 42.9375 and -87.9969, or 42.9375° N and 87.9969° W)');
     if (Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Those coordinates are out of range');
     const state = stateFor(lat, lng);
-    if (!state) throw new Error('That location is not in a U.S. state or territory');
+    if (!state) throw new Error('Could not work out where that is — check the coordinates');
     const cam = { id: base.id || uid(), kind: base.kind, ref: base.ref, name: String(body.name || base.name || 'Community camera').slice(0, 120),
                   channelTitle: base.channelTitle || '', lat, lng, state, addedAt: Date.now(), source: base.source || 'admin', live: null };
     await checkOne(cam);
@@ -411,34 +415,67 @@ module.exports = function setupCommunityCams(app, deps) {
       const p = await parseUrl(/^https?:/i.test(raw) ? raw : `https://www.youtube.com/${raw.startsWith('@') ? raw : '@' + raw}`);
       if (p.kind !== 'yt-channel') throw new Error('Give a channel link or @handle');
       const maxPages = Math.min(6, Math.max(1, parseInt((req.body || {}).maxPages || '4', 10) || 4));
-      let token = '', pages = 0, queued = 0, skipped = 0, channelTitle = '';
+      let token = '', pages = 0, units = 0, queued = 0, skipped = 0, channelTitle = '';
       const report = [];
+      const found = new Map();   // videoId → { title, channelTitle }
+      // (a) YouTube's live search — 100 units per 50
       do {
         upstreamCount('youtubeSearchCommunity');
         const j = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&eventType=live&maxResults=50'
           + `&channelId=${p.ref}${token ? '&pageToken=' + token : ''}&key=${encodeURIComponent(youtubeKey)}`));
+        units += 100;
         if (j.error) throw new Error(j.error.message || 'YouTube search failed');
         for (const it of j.items || []) {
           const id = it.id && it.id.videoId, sn = it.snippet || {};
-          channelTitle = sn.channelTitle || channelTitle;
-          if (!id || known(id)) { skipped++; continue; }
-          const place = placeFromTitle(sn.title, sn.channelTitle);
-          const hit = place.length >= 3 ? (await geocode(place))[0] : null;
-          db.queue.push({
-            id: uid(), kind: 'yt-video', ref: id, name: (sn.title || '').slice(0, 120), channelTitle: sn.channelTitle || '',
-            thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
-            locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
-            source: 'channel', foundAt: Date.now(),
-          });
-          queued++;
-          report.push(`${hit ? '✓' : '?'} ${sn.title}`);
+          if (id) found.set(id, { title: sn.title, channelTitle: sn.channelTitle });
         }
         token = j.nextPageToken || '';
         pages++;
       } while (token && pages < maxPages);
+      // (b) Live search is known to miss streams on some channels. Read the
+      //     channel's uploads list (1 unit per 50) and ask which are live now
+      //     (videos.list, 1 unit per 50). 24/7 streams can be old, so read deep.
+      let scanned = 0;
+      try {
+        let ptok = '', ppages = 0;
+        const uploads = 'UU' + p.ref.slice(2);
+        do {
+          const pl = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=50'
+            + `&playlistId=${uploads}${ptok ? '&pageToken=' + ptok : ''}&key=${encodeURIComponent(youtubeKey)}`));
+          units += 1;
+          if (pl.error) throw new Error(pl.error.message);
+          const ids = (pl.items || []).map(i => i.contentDetails && i.contentDetails.videoId).filter(id => id && !found.has(id));
+          scanned += (pl.items || []).length;
+          if (ids.length) {
+            const vj = JSON.parse(await fetchTextOverHttp(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${ids.join(',')}&key=${encodeURIComponent(youtubeKey)}`));
+            units += 1;
+            for (const it of vj.items || []) {
+              if (it.snippet && it.snippet.liveBroadcastContent === 'live') found.set(it.id, { title: it.snippet.title, channelTitle: it.snippet.channelTitle });
+            }
+          }
+          ptok = pl.nextPageToken || '';
+          ppages++;
+        } while (ptok && ppages < 60);   // up to 3,000 uploads, ~120 units
+      } catch (e) { report.push(`(uploads scan stopped: ${e.message})`); }
+
+      for (const [id, v] of found) {
+        channelTitle = v.channelTitle || channelTitle;
+        if (known(id)) { skipped++; continue; }
+        const place = placeFromTitle(v.title, v.channelTitle);
+        const hit = place.length >= 3 ? (await geocode(place))[0] : null;
+        db.queue.push({
+          id: uid(), kind: 'yt-video', ref: id, name: (v.title || '').slice(0, 120), channelTitle: v.channelTitle || '',
+          thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+          locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+          source: 'channel', foundAt: Date.now(),
+        });
+        queued++;
+        report.push(`${hit ? '✓' : '?'} ${v.title}`);
+      }
+      report.unshift(`Channel ${p.ref}: ${found.size} live now (search + ${scanned} uploads checked)`);
       db.queue = db.queue.slice(-600);
       await save();
-      res.json({ ok: true, channelTitle, pages, unitsUsed: pages * 100, queued, skipped, report: report.slice(0, 300) });
+      res.json({ ok: true, channelTitle: channelTitle || p.ref, pages, unitsUsed: units, queued, skipped, report: report.slice(0, 300) });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
@@ -450,7 +487,7 @@ module.exports = function setupCommunityCams(app, deps) {
     for (const q of ready) {
       try {
         const state = stateFor(q.lat, q.lng);
-        if (!state) throw new Error('outside our camera regions');
+        if (!state) throw new Error('could not work out where that is');
         db.cams.push({ id: q.id, kind: q.kind, ref: q.ref, name: q.name, channelTitle: q.channelTitle || '', lat: q.lat, lng: q.lng,
                        state, addedAt: Date.now(), source: q.source, live: null });
         db.queue = db.queue.filter(x => x.id !== q.id);
