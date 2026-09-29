@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790762400 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790769600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -3438,6 +3438,12 @@ function _camSourceLink(cam, footer) {
   a.textContent = cam.isStreaming ? `▶ Watch live on ${who} ↗` : `View on ${who} ↗`;
   footer.appendChild(document.createTextNode(' · '));
   footer.appendChild(a);
+  if (cam.statusMessage) {          // e.g. NPS: "This webcam is currently experiencing technical issues."
+    const note = document.createElement('div');
+    note.style.cssText = 'color:#f4a261;margin-top:0.25rem;';
+    note.textContent = '⚠ ' + cam.statusMessage;
+    footer.appendChild(note);
+  }
 }
 
 function _startImageStream(cam, body) {

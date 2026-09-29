@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-30T02:00:00Z build.1790762400
+// WeatherTV Server — updated 2026-09-30T04:00:00Z build.1790769600
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2137,6 +2137,7 @@ async function _loadNPSAll() {
           id: 'nps-' + w.id, name: w.title || 'Park webcam', lat, lng,
           imageUrl: img || null, videoUrl: null, direction: null, source: 'nps',
           pageUrl: w.url || null, isStreaming: !!w.isStreaming,
+          statusMessage: (w.statusMessage || '').trim() || null,
           parkName: parks[0] && parks[0].fullName, states,
         });
       }
@@ -2166,11 +2167,17 @@ async function _enrichNPS(cam) {
     const yt = html.match(/youtube(?:-nocookie)?\.com\/embed\/([A-Za-z0-9_-]{11})/) || html.match(/youtu\.be\/([A-Za-z0-9_-]{11})/)
             || html.match(/youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/);
     if (yt) found.playerUrl = `https://www.youtube-nocookie.com/embed/${yt[1]}?autoplay=1&mute=1&playsinline=1`;
-    // Prefer images whose path says webcam/cam; skip logos, icons, banners
-    const imgs = [...html.matchAll(/<img[^>]+src=["']([^"']+\.(?:jpe?g|png|gif|webp)(?:\?[^"']*)?)["']/gi)].map(m => m[1])
-      .filter(src => !/logo|icon|banner|sprite|arrowhead|social|footer|header/i.test(src));
-    const pick = imgs.find(src => /webcam|cam\d|\/cams?\//i.test(src));
-    if (pick) found.imageUrl = new URL(pick, cam.pageUrl).href;
+    // NPS serves every park's live image from /webcams-{park}/… on nps.gov
+    // (e.g. /webcams-hale/HaleSummitCamCrater.jpg). The page inserts it with
+    // a script, so look for that address pattern anywhere in the page rather
+    // than in <img> tags (which only held a broken placeholder).
+    const m = html.match(/(?:https?:\/\/(?:www\.)?nps\.gov)?\/webcams-[a-z0-9]+\/[^"'\s<>\\)]+?\.(?:jpe?g|png|gif|webp)/i);
+    if (m) found.imageUrl = new URL(m[0], 'https://www.nps.gov').href;
+    else {
+      // Other hosts sometimes carry the image (e.g. a USGS camera shown on a park page)
+      const ext = html.match(/https:\/\/[a-z0-9.-]+\.(?:gov|edu)\/[^"'\s<>]*(?:webcam|cams?)\/[^"'\s<>]+?\.(?:jpe?g|png|gif)/i);
+      if (ext) found.imageUrl = ext[0];
+    }
   } catch (e) { /* keep the link-only fallback */ }
   _npsPage.set(cam.id, found);
   return found;
