@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1790812800
+// WeatherTV Community Cams — build.1790827200
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -99,6 +99,54 @@ module.exports = function setupCommunityCams(app, deps) {
     if (/\.(jpe?g|png|webp|gif)$/i.test(u.pathname)) return { kind: 'image', ref: u.href };
     throw new Error('Supported: YouTube links, or a direct link to a camera image (.jpg/.png)');
   }
+  // ── Place → coordinates (so nobody has to look up lat/long) ──────────────
+  // OpenStreetMap Nominatim: street addresses and landmarks ("Broad St,
+  // Greendale WI", "Waikiki Beach"). Usage policy: identify ourselves, max 1
+  // request/second, cache results, credit OpenStreetMap. Falls back to
+  // Open-Meteo's city search. Limited to the US and its territories.
+  const geoCache = new Map();
+  let geoChain = Promise.resolve();
+  function geocode(q) {
+    const key = String(q || '').trim().toLowerCase();
+    if (key.length < 3) return Promise.resolve([]);
+    if (geoCache.has(key)) return Promise.resolve(geoCache.get(key));
+    const job = geoChain.then(async () => {
+      let out = [];
+      try {
+        const txt = await fetchTextOverHttp('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5'
+          + '&countrycodes=us,pr,vi,gu,as,mp,ca,jm,bs,tc,ky,cu,ht,do,vg,ai,kn,ag,dm,lc,vc,bb,gd,tt,aw,cw,bq,sx,mf,bl,gp,mq,bm,mx,bz'
+          + `&q=${encodeURIComponent(q)}`, { 'User-Agent': 'WeatherTV/1.0 (https://watchweathertv.com)', 'Accept-Language': 'en' });
+        out = (JSON.parse(txt) || []).map(r => ({ lat: +r.lat, lng: +r.lon, label: r.display_name, source: 'OpenStreetMap' }));
+      } catch (_) { /* fall through */ }
+      if (!out.length) {
+        try {
+          const j = JSON.parse(await fetchTextOverHttp(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en&format=json`));
+          out = (j.results || []).filter(r => !['GB', 'IE', 'AU', 'NZ'].includes(r.country_code))
+            .map(r => ({ lat: r.latitude, lng: r.longitude, label: [r.name, r.admin1, r.country_code].filter(Boolean).join(', '), source: 'Open-Meteo' }));
+        } catch (_) { /* nothing found */ }
+      }
+      out = out.filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lng)).slice(0, 5);
+      geoCache.set(key, out);
+      if (geoCache.size > 2000) geoCache.delete(geoCache.keys().next().value);
+      await new Promise(r => setTimeout(r, 1100));   // stay under 1 request/second
+      return out;
+    });
+    geoChain = job.catch(() => {});
+    return job;
+  }
+
+  // "Ashland, Virginia USA | Virtual Railfan LIVE" → "Ashland, Virginia USA"
+  // "Times Square, New York City - EarthCam Live" → "Times Square, New York City"
+  function placeFromTitle(title, channelTitle) {
+    let t = String(title || '').replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ');
+    const brand = String(channelTitle || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (brand) t = t.replace(new RegExp(brand, 'ig'), ' ');
+    t = t.split(/\s[|•–—]\s|\s-\s/)[0];
+    t = t.replace(/\b(live ?stream|live ?cam(era)?|webcam|web cam|live|streaming|24\/7|4k|hd|uhd|virtual railfan|earthcam|cam\b|camera)\b/ig, ' ')
+         .replace(/[\[\]()]/g, ' ').replace(/\s{2,}/g, ' ').replace(/^[\s,:-]+|[\s,:-]+$/g, '');
+    return t.slice(0, 100);
+  }
+
   const known = (ref) => db.cams.some(c => c.ref === ref) || db.queue.some(q => q.ref === ref) || db.rejected.includes(ref);
 
   // ── Live checks ───────────────────────────────────────────────────────────
@@ -109,7 +157,7 @@ module.exports = function setupCommunityCams(app, deps) {
       const batch = cams.slice(i, i + 50);
       try {
         upstreamCount('youtubeVideosCommunity');
-        const j = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails'
+        const j = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails,status'
           + `&id=${batch.map(c => c.ref).join(',')}&key=${encodeURIComponent(youtubeKey)}`));
         if (j.error) throw new Error(j.error.message || 'YouTube API error');
         const byId = new Map((j.items || []).map(it => [it.id, it]));
@@ -117,8 +165,9 @@ module.exports = function setupCommunityCams(app, deps) {
           const it = byId.get(c.ref);
           if (!it) { c.live = false; c.lastError = 'Video not found (removed or private)'; }
           else {
-            c.live = it.snippet && it.snippet.liveBroadcastContent === 'live';
-            c.lastError = c.live ? null : 'Not live on YouTube right now';
+            c.embeddable = !(it.status && it.status.embeddable === false);
+            c.live = c.embeddable && it.snippet && it.snippet.liveBroadcastContent === 'live';
+            c.lastError = !c.embeddable ? 'The owner does not allow embedding this stream' : c.live ? null : 'Not live on YouTube right now';
             if (!c.channelTitle && it.snippet) c.channelTitle = it.snippet.channelTitle || '';
           }
           c.lastChecked = Date.now();
@@ -238,12 +287,17 @@ module.exports = function setupCommunityCams(app, deps) {
       const { url, lat, lng, place, note } = req.body || {};
       const p = await parseUrl(url);
       if (known(p.ref)) return res.json({ ok: true, message: 'Already on our list — thank you!' });
-      const la = parseCoord(lat, 'lat'), lo = parseCoord(lng, 'lng');
+      let la = parseCoord(lat, 'lat'), lo = parseCoord(lng, 'lng');
+      let guess = String(place || '').slice(0, 120);
+      if ((!Number.isFinite(la) || !Number.isFinite(lo)) && place) {   // no map spot → look the place up
+        const hit = (await geocode(place))[0];
+        if (hit) { la = hit.lat; lo = hit.lng; guess = `${guess} → looked up: ${hit.label}`; }
+      }
       db.queue.push({
         id: uid(), ...p, name: String(place || '').slice(0, 120) || 'Suggested camera',
         thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : (p.kind === 'image' ? p.ref : null),
         lat: Number.isFinite(la) ? la : null, lng: Number.isFinite(lo) ? lo : null,
-        locationGuess: String(place || '').slice(0, 120), note: String(note || '').slice(0, 300),
+        locationGuess: guess, note: String(note || '').slice(0, 300),
         source: 'suggestion', foundAt: Date.now(),
       });
       db.queue = db.queue.slice(-400);
@@ -316,6 +370,102 @@ module.exports = function setupCommunityCams(app, deps) {
       res.json({ ok: true, ...r });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
+  // Bulk import: pasted text with a place line followed by one or more links.
+  // Each link is looked up by its place and queued with the location filled in.
+  app.post('/api/admin/community/import', async (req, res) => {
+    try {
+      await load();
+      const lines = String((req.body || {}).text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 400);
+      let place = '', queued = 0, skipped = 0, noPlace = 0;
+      const report = [];
+      for (const line of lines) {
+        if (!/^https?:\/\//i.test(line)) { place = line; continue; }
+        let p;
+        try { p = await parseUrl(line); } catch (e) { report.push(`✗ ${line.slice(0, 60)} — ${e.message}`); skipped++; continue; }
+        if (known(p.ref)) { report.push(`• already listed: ${place || line.slice(0, 40)}`); skipped++; continue; }
+        const hit = place ? (await geocode(place))[0] : null;
+        if (!hit) noPlace++;
+        db.queue.push({
+          id: uid(), ...p, name: place || 'Imported camera',
+          thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : null,
+          lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+          locationGuess: hit ? `Looked up: ${hit.label}` : (place ? `Couldn't find "${place}" — set it on the map` : 'No place given'),
+          source: 'import', foundAt: Date.now(),
+        });
+        queued++;
+        report.push(`${hit ? '✓' : '?'} ${place || '(no place)'}${hit ? ' → ' + hit.label.split(',').slice(0, 3).join(',') : ''}`);
+      }
+      db.queue = db.queue.slice(-600);
+      await save();
+      res.json({ ok: true, queued, skipped, noPlace, report });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // Channel import: every stream a channel has LIVE right now (YouTube API:
+  // 100 units per 50 streams). The place is read from each title and looked up.
+  app.post('/api/admin/community/import-channel', async (req, res) => {
+    try {
+      await load();
+      if (!youtubeKey) throw new Error('YOUTUBE_API_KEY not set');
+      const raw = String((req.body || {}).channel || '').trim();
+      const p = await parseUrl(/^https?:/i.test(raw) ? raw : `https://www.youtube.com/${raw.startsWith('@') ? raw : '@' + raw}`);
+      if (p.kind !== 'yt-channel') throw new Error('Give a channel link or @handle');
+      const maxPages = Math.min(6, Math.max(1, parseInt((req.body || {}).maxPages || '4', 10) || 4));
+      let token = '', pages = 0, queued = 0, skipped = 0, channelTitle = '';
+      const report = [];
+      do {
+        upstreamCount('youtubeSearchCommunity');
+        const j = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&eventType=live&maxResults=50'
+          + `&channelId=${p.ref}${token ? '&pageToken=' + token : ''}&key=${encodeURIComponent(youtubeKey)}`));
+        if (j.error) throw new Error(j.error.message || 'YouTube search failed');
+        for (const it of j.items || []) {
+          const id = it.id && it.id.videoId, sn = it.snippet || {};
+          channelTitle = sn.channelTitle || channelTitle;
+          if (!id || known(id)) { skipped++; continue; }
+          const place = placeFromTitle(sn.title, sn.channelTitle);
+          const hit = place.length >= 3 ? (await geocode(place))[0] : null;
+          db.queue.push({
+            id: uid(), kind: 'yt-video', ref: id, name: (sn.title || '').slice(0, 120), channelTitle: sn.channelTitle || '',
+            thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+            locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+            source: 'channel', foundAt: Date.now(),
+          });
+          queued++;
+          report.push(`${hit ? '✓' : '?'} ${sn.title}`);
+        }
+        token = j.nextPageToken || '';
+        pages++;
+      } while (token && pages < maxPages);
+      db.queue = db.queue.slice(-600);
+      await save();
+      res.json({ ok: true, channelTitle, pages, unitsUsed: pages * 100, queued, skipped, report: report.slice(0, 300) });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // Approve every queued camera that already has a location (one click after a big import)
+  app.post('/api/admin/community/approve-located', async (req, res) => {
+    await load();
+    const ready = db.queue.filter(q => Number.isFinite(q.lat) && Number.isFinite(q.lng));
+    let approved = 0; const failed = [];
+    for (const q of ready) {
+      try {
+        const state = stateFor(q.lat, q.lng);
+        if (!state) throw new Error('outside our camera regions');
+        db.cams.push({ id: q.id, kind: q.kind, ref: q.ref, name: q.name, channelTitle: q.channelTitle || '', lat: q.lat, lng: q.lng,
+                       state, addedAt: Date.now(), source: q.source, live: null });
+        db.queue = db.queue.filter(x => x.id !== q.id);
+        approved++;
+      } catch (e) { failed.push(`${q.name}: ${e.message}`); }
+    }
+    await save();
+    res.json({ ok: true, approved, failed });
+    checkAll();   // live + embeddable status for the new ones, in the background
+  });
+
+  app.get('/api/admin/community/geocode', async (req, res) => {
+    try { res.json({ results: await geocode(String(req.query.q || '').slice(0, 200)) }); }
+    catch (e) { res.status(400).json({ error: e.message }); }
+  });
   app.post('/api/admin/community/check', async (req, res) => {
     await load();
     const c = db.cams.find(x => x.id === (req.body || {}).id);
@@ -332,5 +482,5 @@ module.exports = function setupCommunityCams(app, deps) {
     if (h === 3 && (!db.lastDiscovery || Date.now() - db.lastDiscovery > 20 * 3600 * 1000)) nightly().catch(() => {});
   }, 15 * 60 * 1000);
 
-  return { forState, parseUrl, _test: { db: () => db, discover, checkOne, visible } };
+  return { forState, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible } };
 };

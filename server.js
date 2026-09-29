@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-30T14:00:00Z build.1790805600
+// WeatherTV Server — updated 2026-09-30T18:00:00Z build.1790827200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1912,6 +1912,8 @@ const STATE_BBOX = {
   DC:[39.0,-77.1,38.8,-77.0],
   // Territories — Caribbean coverage for tropical storms
   PR:[18.6,-67.95,17.85,-65.2], VI:[18.45,-65.1,17.65,-64.55],
+  // Camera-only regions outside the US (Community Cams): Canada, Caribbean
+  CAN:[60.0,-141.0,41.6,-52.6], CAR:[27.3,-86.0,10.0,-59.4],
 };
 
 function _windyPlayerUrl(w) {
@@ -2261,7 +2263,12 @@ function _stateForPoint(lat, lng) {
   const inside = _stateOf(lat, lng);
   if (inside) return inside;
   // On the water / a beach: nearest state outline within ~8 miles
-  return Object.keys(_stateShapes).find(code => _inState(code, lat, lng, 8)) || null;
+  const near = Object.keys(_stateShapes).find(code => _inState(code, lat, lng, 8));
+  if (near) return near;
+  // Outside the US: Canada or the Caribbean (camera-only regions)
+  if (lat >= 41.6 && lat <= 83 && lng >= -141 && lng <= -52) return 'CAN';
+  if (lat >= 10 && lat <= 27.3 && lng >= -86 && lng <= -59.4) return 'CAR';
+  return null;
 }
 const community = require('./community-cams')(app, {
   rGet, rSet, fetchTextOverHttp, youtubeKey: process.env.YOUTUBE_API_KEY, stateFor: _stateForPoint, upstreamCount,
@@ -2274,7 +2281,8 @@ const community = require('./community-cams')(app, {
 // cameras, which loads fast and doesn't lock up the map.
 app.get('/api/cameras/state/:code', async (req, res) => {
   const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');
-  if (code.length !== 2) return res.status(400).json({ error: 'Invalid state code' });
+  const REGION = code === 'CAN' || code === 'CAR';   // Canada / Caribbean — Community Cams only
+  if (code.length !== 2 && !REGION) return res.status(400).json({ error: 'Invalid state code' });
 
   try {
     // Find the STATE_DOTS entry for this state, if we have one
@@ -2283,8 +2291,8 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams] = await Promise.all([
       _loadOTC().catch(() => []),
       dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
-      _loadWindy(code).catch(() => []),
-      _loadNPS(code).catch(() => []),
+      REGION ? Promise.resolve([]) : _loadWindy(code).catch(() => []),   // too large to grid-search
+      REGION ? Promise.resolve([]) : _loadNPS(code).catch(() => []),
       code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
       community.forState(code).catch(() => []),
     ]);

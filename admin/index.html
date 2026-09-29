@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-30 build.1790812800 -->
+<!-- WeatherTV Admin — updated 2026-09-30 build.1790827200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -604,11 +604,17 @@
         <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
           <input id="cc-url" type="text" placeholder="https://www.youtube.com/watch?v=…" style="font-size:0.8rem;margin:0;" size="42">
           <input id="cc-name" type="text" placeholder="Name (e.g. Greendale — Broad St)" style="font-size:0.8rem;margin:0;" size="28">
-          <input id="cc-lat" type="text" placeholder="Latitude" style="font-size:0.8rem;margin:0;" size="9">
-          <input id="cc-lng" type="text" placeholder="Longitude" style="font-size:0.8rem;margin:0;" size="10">
-          <button class="btn btn-ghost btn-sm" onclick="ccUseLocation('cc-lat','cc-lng')">📍 My location</button>
           <button class="btn btn-primary btn-sm" onclick="ccAdd()">Add to map</button>
         </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;margin-top:0.4rem;">
+          <input id="cc-where" type="text" placeholder="Where is it? (e.g. Broad St, Greendale WI)" style="font-size:0.8rem;margin:0;" size="34"
+                 onkeydown="if(event.key==='Enter')ccLookup('cc-where','cc-lat','cc-lng','cc-where-hit')">
+          <button class="btn btn-ghost btn-sm" onclick="ccLookup('cc-where','cc-lat','cc-lng','cc-where-hit')">🔎 Look up</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccPickOnMap('cc-lat','cc-lng','cc-where')">🗺 Pick on map</button>
+          <input id="cc-lat" type="text" placeholder="Latitude" style="font-size:0.8rem;margin:0;" size="9">
+          <input id="cc-lng" type="text" placeholder="Longitude" style="font-size:0.8rem;margin:0;" size="10">
+        </div>
+        <div id="cc-where-hit" style="font-size:0.74rem;color:var(--muted);margin-top:0.25rem"></div>
         <div id="cc-add-result" style="font-size:0.8rem;margin-top:0.4rem;color:var(--muted)"></div>
       </div>
 
@@ -626,7 +632,26 @@
       </div>
 
       <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">Review queue <span id="cc-qcount" style="color:var(--muted);font-weight:400"></span></div>
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Bulk import a list</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Paste a list: a place line, then its link(s) — like <em>Venice Beach</em> ⏎ <em>https://www.youtube.com/live/…</em>. Each place is looked up and the cameras land in the review queue with locations filled in.</div>
+        <textarea id="cc-bulk" rows="6" style="width:100%;font-size:0.78rem;font-family:monospace;" placeholder="Telluride&#10;https://www.youtube.com/live/8Et9fVZld7E&#10;&#10;Clayton, NC&#10;https://www.youtube.com/live/BWtr3Od7lTk"></textarea>
+        <button class="btn btn-primary btn-sm" id="cc-bulk-btn" onclick="ccBulk()" style="margin-top:0.35rem">Import list</button>
+        <pre id="cc-bulk-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+
+        <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Import a channel's live streams</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Pulls every stream a channel has live right now (e.g. <strong>@VirtualRailfan</strong>, <strong>@earthcam</strong>), reads the place from each title and queues them. <strong>100 quota units per 50 streams.</strong></div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-chan" type="text" placeholder="@VirtualRailfan or channel link" style="font-size:0.8rem;margin:0;" size="30">
+          <button class="btn btn-primary btn-sm" id="cc-chan-btn" onclick="ccChannel()">Import channel</button>
+        </div>
+        <pre id="cc-chan-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+      </div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.5rem;">
+          <div style="font-weight:600;font-size:0.875rem">Review queue <span id="cc-qcount" style="color:var(--muted);font-weight:400"></span></div>
+          <button class="btn btn-ghost btn-sm" onclick="ccApproveLocated()" title="Approve every queued camera that already has a location">✓ Approve all with locations</button>
+        </div>
         <div id="cc-queue" style="display:flex;flex-direction:column;gap:0.6rem;"></div>
       </div>
 
@@ -3013,6 +3038,120 @@ async function manualMarkOffline() {
 }
 
 // ── Community Cams ───────────────────────────────────────────────────────────
+// Place lookup: fill latitude/longitude from a typed place (server: OSM Nominatim)
+async function ccLookup(qId, latId, lngId, outId) {
+  const q = (document.getElementById(qId).value || '').trim();
+  const out = outId ? document.getElementById(outId) : null;
+  if (q.length < 3) { if (out) out.textContent = 'Type a place first.'; return; }
+  if (out) out.textContent = 'Looking up…';
+  try {
+    const r = await (await fetch('/api/admin/community/geocode?q=' + encodeURIComponent(q))).json();
+    const hit = (r.results || [])[0];
+    if (!hit) { if (out) out.textContent = 'Not found — try adding the city/state, or pick it on the map.'; else alert('Not found — pick it on the map instead.'); return; }
+    document.getElementById(latId).value = hit.lat.toFixed(5);
+    document.getElementById(lngId).value = hit.lng.toFixed(5);
+    if (out) out.innerHTML = '📍 ' + lvEsc(hit.label) + ' <span style="opacity:0.6">· © OpenStreetMap</span>';
+  } catch (e) { if (out) out.textContent = 'Lookup failed: ' + e.message; }
+}
+
+// Pick-on-map window: search, click to drop the pin, "Use this spot"
+let _ccMap = null, _ccPin = null, _ccTarget = null;
+function _ccLoadLeaflet() {
+  if (window.L) return Promise.resolve();
+  return new Promise((ok, fail) => {
+    const css = document.createElement('link'); css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(css);
+    const js = document.createElement('script'); js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    js.onload = ok; js.onerror = () => fail(new Error('Map library failed to load')); document.head.appendChild(js);
+  });
+}
+async function ccPickOnMap(latId, lngId, labelId) {
+  _ccTarget = { latId, lngId };
+  let m = document.getElementById('cc-picker');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'cc-picker';
+    m.style.cssText = 'position:fixed;inset:0;z-index:5000;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;';
+    m.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:min(92vw,820px);padding:0.75rem;">
+      <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center;">
+        <input id="cc-picker-q" type="text" placeholder="Search a place, or click the map" style="flex:1;font-size:0.82rem;margin:0" onkeydown="if(event.key==='Enter')ccPickerSearch()">
+        <button class="btn btn-ghost btn-sm" onclick="ccPickerSearch()">🔎 Search</button>
+        <button class="btn btn-primary btn-sm" onclick="ccPickerUse()">Use this spot</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cc-picker').style.display='none'">Cancel</button>
+      </div>
+      <div id="cc-picker-map" style="height:min(62vh,480px);border-radius:6px;"></div>
+      <div id="cc-picker-info" style="font-size:0.74rem;color:var(--muted);margin-top:0.35rem">Click where the camera is. Drag the pin to fine-tune.</div></div>`;
+    document.body.appendChild(m);
+  }
+  m.style.display = 'flex';
+  try { await _ccLoadLeaflet(); } catch (e) { alert(e.message); return; }
+  const la = parseFloat(document.getElementById(latId).value), lo = parseFloat(document.getElementById(lngId).value);
+  const start = Number.isFinite(la) && Number.isFinite(lo) ? [la, lo] : [39.5, -96], zoom = Number.isFinite(la) ? 15 : 4;
+  if (!_ccMap) {
+    _ccMap = L.map('cc-picker-map').setView(start, zoom);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(_ccMap);
+    _ccMap.on('click', (e) => _ccSetPin(e.latlng.lat, e.latlng.lng));
+  } else { _ccMap.setView(start, zoom); }
+  setTimeout(() => _ccMap.invalidateSize(), 50);
+  if (Number.isFinite(la) && Number.isFinite(lo)) _ccSetPin(la, lo); else if (_ccPin) { _ccMap.removeLayer(_ccPin); _ccPin = null; }
+  const label = labelId && document.getElementById(labelId) ? document.getElementById(labelId).value : '';
+  document.getElementById('cc-picker-q').value = label || '';
+}
+function _ccSetPin(lat, lng) {
+  if (_ccPin) _ccPin.setLatLng([lat, lng]);
+  else { _ccPin = L.marker([lat, lng], { draggable: true }).addTo(_ccMap); _ccPin.on('dragend', () => { const p = _ccPin.getLatLng(); _ccSetPin(p.lat, p.lng); }); }
+  document.getElementById('cc-picker-info').textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)} — "Use this spot" to fill it in.`;
+}
+async function ccPickerSearch() {
+  const q = document.getElementById('cc-picker-q').value.trim();
+  if (q.length < 3) return;
+  const info = document.getElementById('cc-picker-info');
+  info.textContent = 'Searching…';
+  try {
+    const r = await (await fetch('/api/admin/community/geocode?q=' + encodeURIComponent(q))).json();
+    const hit = (r.results || [])[0];
+    if (!hit) { info.textContent = 'Not found — zoom in and click the spot instead.'; return; }
+    _ccMap.setView([hit.lat, hit.lng], 16);
+    _ccSetPin(hit.lat, hit.lng);
+    info.textContent = '📍 ' + hit.label + ' — adjust if needed, then "Use this spot".';
+  } catch (e) { info.textContent = 'Search failed: ' + e.message; }
+}
+function ccPickerUse() {
+  if (!_ccPin || !_ccTarget) { alert('Click the map to place the pin first.'); return; }
+  const p = _ccPin.getLatLng();
+  document.getElementById(_ccTarget.latId).value = p.lat.toFixed(5);
+  document.getElementById(_ccTarget.lngId).value = p.lng.toFixed(5);
+  document.getElementById('cc-picker').style.display = 'none';
+}
+
+async function ccBulk() {
+  const out = document.getElementById('cc-bulk-result'), btn = document.getElementById('cc-bulk-btn');
+  btn.disabled = true; out.textContent = 'Importing — each place is looked up (about 1 per second)…';
+  try {
+    const j = await ccPost('import', { text: document.getElementById('cc-bulk').value });
+    out.textContent = `Queued ${j.queued} · skipped ${j.skipped}` + (j.noPlace ? ` · ${j.noPlace} need a location set by hand` : '') + '\n\n' + j.report.join('\n');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccChannel() {
+  const out = document.getElementById('cc-chan-result'), btn = document.getElementById('cc-chan-btn');
+  btn.disabled = true; out.textContent = 'Fetching the channel\'s live streams and looking up places…';
+  try {
+    const j = await ccPost('import-channel', { channel: document.getElementById('cc-chan').value });
+    out.textContent = `${j.channelTitle}: queued ${j.queued}, skipped ${j.skipped} (already listed) · used ${j.unitsUsed} quota units\n\n` + j.report.join('\n');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccApproveLocated() {
+  if (!confirm('Approve every queued camera that already has a location?')) return;
+  try {
+    const j = await ccPost('approve-located', {});
+    alert(`Approved ${j.approved}.` + (j.failed.length ? `\n\nNot approved:\n${j.failed.slice(0, 20).join('\n')}` : ''));
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
 function ccUseLocation(latId, lngId) {
   if (!navigator.geolocation) return alert('Location not available in this browser');
   navigator.geolocation.getCurrentPosition(p => {
@@ -3030,11 +3169,13 @@ async function ccAdd() {
   const out = document.getElementById('cc-add-result');
   out.textContent = 'Checking…';
   try {
-    const j = await ccPost('add', { url: v('cc-url'), name: v('cc-name'), lat: v('cc-lat'), lng: v('cc-lng') });
+    if ((!v('cc-lat') || !v('cc-lng')) && v('cc-where')) await ccLookup('cc-where', 'cc-lat', 'cc-lng', 'cc-where-hit');
+    const j = await ccPost('add', { url: v('cc-url'), name: v('cc-name') || v('cc-where'), lat: v('cc-lat'), lng: v('cc-lng') });
     out.innerHTML = '<span style="color:var(--green)">✓ Added in ' + lvEsc(j.cam.state) + (j.cam.live ? ' · live now' : j.cam.live === false
       ? ' · not live right now (hidden until it is)' + (j.cam.lastError ? ' — ' + lvEsc(j.cam.lastError) : '')
       : ' · live status not confirmed yet — shown on the map' + (j.cam.lastError ? ' (' + lvEsc(j.cam.lastError) + ')' : '')) + '</span>';
-    ['cc-url', 'cc-name'].forEach(id => { document.getElementById(id).value = ''; });
+    ['cc-url', 'cc-name', 'cc-where', 'cc-lat', 'cc-lng'].forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('cc-where-hit').textContent = '';
     loadCommunity();
   } catch (e) { out.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
 }
@@ -3072,7 +3213,7 @@ async function loadCommunity() {
       (d.discovery.lastRun ? ', last run ' + fmtTs(new Date(d.discovery.lastRun).toISOString()) : '') :
       'nightly discovery off (set COMMUNITY_DISCOVERY=true to turn on)');
   document.getElementById('cc-qcount').textContent = d.queue.length ? '(' + d.queue.length + ')' : '';
-  const src = { suggestion: '💬 Viewer suggestion', discovery: '🔎 Found by search', admin: 'Added' };
+  const src = { suggestion: '💬 Viewer suggestion', discovery: '🔎 Found by search', admin: 'Added', import: '📋 Imported list', channel: '📺 Channel import' };
   document.getElementById('cc-queue').innerHTML = d.queue.slice(0, 50).map(q => {
     const link = q.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + q.ref : q.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + q.ref + '/live' : q.ref;
     return `<div style="display:flex;gap:0.75rem;align-items:flex-start;padding:0.6rem;border:1px solid var(--border);border-radius:6px;">
@@ -3085,6 +3226,8 @@ async function loadCommunity() {
         <div style="display:flex;gap:0.35rem;margin-top:0.35rem;flex-wrap:wrap;align-items:center;">
           <input id="ccq-lat-${q.id}" type="text" value="${q.lat ?? ''}" placeholder="Latitude" size="9" style="font-size:0.78rem;margin:0">
           <input id="ccq-lng-${q.id}" type="text" value="${q.lng ?? ''}" placeholder="Longitude" size="10" style="font-size:0.78rem;margin:0">
+          <button class="btn btn-ghost btn-sm" title="Look up the name above" onclick="ccLookup('ccq-name-${q.id}','ccq-lat-${q.id}','ccq-lng-${q.id}',null)">🔎</button>
+          <button class="btn btn-ghost btn-sm" title="Pick on map" onclick="ccPickOnMap('ccq-lat-${q.id}','ccq-lng-${q.id}','ccq-name-${q.id}')">🗺</button>
           <a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open ↗</a>
           <button class="btn btn-primary btn-sm" onclick="ccAct('approve','${q.id}')">Approve</button>
           <button class="btn btn-ghost btn-sm" onclick="ccAct('reject','${q.id}')">Reject</button>
