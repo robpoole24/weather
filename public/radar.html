@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790686800 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790740800 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -283,6 +283,9 @@
     background: #00b4d8;
     box-shadow: 0 0 4px rgba(0,180,216,0.7);
   }
+  /* National Park Service webcams — green; USGS volcano webcams — lava red */
+  .cam-dot.cam-dot-nps  { background:#22c55e; box-shadow:0 0 4px rgba(34,197,94,0.7); }
+  .cam-dot.cam-dot-usgs { background:#ef4444; box-shadow:0 0 5px rgba(239,68,68,0.8); }
   .cam-dot {
     width:10px; height:10px; border-radius:50%;
     background:#f97316; border:2px solid rgba(255,255,255,0.7);
@@ -1581,7 +1584,10 @@ async function setRadarSource(raw) {
       return L.tileLayer.wms(MRMS_WMS, {
         layers: info.name, TIME: new Date(t).toISOString().split('.')[0] + 'Z', format: 'image/png', transparent: true,
         version: '1.3.0', opacity: 0, zIndex: 200 + idx, maxNativeZoom: 9, keepBuffer: 1, updateWhenIdle: true,
-        updateWhenZooming: false, crossOrigin: true,
+        // No crossOrigin: that makes the browser send an Origin header, and
+        // NOAA's map server answers those requests with 403 Forbidden. Plain
+        // image tiles don't need CORS to display.
+        updateWhenZooming: false,
         attribution: idx === 0 ? 'Radar: NOAA MRMS (quality-controlled)' : '',
       });
     });
@@ -3219,6 +3225,7 @@ const ALL_STATES = [
   ['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],
   ['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],
   ['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming'],
+  ['PR','Puerto Rico'],['VI','U.S. Virgin Islands'],
 ];
 
 // Fetch which states have camera coverage and populate the dropdown
@@ -3274,7 +3281,7 @@ async function onCamStateChange(code) {
 
     for (const cam of data.cameras) {
       const el = document.createElement('div');
-      el.className = cam.source === 'windy' ? 'cam-dot cam-dot-windy' : 'cam-dot';
+      el.className = 'cam-dot' + ({ windy: ' cam-dot-windy', nps: ' cam-dot-nps', usgs: ' cam-dot-usgs' }[cam.source] || '');
       const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
       const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
       mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
@@ -3400,10 +3407,28 @@ function openCameraOverlay(cam) {
   } else if (cam.imageUrl) {
     _startImageStream(cam, body);
     footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS/1000}s · ${cam.name}`;
+    _camSourceLink(cam, footer);
+  } else if (cam.pageUrl) {
+    // e.g. an NPS live stream with no still image — send people to the source
+    body.innerHTML = '<div id="camera-overlay-status">This camera streams on its own page</div>';
+    footer.textContent = cam.name;
+    _camSourceLink(cam, footer);
   } else {
     body.innerHTML = '<div id="camera-overlay-status">No feed available for this camera</div>';
     footer.textContent = cam.name;
   }
+}
+
+// Link back to the camera's own page (NPS / USGS) — credit + their live view
+function _camSourceLink(cam, footer) {
+  if (!cam.pageUrl) return;
+  const who = cam.source === 'nps' ? 'NPS.gov' : cam.source === 'usgs' ? 'USGS' : 'source';
+  const a = document.createElement('a');
+  a.href = cam.pageUrl; a.target = '_blank'; a.rel = 'noopener';
+  a.style.cssText = 'color:var(--accent);text-decoration:none;margin-left:0.4rem;';
+  a.textContent = cam.isStreaming ? `▶ Watch live on ${who} ↗` : `View on ${who} ↗`;
+  footer.appendChild(document.createTextNode(' · '));
+  footer.appendChild(a);
 }
 
 function _startImageStream(cam, body) {

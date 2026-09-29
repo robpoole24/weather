@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-29T08:00:00Z build.1790697600
+// WeatherTV Server — updated 2026-09-29T20:00:00Z build.1790740800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1563,6 +1563,9 @@ const STATE_DOTS = [
   { id:'id', label:'Idaho DOT',   url:'https://511.idaho.gov/api/v2/get/cameras?format=json',     envKey:'ID_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
   { id:'nv', label:'Nevada DOT',  url:'https://www.nvroads.com/api/v2/get/cameras?format=json',    envKey:'NV_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
   { id:'ut', label:'Utah DOT',    url:'https://prod-ut.ibi511.com/api/v2/get/cameras?format=json', envKey:'UT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Same IBI/Skyline platform — keys: AK_511_KEY, CT_511_KEY
+  { id:'ak', label:'Alaska DOT&PF', url:'https://511.alaska.gov/api/v2/get/cameras?format=json',   envKey:'AK_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  { id:'ct', label:'Connecticut DOT', url:'https://ctroads.org/api/v2/get/cameras?format=json',    envKey:'CT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
 
   // ── Florida ──────────────────────────────────────────────────────────────
   // FL511 (fl511.com) runs on FDOT's proprietary SunGuide ATMS platform,
@@ -1904,6 +1907,8 @@ const STATE_BBOX = {
   WA:[49.0,-124.7,45.5,-116.9],WV:[40.6,-82.6,37.2,-77.7],
   WI:[47.1,-92.9,42.5,-86.8],  WY:[45.0,-111.1,40.9,-104.0],
   DC:[39.0,-77.1,38.8,-77.0],
+  // Territories — Caribbean coverage for tropical storms
+  PR:[18.6,-67.95,17.85,-65.2], VI:[18.45,-65.1,17.65,-64.55],
 };
 
 function _windyPlayerUrl(w) {
@@ -1917,7 +1922,10 @@ function _windyPlayerUrl(w) {
 }
 
 const _windyCache = new Map();
-const WINDY_TTL = 8 * 60 * 1000; // 8 min — free-tier image tokens expire after 10 min (Windy v3 docs)
+// Camera LOCATIONS barely change, so the list is cached 6 h. The popup uses
+// Windy's player embed (doesn't expire); preview images are left out because
+// free-tier image tokens expire after 10 min.
+const WINDY_TTL = 6 * 60 * 60 * 1000;
 
 async function _loadWindy(stateCode) {
   const key = process.env.WINDY_WEBCAM_KEY;
@@ -1934,59 +1942,57 @@ async function _loadWindy(stateCode) {
   if (!bbox) return [];
   const [N, W, S, E] = bbox;
 
-  // Windy V3 uses nearby={lat},{lon},{radius_km} — NOT boundingBox.
-  // Calculate center point and radius from the state's bounding box.
-  const centerLat = (N + S) / 2;
-  const centerLng = (W + E) / 2;
-  // Distance from center to corner in km (approximate)
-  const latKm = Math.abs(N - S) * 111;
-  const lngKm = Math.abs(E - W) * 111 * Math.cos(centerLat * Math.PI / 180);
-  const radiusKm = Math.min(250, Math.ceil(Math.sqrt((latKm/2)**2 + (lngKm/2)**2))); // Windy max = 250km
-
-  // Fetch multiple pages to get good coverage — free tier allows up to
-  // offset 1000, so up to 4 pages of 50 gives 200 cameras per state.
-  const allCameras = [];
-  const pages = 4;
-  for (let page = 0; page < pages; page++) {
-    const url = `https://api.windy.com/webcams/api/v3/webcams`
-      + `?nearby=${centerLat.toFixed(4)},${centerLng.toFixed(4)},${radiusKm}`
-      + `&include=location,images,player`
-      + `&limit=50&offset=${page * 50}`;
-    try {
-      const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
-      // Diagnostic: log first 200 chars so Railway logs show auth/format issues
-      if (page === 0) console.log(`[Cameras] Windy ${stateCode} raw:`, text.slice(0, 200));
-      const data = JSON.parse(text);
-      const batch = data.webcams || data.data || []; // V3 returns {data:[...]}, V2 {webcams:[...]}
-      if (!batch.length) break; // no more results
-
-      batch.forEach(w => {
-        const lat = w.location?.latitude, lng = w.location?.longitude;
-        if (!isFinite(lat) || !isFinite(lng)) return;
-        // Filter to state bounding box so we don't spill into neighbours
-        if (lat < S || lat > N || lng < W || lng > E) return;
-        allCameras.push({
-          id:        'windy-' + w.webcamId,
-          name:      w.title || 'Webcam',
-          lat, lng,
-          imageUrl:  w.images?.current?.preview || w.image?.current?.preview || null,
-          videoUrl:  null,
-          // Use the player URL Windy returns (v3: player.live/day/… are URL
-          // strings). The old hand-built `/embed/player/{id}` had no view on the
-          // end, so Windy answered with JSON instead of a player.
-          playerUrl: _windyPlayerUrl(w),
-          windyId:   w.webcamId,
-          direction: null,
-          source:    'windy',
-          state:     stateCode,
-        });
-      });
-      if (batch.length < 50) break; // last page
-    } catch(e) {
-      console.warn(`[Cameras] Windy ${stateCode} page ${page} failed:`, e.message);
-      break;
+  // Windy v3 searches around a point (nearby=lat,lon,radiusKm, max 250 km) and
+  // returns the CLOSEST cameras first. One search from the state's center
+  // missed every metro more than 250 km out (NYC, Detroit, Dallas, Houston,
+  // Las Vegas, Philadelphia…). So the state is covered with a grid of ~2°
+  // cells, one search each, and results are merged.
+  const CELL = 2.0, MAX_CALLS = 48;
+  const cells = [];
+  for (let la = S; la < N; la += CELL) {
+    for (let lo = W; lo < E; lo += CELL) {
+      const cLa = (la + Math.min(la + CELL, N)) / 2, cLo = (lo + Math.min(lo + CELL, E)) / 2;   // center of this (possibly partial) cell
+      const hLat = Math.min(CELL, N - la) * 111 / 2, hLng = Math.min(CELL, E - lo) * 111 * Math.cos(cLa * Math.PI / 180) / 2;
+      cells.push([cLa, cLo, Math.min(250, Math.ceil(Math.hypot(hLat, hLng)) + 5)]);
     }
   }
+  const allCameras = [];
+  const seen = new Set();
+  let calls = 0;
+  for (const [cLa, cLo, radiusKm] of cells) {
+    if (calls >= MAX_CALLS) { console.warn(`[Cameras] Windy ${stateCode}: stopped at ${MAX_CALLS} searches`); break; }
+    calls++;
+    const url = `https://api.windy.com/webcams/api/v3/webcams`
+      + `?nearby=${cLa.toFixed(4)},${cLo.toFixed(4)},${radiusKm}`
+      + `&include=location,player&limit=50`;
+    try {
+      const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+      const data = JSON.parse(text);
+      const batch = data.webcams || data.data || [];
+      batch.forEach(w => {
+        const lat = w.location?.latitude, lng = w.location?.longitude;
+        if (!isFinite(lat) || !isFinite(lng) || seen.has(w.webcamId)) return;
+        if (lat < S || lat > N || lng < W || lng > E) return;   // keep to this state
+        seen.add(w.webcamId);
+        allCameras.push({
+          id: 'windy-' + w.webcamId,
+          name: w.title || 'Webcam',
+          lat, lng,
+          imageUrl: null,
+          videoUrl: null,
+          playerUrl: _windyPlayerUrl(w),
+          windyId: w.webcamId,
+          direction: null,
+          source: 'windy',
+          state: stateCode,
+        });
+      });
+    } catch (e) {
+      console.warn(`[Cameras] Windy ${stateCode} cell ${cLa.toFixed(1)},${cLo.toFixed(1)} failed:`, e.message);
+    }
+    await new Promise(r => setTimeout(r, 120));   // be gentle with Windy's rate limits
+  }
+  console.log(`[Cameras] Windy ${stateCode}: ${calls} grid searches`);
 
   _windyCache.set(stateCode, { cameras: allCameras, ts: Date.now() });
   console.log(`[Cameras] Windy ${stateCode}: ${allCameras.length} webcams`);
@@ -2038,6 +2044,93 @@ app.get('/api/cameras/coverage', async (req, res) => {
 
 // GET /api/cameras/state/:code
 // Returns all cameras for a specific US state code (e.g. WI, CA, MN).
+// ── National Park Service webcams (api.data.gov key: GOV_API_KEY) ───────────
+// One call returns every NPS webcam nationwide; cached 12 h and filtered per
+// state. Many parks are exactly where weather happens: Hawaiʻi Volcanoes,
+// Virgin Islands, Everglades, Cape Hatteras, Gulf Islands, Acadia…
+const _nps = { list: null, ts: 0, pending: null };
+async function _loadNPSAll() {
+  const key = process.env.GOV_API_KEY;
+  if (!key) return [];
+  if (_nps.list && Date.now() - _nps.ts < 12 * 3600 * 1000) return _nps.list;
+  if (_nps.pending) return _nps.pending;
+  _nps.pending = (async () => {
+    const out = [];
+    let start = 0, total = Infinity, noCoords = 0, inactive = 0;
+    while (start < total && start < 2000) {
+      const j = JSON.parse(await fetchTextOverHttp(
+        `https://developer.nps.gov/api/v1/webcams?limit=500&start=${start}`, { 'X-Api-Key': key }));
+      const data = j.data || [];
+      if (start === 0) console.log(`[Cameras] NPS: ${j.total} webcams listed; fields: ${Object.keys(data[0] || {}).join(',')}`);
+      total = Number(j.total) || data.length;
+      for (const w of data) {
+        if (w.status && /inactive|offline|disabled/i.test(w.status)) { inactive++; continue; }
+        const lat = parseFloat(w.latitude), lng = parseFloat(w.longitude);
+        if (!isFinite(lat) || !isFinite(lng) || (lat === 0 && lng === 0)) { noCoords++; continue; }
+        const parks = w.relatedParks || [];
+        const states = [...new Set(parks.flatMap(pk => String(pk.states || '').split(',').map(x => x.trim().toUpperCase())).filter(Boolean))];
+        const img = (w.images || []).map(i => i && i.url).find(u => /^https?:\/\//.test(u || ''));
+        out.push({
+          id: 'nps-' + w.id, name: w.title || 'Park webcam', lat, lng,
+          imageUrl: img || null, videoUrl: null, direction: null, source: 'nps',
+          pageUrl: w.url || null, isStreaming: !!w.isStreaming,
+          parkName: parks[0] && parks[0].fullName, states,
+        });
+      }
+      if (!data.length) break;
+      start += data.length;
+    }
+    console.log(`[Cameras] NPS: ${out.length} usable (${noCoords} without coordinates, ${inactive} inactive)`);
+    _nps.list = out; _nps.ts = Date.now();
+    return out;
+  })().catch(e => { console.warn('[Cameras] NPS failed:', e.message); return _nps.list || []; })
+      .finally(() => { _nps.pending = null; });
+  return _nps.pending;
+}
+async function _loadNPS(code) {
+  const all = await _loadNPSAll();
+  const bb = STATE_BBOX[code];
+  return all.filter(c => c.states.includes(code)
+    || (bb && c.lat <= bb[0] && c.lat >= bb[2] && c.lng >= bb[1] && c.lng <= bb[3] && !c.states.length));
+}
+
+// ── USGS Hawaiian Volcano Observatory webcams (public domain, no key) ───────
+// Still images that refresh every few minutes. Checked on first use (and
+// every 6 h): only cameras that actually return an image are shown, and any
+// that don't are logged so the list can be updated.
+const USGS_HVO_CAMS = [
+  ['V1cam', 'Kīlauea — west Halemaʻumaʻu', 19.4085, -155.2890],
+  ['V2cam', 'Kīlauea — east Halemaʻumaʻu', 19.4105, -155.2740],
+  ['V3cam', 'Kīlauea — south Halemaʻumaʻu', 19.4000, -155.2820],
+  ['KWcam', 'Kīlauea caldera — west rim panorama', 19.4100, -155.2905],
+  ['F1cam', 'Kīlauea caldera — thermal (west rim)', 19.4098, -155.2908],
+  ['B1cam', 'Kīlauea caldera — down-dropped block', 19.4080, -155.2680],
+  ['K2cam', 'Kīlauea caldera from Uēkahuna bluff', 19.4205, -155.2880],
+  ['MKcam', 'Mauna Loa from Mauna Kea', 19.8230, -155.4700],
+  ['MSTcam', 'Mauna Loa summit — thermal (south rim)', 19.4600, -155.5950],
+];
+const _usgs = { list: null, ts: 0, pending: null };
+async function _loadUSGS() {
+  if (_usgs.list && Date.now() - _usgs.ts < 6 * 3600 * 1000) return _usgs.list;
+  if (_usgs.pending) return _usgs.pending;
+  _usgs.pending = (async () => {
+    const checks = await Promise.all(USGS_HVO_CAMS.map(async ([id, name, lat, lng]) => {
+      const imageUrl = `https://volcanoes.usgs.gov/observatories/hvo/cams/${id}/images/M.jpg`;
+      try {
+        const r = await _fetchBinary(imageUrl, { maxBytes: 8 * 1024 * 1024, timeoutMs: 12000 });
+        if (r.status !== 200 || !/image/i.test(r.ct)) throw new Error(`HTTP ${r.status} ${r.ct}`);
+        return { id: 'usgs-' + id, name: `${name} (${id})`, lat, lng, imageUrl, videoUrl: null, direction: null,
+                 source: 'usgs', pageUrl: `https://www.usgs.gov/observatories/hvo/multimedia/webcams?cam=${id}`, state: 'HI' };
+      } catch (e) { console.warn(`[Cameras] USGS ${id} unavailable: ${e.message}`); return null; }
+    }));
+    const list = checks.filter(Boolean);
+    console.log(`[Cameras] USGS HVO: ${list.length}/${USGS_HVO_CAMS.length} webcams responding`);
+    _usgs.list = list; _usgs.ts = Date.now();
+    return list;
+  })().finally(() => { _usgs.pending = null; });
+  return _usgs.pending;
+}
+
 // Replaces the old bbox-based endpoint — state-level loading is far more
 // performant than loading thousands of cameras across the whole country
 // and filtering by viewport on every pan/zoom. Users select the state they
@@ -2051,10 +2144,12 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Find the STATE_DOTS entry for this state, if we have one
     const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
 
-    const [otcAll, stateDOT, windyCams] = await Promise.all([
+    const [otcAll, stateDOT, windyCams, npsCams, usgsCams] = await Promise.all([
       _loadOTC().catch(() => []),
       dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
       _loadWindy(code).catch(() => []),
+      _loadNPS(code).catch(() => []),
+      code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
     ]);
 
     // Filter OTC to this state
@@ -2064,7 +2159,7 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Deduplicate at 100m so we don't show two cameras from different sources
     // that are essentially at the same location.
     const merged = [...stateDOT];
-    for (const cam of [...otcForState, ...windyCams]) {
+    for (const cam of [...usgsCams, ...npsCams, ...otcForState, ...windyCams]) {
       const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
       if (!tooClose) merged.push(cam);
     }
@@ -2612,7 +2707,13 @@ function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redi
     if (!['http:', 'https:'].includes(p.protocol)) return reject(new Error('http/https only'));
     if (_isPrivateHost(p.hostname)) return reject(new Error('private address blocked'));
     const mod = p.protocol === 'https:' ? require('https') : require('http');
-    const opts = { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }, timeout: timeoutMs };
+    // Browser-style headers: several state 511 sites sit behind firewalls that
+    // answer unfamiliar clients with 403/404. Still identifies WeatherTV.
+    const opts = { headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; WeatherTV/1.0; +https://watchweathertv.com)',
+      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      'Referer': p.origin + '/',
+    }, timeout: timeoutMs };
     const req = mod.get(url, opts, r => {
       if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
         r.resume();
@@ -2767,11 +2868,26 @@ app.get('/api/camera-image', async (req, res) => {
     }
     send(await p);
   } catch (e) {
+    _noteCamFailure(parsedUrl, e.status || e.message);
     if (e.status) return res.status(e.status).send(e.message);
-    console.warn('[CameraProxy]', e.message);
     res.status(502).send('upstream error');
   }
 });
+
+// Per-host camera failure log — shown at /api/admin/upstream-usage, and the
+// first failure per host+reason is printed to the Railway log, so a broken
+// state feed says exactly what its server answered (404, 403, timeout…).
+const _camFailures = new Map();   // host -> { count, reasons: {reason: n}, example, last }
+function _noteCamFailure(u, reason) {
+  const host = u.hostname;
+  const f = _camFailures.get(host) || { count: 0, reasons: {}, example: '', last: 0 };
+  const r = String(reason);
+  if (!f.reasons[r]) console.warn(`[CameraProxy] ${host} → ${r} (e.g. ${u.pathname}${u.search.replace(/key=[^&]+/i, 'key=…')})`);
+  f.count += 1; f.reasons[r] = (f.reasons[r] || 0) + 1;
+  f.example = u.pathname + u.search.replace(/key=[^&]+/i, 'key=…'); f.last = Date.now();
+  _camFailures.set(host, f);
+  if (_camFailures.size > 200) _camFailures.delete(_camFailures.keys().next().value);
+}
 
 // GET /api/admin/upstream-usage — today's upstream calls, cache efficiency,
 // camera egress, and camera hosts not yet on the allowlist (admin auth).
@@ -2788,6 +2904,9 @@ app.get('/api/admin/upstream-usage', async (req, res) => {
       allowedHosts: _camHosts.size,
       unknownHosts: [..._camUnknown.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([host, hits]) => ({ host, hits })),
       hlsCacheMB: mb(_hlsCacheBytes),
+      // Which camera servers are failing, and what they answered
+      failures: [..._camFailures.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 40)
+        .map(([host, f]) => ({ host, count: f.count, reasons: f.reasons, example: f.example, last: new Date(f.last).toISOString() })),
     },
   });
 });
