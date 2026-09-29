@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-29T20:00:00Z build.1790740800
+// WeatherTV Server — updated 2026-09-30T02:00:00Z build.1790762400
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1645,10 +1645,13 @@ function _parseIBI511(raw, sourceId, dot) {
     if (view.Status === 'Disabled' && !views.some(v => v.Status === 'Enabled')) continue;
     const videoUrl = view.VideoUrl || null;
     const key = (dot?.envKey && process.env[dot.envKey]) ? process.env[dot.envKey] : null;
-    const imageUrl = view.ImageUrl
-      || (baseUrl && view.Id
-        ? `${baseUrl}/Cctv/GetCctvImage?viewId=${view.Id}${key ? '&key=' + encodeURIComponent(key) : ''}`
-        : null);
+    // The v2 API gives each view's image link as `Url` (e.g. https://511ga.org/map/Cctv/24698).
+    // The old fallback built /Cctv/GetCctvImage?viewId=… — a path these sites
+    // don't have, so every image 404'd (GA, NC, AZ, ID, UT). /map/Cctv/{id}
+    // is the public image path on this platform.
+    void key;
+    const imageUrl = view.Url || view.ImageUrl
+      || (baseUrl && view.Id ? `${baseUrl}/map/Cctv/${view.Id}` : null);
     cameras.push({
       id: `${sourceId}-${cam.Id}`,
       name: cam.Location || cam.Roadway || 'Traffic Camera',
@@ -1947,19 +1950,22 @@ async function _loadWindy(stateCode) {
   // missed every metro more than 250 km out (NYC, Detroit, Dallas, Houston,
   // Las Vegas, Philadelphia…). So the state is covered with a grid of ~2°
   // cells, one search each, and results are merged.
-  const CELL = 2.0, MAX_CALLS = 48;
-  const cells = [];
+  const CELL = 2.0, MAX_CALLS = 64;
+  const cells = [];   // [lat, lng, radiusKm, halfSizeDeg, depth]
   for (let la = S; la < N; la += CELL) {
     for (let lo = W; lo < E; lo += CELL) {
       const cLa = (la + Math.min(la + CELL, N)) / 2, cLo = (lo + Math.min(lo + CELL, E)) / 2;   // center of this (possibly partial) cell
       const hLat = Math.min(CELL, N - la) * 111 / 2, hLng = Math.min(CELL, E - lo) * 111 * Math.cos(cLa * Math.PI / 180) / 2;
-      cells.push([cLa, cLo, Math.min(250, Math.ceil(Math.hypot(hLat, hLng)) + 5)]);
+      cells.push([cLa, cLo, Math.min(250, Math.ceil(Math.hypot(hLat, hLng)) + 5), CELL / 2, 0]);
     }
   }
   const allCameras = [];
   const seen = new Set();
   let calls = 0;
-  for (const [cLa, cLo, radiusKm] of cells) {
+  // A search that comes back FULL (50) means a dense area (NYC, Miami, LA…) —
+  // split it into 4 smaller searches so the city itself gets covered.
+  while (cells.length) {
+    const [cLa, cLo, radiusKm, half, depth] = cells.shift();
     if (calls >= MAX_CALLS) { console.warn(`[Cameras] Windy ${stateCode}: stopped at ${MAX_CALLS} searches`); break; }
     calls++;
     const url = `https://api.windy.com/webcams/api/v3/webcams`
@@ -1969,10 +1975,18 @@ async function _loadWindy(stateCode) {
       const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
       const data = JSON.parse(text);
       const batch = data.webcams || data.data || [];
+      if (batch.length >= 50 && depth < 2) {
+        const q = half / 2;
+        for (const [dy, dx] of [[-q, -q], [-q, q], [q, -q], [q, q]]) {
+          const la = cLa + dy, lo = cLo + dx;
+          const r = Math.ceil(Math.hypot(q * 111, q * 111 * Math.cos(la * Math.PI / 180))) + 3;
+          cells.push([la, lo, r, q, depth + 1]);
+        }
+      }
       batch.forEach(w => {
         const lat = w.location?.latitude, lng = w.location?.longitude;
         if (!isFinite(lat) || !isFinite(lng) || seen.has(w.webcamId)) return;
-        if (lat < S || lat > N || lng < W || lng > E) return;   // keep to this state
+        if (lat < S || lat > N || lng < W || lng > E || !_inState(stateCode, lat, lng)) return;   // this state only (real outline)
         seen.add(w.webcamId);
         allCameras.push({
           id: 'windy-' + w.webcamId,
@@ -2044,6 +2058,55 @@ app.get('/api/cameras/coverage', async (req, res) => {
 
 // GET /api/cameras/state/:code
 // Returns all cameras for a specific US state code (e.g. WI, CA, MN).
+// ── Real state outlines (data/us-states.json: 50 states + DC + PR + VI) ──────
+// Rectangles overlap neighbours (Georgia's box covers western South Carolina),
+// so cameras are placed by the actual outline. Coasts are simplified (~2 km),
+// so a camera within 3 km of the state's edge — a beach or harbour cam — counts
+// as long as it isn't inside a different state.
+let _stateShapes = {};
+try { _stateShapes = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'us-states.json'), 'utf8')); }
+catch (e) { console.warn('[Cameras] data/us-states.json missing — falling back to rectangles'); }
+function _inPolyRing(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function _stateOf(lat, lng) {
+  for (const [code, rings] of Object.entries(_stateShapes)) if (rings.some(r => _inPolyRing(lat, lng, r))) return code;
+  return null;
+}
+function _inState(code, lat, lng, edgeMi = 8, allowOtherState = false) {
+  const rings = _stateShapes[code];
+  if (!rings) {                                          // no outline: use the rectangle
+    const bb = STATE_BBOX[code];
+    return !bb || (lat <= bb[0] && lat >= bb[2] && lng >= bb[1] && lng <= bb[3]);
+  }
+  if (rings.some(r => _inPolyRing(lat, lng, r))) return true;
+  // Inside a DIFFERENT state → not ours (unless it's this state's own DOT camera
+  // just over the line). On the water/coast (no state) → ours if close enough.
+  const other = _stateOf(lat, lng);
+  if (other && other !== code && !allowOtherState) return false;
+  return rings.some(r => _milesToRing(lat, lng, r) <= edgeMi);
+}
+
+// ── PennDOT (static images, agreement on file) — data/penndot-cameras.json ──
+let _penndot = null;
+function _loadPennDOT() {
+  if (_penndot) return _penndot;
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'penndot-cameras.json'), 'utf8'));
+    _penndot = j.cameras.map(c => ({
+      id: 'pa-' + c.id, name: c.n + (c.d ? ` (${c.d})` : ''), lat: c.lat, lng: c.lng,
+      imageUrl: c.img, videoUrl: null, direction: c.d || null, source: 'pa',
+    }));
+    console.log(`[Cameras] PennDOT: ${_penndot.length} cameras loaded from data file`);
+  } catch (e) { console.warn('[Cameras] PennDOT data file missing:', e.message); _penndot = []; }
+  return _penndot;
+}
+
 // ── National Park Service webcams (api.data.gov key: GOV_API_KEY) ───────────
 // One call returns every NPS webcam nationwide; cached 12 h and filtered per
 // state. Many parks are exactly where weather happens: Hawaiʻi Volcanoes,
@@ -2087,11 +2150,46 @@ async function _loadNPSAll() {
       .finally(() => { _nps.pending = null; });
   return _nps.pending;
 }
+// Many NPS webcam entries have no image in the API — the live picture is only
+// on the camera's nps.gov page. Read that page (public government content)
+// once per 12 h and take either the embedded YouTube stream (plays inside our
+// popup) or the webcam image. Cameras where neither is found keep the link.
+const _npsPage = new Map();   // id -> { ts, imageUrl, playerUrl }
+async function _enrichNPS(cam) {
+  const hit = _npsPage.get(cam.id);
+  if (hit && Date.now() - hit.ts < 12 * 3600 * 1000) return hit;
+  const found = { ts: Date.now(), imageUrl: null, playerUrl: null };
+  try {
+    const u = new URL(cam.pageUrl);
+    if (!/(^|\.)nps\.gov$/i.test(u.hostname)) throw new Error('not nps.gov');
+    const html = await fetchTextOverHttp(cam.pageUrl);
+    const yt = html.match(/youtube(?:-nocookie)?\.com\/embed\/([A-Za-z0-9_-]{11})/) || html.match(/youtu\.be\/([A-Za-z0-9_-]{11})/)
+            || html.match(/youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/);
+    if (yt) found.playerUrl = `https://www.youtube-nocookie.com/embed/${yt[1]}?autoplay=1&mute=1&playsinline=1`;
+    // Prefer images whose path says webcam/cam; skip logos, icons, banners
+    const imgs = [...html.matchAll(/<img[^>]+src=["']([^"']+\.(?:jpe?g|png|gif|webp)(?:\?[^"']*)?)["']/gi)].map(m => m[1])
+      .filter(src => !/logo|icon|banner|sprite|arrowhead|social|footer|header/i.test(src));
+    const pick = imgs.find(src => /webcam|cam\d|\/cams?\//i.test(src));
+    if (pick) found.imageUrl = new URL(pick, cam.pageUrl).href;
+  } catch (e) { /* keep the link-only fallback */ }
+  _npsPage.set(cam.id, found);
+  return found;
+}
 async function _loadNPS(code) {
   const all = await _loadNPSAll();
-  const bb = STATE_BBOX[code];
-  return all.filter(c => c.states.includes(code)
-    || (bb && c.lat <= bb[0] && c.lat >= bb[2] && c.lng >= bb[1] && c.lng <= bb[3] && !c.states.length));
+  const list = all.filter(c => c.states.includes(code) || (!c.states.length && _inState(code, c.lat, c.lng)));
+  // Fill in missing pictures, 4 pages at a time, within ~8 s (later requests use the cache)
+  const need = list.filter(c => !c.imageUrl && c.pageUrl);
+  const deadline = Date.now() + 8000;
+  for (let i = 0; i < need.length && Date.now() < deadline; i += 4) {
+    await Promise.all(need.slice(i, i + 4).map(async (c) => {
+      const f = await _enrichNPS(c);
+      if (f.playerUrl) c.playerUrl = f.playerUrl;
+      else if (f.imageUrl) c.imageUrl = f.imageUrl;
+    }));
+  }
+  if (need.length) console.log(`[Cameras] NPS ${code}: ${need.filter(c => c.playerUrl || c.imageUrl).length}/${need.length} image-less cameras now have a stream or image`);
+  return list;
 }
 
 // ── USGS Hawaiian Volcano Observatory webcams (public domain, no key) ───────
@@ -2144,13 +2242,22 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Find the STATE_DOTS entry for this state, if we have one
     const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
 
-    const [otcAll, stateDOT, windyCams, npsCams, usgsCams] = await Promise.all([
+    const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams] = await Promise.all([
       _loadOTC().catch(() => []),
       dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
       _loadWindy(code).catch(() => []),
       _loadNPS(code).catch(() => []),
       code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
     ]);
+
+    // Drop cameras with impossible coordinates (0,0, swapped lat/lng…). One bad
+    // Georgia camera made the map zoom out to the whole world. DOT cameras may
+    // sit just over a border, so they get ~25 miles of slack.
+    const stateDOT = [...stateDOTraw, ...(code === 'PA' ? _loadPennDOT() : [])]
+      .filter(c => _inState(code, c.lat, c.lng, 25, true));
+    if (stateDOTraw.length && stateDOT.length < stateDOTraw.length) {
+      console.log(`[Cameras] ${code}: dropped ${stateDOTraw.length - stateDOT.length} DOT cameras with coordinates outside the state`);
+    }
 
     // Filter OTC to this state
     const otcForState = otcAll.filter(c => c.state === code);
@@ -2173,7 +2280,9 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     merged.forEach(c => { sourceCounts[c.source] = (sourceCounts[c.source] || 0) + 1; });
 
     res.set('Cache-Control', 'no-store');
-    res.json({ cameras: merged, total: merged.length, covered: true, sources: sourceCounts });
+    const bb = STATE_BBOX[code];
+    res.json({ cameras: merged, total: merged.length, covered: true, sources: sourceCounts,
+               bounds: bb ? [[bb[2], bb[1]], [bb[0], bb[3]]] : null });
   } catch (e) {
     console.error(`[Cameras] State ${code} failed:`, e.message);
     res.status(500).json({ error: 'Camera data unavailable' });
