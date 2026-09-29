@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-30 build.1790791200 -->
+<!-- WeatherTV Admin — updated 2026-09-30 build.1790812800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3031,7 +3031,9 @@ async function ccAdd() {
   out.textContent = 'Checking…';
   try {
     const j = await ccPost('add', { url: v('cc-url'), name: v('cc-name'), lat: v('cc-lat'), lng: v('cc-lng') });
-    out.innerHTML = '<span style="color:var(--green)">✓ Added in ' + lvEsc(j.cam.state) + (j.cam.live ? ' · live now' : j.cam.live === false ? ' · not live right now (hidden until it is)' : '') + '</span>';
+    out.innerHTML = '<span style="color:var(--green)">✓ Added in ' + lvEsc(j.cam.state) + (j.cam.live ? ' · live now' : j.cam.live === false
+      ? ' · not live right now (hidden until it is)' + (j.cam.lastError ? ' — ' + lvEsc(j.cam.lastError) : '')
+      : ' · live status not confirmed yet — shown on the map' + (j.cam.lastError ? ' (' + lvEsc(j.cam.lastError) + ')' : '')) + '</span>';
     ['cc-url', 'cc-name'].forEach(id => { document.getElementById(id).value = ''; });
     loadCommunity();
   } catch (e) { out.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
@@ -3094,7 +3096,10 @@ async function loadCommunity() {
     <thead><tr style="background:var(--surface2)"><th style="${LV_TD}text-align:left">Camera</th><th style="${LV_TD}text-align:left">State</th><th style="${LV_TD}text-align:left">Status</th><th style="${LV_TD}text-align:left">Checked</th><th style="${LV_TD}"></th></tr></thead><tbody>` +
     d.cams.map(c => {
       const link = c.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + c.ref : c.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + c.ref + '/live' : c.ref;
-      const st = c.live ? '<span style="color:var(--green)">● Live</span>' : c.live === false ? (c.visible ? '<span style="color:var(--gold)">● Offline (recent)</span>' : '<span style="color:var(--red)">● Offline — hidden</span>') : '<span style="color:var(--muted)">● Not checked yet</span>';
+      const why = c.lastError ? ` title="${lvEsc(c.lastError)}"` : '';
+      const st = c.live ? '<span style="color:var(--green)">● Live</span>'
+        : c.live === false ? (c.visible ? `<span style="color:var(--gold)"${why}>● Offline (recent)</span>` : `<span style="color:var(--red)"${why}>● Offline — hidden</span>`)
+        : `<span style="color:var(--muted)"${why}>● Unknown — shown</span>`;
       return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}</td>
         <td style="${LV_TD}color:var(--muted)">${c.lastChecked ? fmtTs(new Date(c.lastChecked).toISOString()) : '—'}</td>
         <td style="${LV_TD}white-space:nowrap"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>

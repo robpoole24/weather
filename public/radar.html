@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790784000 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790805600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -327,6 +327,13 @@
     background:none; border:none; padding:0 0.1rem; line-height:1;
   }
   #camera-overlay-header .cam-close:hover { color:#f97316; }
+  #camera-overlay-header .cam-expand { margin-left:auto; font-size:1.05rem; }
+  #camera-overlay-header .cam-expand + .cam-close { margin-left:0.4rem; }
+  /* Expanded: a big centered viewer (the corner can still resize it) */
+  #camera-overlay.cam-big {
+    top:50% !important; left:50% !important; right:auto !important; transform:translate(-50%,-50%);
+    width:min(92vw, 1100px) !important; height:min(82vh, 720px) !important; z-index:1300;
+  }
   /* Body fills whatever size the user drags the box to (bottom-right corner) */
   #camera-overlay-body { position:relative; background:#000; min-height:160px; flex:1 1 auto; overflow:hidden; }
   #camera-overlay-body video,
@@ -865,6 +872,8 @@
   <div id="camera-overlay-header">
     <span>📷</span>
     <span id="camera-overlay-title">Traffic Camera</span>
+    <button class="cam-close cam-expand" id="camera-overlay-expand" type="button" onclick="toggleCameraExpand()"
+      aria-label="Make the camera bigger" title="Bigger (double-click the picture too)">⤢</button>
     <button class="cam-close" id="camera-overlay-close" aria-label="Close camera">✕</button>
   </div>
   <div id="camera-overlay-body">
@@ -3546,7 +3555,29 @@ function _stopCameraMedia() {
   if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
 }
 
+// ⤢ button / double-click: toggle the camera between the corner box and a big viewer
+function toggleCameraExpand(force) {
+  const ov = document.getElementById('camera-overlay');
+  const big = typeof force === 'boolean' ? force : !ov.classList.contains('cam-big');
+  if (big) { ov.dataset.prevW = ov.style.width; ov.dataset.prevH = ov.style.height; ov.style.width = ''; ov.style.height = ''; }
+  else { ov.style.width = ov.dataset.prevW || ''; ov.style.height = ov.dataset.prevH || ''; }
+  ov.classList.toggle('cam-big', big);
+  const btn = document.getElementById('camera-overlay-expand');
+  btn.textContent = big ? '⤡' : '⤢';
+  btn.setAttribute('aria-label', big ? 'Make the camera smaller' : 'Make the camera bigger');
+  btn.title = big ? 'Smaller' : 'Bigger (double-click the picture too)';
+}
+document.getElementById('camera-overlay-body').addEventListener('dblclick', () => toggleCameraExpand());
+// Escape while expanded shrinks it back (first), instead of closing the camera
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('camera-overlay').classList.contains('cam-big')) {
+    toggleCameraExpand(false);
+    e.stopImmediatePropagation();
+  }
+}, true);
+
 function closeCameraOverlay() {
+  toggleCameraExpand(false);
   _stopCameraMedia();
   camActiveCamId = null;
   const overlay = document.getElementById('camera-overlay');

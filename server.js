@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-30T10:00:00Z build.1790791200
+// WeatherTV Server — updated 2026-09-30T14:00:00Z build.1790805600
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2185,19 +2185,28 @@ async function _enrichNPS(cam) {
 async function _loadNPS(code) {
   const all = await _loadNPSAll();
   const list = all.filter(c => c.states.includes(code) || (!c.states.length && _inState(code, c.lat, c.lng)));
-  // Fill in missing pictures, 4 pages at a time, within ~8 s (later requests use the cache)
-  const need = list.filter(c => !c.imageUrl && c.pageUrl);
-  const deadline = Date.now() + 8000;
+  // Check EVERY camera's nps.gov page for its LIVE image or stream. The API's
+  // own "images" are often representative park photos, not the camera view,
+  // so they're only a last resort. 4 pages at a time within ~10 s; results are
+  // cached 12 h, so later visits are instant and fill in anything missed.
+  const need = list.filter(c => c.pageUrl && !c._checked);
+  const deadline = Date.now() + 10000;
   for (let i = 0; i < need.length && Date.now() < deadline; i += 4) {
     await Promise.all(need.slice(i, i + 4).map(async (c) => {
       const f = await _enrichNPS(c);
-      if (f.playerUrl) c.playerUrl = f.playerUrl;
-      else if (f.imageUrl) c.imageUrl = f.imageUrl;
+      c._checked = true;
+      if (f.playerUrl) { c.playerUrl = f.playerUrl; c.imageUrl = null; c.live = true; }
+      else if (f.imageUrl) { c.imageUrl = f.imageUrl; c.live = true; }
+      else if (c.imageUrl) { c.imageUrl = null; c.photoOnly = true; }   // only a park photo — not a live view
     }));
   }
-  if (need.length) console.log(`[Cameras] NPS ${code}: ${need.filter(c => c.playerUrl || c.imageUrl).length}/${need.length} image-less cameras now have a stream or image`);
-  // A dot you can't view is just frustrating — only show cameras with a picture or stream
-  return list.filter(c => c.imageUrl || c.playerUrl);
+  const viewable = list.filter(c => c.live);
+  const pending = list.filter(c => !c._checked).length;
+  console.log(`[Cameras] NPS ${code}: ${viewable.length}/${list.length} have a live image or stream` +
+    (pending ? ` (${pending} still to check — shown on a later visit)` : '') +
+    `; ${list.filter(c => c._checked && !c.live).length} hidden (no live view on their NPS page)`);
+  // A dot you can't view is just frustrating — only show cameras with a live picture or stream
+  return viewable;
 }
 
 // ── USGS Hawaiian Volcano Observatory webcams (public domain, no key) ───────

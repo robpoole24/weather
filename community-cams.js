@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1790791200
+// WeatherTV Community Cams — build.1790812800
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -11,10 +11,15 @@
 //      On demand from the admin page, or nightly if COMMUNITY_DISCOVERY=true
 //      (COMMUNITY_DISCOVERY_PER_NIGHT searches, default 10 → 1,000 quota units).
 //
-// Staying current (zero YouTube quota): every 20 minutes each approved stream's
-// public YouTube page is checked for "isLive":true — the same signal the live
-// verifier uses. Streams that have been offline for 6+ hours are hidden from
-// the map until they come back.
+// Staying current: every 20 minutes.
+//   • YouTube VIDEO links → YouTube API videos.list, up to 50 per call at 1
+//     quota unit per call (~72 units/day). Scraping video pages from a server
+//     is unreliable: YouTube often serves datacenter IPs a stripped/"are you a
+//     bot" page with no live marker, which read as "offline" (the Greendale bug).
+//   • CHANNEL links → the channel's /live page, checked for "isLive":true (the
+//     live verifier's proven method, no quota).
+//   • If a page can't be read, the result is UNKNOWN, never "offline".
+// Streams confirmed offline for 6+ hours are hidden until they come back.
 //
 // Privacy: suggestions store only the camera URL, the location and an optional
 // note. No names, emails or IP addresses are kept (rate limiting is in memory).
@@ -41,6 +46,18 @@ const DISCOVERY_PLACES = [
 ];
 const CAM_WORDS = /\b(cam|webcam|live ?view|live ?stream|beach|pier|harbou?r|marina|downtown|main street|skyline|traffic|weather|port|bay|lake|river|boardwalk|surf|island)\b/i;
 const NOT_CAM_WORDS = /\b(music|lofi|lo-fi|gaming|gameplay|sermon|church service|podcast|radio|asmr|news|press conference|concert|dj set)\b/i;
+
+// "42.9375° N", "87.9969 W", "-87.99", 42.9 → signed decimal degrees
+function parseCoord(v, axis) {
+  if (typeof v === 'number') return v;
+  const m = String(v || '').trim().match(/^(-?\d+(?:\.\d+)?)\s*°?\s*([NSEW])?$/i);
+  if (!m) return NaN;
+  let n = parseFloat(m[1]);
+  const h = (m[2] || '').toUpperCase();
+  if ((h === 'S' && axis === 'lat') || (h === 'W' && axis === 'lng')) n = -Math.abs(n);
+  if ((h === 'N' && axis === 'lat') || (h === 'E' && axis === 'lng')) n = Math.abs(n);
+  return n;
+}
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 
@@ -84,21 +101,53 @@ module.exports = function setupCommunityCams(app, deps) {
   }
   const known = (ref) => db.cams.some(c => c.ref === ref) || db.queue.some(q => q.ref === ref) || db.rejected.includes(ref);
 
-  // ── Live checks (no YouTube quota) ────────────────────────────────────────
-  async function checkOne(c) {
+  // ── Live checks ───────────────────────────────────────────────────────────
+  // Videos: YouTube API, 50 per call, 1 quota unit per call.
+  async function checkVideos(cams) {
+    if (!youtubeKey) return cams.forEach(c => { c.live = null; c.lastError = 'YOUTUBE_API_KEY not set'; });
+    for (let i = 0; i < cams.length; i += 50) {
+      const batch = cams.slice(i, i + 50);
+      try {
+        upstreamCount('youtubeVideosCommunity');
+        const j = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails'
+          + `&id=${batch.map(c => c.ref).join(',')}&key=${encodeURIComponent(youtubeKey)}`));
+        if (j.error) throw new Error(j.error.message || 'YouTube API error');
+        const byId = new Map((j.items || []).map(it => [it.id, it]));
+        for (const c of batch) {
+          const it = byId.get(c.ref);
+          if (!it) { c.live = false; c.lastError = 'Video not found (removed or private)'; }
+          else {
+            c.live = it.snippet && it.snippet.liveBroadcastContent === 'live';
+            c.lastError = c.live ? null : 'Not live on YouTube right now';
+            if (!c.channelTitle && it.snippet) c.channelTitle = it.snippet.channelTitle || '';
+          }
+          c.lastChecked = Date.now();
+          if (c.live) c.lastLive = Date.now();
+        }
+      } catch (e) {
+        batch.forEach(c => { c.live = null; c.lastError = e.message; c.lastChecked = Date.now(); });   // unknown, not offline
+      }
+    }
+  }
+  // Channels and images: read the page / image (no quota).
+  async function checkPage(c) {
     try {
       if (c.kind === 'image') {
         const r = await fetch(c.ref, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WeatherTV/1.0)' } });
         c.live = r.ok && /image/i.test(r.headers.get('content-type') || '');
+        c.lastError = c.live ? null : `Image returned HTTP ${r.status}`;
       } else {
-        const url = c.kind === 'yt-video' ? `https://www.youtube.com/watch?v=${c.ref}` : `https://www.youtube.com/channel/${c.ref}/live`;
-        const html = await fetchTextOverHttp(url, { 'Accept-Language': 'en-US,en;q=0.9' });
-        c.live = html.includes('"isLive":true');
-        if (!c.channelTitle) c.channelTitle = (html.match(/"ownerChannelName":"([^"]{1,80})"/) || [])[1] || c.channelTitle;
+        const html = await fetchTextOverHttp(`https://www.youtube.com/channel/${c.ref}/live`, { 'Accept-Language': 'en-US,en;q=0.9' });
+        if (html.includes('"isLive":true')) { c.live = true; c.lastError = null; }
+        else if (html.includes('ytInitialData')) { c.live = false; c.lastError = 'Channel is not live right now'; }   // a real page with no live stream
+        else { c.live = null; c.lastError = 'YouTube returned a page we could not read'; }                        // blocked/odd page → unknown
       }
     } catch (e) { c.live = null; c.lastError = e.message; }
     c.lastChecked = Date.now();
     if (c.live) c.lastLive = Date.now();
+  }
+  async function checkOne(c) {
+    if (c.kind === 'yt-video') await checkVideos([c]); else await checkPage(c);
     return c;
   }
   let checking = false;
@@ -107,14 +156,13 @@ module.exports = function setupCommunityCams(app, deps) {
     checking = true;
     try {
       await load();
-      for (const c of db.cams) { await checkOne(c); await new Promise(r => setTimeout(r, 1500)); }
+      await checkVideos(db.cams.filter(c => c.kind === 'yt-video'));
+      for (const c of db.cams.filter(c => c.kind !== 'yt-video')) { await checkPage(c); await new Promise(r => setTimeout(r, 1500)); }
       await save();
-      const live = db.cams.filter(c => c.live).length;
-      if (db.cams.length) console.log(`[Community] live check: ${live}/${db.cams.length} streams live`);
+      const live = db.cams.filter(c => c.live).length, unknown = db.cams.filter(c => c.live == null).length;
+      if (db.cams.length) console.log(`[Community] live check: ${live}/${db.cams.length} live` + (unknown ? `, ${unknown} unknown` : ''));
     } finally { checking = false; }
   }
-  // Shown while live, unchecked, or offline for under 6 h (brief outages).
-  // Confirmed offline and not live in the last 6 h → hidden until it returns.
   const visible = (c) => c.live !== false || (c.lastLive && Date.now() - c.lastLive < HIDE_AFTER_OFFLINE_MS);
 
   // ── Discovery (YouTube Data API: 100 units per search) ───────────────────
@@ -190,7 +238,7 @@ module.exports = function setupCommunityCams(app, deps) {
       const { url, lat, lng, place, note } = req.body || {};
       const p = await parseUrl(url);
       if (known(p.ref)) return res.json({ ok: true, message: 'Already on our list — thank you!' });
-      const la = parseFloat(lat), lo = parseFloat(lng);
+      const la = parseCoord(lat, 'lat'), lo = parseCoord(lng, 'lng');
       db.queue.push({
         id: uid(), ...p, name: String(place || '').slice(0, 120) || 'Suggested camera',
         thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : (p.kind === 'image' ? p.ref : null),
@@ -214,8 +262,9 @@ module.exports = function setupCommunityCams(app, deps) {
     });
   });
   const approveInto = async (base, body) => {
-    const lat = parseFloat(body.lat), lng = parseFloat(body.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Set a latitude and longitude first');
+    const lat = parseCoord(body.lat, 'lat'), lng = parseCoord(body.lng, 'lng');
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Set a latitude and longitude first (e.g. 42.9375 and -87.9969, or 42.9375° N and 87.9969° W)');
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Those coordinates are out of range');
     const state = stateFor(lat, lng);
     if (!state) throw new Error('That location is not in a U.S. state or territory');
     const cam = { id: base.id || uid(), kind: base.kind, ref: base.ref, name: String(body.name || base.name || 'Community camera').slice(0, 120),
