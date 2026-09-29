@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-09-29 build.1790668800 -->
+<!-- WeatherTV Admin — updated 2026-09-30 build.1790791200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -585,6 +585,54 @@
             <div id="burn-archive-text" style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;">— / 10,000 units</div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Community Cams — town/beach/harbor livestreams: add, discover, review, monitor -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">📷 Community Cams</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadCommunity()">Refresh</button>
+    </div>
+    <div class="section-body">
+      <div id="cc-status" style="font-size:0.78rem;color:var(--muted);margin-bottom:1rem"></div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Add a camera</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Paste a YouTube live/video/channel link, or a direct link to a camera image (.jpg). Set where it is — it goes straight onto the map.</div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-url" type="text" placeholder="https://www.youtube.com/watch?v=…" style="font-size:0.8rem;margin:0;" size="42">
+          <input id="cc-name" type="text" placeholder="Name (e.g. Greendale — Broad St)" style="font-size:0.8rem;margin:0;" size="28">
+          <input id="cc-lat" type="text" placeholder="Latitude" style="font-size:0.8rem;margin:0;" size="9">
+          <input id="cc-lng" type="text" placeholder="Longitude" style="font-size:0.8rem;margin:0;" size="10">
+          <button class="btn btn-ghost btn-sm" onclick="ccUseLocation('cc-lat','cc-lng')">📍 My location</button>
+          <button class="btn btn-primary btn-sm" onclick="ccAdd()">Add to map</button>
+        </div>
+        <div id="cc-add-result" style="font-size:0.8rem;margin-top:0.4rem;color:var(--muted)"></div>
+      </div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Find live cams on YouTube</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Searches YouTube for live cameras near a place and adds likely ones to the review queue. <strong>Costs 100 units of your daily YouTube quota per search.</strong> The location is a starting guess — adjust it before approving.</div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-place" type="text" placeholder="Place (e.g. Key West, FL)" style="font-size:0.8rem;margin:0;" size="26">
+          <input id="cc-dlat" type="text" placeholder="Latitude" style="font-size:0.8rem;margin:0;" size="9">
+          <input id="cc-dlng" type="text" placeholder="Longitude" style="font-size:0.8rem;margin:0;" size="10">
+          <button class="btn btn-ghost btn-sm" onclick="ccUseLocation('cc-dlat','cc-dlng')">📍 My location</button>
+          <button class="btn btn-primary btn-sm" id="cc-disc-btn" onclick="ccDiscover()">Search</button>
+        </div>
+        <div id="cc-disc-result" style="font-size:0.8rem;margin-top:0.4rem;color:var(--muted)"></div>
+      </div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">Review queue <span id="cc-qcount" style="color:var(--muted);font-weight:400"></span></div>
+        <div id="cc-queue" style="display:flex;flex-direction:column;gap:0.6rem;"></div>
+      </div>
+
+      <div>
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">On the map <span id="cc-ccount" style="color:var(--muted);font-weight:400"></span></div>
+        <div id="cc-cams" style="overflow-x:auto;"></div>
       </div>
     </div>
   </div>
@@ -2964,6 +3012,97 @@ async function manualMarkOffline() {
   } catch(e) { resultEl.innerHTML = '<span style="color:var(--red)">✗ Request failed</span>'; }
 }
 
+// ── Community Cams ───────────────────────────────────────────────────────────
+function ccUseLocation(latId, lngId) {
+  if (!navigator.geolocation) return alert('Location not available in this browser');
+  navigator.geolocation.getCurrentPosition(p => {
+    document.getElementById(latId).value = p.coords.latitude.toFixed(5);
+    document.getElementById(lngId).value = p.coords.longitude.toFixed(5);
+  }, () => alert('Location permission denied'), { timeout: 10000 });
+}
+async function ccPost(path, body) {
+  const r = await fetch('/api/admin/community/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+async function ccAdd() {
+  const out = document.getElementById('cc-add-result');
+  out.textContent = 'Checking…';
+  try {
+    const j = await ccPost('add', { url: v('cc-url'), name: v('cc-name'), lat: v('cc-lat'), lng: v('cc-lng') });
+    out.innerHTML = '<span style="color:var(--green)">✓ Added in ' + lvEsc(j.cam.state) + (j.cam.live ? ' · live now' : j.cam.live === false ? ' · not live right now (hidden until it is)' : '') + '</span>';
+    ['cc-url', 'cc-name'].forEach(id => { document.getElementById(id).value = ''; });
+    loadCommunity();
+  } catch (e) { out.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
+}
+function v(id) { return (document.getElementById(id).value || '').trim(); }
+async function ccDiscover() {
+  const out = document.getElementById('cc-disc-result'), btn = document.getElementById('cc-disc-btn');
+  if (!v('cc-place') && !(v('cc-dlat') && v('cc-dlng'))) { out.textContent = 'Enter a place, or a latitude/longitude.'; return; }
+  btn.disabled = true; out.textContent = 'Searching YouTube…';
+  try {
+    const j = await ccPost('discover', { place: v('cc-place'), lat: v('cc-dlat'), lng: v('cc-dlng') });
+    out.innerHTML = '<span style="color:var(--green)">✓ ' + j.found + ' live results · ' + j.added + ' new candidates added to the queue</span>';
+    loadCommunity();
+  } catch (e) { out.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
+  btn.disabled = false;
+}
+async function ccAct(action, id) {
+  try {
+    const body = { id };
+    if (action === 'approve') {
+      body.name = v('ccq-name-' + id); body.lat = v('ccq-lat-' + id); body.lng = v('ccq-lng-' + id);
+    }
+    if (action === 'remove' && !confirm('Remove this camera from the map?')) return;
+    await ccPost(action, body);
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
+async function loadCommunity() {
+  let d;
+  try { d = await (await fetch('/api/admin/community')).json(); }
+  catch (e) { document.getElementById('cc-status').innerHTML = '<span style="color:var(--red)">✗ Could not load — is the new server deployed?</span>'; return; }
+  const live = d.cams.filter(c => c.live).length;
+  document.getElementById('cc-status').innerHTML =
+    `${d.cams.length} on the map (${live} live now) · ${d.queue.length} waiting for review · streams checked every 20 min (no quota) · ` +
+    (d.discovery.nightly ? `nightly discovery ON: ${d.discovery.perNight} searches/night (~${d.discovery.perNight * 100} units)` +
+      (d.discovery.lastRun ? ', last run ' + fmtTs(new Date(d.discovery.lastRun).toISOString()) : '') :
+      'nightly discovery off (set COMMUNITY_DISCOVERY=true to turn on)');
+  document.getElementById('cc-qcount').textContent = d.queue.length ? '(' + d.queue.length + ')' : '';
+  const src = { suggestion: '💬 Viewer suggestion', discovery: '🔎 Found by search', admin: 'Added' };
+  document.getElementById('cc-queue').innerHTML = d.queue.slice(0, 50).map(q => {
+    const link = q.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + q.ref : q.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + q.ref + '/live' : q.ref;
+    return `<div style="display:flex;gap:0.75rem;align-items:flex-start;padding:0.6rem;border:1px solid var(--border);border-radius:6px;">
+      ${q.thumb ? `<img src="${lvEsc(q.thumb)}" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex:0 0 auto;background:#000">` : ''}
+      <div style="flex:1;min-width:0;font-size:0.78rem;">
+        <div style="color:var(--muted);font-size:0.7rem">${src[q.source] || q.source}${q.channelTitle ? ' · ' + lvEsc(q.channelTitle) : ''}</div>
+        <input id="ccq-name-${q.id}" type="text" value="${lvEsc(q.name)}" style="width:100%;font-size:0.8rem;margin:0.2rem 0;">
+        ${q.note ? `<div style="color:var(--muted)">Note: ${lvEsc(q.note)}</div>` : ''}
+        ${q.locationGuess ? `<div style="color:var(--gold)">📍 ${lvEsc(q.locationGuess)}</div>` : ''}
+        <div style="display:flex;gap:0.35rem;margin-top:0.35rem;flex-wrap:wrap;align-items:center;">
+          <input id="ccq-lat-${q.id}" type="text" value="${q.lat ?? ''}" placeholder="Latitude" size="9" style="font-size:0.78rem;margin:0">
+          <input id="ccq-lng-${q.id}" type="text" value="${q.lng ?? ''}" placeholder="Longitude" size="10" style="font-size:0.78rem;margin:0">
+          <a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open ↗</a>
+          <button class="btn btn-primary btn-sm" onclick="ccAct('approve','${q.id}')">Approve</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccAct('reject','${q.id}')">Reject</button>
+        </div>
+      </div></div>`;
+  }).join('') || '<div style="font-size:0.8rem;color:var(--muted)">Nothing waiting. Search above, or wait for viewer suggestions / nightly discovery.</div>';
+  document.getElementById('cc-ccount').textContent = d.cams.length ? '(' + d.cams.length + ')' : '';
+  document.getElementById('cc-cams').innerHTML = d.cams.length ? `<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+    <thead><tr style="background:var(--surface2)"><th style="${LV_TD}text-align:left">Camera</th><th style="${LV_TD}text-align:left">State</th><th style="${LV_TD}text-align:left">Status</th><th style="${LV_TD}text-align:left">Checked</th><th style="${LV_TD}"></th></tr></thead><tbody>` +
+    d.cams.map(c => {
+      const link = c.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + c.ref : c.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + c.ref + '/live' : c.ref;
+      const st = c.live ? '<span style="color:var(--green)">● Live</span>' : c.live === false ? (c.visible ? '<span style="color:var(--gold)">● Offline (recent)</span>' : '<span style="color:var(--red)">● Offline — hidden</span>') : '<span style="color:var(--muted)">● Not checked yet</span>';
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}</td>
+        <td style="${LV_TD}color:var(--muted)">${c.lastChecked ? fmtTs(new Date(c.lastChecked).toISOString()) : '—'}</td>
+        <td style="${LV_TD}white-space:nowrap"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>
+        <button class="btn btn-ghost btn-sm" onclick="ccAct('check','${c.id}')">Check</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccAct('remove','${c.id}')">Remove</button></td></tr>`;
+    }).join('') + '</tbody></table>' : '<div style="font-size:0.8rem;color:var(--muted)">No community cameras yet.</div>';
+}
+
 // ── Alert Tests ──────────────────────────────────────────────────────────────
 function openBannerTest(kind) {
   window.open('/radar.html?testAlert=' + encodeURIComponent(kind), '_blank', 'noopener');
@@ -3250,6 +3389,7 @@ loadWebSubHealth();
 loadFetchErrors();
 loadLiveVerifier();
 loadAlertTypesForTest();
+loadCommunity();
 loadPushStatus();
 setInterval(loadSystemHealth, 60000);
 setInterval(loadWebSubHealth, 120000);

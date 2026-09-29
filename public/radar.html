@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790769600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790784000 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -286,6 +286,7 @@
   /* National Park Service webcams — green; USGS volcano webcams — lava red */
   .cam-dot.cam-dot-nps  { background:#22c55e; box-shadow:0 0 4px rgba(34,197,94,0.7); }
   .cam-dot.cam-dot-usgs { background:#ef4444; box-shadow:0 0 5px rgba(239,68,68,0.8); }
+  .cam-dot.cam-dot-community { background:#a855f7; box-shadow:0 0 5px rgba(168,85,247,0.8); }
   .cam-dot {
     width:10px; height:10px; border-radius:50%;
     background:#f97316; border:2px solid rgba(255,255,255,0.7);
@@ -311,6 +312,8 @@
     background:#0a0e14; border:1px solid rgba(249,115,22,0.5);
     border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,0.7);
     overflow:hidden; display:none; resize:both;
+    height:310px; min-height:220px; max-height:90vh;
+    flex-direction:column;
   }
   #camera-overlay-header {
     display:flex; align-items:center; gap:0.5rem;
@@ -324,10 +327,12 @@
     background:none; border:none; padding:0 0.1rem; line-height:1;
   }
   #camera-overlay-header .cam-close:hover { color:#f97316; }
-  #camera-overlay-body { position:relative; background:#000; min-height:180px; }
+  /* Body fills whatever size the user drags the box to (bottom-right corner) */
+  #camera-overlay-body { position:relative; background:#000; min-height:160px; flex:1 1 auto; overflow:hidden; }
   #camera-overlay-body video,
-  #camera-overlay-body img {
-    width:100%; display:block; max-height:280px; object-fit:cover;
+  #camera-overlay-body img,
+  #camera-overlay-body iframe {
+    width:100%; height:100%; display:block; object-fit:contain; border:none;
   }
   #camera-overlay-status {
     position:absolute; inset:0; display:flex; align-items:center;
@@ -1023,8 +1028,9 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Base Map</div>
+    <div class="lp-section-label">Radar</div>
     <div id="lp-basemap"></div>
+    <div id="lp-radar-canada"></div>
     <div style="margin-top:0.55rem;display:flex;align-items:center;gap:0.5rem;">
       <span style="font-size:0.68rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;
         text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">Opacity</span>
@@ -1036,7 +1042,7 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Radar Options</div>
+    <div class="lp-section-label">Radar Tools <span style="text-transform:none;letter-spacing:0;opacity:0.7">(one station)</span></div>
     <div id="lp-radaropts"></div>
     <div id="site-picker" style="display:none;">
       <div id="site-message" style="font-size:0.68rem;color:var(--muted);margin-bottom:0.45rem;line-height:1.4;min-height:2.5em">
@@ -1059,7 +1065,13 @@
 
   </div>
 
-  <!-- Extended Coverage section — visibility driven by EXTENDED_ITEMS.length at render time -->
+  <div class="lp-section">
+    <div class="lp-section-label">Satellite &amp; Temperature</div>
+    <div id="lp-satellite"></div>
+  </div>
+
+  <!-- Extended Coverage section — now empty: Canadian radar lives under Radar,
+       Canadian alerts under Alerts & Warnings. Kept hidden for layout safety. -->
   <div class="lp-section" id="lp-extended-section" style="display:none;">
     <div class="lp-section-label">Extended Coverage</div>
     <div id="lp-extended"></div>
@@ -1068,6 +1080,7 @@
   <div class="lp-section">
     <div class="lp-section-label">Alerts &amp; Warnings</div>
     <div id="lp-alerts"></div>
+    <div id="lp-alerts-ca"></div>
   </div>
 
   <div class="lp-section">
@@ -1086,30 +1099,31 @@
     <!-- Live DOT Cameras -->
     <div id="lp-cameras"></div>
     <div id="lp-cameras-state" style="display:none;margin-top:0.5rem;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
-        <span style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);">🟠 Live DOT Cams</span>
-        <label class="lp-toggle-label" title="Toggle live DOT traffic cameras">
-          <input type="checkbox" id="cam-dot-toggle" checked onchange="onCamSourceToggle()">
-          <span class="lp-toggle-track"></span>
-        </label>
+      <!-- One switch for every camera source. Colors only tell them apart. -->
+      <div style="font-size:0.64rem;color:var(--muted);line-height:1.6;margin-bottom:0.5rem;">
+        <span style="color:#f97316">●</span> Traffic &nbsp;
+        <span style="color:#00b4d8">●</span> Windy &nbsp;
+        <span style="color:#a855f7">●</span> Community &nbsp;
+        <span style="color:#22c55e">●</span> National Parks &nbsp;
+        <span style="color:#ef4444">●</span> Volcanoes
       </div>
-      <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-bottom:0.5rem;">Live traffic cameras from state DOT feeds. Images refresh every 5–30 seconds.</div>
-
-      <!-- Windy Timelapse Cameras -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
-        <span style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);">🔵 Windy Timelapse</span>
-        <label class="lp-toggle-label" title="Toggle Windy timelapse webcams">
-          <input type="checkbox" id="cam-windy-toggle" checked onchange="onCamSourceToggle()">
-          <span class="lp-toggle-track"></span>
-        </label>
-      </div>
-      <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-bottom:0.5rem;">Scenic &amp; weather webcams from <a href="https://www.windy.com/webcams" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Windy.com</a>. Timelapse player — not a live feed.</div>
-
-      <label class="lp-select-label">Select a state to load cameras</label>
+      <label class="lp-select-label">Pick a state to show its cameras</label>
       <select id="cam-state-select" class="lp-select" onchange="onCamStateChange(this.value)">
         <option value="">— Pick a state —</option>
       </select>
       <div id="cam-state-status" style="font-size:0.66rem;color:var(--muted);margin-top:0.35rem;line-height:1.5;min-height:1.2em;"></div>
+
+      <!-- Viewers can suggest a public camera (YouTube live cam or camera image). Reviewed before it appears. -->
+      <button type="button" onclick="toggleSuggestCam()" style="margin-top:0.5rem;width:100%;background:none;border:1px dashed rgba(168,85,247,0.6);color:#c084fc;
+        border-radius:4px;padding:0.3rem;font:700 0.7rem 'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;cursor:pointer;">＋ Suggest a camera</button>
+      <div id="suggest-cam" style="display:none;margin-top:0.45rem;font-size:0.68rem;color:var(--muted);line-height:1.45;">
+        Know a public live cam — a town, beach, harbor or skyline? Paste the YouTube link (or a direct camera image link). We review every suggestion first.
+        <input id="sc-url" class="lp-select" type="text" placeholder="https://www.youtube.com/watch?v=…" style="margin:0.35rem 0 0.25rem;">
+        <input id="sc-place" class="lp-select" type="text" placeholder="Where is it? (e.g. Broad St, Greendale WI)" style="margin:0 0 0.25rem;">
+        <label style="display:flex;align-items:center;gap:0.35rem;margin:0.15rem 0 0.35rem;"><input type="checkbox" id="sc-center" checked> It's near the center of the map right now</label>
+        <button type="button" onclick="submitSuggestCam()" class="lp-select" style="cursor:pointer;color:#fff;background:rgba(168,85,247,0.25);border-color:rgba(168,85,247,0.6);">Send suggestion</button>
+        <div id="sc-result" style="margin-top:0.3rem;min-height:1em;"></div>
+      </div>
     </div>
   </div>
 
@@ -3281,7 +3295,7 @@ async function onCamStateChange(code) {
 
     for (const cam of data.cameras) {
       const el = document.createElement('div');
-      el.className = 'cam-dot' + ({ windy: ' cam-dot-windy', nps: ' cam-dot-nps', usgs: ' cam-dot-usgs' }[cam.source] || '');
+      el.className = 'cam-dot' + ({ windy: ' cam-dot-windy', nps: ' cam-dot-nps', usgs: ' cam-dot-usgs', community: ' cam-dot-community' }[cam.source] || '');
       const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
       const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
       mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
@@ -3359,7 +3373,7 @@ function openCameraOverlay(cam) {
   const footer  = document.getElementById('camera-overlay-footer');
 
   title.textContent = cam.name + (cam.direction ? ` — ${cam.direction}` : '');
-  overlay.style.display = 'block';
+  overlay.style.display = 'flex';
 
   _stopCameraMedia();
   body.innerHTML = '<div id="camera-overlay-status">Loading…</div>';
@@ -3370,7 +3384,7 @@ function openCameraOverlay(cam) {
     const iframe = document.createElement('iframe');
     iframe.src = cam.playerUrl;
     iframe.allow = 'autoplay; fullscreen';
-    iframe.style.cssText = 'width:100%;height:250px;border:none;background:#000;display:block;';
+    iframe.style.cssText = 'width:100%;height:100%;border:none;background:#000;display:block;';
     body.innerHTML = '';
     body.appendChild(iframe);
     if (cam.source === 'windy') {
@@ -3385,7 +3399,7 @@ function openCameraOverlay(cam) {
   } else if (cam.videoUrl) {
     const video = document.createElement('video');
     video.autoplay = true; video.muted = true; video.controls = true; video.playsInline = true;
-    video.style.cssText = 'width:100%;display:block;max-height:280px;background:#000;';
+    video.style.cssText = 'width:100%;height:100%;display:block;object-fit:contain;background:#000;';
     body.innerHTML = '';
     body.appendChild(video);
 
@@ -3428,10 +3442,31 @@ function openCameraOverlay(cam) {
   }
 }
 
+// ── Suggest a camera ─────────────────────────────────────────────────────────
+function toggleSuggestCam() {
+  const el = document.getElementById('suggest-cam');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+async function submitSuggestCam() {
+  const out = document.getElementById('sc-result');
+  const url = document.getElementById('sc-url').value.trim();
+  if (!url) { out.textContent = 'Paste a link first.'; return; }
+  const body = { url, place: document.getElementById('sc-place').value.trim() };
+  if (document.getElementById('sc-center').checked) { const c = map.getCenter(); body.lat = c.lat.toFixed(5); body.lng = c.lng.toFixed(5); }
+  out.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/community/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    out.style.color = r.ok ? '#22c55e' : '#f87171';
+    out.textContent = r.ok ? (j.message || 'Thanks!') : (j.error || 'Could not send — try again later');
+    if (r.ok) { document.getElementById('sc-url').value = ''; document.getElementById('sc-place').value = ''; }
+  } catch (e) { out.style.color = '#f87171'; out.textContent = 'Could not send — try again later'; }
+}
+
 // Link back to the camera's own page (NPS / USGS) — credit + their live view
 function _camSourceLink(cam, footer) {
   if (!cam.pageUrl) return;
-  const who = cam.source === 'nps' ? 'NPS.gov' : cam.source === 'usgs' ? 'USGS' : 'source';
+  const who = cam.source === 'nps' ? 'NPS.gov' : cam.source === 'usgs' ? 'USGS' : cam.source === 'community' ? 'YouTube' : 'source';
   const a = document.createElement('a');
   a.href = cam.pageUrl; a.target = '_blank'; a.rel = 'noopener';
   a.style.cssText = 'color:var(--accent);text-decoration:none;margin-left:0.4rem;';
@@ -3457,7 +3492,7 @@ function _startImageStream(cam, body) {
 
   const img = document.createElement('img');
   img.alt = cam.name;
-  img.style.cssText = 'width:100%;display:block;max-height:280px;object-fit:cover;display:none;';
+  img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:none;';
 
   let errorCount = 0;
   const MAX_RETRIES = 2;
@@ -6916,8 +6951,8 @@ async function onModelChange(model) {
 }
 
 const BASEMAP_ITEMS=[
-  {id:'global-radar', ico:'🌍', name:'Global Radar',       sub:'LibreWXR · global radar · 150+ countries · animated'},
-  {id:'reflectivity', ico:'🌧', name:'US Radar (NEXRAD)',  sub:'IEM mosaic · high-res CONUS only'},
+  {id:'reflectivity', ico:'🌧', name:'US Radar',           sub:'NOAA · most detailed · United States'},
+  {id:'global-radar', ico:'🌍', name:'Worldwide Radar',    sub:'150+ countries · use outside the US'},
   {id:'goes',         ico:'🛰', name:'GOES Satellite',     sub:'Infrared cloud imagery'},
   {id:'apptemp',      ico:'🌡', name:'Feels Like Temperatures', sub:'Wind chill & heat index · regional/national view'},
 ];
@@ -6933,7 +6968,7 @@ const CC_ITEMS=[
   {id:'raw-radar',ico:'🐦',name:'Birds & Bugs (Raw Radar)',sub:'Unfiltered NEXRAD · migrations, insects & clutter',def:false},
 ];
 const EXTENDED_ITEMS=[
-  {id:'canada',    ico:'🇨🇦',name:'Canadian Radar',         sub:'MSC GeoMet composite — animated',              def:false},
+  {id:'canada',    ico:'🇨🇦',name:'Add Canada',             sub:'Environment Canada radar · shows alongside US Radar', def:false},
   {id:'ca-alerts', ico:'🍁', name:'Canadian Weather Alerts', sub:'Environment Canada · warnings/watches/advisories',def:false},
 ];
 const ALERT_ITEMS=[
@@ -6966,7 +7001,7 @@ const FIRE_ITEMS=[
   {id:'aqi',              ico:'😷',name:'Air Quality Index',     sub:'AirNow monitoring stations · requires key',   def:false},
 ];
 const CAM_ITEMS=[
-  {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
+  {id:'cameras',ico:'📷',name:'Location Cams',sub:'Traffic, parks, volcanoes & scenic webcams · pick a state',def:false},
 ];
 const MESO_ITEMS=[
   {id:'mcd',          ico:'💬', name:'Mesoscale Discussions', sub:'SPC forecaster updates · active MCDs', def:false},
@@ -7036,15 +7071,19 @@ function toggleRowHTML(item){
   return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-toggle"></span></div>`;
 }
 function renderPanel(){
-  document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(exclusiveToggleRowHTML).join('');
+  const _radarIds = ['reflectivity', 'global-radar'];
+  document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.filter(b=>_radarIds.includes(b.id)).map(exclusiveToggleRowHTML).join('');
+  document.getElementById('lp-satellite').innerHTML=BASEMAP_ITEMS.filter(b=>!_radarIds.includes(b.id)).map(exclusiveToggleRowHTML).join('');
+  document.getElementById('lp-radar-canada').innerHTML=EXTENDED_ITEMS.filter(x=>x.id==='canada').map(toggleRowHTML).join('');
+  document.getElementById('lp-alerts-ca').innerHTML=EXTENDED_ITEMS.filter(x=>x.id==='ca-alerts').map(toggleRowHTML).join('');
   // RADAR_ITEMS (paint-style, e.g. future Velocity/SRV/Echo Tops re-add) and
   // CC_ITEMS (toggle-style) share the same panel section — CC needs
   // toggleRowHTML so it behaves as an independent on/off overlay rather
   // than a mutually-exclusive radio option.
   document.getElementById('lp-radaropts').innerHTML=
     RADAR_ITEMS.map(exclusiveToggleRowHTML).join('') + CC_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
+  document.getElementById('lp-extended').innerHTML='';
+  document.getElementById('lp-extended-section').style.display = 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-meso').innerHTML=MESO_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');

@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-09-30T04:00:00Z build.1790769600
+// WeatherTV Server — updated 2026-09-30T10:00:00Z build.1790791200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2196,7 +2196,8 @@ async function _loadNPS(code) {
     }));
   }
   if (need.length) console.log(`[Cameras] NPS ${code}: ${need.filter(c => c.playerUrl || c.imageUrl).length}/${need.length} image-less cameras now have a stream or image`);
-  return list;
+  // A dot you can't view is just frustrating — only show cameras with a picture or stream
+  return list.filter(c => c.imageUrl || c.playerUrl);
 }
 
 // ── USGS Hawaiian Volcano Observatory webcams (public domain, no key) ───────
@@ -2213,6 +2214,13 @@ const USGS_HVO_CAMS = [
   ['K2cam', 'Kīlauea caldera from Uēkahuna bluff', 19.4205, -155.2880],
   ['MKcam', 'Mauna Loa from Mauna Kea', 19.8230, -155.4700],
   ['MSTcam', 'Mauna Loa summit — thermal (south rim)', 19.4600, -155.5950],
+  ['S1cam', 'Kīlauea upper Southwest Rift Zone', 19.3700, -155.3000],
+  ['S2cam', 'Halemaʻumaʻu from the south rim', 19.3950, -155.2830],
+  ['MITDcam', 'Kīlauea Southwest Rift Zone from the Kaʻū Desert', 19.3300, -155.3600],
+  ['B2cam', 'Halemaʻumaʻu from the east rim', 19.4070, -155.2670],
+  ['KOcam', 'Kīlauea upper East Rift Zone from Maunaulu', 19.3600, -155.2100],
+  ['MUcam', 'Maunaulu', 19.3630, -155.2150],
+  ['PWcam', 'Puʻuʻōʻō west flank', 19.3870, -155.1070],
 ];
 const _usgs = { list: null, ts: 0, pending: null };
 async function _loadUSGS() {
@@ -2224,6 +2232,9 @@ async function _loadUSGS() {
       try {
         const r = await _fetchBinary(imageUrl, { maxBytes: 8 * 1024 * 1024, timeoutMs: 12000 });
         if (r.status !== 200 || !/image/i.test(r.ct)) throw new Error(`HTTP ${r.status} ${r.ct}`);
+        // An image that hasn't changed in over a day isn't a live camera any more
+        const age = r.lastModified ? Date.now() - Date.parse(r.lastModified) : 0;
+        if (age > 24 * 3600 * 1000) throw new Error(`image not updated since ${r.lastModified}`);
         return { id: 'usgs-' + id, name: `${name} (${id})`, lat, lng, imageUrl, videoUrl: null, direction: null,
                  source: 'usgs', pageUrl: `https://www.usgs.gov/observatories/hvo/multimedia/webcams?cam=${id}`, state: 'HI' };
       } catch (e) { console.warn(`[Cameras] USGS ${id} unavailable: ${e.message}`); return null; }
@@ -2235,6 +2246,17 @@ async function _loadUSGS() {
   })().finally(() => { _usgs.pending = null; });
   return _usgs.pending;
 }
+
+// ── Community Cams (community-cams.js) ──────────────────────────────────────
+function _stateForPoint(lat, lng) {
+  const inside = _stateOf(lat, lng);
+  if (inside) return inside;
+  // On the water / a beach: nearest state outline within ~8 miles
+  return Object.keys(_stateShapes).find(code => _inState(code, lat, lng, 8)) || null;
+}
+const community = require('./community-cams')(app, {
+  rGet, rSet, fetchTextOverHttp, youtubeKey: process.env.YOUTUBE_API_KEY, stateFor: _stateForPoint, upstreamCount,
+});
 
 // Replaces the old bbox-based endpoint — state-level loading is far more
 // performant than loading thousands of cameras across the whole country
@@ -2249,12 +2271,13 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Find the STATE_DOTS entry for this state, if we have one
     const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
 
-    const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams] = await Promise.all([
+    const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams] = await Promise.all([
       _loadOTC().catch(() => []),
       dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
       _loadWindy(code).catch(() => []),
       _loadNPS(code).catch(() => []),
       code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
+      community.forState(code).catch(() => []),
     ]);
 
     // Drop cameras with impossible coordinates (0,0, swapped lat/lng…). One bad
@@ -2273,7 +2296,7 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Deduplicate at 100m so we don't show two cameras from different sources
     // that are essentially at the same location.
     const merged = [...stateDOT];
-    for (const cam of [...usgsCams, ...npsCams, ...otcForState, ...windyCams]) {
+    for (const cam of [...communityCams, ...usgsCams, ...npsCams, ...otcForState, ...windyCams]) {
       const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
       if (!tooClose) merged.push(cam);
     }
@@ -2848,7 +2871,8 @@ function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redi
         if (total > maxBytes) { r.destroy(); reject(new Error('upstream too large')); return; }
         chunks.push(c);
       });
-      r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] || '', status: r.statusCode }));
+      r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] || '', status: r.statusCode,
+                                 lastModified: r.headers['last-modified'] || null }));
       r.on('error', reject);
     });
     req.on('timeout', () => req.destroy(new Error('upstream timeout')));
