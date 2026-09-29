@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1790906400
+// WeatherTV Community Cams — build.1790920800
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -20,6 +20,16 @@
 //     live verifier's proven method, no quota).
 //   • If a page can't be read, the result is UNKNOWN, never "offline".
 // Streams confirmed offline for 6+ hours are hidden until they come back.
+//
+// Stream replacement: 24/7 streams end (restarts, new stream keys, YouTube's
+// limits) and the owner starts a NEW stream with a new address but nearly the
+// same title. When a camera's stream has ended, the owner's channel is checked
+// for a live stream with a matching title; if one is found it takes the old
+// one's place on the map — same name, same location — automatically.
+//
+// Watched channels: channels you import are remembered and re-checked every
+// night for NEW live streams, which go to the review queue.
+// Cost: ~2–4 quota units per channel check (newest uploads + which are live).
 //
 // Privacy: suggestions store only the camera URL, the location and an optional
 // note. No names, emails or IP addresses are kept (rate limiting is in memory).
@@ -63,13 +73,14 @@ function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toS
 
 module.exports = function setupCommunityCams(app, deps) {
   const { rGet, rSet, fetchTextOverHttp, youtubeKey, stateFor, upstreamCount = () => {} } = deps;
-  let db = { cams: [], queue: [], rejected: [], lastDiscovery: null, nextPlace: 0 };
+  let db = { cams: [], queue: [], rejected: [], lastDiscovery: null, nextPlace: 0, channels: {} };
   let loaded = false;
 
   async function load() {
     if (loaded) return;
     const saved = await rGet(STORE_KEY);
     if (saved && Array.isArray(saved.cams)) db = { ...db, ...saved };
+    if (!db.channels) db.channels = {};
     loaded = true;
   }
   async function save() { await rSet(STORE_KEY, db); }
@@ -167,12 +178,17 @@ module.exports = function setupCommunityCams(app, deps) {
         const byId = new Map((j.items || []).map(it => [it.id, it]));
         for (const c of batch) {
           const it = byId.get(c.ref);
-          if (!it) { c.live = false; c.lastError = 'Video not found (removed or private)'; }
+          if (!it) { c.live = false; c.ended = true; c.lastError = 'Video not found (removed or private)'; }
           else {
             c.embeddable = !(it.status && it.status.embeddable === false);
             c.live = c.embeddable && it.snippet && it.snippet.liveBroadcastContent === 'live';
             c.lastError = !c.embeddable ? 'The owner does not allow embedding this stream' : c.live ? null : 'Not live on YouTube right now';
-            if (!c.channelTitle && it.snippet) c.channelTitle = it.snippet.channelTitle || '';
+            if (it.snippet) {
+              if (!c.channelTitle) c.channelTitle = it.snippet.channelTitle || '';
+              if (!c.channelId) c.channelId = it.snippet.channelId || null;
+              if (!c.streamTitle) c.streamTitle = it.snippet.title || '';
+              c.ended = !c.live && ['none', 'completed'].includes(it.snippet.liveBroadcastContent) && !!(it.liveStreamingDetails && it.liveStreamingDetails.actualEndTime);
+            }
           }
           c.lastChecked = Date.now();
           if (c.live) c.lastLive = Date.now();
@@ -203,6 +219,108 @@ module.exports = function setupCommunityCams(app, deps) {
     if (c.kind === 'yt-video') await checkVideos([c]); else await checkPage(c);
     return c;
   }
+  // ── A channel's streams that are live right now (newest uploads first) ───
+  async function liveOnChannel(channelId, pages = 2) {
+    const out = new Map();
+    let tok = '';
+    for (let i = 0; i < pages; i++) {
+      const pl = JSON.parse(await fetchTextOverHttp('https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=50'
+        + `&playlistId=UU${channelId.slice(2)}${tok ? '&pageToken=' + tok : ''}&key=${encodeURIComponent(youtubeKey)}`));
+      if (pl.error) throw new Error(pl.error.message);
+      const ids = (pl.items || []).map(x => x.contentDetails && x.contentDetails.videoId).filter(Boolean);
+      if (ids.length) {
+        const vj = JSON.parse(await fetchTextOverHttp(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${ids.join(',')}&key=${encodeURIComponent(youtubeKey)}`));
+        for (const it of vj.items || []) if (it.snippet && it.snippet.liveBroadcastContent === 'live') out.set(it.id, { title: it.snippet.title, channelTitle: it.snippet.channelTitle });
+      }
+      upstreamCount('youtubeChannelScan');
+      tok = pl.nextPageToken || '';
+      if (!tok) break;
+    }
+    return out;
+  }
+
+  // "Ashland, Virginia USA | Virtual Railfan LIVE  🔴 Day 812" → {ashland, virginia}
+  // Drops the channel's own name, live/cam words, numbers and dates, so two
+  // streams of the same camera match and two different cameras don't.
+  const TITLE_NOISE = new Set(['live', 'livestream', 'stream', 'streaming', 'cam', 'webcam', 'camera', 'cams', '247', '24', '7', 'hd', '4k', 'uhd',
+    'usa', 'us', 'the', 'a', 'of', 'at', 'in', 'on', 'and', 'from', 'view', 'day', 'new', 'now', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul',
+    'aug', 'sep', 'sept', 'oct', 'nov', 'dec', 'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october',
+    'november', 'december']);
+  function titleTokens(title, channelTitle) {
+    const brand = new Set(String(channelTitle || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+    return new Set(String(title || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      .split(/[^a-z0-9]+/).filter(w => w && !TITLE_NOISE.has(w) && !brand.has(w) && !/^\d+$/.test(w)));
+  }
+  function titleSimilarity(a, b, channelTitle) {
+    const A = titleTokens(a, channelTitle), B = titleTokens(b, channelTitle);
+    if (!A.size || !B.size) return 0;
+    let both = 0; A.forEach(w => { if (B.has(w)) both++; });
+    return both / (A.size + B.size - both);
+  }
+
+  // Ended streams → find their replacement on the same channel
+  async function replaceEnded() {
+    if (!youtubeKey) return 0;
+    const dead = db.cams.filter(c => c.kind === 'yt-video' && c.live === false && c.channelId && c.streamTitle
+      && (c.ended || (c.lastLive && Date.now() - c.lastLive > 30 * 60 * 1000))
+      && (!c.replaceCheckedAt || Date.now() - c.replaceCheckedAt > 2 * 3600 * 1000));   // each camera checked at most every 2 h
+    const byChannel = new Map();
+    dead.forEach(c => { if (!byChannel.has(c.channelId)) byChannel.set(c.channelId, []); byChannel.get(c.channelId).push(c); });
+    let replaced = 0, channelsChecked = 0;
+    const onMap = new Set(db.cams.map(c => c.ref));
+    for (const [channelId, cams] of byChannel) {
+      if (channelsChecked++ >= 15) break;                                  // spread big batches over several runs
+      let live;
+      try { live = await liveOnChannel(channelId, 2); } catch (e) { cams.forEach(c => { c.replaceCheckedAt = Date.now(); }); continue; }
+      for (const c of cams) {
+        c.replaceCheckedAt = Date.now();
+        let best = null, bestSim = 0;
+        for (const [id, v] of live) {
+          if (onMap.has(id) || db.rejected.includes(id)) continue;
+          const sim = titleSimilarity(c.streamTitle, v.title, v.channelTitle || c.channelTitle);
+          if (sim > bestSim) { bestSim = sim; best = { id, ...v }; }
+        }
+        if (best && bestSim >= 0.6) {
+          console.log(`[Community] Replaced ended stream for "${c.name}": ${c.ref} → ${best.id} (title match ${Math.round(bestSim * 100)}%)`);
+          (c.history || (c.history = [])).push({ ref: c.ref, until: Date.now() });
+          c.history = c.history.slice(-10);
+          onMap.delete(c.ref); onMap.add(best.id);
+          c.ref = best.id; c.streamTitle = best.title; c.live = true; c.ended = false; c.lastLive = Date.now();
+          c.lastError = null; c.replacedAt = Date.now(); c.replacements = (c.replacements || 0) + 1;
+          replaced++;
+        }
+      }
+    }
+    return replaced;
+  }
+
+  // Watched channels: new live streams since last time → review queue
+  async function scanWatchedChannels(onlyId) {
+    if (!youtubeKey) throw new Error('YOUTUBE_API_KEY not set');
+    let queued = 0;
+    for (const [channelId, ch] of Object.entries(db.channels)) {
+      if (onlyId && onlyId !== channelId) continue;
+      let live;
+      try { live = await liveOnChannel(channelId, 3); } catch (e) { ch.lastError = e.message; continue; }
+      ch.lastScan = Date.now(); ch.lastError = null; ch.liveCount = live.size;
+      for (const [id, v] of live) {
+        if (known(id)) continue;
+        // Probably a restarted stream of a camera we already have? Leave it to replaceEnded()
+        if (db.cams.some(c => c.channelId === channelId && titleSimilarity(c.streamTitle, v.title, v.channelTitle) >= 0.6)) continue;
+        const place = placeFromTitle(v.title, v.channelTitle);
+        const hit = place.length >= 3 ? (await geocode(place))[0] : null;
+        db.queue.push({ id: uid(), kind: 'yt-video', ref: id, name: (v.title || '').slice(0, 120), channelTitle: v.channelTitle || '',
+          thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+          locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+          source: 'channel', foundAt: Date.now() });
+        queued++;
+      }
+    }
+    db.queue = db.queue.slice(-600);
+    await save();
+    return queued;
+  }
+
   let checking = false;
   async function checkAll() {
     if (checking) return;
@@ -210,6 +328,8 @@ module.exports = function setupCommunityCams(app, deps) {
     try {
       await load();
       await checkVideos(db.cams.filter(c => c.kind === 'yt-video'));
+      try { const n = await replaceEnded(); if (n) console.log(`[Community] ${n} ended stream(s) replaced with their new live stream`); }
+      catch (e) { console.warn('[Community] replacement check:', e.message); }
       for (const c of db.cams.filter(c => c.kind !== 'yt-video')) { await checkPage(c); await new Promise(r => setTimeout(r, 1500)); }
       await save();
       const live = db.cams.filter(c => c.live).length, unknown = db.cams.filter(c => c.live == null).length;
@@ -248,8 +368,10 @@ module.exports = function setupCommunityCams(app, deps) {
     return { found: (j.items || []).length, added };
   }
   async function nightly() {
-    if (!/^(1|true|yes)$/i.test(process.env.COMMUNITY_DISCOVERY || '')) return;
     await load();
+    try { const q = await scanWatchedChannels(); if (Object.keys(db.channels).length) console.log(`[Community] watched channels: ${q} new live streams queued`); }
+    catch (e) { console.warn('[Community] watched channels:', e.message); }
+    if (!/^(1|true|yes)$/i.test(process.env.COMMUNITY_DISCOVERY || '')) { db.lastDiscovery = Date.now(); await save(); return; }
     const n = Math.max(1, Math.min(40, parseInt(process.env.COMMUNITY_DISCOVERY_PER_NIGHT || '10', 10) || 10));
     let total = 0;
     for (let i = 0; i < n; i++) {
@@ -315,6 +437,7 @@ module.exports = function setupCommunityCams(app, deps) {
     await load();
     res.json({
       cams: db.cams.map(c => ({ ...c, visible: visible(c) })), queue: db.queue.slice().reverse(), rejectedCount: db.rejected.length,
+      channels: Object.entries(db.channels).map(([id, c]) => ({ id, ...c })),
       discovery: { nightly: /^(1|true|yes)$/i.test(process.env.COMMUNITY_DISCOVERY || ''), perNight: parseInt(process.env.COMMUNITY_DISCOVERY_PER_NIGHT || '10', 10) || 10,
                    lastRun: db.lastDiscovery, places: DISCOVERY_PLACES.length },
     });
@@ -503,6 +626,9 @@ module.exports = function setupCommunityCams(app, deps) {
         report.push(`${hit ? '✓' : '?'} ${v.title}`);
       }
       report.unshift(`Channel ${p.ref}: ${found.size} live now (search + ${scanned} uploads checked)`);
+      db.channels[p.ref] = { ...(db.channels[p.ref] || {}), title: channelTitle || p.ref, addedAt: (db.channels[p.ref] || {}).addedAt || Date.now(),
+                             lastScan: Date.now(), liveCount: found.size };
+      report.unshift(`Now watching this channel — new live streams will be found nightly.`);
       db.queue = db.queue.slice(-600);
       await save();
       res.json({ ok: true, channelTitle: channelTitle || p.ref, pages, unitsUsed: units, queued, skipped, report: report.slice(0, 300) });
@@ -529,6 +655,14 @@ module.exports = function setupCommunityCams(app, deps) {
     checkAll();   // live + embeddable status for the new ones, in the background
   });
 
+  app.post('/api/admin/community/channels/rescan', async (req, res) => {
+    try { await load(); res.json({ ok: true, queued: await scanWatchedChannels((req.body || {}).channelId) }); }
+    catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  app.post('/api/admin/community/channels/remove', async (req, res) => {
+    await load(); delete db.channels[(req.body || {}).channelId]; await save(); res.json({ ok: true });
+  });
+
   app.get('/api/admin/community/geocode', async (req, res) => {
     try { res.json({ results: await geocode(String(req.query.q || '').slice(0, 200)) }); }
     catch (e) { res.status(400).json({ error: e.message }); }
@@ -549,5 +683,5 @@ module.exports = function setupCommunityCams(app, deps) {
     if (h === 3 && (!db.lastDiscovery || Date.now() - db.lastDiscovery > 20 * 3600 * 1000)) nightly().catch(() => {});
   }, 15 * 60 * 1000);
 
-  return { forState, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible } };
+  return { forState, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll } };
 };

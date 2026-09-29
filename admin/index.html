@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-01 build.1790906400 -->
+<!-- WeatherTV Admin — updated 2026-10-01 build.1790920800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -657,6 +657,8 @@
           <button class="btn btn-primary btn-sm" id="cc-chan-btn" onclick="ccChannel()">Import channel</button>
         </div>
         <pre id="cc-chan-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+        <div style="font-weight:600;font-size:0.8rem;margin:0.8rem 0 0.3rem">Watched channels <span style="color:var(--muted);font-weight:400">— checked every night for new live streams (~4 quota units each)</span></div>
+        <div id="cc-channels" style="font-size:0.78rem;"></div>
       </div>
 
       <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
@@ -3202,6 +3204,14 @@ async function ccChannel() {
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;
 }
+async function ccChannelAct(action, channelId) {
+  if (action === 'remove' && !confirm('Stop watching this channel? Cameras already on the map stay.')) return;
+  try {
+    const j = await ccPost('channels/' + action, { channelId });
+    if (action === 'rescan') alert(j.queued ? `${j.queued} new live stream(s) added to the review queue.` : 'No new live streams on that channel.');
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
 async function ccApproveLocated() {
   if (!confirm('Approve every queued camera that already has a location?')) return;
   try {
@@ -3299,6 +3309,13 @@ async function loadCommunity() {
       </div></div>`;
   }).join('') || '<div style="font-size:0.8rem;color:var(--muted)">Nothing waiting. Search above, or wait for viewer suggestions / nightly discovery.</div>';
   document.getElementById('cc-ccount').textContent = d.cams.length ? '(' + d.cams.length + ')' : '';
+  const chans = d.channels || [];
+  document.getElementById('cc-channels').innerHTML = chans.length ? chans.map(c =>
+    `<div style="display:flex;gap:0.5rem;align-items:center;padding:0.3rem 0;border-bottom:1px solid var(--border);">
+       <span style="flex:1"><strong>${lvEsc(c.title || c.id)}</strong> <span style="color:var(--muted)">· ${c.liveCount ?? '?'} live at last check · ${c.lastScan ? fmtTs(new Date(c.lastScan).toISOString()) : 'not checked yet'}${c.lastError ? ' · ⚠ ' + lvEsc(c.lastError) : ''}</span></span>
+       <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('rescan','${c.id}')">Check now</button>
+       <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('remove','${c.id}')">Stop watching</button></div>`).join('')
+    : '<span style="color:var(--muted)">None yet — channels you import are watched automatically.</span>';
   document.getElementById('cc-cams').innerHTML = d.cams.length ? `<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
     <thead><tr style="background:var(--surface2)"><th style="${LV_TD}text-align:left">Camera</th><th style="${LV_TD}text-align:left">State</th><th style="${LV_TD}text-align:left">Status</th><th style="${LV_TD}text-align:left">Checked</th><th style="${LV_TD}"></th></tr></thead><tbody>` +
     d.cams.map(c => {
@@ -3307,7 +3324,8 @@ async function loadCommunity() {
       const st = c.live ? '<span style="color:var(--green)">● Live</span>'
         : c.live === false ? (c.visible ? `<span style="color:var(--gold)"${why}>● Offline (recent)</span>` : `<span style="color:var(--red)"${why}>● Offline — hidden</span>`)
         : `<span style="color:var(--muted)"${why}>● Unknown — shown</span>`;
-      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}</td>
+      const swapped = c.replacements ? ` <span title="The stream ended and was replaced by the channel's new live stream automatically" style="color:var(--accent);font-size:0.7rem">↻ ${c.replacements}</span>` : '';
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}${swapped}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}</td>
         <td style="${LV_TD}color:var(--muted)">${c.lastChecked ? fmtTs(new Date(c.lastChecked).toISOString()) : '—'}</td>
         <td style="${LV_TD}white-space:nowrap"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>
         <button class="btn btn-ghost btn-sm" onclick="ccAct('check','${c.id}')">Check</button>
