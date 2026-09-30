@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790978400 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790985600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2959,20 +2959,28 @@ async function ws4kpGeocode() {
   if (wsAllSettings['4000'].location === 'Haddonfield, IL') wtvAudioPlaylist = [];   // leaving Haddonfield: normal music again
 
   if (!query) {
+    // Empty box → the browser's own location (asks permission; nothing is sent
+    // to an IP-lookup company), then OpenStreetMap names the town.
+    if (!navigator.geolocation) { if (input) input.placeholder = 'Type a city or ZIP'; return; }
+    if (input) input.placeholder = 'Finding you…';
+    const pos = await new Promise((ok) => navigator.geolocation.getCurrentPosition(ok, () => ok(null), { timeout: 12000, maximumAge: 600000 }));
+    if (!pos) { if (input) input.placeholder = 'Location blocked — type a city or ZIP'; return; }
+    const lat = +pos.coords.latitude.toFixed(4), lon = +pos.coords.longitude.toFixed(4);
+    let loc = `${lat}, ${lon}`;
     try {
-      const r = await fetch('https://ipapi.co/json/');
-      const d = await r.json();
-      if (d.latitude && d.longitude) {
-        const loc = [d.city, d.region_code].filter(Boolean).join(', ');
-        ['4000', '3000'].forEach(v => {
-          wsAllSettings[v].lat = d.latitude;
-          wsAllSettings[v].lon = d.longitude;
-          wsAllSettings[v].location = loc;
-        });
-        saveWSSettings();
-        if (input) input.value = loc;
-      }
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`, { headers: { 'Accept-Language': 'en' } });
+      const a = (await r.json()).address || {};
+      const place = a.city || a.town || a.village || a.hamlet || a.municipality || a.county;
+      const st = (a['ISO3166-2-lvl4'] || '').replace(/^US-/, '') || a.state;
+      if (place) loc = [place, st].filter(Boolean).join(', ');
     } catch {}
+    ['4000', '3000'].forEach(v => {
+      wsAllSettings[v].lat = lat;
+      wsAllSettings[v].lon = lon;
+      wsAllSettings[v].location = loc;
+    });
+    saveWSSettings();
+    if (input) { input.value = loc; input.placeholder = ''; }
     return;
   }
 

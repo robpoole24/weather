@@ -104,8 +104,10 @@ function securityHeaders(req, res, next) {
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https: blob:",
     "connect-src 'self'" +
-      // Radar search box: OpenStreetMap place search (was missing → every search blocked)
+      // Radar search box + WeatherStar "Locate": OpenStreetMap place search / reverse lookup
       " https://nominatim.openstreetmap.org" +
+      // WeatherStar ZIP code lookup (receives only the ZIP code)
+      " https://api.zippopotam.us" +
       // Internal WeatherTV APIs
       " https://api.anthropic.com" +
       // Radar Sidecar (forecast-model run info: /meta/models). Tiles themselves
