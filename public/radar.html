@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1791021600 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1791032400 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -3404,7 +3404,7 @@ function openCameraOverlay(cam) {
         target="_blank" rel="noopener"
         style="color:var(--accent);text-decoration:none">View on Windy.com ↗</a>`;
     } else if (cam.source === 'haddonfield') {
-      footer.innerHTML = `🎃 Ambience by ${cam.credit} · <a href="${cam.pageUrl}" target="_blank" rel="noopener"
+      footer.innerHTML = `🎃 ${cam.creditLine || `Ambience by ${cam.credit}`} · <a href="${cam.pageUrl}" target="_blank" rel="noopener"
         style="color:var(--accent);text-decoration:none">Watch on YouTube ↗</a>`;
     } else {                       // e.g. an NPS camera streaming on YouTube
       footer.textContent = 'Live stream · ' + cam.name;
@@ -7690,9 +7690,9 @@ if (navigator.geolocation) {
   place('strode', 490, 140, 'Strode House');                          bldgs += bldg(460, 100, 60, 26);
   place('stoop', 560, 100, "Laurie's Pumpkin Stoop");
   place('carruthers', 245, 190, 'Carruthers House');                  bldgs += bldg(225, 160, 40, 20);
-  P.clothesline = [612 * K, 140 * K];                                  // the yard across Oxley Street, right of the Strode house
-  landuse += `<line x1="${k(592)}" y1="${k(118)}" x2="${k(640)}" y2="${k(118)}" stroke="#9e9e9e" stroke-width="1"/>`
-           + `<line x1="${k(592)}" y1="${k(126)}" x2="${k(640)}" y2="${k(126)}" stroke="#9e9e9e" stroke-width="1"/>`;
+  P.clothesline = [481 * K, 89 * K + 24];                              // Strode back yard, behind the house (pumpkin sits on the line)
+  landuse += `<line x1="${k(462)}" y1="${k(84)}" x2="${k(500)}" y2="${k(84)}" stroke="#9e9e9e" stroke-width="1"/>`
+           + `<line x1="${k(462)}" y1="${k(90)}" x2="${k(500)}" y2="${k(90)}" stroke="#9e9e9e" stroke-width="1"/>`;
   P.alley = [452 * K, 345 * K];                                        // alley in the block between the Wallace and Elrod houses
   landuse += `<line x1="${k(452)}" y1="${k(312)}" x2="${k(452)}" y2="${k(380)}" stroke="#fff" stroke-width="3.5"/>`;
   place('brackett', 480, 280, 'Brackett House');                      bldgs += bldg(450, 235, 60, 28);
@@ -7756,7 +7756,7 @@ if (navigator.geolocation) {
   // ── Pumpkin cameras: each video names its place; several at one place fan out
   const CREDIT = 'Sinister';
   const VIDEOS = [
-    { vid: 'XfXlqYLnqww', place: 'townvideo',   name: 'Haddonfield, Illinois' },
+    { vid: 'tuwnJGjoqpc', place: 'townvideo',   name: 'Haddonfield, Illinois', creditLine: 'Halloween 4 Homage by Witching Season Films' },
     { vid: 'A_H3lvwqrXA', place: 'hedge',       name: 'The Hedge' },
     { vid: 'cNPkwyOmUxQ', place: 'elrod',       name: "Mrs. Elrod's House" },
     { vid: 'w9Wx0vzszZI', place: 'meeker',      name: "Ben Meeker's House" },
@@ -7772,7 +7772,7 @@ if (navigator.geolocation) {
     { vid: '5ywgdylcM_o', place: 'hospital',    name: 'Haddonfield Memorial Hospital — inside' },
   ];
   // Clicking the town's name plays the video that sums up Haddonfield
-  const TOWN_VIDEO = { vid: 'XfXlqYLnqww', name: 'Haddonfield, Illinois' };
+  const TOWN_VIDEO = { vid: 'tuwnJGjoqpc', name: 'Haddonfield, Illinois', creditLine: 'Halloween 4 Homage by Witching Season Films' };
   const perPlace = {};
   const icon = L.divIcon({ className: '', html: '<div style="font-size:15px;line-height:15px;filter:drop-shadow(0 0 3px #ff7a00);cursor:pointer" title="Camera">🎃</div>', iconSize: [16, 16], iconAnchor: [8, 8] });
   const pumpkins = VIDEOS.filter(v => P[v.place]).map(v => {
@@ -7781,7 +7781,7 @@ if (navigator.geolocation) {
     // on the building, above its name; extra videos at the same place line up beside it
     const ll = atPlan(px + (n - 1) * 20, py - 24);
     return L.marker(ll, { icon, keyboard: false, title: v.name }).on('click', () => openCameraOverlay({
-      id: 'haddonfield-' + v.vid, name: v.name, source: 'haddonfield', credit: CREDIT, lat: ll[0], lng: ll[1],
+      id: 'haddonfield-' + v.vid, name: v.name, source: 'haddonfield', credit: CREDIT, creditLine: v.creditLine, lat: ll[0], lng: ll[1],
       playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&loop=1&playlist=${v.vid}&playsinline=1`,
       pageUrl: `https://www.youtube.com/watch?v=${v.vid}`,
     }));
@@ -7790,7 +7790,7 @@ if (navigator.geolocation) {
   const townName = L.marker(townLL, { keyboard: false, title: 'Haddonfield', icon: L.divIcon({ className: '', iconSize: [140, 26], iconAnchor: [70, 13],
     html: `<div style="text-align:center;font:20px ${FONT};color:#555;cursor:pointer;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 4px #fff,0 0 4px #fff">Haddonfield</div>` }) })
     .on('click', () => openCameraOverlay({
-      id: 'haddonfield-' + TOWN_VIDEO.vid, name: TOWN_VIDEO.name, source: 'haddonfield', credit: CREDIT, lat: townLL[0], lng: townLL[1],
+      id: 'haddonfield-' + TOWN_VIDEO.vid, name: TOWN_VIDEO.name, source: 'haddonfield', credit: CREDIT, creditLine: TOWN_VIDEO.creditLine, lat: townLL[0], lng: townLL[1],
       playerUrl: `https://www.youtube-nocookie.com/embed/${TOWN_VIDEO.vid}?autoplay=1&loop=1&playlist=${TOWN_VIDEO.vid}&playsinline=1`,
       pageUrl: `https://www.youtube.com/watch?v=${TOWN_VIDEO.vid}`,
     }));
