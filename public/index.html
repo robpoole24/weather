@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790985600 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790992800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2618,8 +2618,8 @@ function buildWSPanel() {
       <input id="ws-location" type="text" placeholder="Zip Code or City Name"
         value="${s.location || ''}"
         style="font-size:0.72rem;padding:0.26rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:148px;outline:none;"
-        onkeydown="if(event.key==='Enter') ws4kpGeocode()" />
-      <button onclick="ws4kpGeocode()"
+        onkeydown="if(event.key==='Enter') wsGo()" />
+      <button id="ws-locate-btn" onclick="wsGo()"
         style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);">
         📍 Locate
       </button>
@@ -2954,17 +2954,17 @@ async function ws4kpGeocode() {
     wtvAudioPlaylist = [];              // WS3000 music: reload with the Haddonfield-only playlist
     saveWSSettings();
     if (input) input.value = 'Haddonfield, IL';
-    return;
+    return true;
   }
   if (wsAllSettings['4000'].location === 'Haddonfield, IL') wtvAudioPlaylist = [];   // leaving Haddonfield: normal music again
 
   if (!query) {
     // Empty box → the browser's own location (asks permission; nothing is sent
     // to an IP-lookup company), then OpenStreetMap names the town.
-    if (!navigator.geolocation) { if (input) input.placeholder = 'Type a city or ZIP'; return; }
+    if (!navigator.geolocation) { if (input) input.placeholder = 'Type a city or ZIP'; return false; }
     if (input) input.placeholder = 'Finding you…';
     const pos = await new Promise((ok) => navigator.geolocation.getCurrentPosition(ok, () => ok(null), { timeout: 12000, maximumAge: 600000 }));
-    if (!pos) { if (input) input.placeholder = 'Location blocked — type a city or ZIP'; return; }
+    if (!pos) { if (input) input.placeholder = 'Location blocked — type a city or ZIP'; return false; }
     const lat = +pos.coords.latitude.toFixed(4), lon = +pos.coords.longitude.toFixed(4);
     let loc = `${lat}, ${lon}`;
     try {
@@ -2981,7 +2981,7 @@ async function ws4kpGeocode() {
     });
     saveWSSettings();
     if (input) { input.value = loc; input.placeholder = ''; }
-    return;
+    return true;
   }
 
   // Detect US zip code
@@ -3001,7 +3001,7 @@ async function ws4kpGeocode() {
         });
         saveWSSettings();
         if (input) input.value = loc;
-        return;
+        return true;
       }
     } catch {}
   }
@@ -3023,8 +3023,33 @@ async function ws4kpGeocode() {
       });
       saveWSSettings();
       if (input) input.value = locStr;
+      return true;
     }
   } catch {}
+  return false;
+}
+
+// Enter / 📍 Locate: find the place AND load it — no Restart needed.
+// Empty box → your current location. Unknown place → say so, keep the old one.
+let _wsGoBusy = false;
+async function wsGo() {
+  if (_wsGoBusy) return;
+  _wsGoBusy = true;
+  const input = document.getElementById('ws-location');
+  const btn = document.getElementById('ws-locate-btn');
+  const typed = input ? input.value.trim() : '';
+  if (btn) { btn.disabled = true; btn.textContent = typed ? '⏳ Finding…' : '⏳ Locating…'; }
+  if (input) input.style.borderColor = '';
+  let ok = false;
+  try { ok = await ws4kpGeocode(); } catch (_) { ok = false; }
+  if (btn) { btn.disabled = false; btn.textContent = '📍 Locate'; }
+  _wsGoBusy = false;
+  if (ok) { wsIsLaunched = false; ws4kpLaunch(); return; }
+  if (input && typed) {                         // not found: keep what they typed, show why
+    input.style.borderColor = '#e63946';
+    input.title = "Couldn't find that place — try a city and state, or a ZIP code";
+    if (typeof showToast === 'function') showToast("Couldn't find that place — try a city and state, or a ZIP code");
+  }
 }
 
 function ws4kpLaunch() {
