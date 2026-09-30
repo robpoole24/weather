@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790978400 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1791000000 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -7793,7 +7793,7 @@ if (navigator.geolocation) {
   // ~3¾–4 hours. Smith's Grove sits in the countryside west of I-57 north of
   // Marion; the ambulance crash is about an hour north on I-57; the gas station
   // is a short walk from the crash. Each is hidden like Haddonfield.
-  const SG = { N: 37.8075, S: 37.7995, W: -88.9650, E: -88.9530 };          // ~0.9 km grounds
+  const SG = { N: 37.8125, S: 37.7945, W: -88.9705, E: -88.9475 };          // ~2 km campus
   const sgSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
     <rect x="40" y="40" width="920" height="920" fill="${C.hosp}" stroke="${C.schoolLine}" stroke-width="3" rx="6"/>
     <path d="M1000 520 L720 520 L720 480 L420 480" fill="none" stroke="${C.casing}" stroke-width="30" stroke-linejoin="round"/>
@@ -7816,18 +7816,22 @@ if (navigator.geolocation) {
     playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&loop=1&playlist=${v.vid}&playsinline=1`,
     pageUrl: `https://www.youtube.com/watch?v=${v.vid}`,
   }));
+  const LABEL_AT = 11;   // place names appear once you're looking at a county-sized area
   const SPOTS = [
     { bounds: [[SG.S, SG.W], [SG.N, SG.E]], layers: [sgPlan] },
-    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], detail: true, layers: [pumpkinAt([37.8045, -88.9600], { vid: 'WlA1eAzeJnU', name: "Smith's Grove Sanitarium" })] },
+    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], labelOnly: true, layers: [
+        L.marker([SG.N, (SG.W + SG.E) / 2], { icon: spotLabel("Smith's Grove Sanitarium"), interactive: false, keyboard: false }) ] },
+    { bounds: [[38.5230, -88.9300], [38.5330, -88.9160]], labelOnly: true, layers: [
+        L.marker([38.5280, -88.9225], { icon: spotLabel('Ambulance crash site'), interactive: false, keyboard: false }) ] },
+    { bounds: [[38.5390, -88.9240], [38.5460, -88.9140]], labelOnly: true, layers: [
+        L.marker([38.5425, -88.9190], { icon: spotLabel('⛽ Gas station'), interactive: false, keyboard: false }) ] },
+    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], detail: true, layers: [pumpkinAt([37.8050, -88.9630], { vid: 'WlA1eAzeJnU', name: "Smith's Grove Sanitarium" })] },
     // Ambulance/bridge crash — ~1 hour north of Smith's Grove on I-57 (Halloween 4)
     { bounds: [[38.5230, -88.9300], [38.5330, -88.9160]], detail: true, layers: [
-        pumpkinAt([38.5280, -88.9225], { vid: 'A_H3lvwqrXA', name: 'The ambulance crash (Halloween 4)' }),
-        L.marker([38.5280, -88.9225], { icon: spotLabel('Ambulance crash site'), interactive: false, keyboard: false }) ] },
-    // The gas station he walked to from the crash (no video — just a label)
-    { bounds: [[38.5390, -88.9240], [38.5460, -88.9140]], detail: true, layers: [
-        L.marker([38.5425, -88.9190], { icon: spotLabel('⛽ Gas station'), interactive: false, keyboard: false }) ] },
+        pumpkinAt([38.5280, -88.9225], { vid: 'A_H3lvwqrXA', name: 'The ambulance crash (Halloween 4)' }) ] },
   ];
-  const spotGroups = SPOTS.map(sp => ({ bounds: L.latLngBounds(sp.bounds), group: L.layerGroup(sp.layers), minZoom: sp.detail ? DETAIL_AT : SHOW_AT }));
+  const spotGroups = SPOTS.map(sp => ({ bounds: L.latLngBounds(sp.bounds), group: L.layerGroup(sp.layers),
+    minZoom: sp.detail ? DETAIL_AT : sp.labelOnly ? LABEL_AT : SHOW_AT }));
   function updateSpots() {
     const z = map.getZoom(), vb = map.getBounds();
     for (const sp of spotGroups) {
