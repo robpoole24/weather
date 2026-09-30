@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1791000000 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1791014400 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -7267,20 +7267,32 @@ async function searchLocation(e) {
   e.preventDefault();
   const q = document.getElementById('zip-input').value.trim();
   if (!q) return;
-  // 🎃 "Haddonfield, IL" → the fictional town (plain "Haddonfield" finds the real one in NJ)
-  if (/^haddonfield\s*,?\s*(il|ill|illinois)\.?$/i.test(q)) {
-    map.setView([40.5952, -88.8168], 15);
-    document.getElementById('alerts-status').textContent = 'Haddonfield, IL';
+  // 🎃 Easter-egg searches. The plain names ("Haddonfield", "Smiths Grove")
+  // still find the REAL towns in New Jersey and Kentucky.
+  const EGGS = [
+    { re: /^haddonfield\s*,?\s*(il|ill|illinois)\.?$/i, at: [40.5952, -88.8168], z: 15, name: 'Haddonfield, IL' },
+    { re: /^smith'?s\s+grove\s*(,?\s*(il|ill|illinois)\.?|\s+sanitarium|\s+sanatorium|\s+asylum)$/i, at: [37.8035, -88.9590], z: 15, name: "Smith's Grove Sanitarium" },
+    { re: /^(the\s+)?ambulance\s+(accident|crash|wreck)(\s+site)?$/i, at: [38.5280, -88.9225], z: 16, name: 'Ambulance crash site' },
+  ];
+  const egg = EGGS.find(e => e.re.test(q));
+  if (egg) {
+    map.setView(egg.at, egg.z);
+    document.getElementById('alerts-status').textContent = egg.name;
     document.getElementById('zip-input').value = '';
     return;
   }
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=json&limit=1`,
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=jsonv2&limit=8`,
       { headers:{'Accept-Language':'en'} }
     );
-    const data = await res.json();
+    const all = await res.json();
+    // Prefer an actual town over a county/state with the same name: "Marion, IL"
+    // should be the city of Marion, not Marion County (whose centre is Salem).
+    const TOWN = /^(city|town|village|hamlet|suburb|neighbourhood|quarter|borough|municipality|locality|postcode)$/;
+    const rank = (r) => (TOWN.test(r.addresstype || r.type || '') ? 0 : /^(county|state|region|administrative)$/.test(r.addresstype || r.type || '') ? 2 : 1);
+    const data = Array.isArray(all) ? all.slice().sort((a, b) => rank(a) - rank(b) || (b.importance || 0) - (a.importance || 0)) : [];
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
       const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
