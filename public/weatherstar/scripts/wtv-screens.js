@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790715600
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790964000
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
@@ -15,6 +15,16 @@
 //
 // Screens with nothing to show (no smoke/fires nearby, no tropical storms, no
 // AirNow key) report "no data" and WeatherStar simply skips them.
+// 🎃 Haddonfield easter egg: WeatherStar fetches 'playlist.json' once at startup.
+// In Haddonfield, ask for the Haddonfield-only playlist (music/haddonfield/).
+if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && window.fetch) {
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    if (typeof input === 'string' && /(^|\/)playlist\.json$/.test(input)) input += '?town=haddonfield';
+    return realFetch(input, init);
+  };
+}
+
 (self.webpackChunkws4kp = self.webpackChunkws4kp || []).push([[9001], {
   9001(module, exports, require) {
     const WeatherDisplay = require(24).A;

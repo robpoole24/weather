@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-01T14:00:00Z build.1790899200
+// WeatherTV Server — updated 2026-10-02T02:00:00Z build.1790964000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -42,6 +42,14 @@ app.get('/weatherstar/playlist.json', (req, res) => {
   const fs = require('fs');
   const musicRoot = path.join(__dirname, 'public', 'weatherstar', 'music');
   const files = [];
+  // 🎃 Haddonfield easter egg: music/haddonfield/ plays ONLY for Haddonfield
+  // (the normal list below never reads that folder, so no other city hears it)
+  if (req.query.town === 'haddonfield') {
+    try {
+      fs.readdirSync(path.join(musicRoot, 'haddonfield')).filter(f => /\.mp3$/i.test(f)).forEach(f => files.push(`haddonfield/${f}`));
+    } catch (_) {}
+    if (files.length) return res.json({ availableFiles: files });
+  }
   // Root music/ folder
   try {
     fs.readdirSync(musicRoot)

@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790913600 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790964000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2566,6 +2566,14 @@ function buildWSUrl(ver) {
     p.set('settings-wide-checkbox', s.viewMode === 'wide' ? 'true' : 'false');
     p.set('settings-kiosk-checkbox','true');
   }
+  if (s.town === 'haddonfield') {
+    p.set('wtvTown', 'haddonfield');
+    p.set('customTextEnable', 'true');
+    p.set('customText', [
+      "SHERIFF'S EMERGENCY: MASKED SUSPECT MICHAEL MYERS AT LARGE IN HADDONFIELD. STAY INDOORS AND LOCK YOUR DOORS.",
+      "TRICK-OR-TREAT IS CANCELED BY ORDER OF SHERIFF BRACKETT. REPORT A STOLEN GREEN STATION WAGON TO THE SHERIFF'S OFFICE.",
+    ].join('|'));
+  }
   if (s.lat && s.lon) {
     p.set('latLon', JSON.stringify({ lat: +parseFloat(s.lat).toFixed(4), lon: +parseFloat(s.lon).toFixed(4) }));
     if (s.location) { p.set('latLonQuery', s.location); p.set('txtLocation', s.location); }
@@ -2825,7 +2833,8 @@ let wtvAudioTrack = 0;
 async function wtvLoadPlaylist() {
   if (wtvAudioPlaylist.length) return;
   try {
-    const r = await fetch('/weatherstar/playlist.json');
+    const inHaddonfield = wsAllSettings[wsActiveVersion] && wsAllSettings[wsActiveVersion].town === 'haddonfield';
+    const r = await fetch('/weatherstar/playlist.json' + (inHaddonfield ? '?town=haddonfield' : ''));
     const data = await r.json();
     const files = data.availableFiles || [];
     // shuffle
@@ -2930,6 +2939,24 @@ function wsResetSettings() {
 async function ws4kpGeocode() {
   const input = document.getElementById('ws-location');
   const query = (input ? input.value : '').trim();
+
+  // 🎃 Easter egg: "Haddonfield" / "Haddonfield, IL" → the fictional town,
+  // using nearby Bloomington's real weather. ("Haddonfield, NJ" is a real town
+  // and still gets its real weather below.)
+  const haddonfield = /^haddonfield(\s*,?\s*(il|ill|illinois))?\.?$/i.test(query);
+  ['4000', '3000'].forEach(v => { wsAllSettings[v].town = haddonfield ? 'haddonfield' : null; });
+  if (haddonfield) {
+    ['4000', '3000'].forEach(v => {
+      wsAllSettings[v].lat = 40.4842;
+      wsAllSettings[v].lon = -88.9937;
+      wsAllSettings[v].location = 'Haddonfield, IL';
+    });
+    wtvAudioPlaylist = [];              // WS3000 music: reload with the Haddonfield-only playlist
+    saveWSSettings();
+    if (input) input.value = 'Haddonfield, IL';
+    return;
+  }
+  if (wsAllSettings['4000'].location === 'Haddonfield, IL') wtvAudioPlaylist = [];   // leaving Haddonfield: normal music again
 
   if (!query) {
     try {
@@ -3146,6 +3173,7 @@ function loadIframe(src, label, isLive) {
   // TV remote: the embedded radar (same site, same remote script) can take the
   // highlight; YouTube/Twitch/WeatherStar players can't (they'd trap the remote)
   if (/^\/radar\.html/.test(src)) newFrame.setAttribute('data-tv-frame', ''); else newFrame.removeAttribute('data-tv-frame');
+  if (isWeatherStar && /[?&]wtvTown=haddonfield/.test(src)) newFrame.addEventListener('load', () => haddonfieldTakeover(newFrame));
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
   // Anything that isn't WeatherStar replaces it, so WeatherStar must relaunch
@@ -3174,6 +3202,78 @@ function loadIframe(src, label, isLive) {
   }
 
   currentChannel = label;
+}
+
+// ── 🎃 Haddonfield takeover (WeatherStar 3000 and 4000) ─────────────────────
+// Runs inside the WeatherStar frame (same site): a full-screen Sheriff's
+// emergency message in WeatherStar's own font, shown at start and every
+// 15 minutes, and "Bloomington" → "Haddonfield" everywhere it's printed.
+function haddonfieldTakeover(frame) {
+  let doc;
+  try { doc = frame.contentDocument; } catch (_) { return; }
+  if (!doc || !doc.body || doc.getElementById('hf-alert')) return;
+  const css = doc.createElement('style');
+  css.textContent = `
+    @font-face { font-family: 'HF Star'; src: url('/weatherstar/fonts/Star4000.woff') format('woff'); }
+    @font-face { font-family: 'HF Star Large'; src: url('/weatherstar/fonts/Star4000 Large.woff') format('woff'); }
+    #hf-alert { position: fixed; inset: 0; z-index: 99999; display: none; flex-direction: column; cursor: pointer;
+      background: linear-gradient(180deg, #7a0010 0%, #b3001b 45%, #7a0010 100%); color: #fff;
+      font-family: 'HF Star', 'Star4000', monospace; text-shadow: 3px 3px 0 #000; animation: hf-pulse 1.6s ease-in-out infinite; }
+    #hf-alert .hd { background: #000; color: #ffd000; font-family: 'HF Star Large', 'Star4000 Large', monospace;
+      font-size: 5.2vh; text-align: center; padding: 1.6vh 2vw; letter-spacing: 0.08em; border-bottom: 0.6vh solid #ffd000; }
+    #hf-alert .sub { text-align: center; font-size: 3vh; color: #ffd9d9; padding: 1.2vh 0 0.4vh; letter-spacing: 0.06em; }
+    #hf-alert .body { flex: 1; overflow: hidden; position: relative; margin: 1vh 5vw 2vh; }
+    #hf-alert .scroll { position: absolute; left: 0; right: 0; font-size: 3.4vh; line-height: 1.45; }
+    #hf-alert .ft { text-align: center; font-size: 2.2vh; color: #ffd9d9; padding: 0 0 1.6vh; }
+    @keyframes hf-pulse { 0%, 100% { box-shadow: inset 0 0 0 0.8vh #ff2a2a; } 50% { box-shadow: inset 0 0 0 0.8vh #ffd000; } }
+    @keyframes hf-roll { from { transform: translateY(var(--from)); } to { transform: translateY(var(--to)); } }`;
+  doc.head.appendChild(css);
+  const box = doc.createElement('div');
+  box.id = 'hf-alert';
+  box.innerHTML = `
+    <div class="hd">*** SHERIFF'S EMERGENCY MESSAGE ***</div>
+    <div class="sub">HADDONFIELD SHERIFF'S OFFICE - HADDONFIELD, ILLINOIS</div>
+    <div class="body"><div class="scroll">
+      A MASKED KILLER HAS BEEN SPOTTED IN HADDONFIELD after escaping from Smith's Grove Sanitarium.<br><br>
+      The Sheriff's Office, led by Sheriff Brackett and Deputy Meeker, has declared tonight's trick-or-treat event
+      OFFICIALLY OVER. All residents are asked to return to their homes and LOCK THEIR DOORS until officials give the all clear.<br><br>
+      The suspect has been identified as MICHAEL MYERS. He was last seen wearing a black auto mechanic's outfit and a
+      white Halloween mask. He is EXTREMELY DANGEROUS. Do not attempt to interact with him.<br><br>
+      If you spot him, or a stolen green station wagon he may be driving, contact the Sheriff's Office immediately.
+    </div></div>
+    <div class="ft">Click to continue</div>`;
+  doc.body.appendChild(box);
+  // WeatherStar's kiosk mode hides every other element with a strong rule, so
+  // the alert's display is set with !important
+  const hide = () => { box.style.setProperty('display', 'none', 'important'); };
+  box.addEventListener('click', hide);
+  function show() {
+    box.style.setProperty('display', 'flex', 'important');
+    // Roll the message up slowly if it's taller than the screen
+    const body = box.querySelector('.body'), txt = box.querySelector('.scroll');
+    txt.style.animation = 'none';
+    requestAnimationFrame(() => {
+      const extra = txt.scrollHeight - body.clientHeight;
+      if (extra > 0) {
+        txt.style.setProperty('--from', '0px'); txt.style.setProperty('--to', `-${extra}px`);
+        txt.style.animation = `hf-roll ${Math.max(12, extra / 18)}s linear 3s forwards`;
+      }
+    });
+    clearTimeout(box._t); box._t = setTimeout(hide, 45000);
+  }
+  setTimeout(show, 1500);
+  const again = setInterval(() => { if (!doc.defaultView || doc.defaultView.closed) return clearInterval(again); show(); }, 15 * 60 * 1000);
+
+  // Bloomington → Haddonfield wherever WeatherStar prints it
+  const swap = (node) => {
+    if (node.nodeType === 3) {
+      if (/Bloomington/i.test(node.nodeValue)) node.nodeValue = node.nodeValue.replace(/Bloomington(\s*[-/]\s*Normal)?/gi, 'Haddonfield');
+    } else if (node.nodeType === 1 && node.id !== 'hf-alert') node.childNodes.forEach(swap);
+  };
+  swap(doc.body);
+  new doc.defaultView.MutationObserver(ms => ms.forEach(m => {
+    if (m.type === 'characterData') swap(m.target); else m.addedNodes.forEach(swap);
+  })).observe(doc.body, { subtree: true, childList: true, characterData: true });
 }
 
 // Remove everything that only makes sense while a live channel is playing
