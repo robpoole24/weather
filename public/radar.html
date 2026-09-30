@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1790964000 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1790978400 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -3395,7 +3395,7 @@ function openCameraOverlay(cam) {
     // Free tier requires linking back to windy.com (attribution built into player).
     const iframe = document.createElement('iframe');
     iframe.src = cam.playerUrl;
-    iframe.allow = 'autoplay; fullscreen';
+    iframe.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
     iframe.style.cssText = 'width:100%;height:100%;border:none;background:#000;display:block;';
     body.innerHTML = '';
     body.appendChild(iframe);
@@ -7267,6 +7267,13 @@ async function searchLocation(e) {
   e.preventDefault();
   const q = document.getElementById('zip-input').value.trim();
   if (!q) return;
+  // 🎃 "Haddonfield, IL" → the fictional town (plain "Haddonfield" finds the real one in NJ)
+  if (/^haddonfield\s*,?\s*(il|ill|illinois)\.?$/i.test(q)) {
+    map.setView([40.5952, -88.8168], 15);
+    document.getElementById('alerts-status').textContent = 'Haddonfield, IL';
+    document.getElementById('zip-input').value = '';
+    return;
+  }
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
     const res = await fetch(
@@ -7462,7 +7469,7 @@ async function shareRadarView() {
   catch (_) { window.prompt('Copy this link:', url); }
 }
 const _shareParams = new URLSearchParams(location.search);
-const _sharedView = _shareParams.has('at');
+const _sharedView = _shareParams.has('at') || (_shareParams.has('lat') && _shareParams.has('lng'));   // links keep their own view
 function applySharedView() {
   const p = _shareParams;
   if (p.has('at')) {
@@ -7754,7 +7761,7 @@ if (navigator.geolocation) {
     const ll = atPlan(px + (n - 1) * 20, py - 24);
     return L.marker(ll, { icon, keyboard: false, title: v.name }).on('click', () => openCameraOverlay({
       id: 'haddonfield-' + v.vid, name: v.name, source: 'haddonfield', credit: CREDIT, lat: ll[0], lng: ll[1],
-      playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&mute=1&loop=1&playlist=${v.vid}&playsinline=1`,
+      playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&loop=1&playlist=${v.vid}&playsinline=1`,
       pageUrl: `https://www.youtube.com/watch?v=${v.vid}`,
     }));
   });
@@ -7763,15 +7770,20 @@ if (navigator.geolocation) {
     html: `<div style="text-align:center;font:20px ${FONT};color:#555;cursor:pointer;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 4px #fff,0 0 4px #fff">Haddonfield</div>` }) })
     .on('click', () => openCameraOverlay({
       id: 'haddonfield-' + TOWN_VIDEO.vid, name: TOWN_VIDEO.name, source: 'haddonfield', credit: CREDIT, lat: townLL[0], lng: townLL[1],
-      playerUrl: `https://www.youtube-nocookie.com/embed/${TOWN_VIDEO.vid}?autoplay=1&mute=1&loop=1&playlist=${TOWN_VIDEO.vid}&playsinline=1`,
+      playerUrl: `https://www.youtube-nocookie.com/embed/${TOWN_VIDEO.vid}?autoplay=1&loop=1&playlist=${TOWN_VIDEO.vid}&playsinline=1`,
       pageUrl: `https://www.youtube.com/watch?v=${TOWN_VIDEO.vid}`,
     }));
-  const group = L.layerGroup([plan, townName, ...pumpkins]);
-  const SHOW_AT = 14;   // neighbourhood zoom — invisible from normal radar views
+  // The town itself shows from zoom 10 (a small grey patch of streets you can
+  // stumble on); its name and the pumpkin cameras appear from zoom 13.
+  const SHOW_AT = 10, DETAIL_AT = 13;
+  const group = L.layerGroup([plan]), detail = L.layerGroup([townName, ...pumpkins]);
+  const townBounds = L.latLngBounds([[S, W], [N, E]]);
   function update() {
-    const want = map.getZoom() >= SHOW_AT && map.getBounds().intersects(L.latLngBounds([[S, W], [N, E]]));
-    if (want && !map.hasLayer(group)) group.addTo(map);
-    else if (!want && map.hasLayer(group)) map.removeLayer(group);
+    const z = map.getZoom(), near = map.getBounds().intersects(townBounds);
+    [[group, z >= SHOW_AT], [detail, z >= DETAIL_AT]].forEach(([g, on]) => {
+      const want = on && near;
+      if (want && !map.hasLayer(g)) g.addTo(map); else if (!want && map.hasLayer(g)) map.removeLayer(g);
+    });
   }
   map.on('zoomend moveend', update);
   update();
@@ -7801,24 +7813,25 @@ if (navigator.geolocation) {
     html: `<div style="text-align:center;font:italic 11px ${FONT};color:${C.poi};text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">${text}</div>` });
   const pumpkinAt = (ll, v) => L.marker(ll, { icon, keyboard: false, title: v.name }).on('click', () => openCameraOverlay({
     id: 'haddonfield-' + v.vid, name: v.name, source: 'haddonfield', credit: CREDIT, lat: ll[0], lng: ll[1],
-    playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&mute=1&loop=1&playlist=${v.vid}&playsinline=1`,
+    playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&loop=1&playlist=${v.vid}&playsinline=1`,
     pageUrl: `https://www.youtube.com/watch?v=${v.vid}`,
   }));
   const SPOTS = [
-    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], layers: [sgPlan, pumpkinAt([37.8045, -88.9600], { vid: 'WlA1eAzeJnU', name: "Smith's Grove Sanitarium" })] },
+    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], layers: [sgPlan] },
+    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], detail: true, layers: [pumpkinAt([37.8045, -88.9600], { vid: 'WlA1eAzeJnU', name: "Smith's Grove Sanitarium" })] },
     // Ambulance/bridge crash — ~1 hour north of Smith's Grove on I-57 (Halloween 4)
-    { bounds: [[38.5230, -88.9300], [38.5330, -88.9160]], layers: [
+    { bounds: [[38.5230, -88.9300], [38.5330, -88.9160]], detail: true, layers: [
         pumpkinAt([38.5280, -88.9225], { vid: 'A_H3lvwqrXA', name: 'The ambulance crash (Halloween 4)' }),
         L.marker([38.5280, -88.9225], { icon: spotLabel('Ambulance crash site'), interactive: false, keyboard: false }) ] },
     // The gas station he walked to from the crash (no video — just a label)
-    { bounds: [[38.5390, -88.9240], [38.5460, -88.9140]], layers: [
+    { bounds: [[38.5390, -88.9240], [38.5460, -88.9140]], detail: true, layers: [
         L.marker([38.5425, -88.9190], { icon: spotLabel('⛽ Gas station'), interactive: false, keyboard: false }) ] },
   ];
-  const spotGroups = SPOTS.map(sp => ({ bounds: L.latLngBounds(sp.bounds), group: L.layerGroup(sp.layers) }));
+  const spotGroups = SPOTS.map(sp => ({ bounds: L.latLngBounds(sp.bounds), group: L.layerGroup(sp.layers), minZoom: sp.detail ? DETAIL_AT : SHOW_AT }));
   function updateSpots() {
     const z = map.getZoom(), vb = map.getBounds();
     for (const sp of spotGroups) {
-      const want = z >= SHOW_AT && vb.intersects(sp.bounds);
+      const want = z >= sp.minZoom && vb.intersects(sp.bounds);
       if (want && !map.hasLayer(sp.group)) sp.group.addTo(map);
       else if (!want && map.hasLayer(sp.group)) map.removeLayer(sp.group);
     }

@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790964000 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1790978400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3212,6 +3212,12 @@ function haddonfieldTakeover(frame) {
   let doc;
   try { doc = frame.contentDocument; } catch (_) { return; }
   if (!doc || !doc.body || doc.getElementById('hf-alert')) return;
+  // WeatherStar 4000 shows the Sheriff's message on its own red hazard screen
+  // (wtv-screens.js adds it to the alert list), so only the name swap runs
+  // there. WeatherStar 3000 has no such screen — it gets the full-page message
+  // below, under WeatherTV's scanline overlay.
+  const isWs3000 = /\/weatherstar3000\//.test(frame.getAttribute('src') || '');
+  if (!isWs3000) { haddonfieldNames(doc); return; }
   const css = doc.createElement('style');
   css.textContent = `
     @font-face { font-family: 'HF Star'; src: url('/weatherstar/fonts/Star4000.woff') format('woff'); }
@@ -3264,7 +3270,11 @@ function haddonfieldTakeover(frame) {
   setTimeout(show, 1500);
   const again = setInterval(() => { if (!doc.defaultView || doc.defaultView.closed) return clearInterval(again); show(); }, 15 * 60 * 1000);
 
-  // Bloomington → Haddonfield wherever WeatherStar prints it
+  haddonfieldNames(doc);
+}
+
+// Bloomington → Haddonfield wherever WeatherStar prints it
+function haddonfieldNames(doc) {
   const swap = (node) => {
     if (node.nodeType === 3) {
       if (/Bloomington/i.test(node.nodeValue)) node.nodeValue = node.nodeValue.replace(/Bloomington(\s*[-/]\s*Normal)?/gi, 'Haddonfield');

@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790964000
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790978400
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
@@ -15,12 +15,35 @@
 //
 // Screens with nothing to show (no smoke/fires nearby, no tropical storms, no
 // AirNow key) report "no data" and WeatherStar simply skips them.
-// 🎃 Haddonfield easter egg: WeatherStar fetches 'playlist.json' once at startup.
-// In Haddonfield, ask for the Haddonfield-only playlist (music/haddonfield/).
+// 🎃 Haddonfield easter egg (only when WeatherTV sets wtvTown=haddonfield):
+//  • music: ask for the Haddonfield-only playlist (music/haddonfield/)
+//  • alerts: add the Sheriff's emergency message to the Weather Service alert
+//    list, so WeatherStar shows it on its OWN red hazard screen (with its
+//    scroll, alert indicator and scanlines) — Extreme + Immediate puts it first
 if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && window.fetch) {
   const realFetch = window.fetch.bind(window);
-  window.fetch = (input, init) => {
-    if (typeof input === 'string' && /(^|\/)playlist\.json$/.test(input)) input += '?town=haddonfield';
+  const SHERIFF = {
+    id: 'wtv-haddonfield-sheriff', type: 'Feature', geometry: null,
+    properties: {
+      id: 'wtv-haddonfield-sheriff', event: 'Law Enforcement Warning', severity: 'Extreme', urgency: 'Immediate', certainty: 'Observed',
+      headline: "Sheriff's emergency message for Haddonfield",
+      description: "THE HADDONFIELD SHERIFF'S OFFICE REPORTS A MASKED KILLER HAS BEEN SPOTTED IN HADDONFIELD AFTER ESCAPING FROM "
+        + "SMITH'S GROVE SANITARIUM.\n\nSHERIFF BRACKETT AND DEPUTY MEEKER HAVE DECLARED TONIGHT'S TRICK-OR-TREAT EVENT OFFICIALLY "
+        + "OVER. ALL RESIDENTS SHOULD RETURN TO THEIR HOMES AND LOCK THEIR DOORS UNTIL OFFICIALS GIVE THE ALL CLEAR.\n\nTHE SUSPECT "
+        + "HAS BEEN IDENTIFIED AS MICHAEL MYERS. HE WAS LAST SEEN WEARING A BLACK AUTO MECHANIC'S OUTFIT AND A WHITE HALLOWEEN MASK. "
+        + "HE IS EXTREMELY DANGEROUS. DO NOT ATTEMPT TO INTERACT WITH HIM.\n\nIF YOU SPOT HIM, OR A STOLEN GREEN STATION WAGON HE "
+        + "MAY BE DRIVING, CONTACT THE SHERIFF'S OFFICE IMMEDIATELY.",
+    },
+  };
+  window.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+    if (/(^|\/)playlist\.json$/.test(url)) return realFetch(url + '?town=haddonfield', init);
+    if (/api\.weather\.gov\/alerts\/active/.test(url)) {
+      let data = { type: 'FeatureCollection', features: [] };
+      try { const r = await realFetch(input, init); if (r.ok) data = await r.json(); } catch (_) { /* offline: just the Sheriff */ }
+      data.features = [SHERIFF, ...(data.features || []).filter(f => f && f.id !== SHERIFF.id)];
+      return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/geo+json' } });
+    }
     return realFetch(input, init);
   };
 }
