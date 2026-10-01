@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-01 build.1790920800 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791050400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -700,9 +700,24 @@
       <!-- 2. Real push through Firebase to everyone subscribed to one area + type -->
       <div style="margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);">
         <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Push notification test</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Sends a real push, marked <strong>TEST</strong>, through the same path real warnings use. It reaches every device subscribed to that area and alert type — normally just you, if you use your own county. To receive it: open watchweathertv.com on this device, allow notifications, and set your location first.</div>
+        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.75rem">Sends a real push, marked <strong>TEST</strong>, through the same path real warnings use. It goes to every device that has WeatherTV notifications on <strong>for that county or zone</strong> (not a phone number) — normally just you, if you use your own. To receive it: open watchweathertv.com on your phone, allow notifications, and set your location first. Type a <strong>ZIP code or city</strong> (or a Weather Service code like WIC079 if you know it), or use your location.</div>
+        <div style="padding:0.6rem 0.75rem;border:1px solid var(--accent);border-radius:6px;margin-bottom:0.9rem;">
+          <div style="font-weight:600;font-size:0.82rem;margin-bottom:0.25rem">One phone — test link <span style="color:var(--green);font-weight:400">(recommended)</span></div>
+          <div style="font-size:0.76rem;color:var(--muted);margin-bottom:0.5rem">Create a link, then text it to the person from your own phone. When they open it and tap
+            <strong>Send the test</strong>, a TEST alert (the type picked below) arrives on <strong>their phone only</strong>. Links expire in 24 hours and work 3 times.
+            Regular users never see any test controls, and WeatherTV never sees phone numbers.</div>
+          <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-primary btn-sm" id="pt-link-btn" onclick="createTestLink()">Create test link</button>
+            <input id="pt-link" type="text" readonly placeholder="(link appears here)" style="flex:1;min-width:240px;font-family:monospace;font-size:0.78rem;margin:0;">
+            <button class="btn btn-ghost btn-sm" onclick="copyTestLink()">Copy</button>
+            <a class="btn btn-ghost btn-sm" id="pt-link-sms" href="#" style="display:none">💬 Text it</a>
+          </div>
+          <div id="pt-link-result" style="font-size:0.8rem;margin-top:0.4rem;min-height:1em"></div>
+        </div>
+        <div style="font-weight:600;font-size:0.82rem;margin-bottom:0.25rem">Everyone in an area <span style="color:var(--gold);font-weight:400">(reaches every subscribed device there — use sparingly)</span></div>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.5rem;">
-          <input id="pt-ugc" type="text" placeholder="Area code, e.g. WIC079" maxlength="6" style="width:170px;font-family:monospace;font-size:0.82rem;text-transform:uppercase;margin:0;">
+          <input id="pt-ugc" type="text" placeholder="ZIP, city or WIC079" maxlength="60" style="width:210px;font-size:0.82rem;margin:0;"
+                 onkeydown="if(event.key==='Enter') sendTestPush()">
           <button class="btn btn-ghost btn-sm" onclick="fillMyAreaCodes()">📍 Use my location</button>
           <select id="pt-type" style="font-size:0.82rem;margin:0;min-width:220px;"></select>
           <button class="btn btn-primary btn-sm" id="pt-send" onclick="sendTestPush()">Send test push</button>
@@ -3349,6 +3364,24 @@ async function loadAlertTypesForTest() {
   }
 }
 
+// lat/lon → the Weather Service's county + forecast-zone codes for that spot
+async function ptCodesAt(la, lo) {
+  const r = await fetch('https://api.weather.gov/points/' + la.toFixed(4) + ',' + lo.toFixed(4), { headers: { Accept: 'application/geo+json' } });
+  if (!r.ok) throw new Error(r.status === 404 ? 'the Weather Service only covers the US' : 'Weather Service lookup failed (' + r.status + ')');
+  const p = (await r.json()).properties || {};
+  const codes = [['County', p.county], ['Forecast zone', p.forecastZone]].filter(([, u]) => u).map(([label, u]) => [label, u.split('/').pop()]);
+  if (!codes.length) throw new Error('no Weather Service area here');
+  const rl = p.relativeLocation && p.relativeLocation.properties;
+  return { codes, place: rl ? rl.city + ', ' + rl.state : null };
+}
+function ptShowCodes(found, where) {
+  const out = document.getElementById('pt-areas');
+  out.innerHTML = found.codes.map(([label, c]) =>
+    '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'pt-ugc\').value=\'' + c + '\'">' + label + ': <strong>' + c + '</strong></button>').join('');
+  document.getElementById('pt-result').textContent = 'Codes for ' + (found.place || where) +
+    '. Storm warnings (tornado, severe t-storm) use the county code; winter/heat/flood alerts often use the zone code.';
+}
+
 // Browser location -> NWS county + forecast zone codes (nothing sent to our server)
 function fillMyAreaCodes() {
   const out = document.getElementById('pt-areas');
@@ -3373,12 +3406,49 @@ function fillMyAreaCodes() {
   }, err => { res.textContent = '✗ Location permission denied — type the code instead (e.g. WIC079).'; }, { timeout: 10000 });
 }
 
+async function createTestLink() {
+  const type = document.getElementById('pt-type').value || 'Tornado Warning';
+  const res = document.getElementById('pt-link-result');
+  res.textContent = 'Creating…';
+  try {
+    const r = await fetch('/api/admin/radar/test-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    document.getElementById('pt-link').value = j.url;
+    const sms = document.getElementById('pt-link-sms');
+    sms.href = 'sms:?&body=' + encodeURIComponent('WeatherTV notification test — open this on your phone and tap "Send the test": ' + j.url);
+    sms.style.display = '';
+    res.innerHTML = '<span style="color:var(--green)">✓ Link ready — sends a TEST ' + lvEsc(j.type) + '. Good for ' + j.expiresHours + ' hours / ' + j.uses + ' tests. Copy it, or tap 💬 Text it on your phone.</span>';
+  } catch (e) { res.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
+}
+function copyTestLink() {
+  const el = document.getElementById('pt-link');
+  if (!el.value) return;
+  (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).catch(() => { el.select(); document.execCommand('copy'); });
+  document.getElementById('pt-link-result').innerHTML = '<span style="color:var(--green)">✓ Copied</span>';
+}
+
 async function sendTestPush() {
-  const ugc = document.getElementById('pt-ugc').value.trim().toUpperCase();
+  const box = document.getElementById('pt-ugc');
+  let ugc = box.value.trim().toUpperCase();
   const type = document.getElementById('pt-type').value;
   const res = document.getElementById('pt-result');
   const btn = document.getElementById('pt-send');
-  if (!/^[A-Z]{2}[CZ]\d{3}$/.test(ugc)) { res.innerHTML = '<span style="color:var(--red)">Area code should look like WIC079 or WIZ066.</span>'; return; }
+  if (!ugc) { res.innerHTML = '<span style="color:var(--red)">Type a ZIP code or city, or use your location.</span>'; return; }
+  // Not a Weather Service code (like WIC079)? Treat it as a ZIP / city and look its county code up.
+  if (!/^[A-Z]{2}[CZ]\d{3}$/.test(ugc)) {
+    const where = box.value.trim();
+    res.textContent = 'Looking up ' + where + '…';
+    try {
+      const g = await (await fetch('/api/admin/community/geocode?q=' + encodeURIComponent(where))).json();
+      const hit = (g.results || [])[0];
+      if (!hit) throw new Error('could not find "' + where + '"');
+      const found = await ptCodesAt(hit.lat, hit.lng);
+      ptShowCodes(found, where);
+      ugc = found.codes[0][1];                         // county code — what storm warnings use
+      box.value = ugc;
+    } catch (e) { res.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + ' — try a 5-digit ZIP code, or use your location.</span>'; return; }
+  }
   btn.disabled = true; res.textContent = 'Sending…';
   try {
     const r = await fetch('/api/admin/radar/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ugc, type }) });

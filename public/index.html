@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1790992800 -->
+<!-- WeatherTV App — updated 2026-09-27 build.1791050400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4572,6 +4572,60 @@ function renderNotifPrefs(types, token) {
   panel.innerHTML = html;
   panel.style.display = '';
 }
+
+// ── 🧪 Test links (invite only) ─────────────────────────────────────────────
+// Only people sent a link (/?wtvtest=…) by WeatherTV see this. Tapping "Send
+// the test" asks for notification permission (a tap is required on phones),
+// gets this phone's push address and redeems the link: ONE test push arrives.
+async function getPushTokenOnly() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) throw new Error("This browser can't receive notifications");
+  if (!FIREBASE_CONFIG && !(await loadFirebaseConfig())) throw new Error('Notifications are not set up on the server');
+  const [{ initializeApp, getApps }, { getMessaging, getToken }] = await Promise.all([
+    import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js'),
+    import('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js'),
+  ]);
+  const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+  const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications are blocked for watchweathertv.com — allow them in your browser settings, then tap again');
+  const token = await getToken(getMessaging(app), { vapidKey: FIREBASE_VAPID_KEY, serviceWorkerRegistration: _swRegistration || await navigator.serviceWorker.ready });
+  if (!token) throw new Error('Could not get a push address for this device');
+  return token;
+}
+function showTestLinkPanel(invite) {
+  const iosBrowser = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.matchMedia('(display-mode: standalone)').matches && !navigator.standalone;
+  const box = document.createElement('div');
+  box.id = 'wtv-test-link';
+  box.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;padding:1rem;';
+  box.innerHTML = `<div style="background:var(--surface);border:1px solid var(--accent);border-radius:10px;max-width:360px;width:100%;padding:1.25rem 1.4rem;font-family:Barlow,sans-serif">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:1.1rem;font-weight:700;color:var(--accent);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.5rem">🧪 Notification test</div>
+    <p style="font-size:0.85rem;color:var(--text);line-height:1.5;margin:0 0 0.9rem">WeatherTV sent you this link to check that weather alerts reach your phone. Tap the button and a <strong>TEST</strong> alert (not a real warning) will arrive in a few seconds.</p>
+    ${iosBrowser ? `<p style="font-size:0.78rem;color:#f4a261;line-height:1.45;margin:0 0 0.9rem">On iPhone, alerts only work from the Home Screen app: tap Share → <strong>Add to Home Screen</strong>, open WeatherTV from there, then open this link again.</p>` : ''}
+    <button id="wtv-test-go" style="width:100%;font-family:'Barlow Condensed',sans-serif;font-size:0.95rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;background:var(--accent);color:#000;border:none;border-radius:6px;padding:0.7rem;cursor:pointer">🔔 Send the test</button>
+    <div id="wtv-test-msg" style="font-size:0.8rem;margin-top:0.6rem;min-height:1.2em;color:var(--muted)"></div>
+    <button onclick="document.getElementById('wtv-test-link').remove()" style="margin-top:0.4rem;width:100%;background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.8rem">Close</button>
+  </div>`;
+  document.body.appendChild(box);
+  document.getElementById('wtv-test-go').onclick = async () => {
+    const msg = document.getElementById('wtv-test-msg'), btn = document.getElementById('wtv-test-go');
+    btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Asking for permission…';
+    try {
+      const token = await getPushTokenOnly();
+      msg.textContent = 'Sending…';
+      const r = await fetch('/api/radar/test-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite, token }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'The test could not be sent');
+      msg.style.color = '#22c55e';
+      msg.textContent = '✓ Sent! A TEST alert should appear on this phone within a few seconds. If it doesn\u2019t, let WeatherTV know.';
+    } catch (e) { msg.style.color = '#f87171'; msg.textContent = e.message; }
+    btn.disabled = false;
+  };
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const invite = new URLSearchParams(location.search).get('wtvtest');
+  if (!invite) return;
+  history.replaceState(null, '', location.pathname);   // keep the link out of bookmarks/history
+  setTimeout(() => showTestLinkPanel(invite), 600);
+});
 
 async function saveNotifPrefs(token) {
   const panel = document.getElementById('notif-prefs-panel');

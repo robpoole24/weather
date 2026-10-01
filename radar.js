@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
 // radar.js — WeatherTV NWS Alert Push Notifications (privacy-first)
-// build.1790668800
+// build.1791050400
 // ═══════════════════════════════════════════════════════════════════
 // HOW IT WORKS — the server never learns or stores where anyone is:
 //
@@ -250,6 +250,31 @@ async function sendAlert(props, geometry, c, ugcList, identity, test = false) {
   return okAny;
 }
 
+// ── Test links (invite only, no device storage) ─────────────────────────────
+// The admin creates a link (/?wtvtest=…) and texts it to a chosen tester from
+// their own phone — WeatherTV never sees phone numbers. Opening it on the phone
+// sends ONE test push to that phone. Links live in memory for 24 h and work
+// for 3 tests, so a forwarded link can't be used to spam anyone. Regular
+// users never see any test controls.
+const _invites = new Map();   // id → { type, exp, uses }
+const INVITE_USES = 3, INVITE_TTL = 24 * 3600 * 1000;
+setInterval(() => { const now = Date.now(); for (const [k, v] of _invites) if (v.exp < now) _invites.delete(k); }, 10 * 60 * 1000).unref();
+async function sendTestToToken(token, event) {
+  const meta = ALERT_META[event] || ALERT_META['Tornado Warning'];
+  const ev = ALERT_META[event] ? event : 'Tornado Warning';
+  const c = { event: ev, meta, displayEvent: ev, tier: meta.tier, level: 'base' };
+  const props = { headline: `TEST — ${ev} (not a real warning)`, areaDesc: 'WeatherTV test for this device',
+                  expires: new Date(Date.now() + 15 * 60000).toISOString() };
+  const data = buildData(props, null, c, 'TEST.DEVICE.' + Date.now(), true);
+  await admin.messaging(firebaseApp).send({
+    token, data,
+    android: { priority: 'high', ttl: 15 * 60000 },
+    webpush: { headers: { Urgency: 'high', TTL: '900' } },
+  });
+  bump('messages');
+}
+const _validToken = (t) => typeof t === 'string' && t.length > 40 && t.length < 4096 && /^[\w:.\-]+$/.test(t);
+
 // ── Tiny per-IP limiter for the subscribe relay ─────────────────────────────
 const _rate = new Map();
 setInterval(() => _rate.clear(), 60 * 1000).unref();
@@ -285,6 +310,20 @@ function routes(app) {
     res.json({ ok: failed.length === 0, added: add.length - failed.length, removed: remove.length, failed });
   });
 
+  // POST /api/radar/test-link { invite, token } — the tester's phone redeems a test link
+  app.post('/api/radar/test-link', async (req, res) => {
+    if (!firebaseApp) return res.status(503).json({ error: 'Push notifications are not set up on the server' });
+    if (!rateOk(req, 10)) return res.status(429).json({ error: 'Too many tries — wait a minute' });
+    const inv = _invites.get(String(req.body?.invite || ''));
+    if (!inv || inv.exp < Date.now()) return res.status(404).json({ error: 'This test link has expired — ask for a new one' });
+    if (inv.uses >= INVITE_USES) return res.status(410).json({ error: 'This test link has been used up — ask for a new one' });
+    const token = req.body?.token;
+    if (!_validToken(token)) return res.status(400).json({ error: 'Notifications are not allowed on this device yet' });
+    inv.uses++;
+    try { await sendTestToToken(token, inv.type); res.json({ ok: true, type: inv.type, left: INVITE_USES - inv.uses }); }
+    catch (e) { bump('errors'); inv.uses--; res.status(502).json({ error: 'The push service refused the test: ' + e.message }); }
+  });
+
   // GET /api/radar/alert-types — catalog for the preferences UI
   app.get('/api/radar/alert-types', (req, res) => {
     res.set('Cache-Control', 'public, max-age=3600');
@@ -301,6 +340,15 @@ function routes(app) {
 
   // ── Admin (behind /api/admin auth) ──
   app.get('/api/admin/radar/status', (req, res) => res.json({ enabled: !!firebaseApp, deviceRecordsStored: 0, ...stats }));
+
+  // POST /api/admin/radar/test-link { type } → a link to text to ONE tester
+  app.post('/api/admin/radar/test-link', (req, res) => {
+    const type = ALERT_META[req.body?.type] ? req.body.type : 'Tornado Warning';
+    const id = require('crypto').randomBytes(9).toString('base64url');
+    _invites.set(id, { type, exp: Date.now() + INVITE_TTL, uses: 0 });
+    const host = req.headers['x-forwarded-host'] || req.headers.host || 'www.watchweathertv.com';
+    res.json({ url: `https://${host}/?wtvtest=${id}`, type, expiresHours: 24, uses: INVITE_USES });
+  });
 
   // POST /api/admin/radar/test  { ugc:'WIC079', type:'Tornado Warning' }
   // Sends a clearly-labelled TEST push to everyone subscribed to that area+type.
