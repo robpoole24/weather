@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1791032400 -->
+<!-- WeatherTV Radar — updated 2026-09-27 build.1791057600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -3481,7 +3481,7 @@ async function submitSuggestCam() {
 // Link back to the camera's own page (NPS / USGS) — credit + their live view
 function _camSourceLink(cam, footer) {
   if (!cam.pageUrl) return;
-  const who = cam.source === 'nps' ? 'NPS.gov' : cam.source === 'usgs' ? 'USGS' : cam.source === 'community' ? 'YouTube' : 'source';
+  const who = cam.provider || (cam.source === 'nps' ? 'NPS.gov' : cam.source === 'usgs' ? 'USGS' : cam.source === 'community' ? 'YouTube' : 'source');
   const a = document.createElement('a');
   a.href = cam.pageUrl; a.target = '_blank'; a.rel = 'noopener';
   a.style.cssText = 'color:var(--accent);text-decoration:none;margin-left:0.4rem;';

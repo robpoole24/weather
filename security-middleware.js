@@ -152,7 +152,9 @@ function securityHeaders(req, res, next) {
       // Altruistic Apps / Aporia quote APIs
       " https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
     // frame-src: allow YouTube and Twitch video embeds
-    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com",
+    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com" +
+      // Community Cams: Nest public cameras (Nest's own embed player)
+      " https://video.nest.com",
     "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header

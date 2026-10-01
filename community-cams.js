@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1790920800
+// WeatherTV Community Cams — build.1791057600
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -112,7 +112,46 @@ module.exports = function setupCommunityCams(app, deps) {
       throw new Error('Paste a YouTube video, live or channel link');
     }
     if (/\.(jpe?g|png|webp|gif)$/i.test(u.pathname)) return { kind: 'image', ref: u.href };
-    throw new Error('Supported: YouTube links, or a direct link to a camera image (.jpg/.png)');
+    // Unofficial relays of other people's protected streams — never used
+    if (/proxy/i.test(u.pathname) && /hdontap/i.test(u.href)) {
+      throw new Error("That's an unofficial relay of an HDOnTap camera. Paste the camera's hdontap.com page instead");
+    }
+    // Nest public cameras: Nest's own embed player
+    if (host === 'video.nest.com') {
+      const m = u.pathname.match(/\/(?:embedded\/)?live\/([A-Za-z0-9_-]+)/);
+      if (!m) throw new Error('Paste the public Nest camera link (video.nest.com/live/…)');
+      return { kind: 'embed', ref: `https://video.nest.com/embedded/live/${m[1]}?autoplay=1`, page: `https://video.nest.com/live/${m[1]}`, provider: 'Nest' };
+    }
+    // A direct live video stream
+    if (/\.m3u8$/i.test(u.pathname)) return { kind: 'hls', ref: u.href, provider: u.hostname.replace(/^www\./, '') };
+    // HDOnTap doesn't allow embedding (token-secured): show its published
+    // preview picture, with a button to watch live on HDOnTap
+    if (host === 'hdontap.com' && /^\/stream\//.test(u.pathname)) {
+      const html = await fetchTextOverHttp(u.href);
+      const img = (html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i) || [])[1];
+      const title = ((html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || [])[1] || '').replace(/\s*-\s*HDOnTap$/i, '');
+      if (!img) throw new Error('Could not find a preview picture on that HDOnTap page');
+      return { kind: 'link', ref: u.href.split('?')[0], preview: img, provider: 'HDOnTap', suggestedName: title };
+    }
+    // Any other page: look inside it for a player we can show
+    let html = '';
+    try { html = await fetchTextOverHttp(u.href); } catch (e) { throw new Error("Couldn't open that page (" + e.message + ')'); }
+    const found = findPlayerInPage(html, u.href);
+    if (found) return found;
+    throw new Error("Couldn't find a camera on that page we're allowed to show (YouTube, Nest or a live video stream). "
+      + "If the page has a Share or Embed option, paste that link instead");
+  }
+  // Players we recognize inside someone's page, best first
+  function findPlayerInPage(html, base) {
+    const yt = html.match(/youtube(?:-nocookie)?\.com\/(?:embed|live)\/([A-Za-z0-9_-]{11})/) || html.match(/youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/) || html.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
+    if (yt && yt[1] !== 'live_stream') return { kind: 'yt-video', ref: yt[1], page: base };
+    const ytch = html.match(/youtube\.com\/embed\/live_stream\?channel=(UC[A-Za-z0-9_-]{22})/);
+    if (ytch) return { kind: 'yt-channel', ref: ytch[1], page: base };
+    const nest = html.match(/video\.nest\.com\/(?:embedded\/)?live\/([A-Za-z0-9_-]+)/);
+    if (nest) return { kind: 'embed', ref: `https://video.nest.com/embedded/live/${nest[1]}?autoplay=1`, page: base, provider: 'Nest' };
+    const hls = html.match(/https:\/\/[^"'\s<>\\]+?\.m3u8(?:\?[^"'\s<>\\]*)?/i);
+    if (hls && !/hdontap/i.test(hls[0])) return { kind: 'hls', ref: hls[0], page: base, provider: new URL(base).hostname.replace(/^www\./, '') };
+    return null;
   }
   // ── Place → coordinates (so nobody has to look up lat/long) ──────────────
   // OpenStreetMap Nominatim: street addresses and landmarks ("Broad St,
@@ -201,7 +240,12 @@ module.exports = function setupCommunityCams(app, deps) {
   // Channels and images: read the page / image (no quota).
   async function checkPage(c) {
     try {
-      if (c.kind === 'image') {
+      if (c.kind === 'hls' || c.kind === 'embed' || c.kind === 'link') {
+        const url = c.kind === 'link' ? c.preview : c.ref;
+        const r = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WeatherTV/1.0)' } });
+        c.live = r.ok;
+        c.lastError = r.ok ? null : `${c.provider || 'Source'} returned HTTP ${r.status}`;
+      } else if (c.kind === 'image') {
         const r = await fetch(c.ref, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WeatherTV/1.0)' } });
         c.live = r.ok && /image/i.test(r.headers.get('content-type') || '');
         c.lastError = c.live ? null : `Image returned HTTP ${r.status}`;
@@ -387,11 +431,15 @@ module.exports = function setupCommunityCams(app, deps) {
   // ── Map output ─────────────────────────────────────────────────────────────
   function toCamera(c) {
     const player = c.kind === 'yt-video' ? `https://www.youtube-nocookie.com/embed/${c.ref}?autoplay=1&mute=1&playsinline=1`
-      : c.kind === 'yt-channel' ? `https://www.youtube.com/embed/live_stream?channel=${c.ref}&autoplay=1&mute=1` : null;
+      : c.kind === 'yt-channel' ? `https://www.youtube.com/embed/live_stream?channel=${c.ref}&autoplay=1&mute=1`
+      : c.kind === 'embed' ? c.ref : null;
+    const page = c.kind === 'yt-video' ? `https://www.youtube.com/watch?v=${c.ref}` : c.kind === 'yt-channel' ? `https://www.youtube.com/channel/${c.ref}/live`
+      : c.kind === 'link' ? c.ref : (c.page || null);
     return {
       id: 'comm-' + c.id, name: c.name, lat: c.lat, lng: c.lng, source: 'community',
-      playerUrl: player, imageUrl: c.kind === 'image' ? c.ref : null, videoUrl: null, direction: null,
-      pageUrl: c.kind === 'yt-video' ? `https://www.youtube.com/watch?v=${c.ref}` : c.kind === 'yt-channel' ? `https://www.youtube.com/channel/${c.ref}/live` : null,
+      playerUrl: player, imageUrl: c.kind === 'image' ? c.ref : c.kind === 'link' ? c.preview : null,
+      videoUrl: c.kind === 'hls' ? c.ref : null, direction: null,
+      pageUrl: page, provider: c.provider || (/^yt-/.test(c.kind) ? 'YouTube' : null),
       isStreaming: c.kind !== 'image',
     };
   }
@@ -421,7 +469,7 @@ module.exports = function setupCommunityCams(app, deps) {
       }
       db.queue.push({
         id: uid(), ...p, name: String(place || '').slice(0, 120) || 'Suggested camera',
-        thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : (p.kind === 'image' ? p.ref : null),
+        thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : (p.kind === 'image' ? p.ref : p.kind === 'link' ? p.preview : null),
         lat: Number.isFinite(la) ? la : null, lng: Number.isFinite(lo) ? lo : null,
         locationGuess: guess, note: String(note || '').slice(0, 300),
         source: 'suggestion', foundAt: Date.now(),
@@ -448,7 +496,8 @@ module.exports = function setupCommunityCams(app, deps) {
     if (Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Those coordinates are out of range');
     const state = stateFor(lat, lng);
     if (!state) throw new Error('Could not work out where that is — check the coordinates');
-    const cam = { id: base.id || uid(), kind: base.kind, ref: base.ref, name: String(body.name || base.name || 'Community camera').slice(0, 120),
+    const cam = { id: base.id || uid(), kind: base.kind, ref: base.ref, page: base.page || null, preview: base.preview || null, provider: base.provider || null,
+                  name: String(body.name || base.name || base.suggestedName || 'Community camera').slice(0, 120),
                   channelTitle: base.channelTitle || '', lat, lng, state, addedAt: Date.now(), source: base.source || 'admin', live: null };
     await checkOne(cam);
     db.cams.push(cam);
@@ -541,7 +590,7 @@ module.exports = function setupCommunityCams(app, deps) {
         if (!hit) noPlace++;
         db.queue.push({
           id: uid(), ...p, name: place || 'Imported camera',
-          thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : null,
+          thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : p.kind === 'link' ? p.preview : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `Looked up: ${hit.label}` : (place ? `Couldn't find "${place}" — set it on the map` : 'No place given'),
           source: 'import', foundAt: Date.now(),
@@ -644,7 +693,8 @@ module.exports = function setupCommunityCams(app, deps) {
       try {
         const state = stateFor(q.lat, q.lng);
         if (!state) throw new Error('could not work out where that is');
-        db.cams.push({ id: q.id, kind: q.kind, ref: q.ref, name: q.name, channelTitle: q.channelTitle || '', lat: q.lat, lng: q.lng,
+        db.cams.push({ id: q.id, kind: q.kind, ref: q.ref, page: q.page || null, preview: q.preview || null, provider: q.provider || null,
+                       name: q.name, channelTitle: q.channelTitle || '', lat: q.lat, lng: q.lng,
                        state, addedAt: Date.now(), source: q.source, live: null });
         db.queue = db.queue.filter(x => x.id !== q.id);
         approved++;
