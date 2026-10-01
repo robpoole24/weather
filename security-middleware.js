@@ -153,8 +153,8 @@ function securityHeaders(req, res, next) {
       " https://zenquotes.io https://en.wikiquote.org https://raw.githubusercontent.com",
     // frame-src: allow YouTube and Twitch video embeds
     "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com" +
-      // Community Cams: Nest public cameras (Nest's own embed player)
-      " https://video.nest.com",
+      // Community Cams: camera hosts' own embed players (Nest, Brownrice, IPCamLive, RTSP.me, Angelcam)
+      " https://video.nest.com https://player.brownrice.com https://*.brownrice.com https://ipcamlive.com https://rtsp.me https://v.angelcam.com",
     "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header

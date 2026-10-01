@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791082800
+// WeatherTV Community Cams — build.1791090000
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -194,12 +194,15 @@ module.exports = function setupCommunityCams(app, deps) {
       if (!img) throw new Error('Could not find a preview picture on that HDOnTap page');
       return { kind: 'link', ref: u.href.split('?')[0], preview: img, provider: 'HDOnTap', suggestedName: title };
     }
+    // A camera host's own player/embed link pasted directly
+    const direct = findPlayerInPage(u.href, u.href);
+    if (direct && direct.kind === 'embed') return direct;
     // Any other page: look inside it for a player we can show
     let html = '';
     try { html = await fetchTextOverHttp(u.href); } catch (e) { throw new Error("Couldn't open that page (" + e.message + ')'); }
     const found = findPlayerInPage(html, u.href);
     if (found) return found;
-    throw new Error("Couldn't find a camera on that page we're allowed to show (YouTube, Nest or a live video stream). "
+    throw new Error("Couldn't find a camera on that page we're allowed to show (YouTube, Nest, Brownrice, IPCamLive, RTSP.me, Angelcam or a live video stream). "
       + "If the page has a Share or Embed option, paste that link instead");
   }
   // Players we recognize inside someone's page, best first
@@ -210,6 +213,18 @@ module.exports = function setupCommunityCams(app, deps) {
     if (ytch) return { kind: 'yt-channel', ref: ytch[1], page: base };
     const nest = html.match(/video\.nest\.com\/(?:embedded\/)?live\/([A-Za-z0-9_-]+)/);
     if (nest) return { kind: 'embed', ref: `https://video.nest.com/embedded/live/${nest[1]}?autoplay=1`, page: base, provider: 'Nest' };
+    // Camera hosts used by towns, tourism boards and resorts — their own embed players.
+    // Brownrice: iframe (/embed/NAME), JavaScript tag (?sn=NAME), or the older live2 player
+    const bri = html.match(/player\.brownrice\.com\/embed\/([A-Za-z0-9_-]+)/i)
+      || html.match(/player\.brownrice\.com\/?\?[^"'<>\s]*?\bsn=([A-Za-z0-9_-]+)/i)
+      || html.match(/live\d*\.brownrice\.com\/player\/live\/([A-Za-z0-9_-]+)/i);
+    if (bri) return { kind: 'embed', ref: `https://player.brownrice.com/embed/${bri[1]}`, page: base, provider: 'Brownrice' };
+    const ipc = html.match(/ipcamlive\.com\/player\/player\.php\?[^"'<>\s]*?\balias=([A-Za-z0-9_-]+)/i);
+    if (ipc) return { kind: 'embed', ref: `https://ipcamlive.com/player/player.php?alias=${ipc[1]}&autoplay=1`, page: base, provider: 'IPCamLive' };
+    const rtsp = html.match(/rtsp\.me\/embed\/([A-Za-z0-9_-]+)/i);
+    if (rtsp) return { kind: 'embed', ref: `https://rtsp.me/embed/${rtsp[1]}/`, page: base, provider: 'RTSP.me' };
+    const angel = html.match(/v\.angelcam\.com\/iframe\?[^"'<>\s]*?\bv=([A-Za-z0-9_-]+)/i);
+    if (angel) return { kind: 'embed', ref: `https://v.angelcam.com/iframe?v=${angel[1]}&autoplay=1`, page: base, provider: 'Angelcam' };
     const hls = html.match(/https:\/\/[^"'\s<>\\]+?\.m3u8(?:\?[^"'\s<>\\]*)?/i);
     if (hls && !/hdontap/i.test(hls[0])) return { kind: 'hls', ref: hls[0], page: base, provider: new URL(base).hostname.replace(/^www\./, '') };
     return null;
@@ -273,6 +288,19 @@ module.exports = function setupCommunityCams(app, deps) {
   // The place a camera's own name points to: "Amsterdam: Dam Square" → "Amsterdam"
   const placeFromName = (c) => decodeEntities(c.name).split(/[:|–—-]\s/)[0].replace(/\b(live|cam|webcam|camera|stream)\b/ig, '').trim();
   const pageSlug = (c) => { try { const u = new URL(c.page || ''); return u.pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } };
+
+  // Titles put the place first OR last ("Live River Cam | La Crosse, Wisconsin").
+  // Try each part (camera words removed) and use the first that's a real place.
+  async function placeFromParts(title, cc) {
+    const parts = decodeEntities(title).split(/\s[|•–—]\s|\s-\s|:\s/).map(p => p
+      .replace(/\b(live ?stream|live ?cam(era)?|webcam|web cam|live|streaming|24\/7|4k|hd|cam|camera|view|views)\b/ig, ' ')
+      .replace(/\s{2,}/g, ' ').replace(/^[\s,]+|[\s,]+$/g, '')).filter(p => p.length >= 3);
+    for (const part of parts.sort((a, b) => (b.includes(',') - a.includes(',')))) {   // "City, State" parts first
+      const r = await placeIt(part, cc);
+      if (r.hit) return { ...r, place: part };
+    }
+    return { hit: null, confident: false, place: parts[0] || title };
+  }
 
   // Place a camera. With a known country, only results IN that country count
   // (✓ confirmed). Without one, the best guess is used but marked ⚠ check.
@@ -829,7 +857,23 @@ module.exports = function setupCommunityCams(app, deps) {
         }
         await new Promise(r => setTimeout(r, 400));
       }
-      if (!links.size) throw new Error('No camera links found on that page');
+      if (!links.size) {
+        // Not a directory — maybe the page itself is a single camera
+        let html0 = ''; try { html0 = await fetchTextOverHttp(start.href); } catch (_) {}
+        const one = findPlayerInPage(html0, start.href);
+        if (!one) throw new Error("No list of cameras on that page, and no camera player we recognize on it either");
+        if (known(one.ref)) return res.json({ ok: true, found: 1, queued: 0, skipped: 1, noPlayer: 0, report: ['That camera is already on the map or in the queue'] });
+        const title = decodeEntities(((html0.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || html0.match(/<title>([^<]+)<\/title>/i) || [])[1] || start.hostname)).trim();
+        const { hit, confident, place } = await placeFromParts(title, countryHint(title + ' ' + start.hostname));
+        db.queue.push({ id: uid(), ...one, page: one.page || start.href, name: title.slice(0, 120), confident,
+          thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : null,
+          lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+          locationGuess: hit ? `From page title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+          source: 'import', foundAt: Date.now() });
+        await save();
+        return res.json({ ok: true, found: 1, queued: 1, skipped: 0, noPlayer: 0,
+          report: [`This page is a single camera (${one.provider || one.kind}) — added to the review queue. (For one page, "Add a camera" works too.)`] });
+      }
       const deslug = (x) => decodeURIComponent(x || '').replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       let n = 0, queued = 0, skipped = 0, noPlayer = 0;
       const report = [];
