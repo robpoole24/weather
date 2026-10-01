@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791090000
+// WeatherTV Community Cams — build.1791097200
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -187,12 +187,16 @@ module.exports = function setupCommunityCams(app, deps) {
     if (/\.m3u8$/i.test(u.pathname)) return { kind: 'hls', ref: u.href, provider: u.hostname.replace(/^www\./, '') };
     // HDOnTap doesn't allow embedding (token-secured): show its published
     // preview picture, with a button to watch live on HDOnTap
-    if (host === 'hdontap.com' && /^\/stream\//.test(u.pathname)) {
+    if ((host === 'hdontap.com' && /^\/stream\//.test(u.pathname)) || host === 'earthcam.com') {
       const html = await fetchTextOverHttp(u.href);
       const img = (html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i) || [])[1];
-      const title = ((html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || [])[1] || '').replace(/\s*-\s*HDOnTap$/i, '');
-      if (!img) throw new Error('Could not find a preview picture on that HDOnTap page');
-      return { kind: 'link', ref: u.href.split('?')[0], preview: img, provider: 'HDOnTap', suggestedName: title };
+      const title = decodeEntities((html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || [])[1] || '').replace(/\s*-\s*HDOnTap$/i, '');
+      const provider = host === 'earthcam.com' ? 'EarthCam' : 'HDOnTap';
+      // EarthCam pages often carry a YouTube stream too — use it when present
+      if (provider === 'EarthCam') { const yt = findAllPlayersInPage(html, u.href).find(p => /^yt-/.test(p.kind)); if (yt) return yt; }
+      if (!img) throw new Error(`Could not find a preview picture on that ${provider} page`);
+      return { kind: 'link', ref: provider === 'EarthCam' ? u.href : u.href.split('?')[0], preview: img, provider,
+               suggestedName: title.replace(/\s*[|-]\s*EarthCam.*$/i, '') };
     }
     // A camera host's own player/embed link pasted directly
     const direct = findPlayerInPage(u.href, u.href);
@@ -200,35 +204,44 @@ module.exports = function setupCommunityCams(app, deps) {
     // Any other page: look inside it for a player we can show
     let html = '';
     try { html = await fetchTextOverHttp(u.href); } catch (e) { throw new Error("Couldn't open that page (" + e.message + ')'); }
-    const found = findPlayerInPage(html, u.href);
-    if (found) return found;
+    const foundAll = findAllPlayersInPage(html, u.href);
+    if (foundAll.length) return { ...foundAll[0], more: foundAll.length - 1 };
     throw new Error("Couldn't find a camera on that page we're allowed to show (YouTube, Nest, Brownrice, IPCamLive, RTSP.me, Angelcam or a live video stream). "
       + "If the page has a Share or Embed option, paste that link instead");
   }
-  // Players we recognize inside someone's page, best first
-  function findPlayerInPage(html, base) {
-    const yt = html.match(/youtube(?:-nocookie)?\.com\/(?:embed|live)\/([A-Za-z0-9_-]{11})/) || html.match(/youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/) || html.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
-    if (yt && yt[1] !== 'live_stream') return { kind: 'yt-video', ref: yt[1], page: base };
-    const ytch = html.match(/youtube\.com\/embed\/live_stream\?channel=(UC[A-Za-z0-9_-]{22})/);
-    if (ytch) return { kind: 'yt-channel', ref: ytch[1], page: base };
-    const nest = html.match(/video\.nest\.com\/(?:embedded\/)?live\/([A-Za-z0-9_-]+)/);
-    if (nest) return { kind: 'embed', ref: `https://video.nest.com/embedded/live/${nest[1]}?autoplay=1`, page: base, provider: 'Nest' };
-    // Camera hosts used by towns, tourism boards and resorts — their own embed players.
-    // Brownrice: iframe (/embed/NAME), JavaScript tag (?sn=NAME), or the older live2 player
-    const bri = html.match(/player\.brownrice\.com\/embed\/([A-Za-z0-9_-]+)/i)
-      || html.match(/player\.brownrice\.com\/?\?[^"'<>\s]*?\bsn=([A-Za-z0-9_-]+)/i)
-      || html.match(/live\d*\.brownrice\.com\/player\/live\/([A-Za-z0-9_-]+)/i);
-    if (bri) return { kind: 'embed', ref: `https://player.brownrice.com/embed/${bri[1]}`, page: base, provider: 'Brownrice' };
-    const ipc = html.match(/ipcamlive\.com\/player\/player\.php\?[^"'<>\s]*?\balias=([A-Za-z0-9_-]+)/i);
-    if (ipc) return { kind: 'embed', ref: `https://ipcamlive.com/player/player.php?alias=${ipc[1]}&autoplay=1`, page: base, provider: 'IPCamLive' };
-    const rtsp = html.match(/rtsp\.me\/embed\/([A-Za-z0-9_-]+)/i);
-    if (rtsp) return { kind: 'embed', ref: `https://rtsp.me/embed/${rtsp[1]}/`, page: base, provider: 'RTSP.me' };
-    const angel = html.match(/v\.angelcam\.com\/iframe\?[^"'<>\s]*?\bv=([A-Za-z0-9_-]+)/i);
-    if (angel) return { kind: 'embed', ref: `https://v.angelcam.com/iframe?v=${angel[1]}&autoplay=1`, page: base, provider: 'Angelcam' };
-    const hls = html.match(/https:\/\/[^"'\s<>\\]+?\.m3u8(?:\?[^"'\s<>\\]*)?/i);
-    if (hls && !/hdontap/i.test(hls[0])) return { kind: 'hls', ref: hls[0], page: base, provider: new URL(base).hostname.replace(/^www\./, '') };
-    return null;
+  // EVERY camera we can recognize inside a page (some pages have several).
+  // Hosts' own embed players, YouTube, live streams, and refreshing still
+  // images (many town/museum/mountain cams update a .jpg every few seconds).
+  function findAllPlayersInPage(html, base) {
+    const out = [], seen = new Set();
+    const add = (p) => { if (p && !seen.has(p.ref)) { seen.add(p.ref); out.push({ page: base, ...p }); } };
+    const all = (re) => [...String(html).matchAll(re)];
+    all(/youtube(?:-nocookie)?\.com\/(?:embed|live)\/([A-Za-z0-9_-]{11})/g).concat(all(/youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/g), all(/youtu\.be\/([A-Za-z0-9_-]{11})/g))
+      .forEach(m => { if (m[1] !== 'live_stream') add({ kind: 'yt-video', ref: m[1] }); });
+    all(/youtube\.com\/embed\/live_stream\?channel=(UC[A-Za-z0-9_-]{22})/g).forEach(m => add({ kind: 'yt-channel', ref: m[1] }));
+    all(/video\.nest\.com\/(?:embedded\/)?live\/([A-Za-z0-9_-]+)/g).forEach(m => add({ kind: 'embed', ref: `https://video.nest.com/embedded/live/${m[1]}?autoplay=1`, provider: 'Nest' }));
+    all(/player\.brownrice\.com\/embed\/([A-Za-z0-9_-]+)/gi).concat(all(/player\.brownrice\.com\/?\?[^"'<>\s]*?\bsn=([A-Za-z0-9_-]+)/gi), all(/live\d*\.brownrice\.com\/player\/live\/([A-Za-z0-9_-]+)/gi))
+      .forEach(m => add({ kind: 'embed', ref: `https://player.brownrice.com/embed/${m[1]}`, provider: 'Brownrice' }));
+    all(/ipcamlive\.com\/player\/player\.php\?[^"'<>\s]*?\balias=([A-Za-z0-9_-]+)/gi).forEach(m => add({ kind: 'embed', ref: `https://ipcamlive.com/player/player.php?alias=${m[1]}&autoplay=1`, provider: 'IPCamLive' }));
+    all(/rtsp\.me\/embed\/([A-Za-z0-9_-]+)/gi).forEach(m => add({ kind: 'embed', ref: `https://rtsp.me/embed/${m[1]}/`, provider: 'RTSP.me' }));
+    all(/v\.angelcam\.com\/iframe\?[^"'<>\s]*?\bv=([A-Za-z0-9_-]+)/gi).forEach(m => add({ kind: 'embed', ref: `https://v.angelcam.com/iframe?v=${m[1]}&autoplay=1`, provider: 'Angelcam' }));
+    all(/https:\/\/[^"'\s<>\\]+?\.m3u8(?:\?[^"'\s<>\\]*)?/gi).forEach(m => { if (!/hdontap/i.test(m[0])) add({ kind: 'hls', ref: m[0], provider: hostOf(base) }); });
+    // Refreshing still images: <img> whose address or label says webcam/snapshot/latest…
+    const BAD = /logo|icon|sprite|banner|avatar|placeholder|social|footer|header|button|badge|\/ads?[\/_-]|emoji|spinner|loading/i;
+    const CAMURL = /webcam|[\/_-]cam[s\d_.-]|camera|snapshot|latest|current\.(jpe?g|png)|live\.(jpe?g|png)|stillimage|frame\.(jpe?g|png)/i;
+    for (const m of all(/<img\b[^>]*>/gi)) {
+      const tag = m[0];
+      const src = (tag.match(/\b(?:data-src|src)=["']([^"']+)["']/i) || [])[1];
+      if (!src || !/\.(jpe?g|png|webp)(\?|$)/i.test(src) || BAD.test(src)) continue;
+      const label = (tag.match(/\b(?:alt|id|class|title)=["']([^"']*)["']/gi) || []).join(' ');
+      if (!CAMURL.test(src) && !/webcam|camera|\bcam\b|live view/i.test(label)) continue;
+      let abs; try { abs = new URL(src.replace(/&amp;/g, '&'), base).href; } catch { continue; }
+      add({ kind: 'image', ref: abs, provider: hostOf(abs) });
+    }
+    return out;
   }
+  const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return null; } };
+  const findPlayerInPage = (html, base) => findAllPlayersInPage(html, base)[0] || null;
   // ── Place → coordinates (so nobody has to look up lat/long) ──────────────
   // OpenStreetMap Nominatim: street addresses and landmarks ("Broad St,
   // Greendale WI", "Waikiki Beach"). Usage policy: identify ourselves, max 1
@@ -289,6 +302,7 @@ module.exports = function setupCommunityCams(app, deps) {
   const placeFromName = (c) => decodeEntities(c.name).split(/[:|–—-]\s/)[0].replace(/\b(live|cam|webcam|camera|stream)\b/ig, '').trim();
   const pageSlug = (c) => { try { const u = new URL(c.page || ''); return u.pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } };
 
+
   // Titles put the place first OR last ("Live River Cam | La Crosse, Wisconsin").
   // Try each part (camera words removed) and use the first that's a real place.
   async function placeFromParts(title, cc) {
@@ -342,11 +356,20 @@ module.exports = function setupCommunityCams(app, deps) {
         const byId = new Map((j.items || []).map(it => [it.id, it]));
         for (const c of batch) {
           const it = byId.get(c.ref);
+          await null;
           if (!it) { c.live = false; c.ended = true; c.lastError = 'Video not found (removed or private)'; }
           else {
             // Live and embeddable are separate: a live stream whose owner blocks
             // embedding is still shown — as a live snapshot + "Watch on YouTube"
             c.embeddable = !(it.status && it.status.embeddable === false);
+            // Second opinion before believing "embedding off": YouTube's own oEmbed
+            // endpoint answers 401 when a video can't be embedded, 200 when it can.
+            if (!c.embeddable) {
+              try {
+                const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + c.ref)}`);
+                if (r.ok) c.embeddable = true;
+              } catch (_) { /* keep the API's answer */ }
+            }
             c.live = !!(it.snippet && it.snippet.liveBroadcastContent === 'live');
             c.lastError = !c.live ? 'Not live on YouTube right now'
               : !c.embeddable ? 'Owner blocks embedding — shown as a live snapshot with a Watch on YouTube button' : null;
@@ -646,7 +669,7 @@ module.exports = function setupCommunityCams(app, deps) {
       const cam = await approveInto({ ...p, source: 'admin' }, req.body || {});
       db.queue = db.queue.filter(q => q.ref !== p.ref);
       await save();
-      res.json({ ok: true, cam });
+      res.json({ ok: true, cam, more: p.more || 0 });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
   app.post('/api/admin/community/approve', async (req, res) => {
@@ -834,80 +857,109 @@ module.exports = function setupCommunityCams(app, deps) {
       await load();
       const b = req.body || {};
       let start; try { start = new URL(String(b.url || '').trim()); } catch { throw new Error('Paste the address of the page that lists the cameras'); }
-      const pages = Math.max(1, Math.min(40, parseInt(b.pages || '1', 10) || 1));
+      start.hash = '';
+      const pages = Math.max(1, Math.min(300, parseInt(b.pages || '1', 10) || 1));
       const mustContain = String(b.contains || '').trim();
       const job = req._job || {};
-      const links = new Map();   // url → link text
-      for (let pg = 1; pg <= pages; pg++) {
-        const pu = new URL(start.href);
-        if (pg > 1) pu.searchParams.set('page', String(pg));
-        job.progress = `Reading listing page ${pg} of ${pages}… (${links.size} camera links so far)`;
+      const clean = (t) => decodeEntities(String(t || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+
+      // 1) Read the listing pages, following the site's own "Next" link
+      //    (falls back to ?page=N when a site has no Next link)
+      const pageLinks = [];                       // one Map(url → text) per listing page
+      let url = start.href;
+      for (let pg = 1; pg <= pages && url; pg++) {
+        job.progress = `Reading listing page ${pg} of ${pages}…`;
         let html;
-        try { html = await fetchTextOverHttp(pu.href); } catch (e) { if (pg === 1) throw new Error("Couldn't open that page: " + e.message); break; }
+        try { html = await fetchTextOverHttp(url); } catch (e) { if (pg === 1) throw new Error("Couldn't open that page: " + e.message); break; }
+        const here = new Map();
         for (const m of html.matchAll(/<a\s[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-          let href; try { href = new URL(m[1], pu.href); } catch { continue; }
-          if (href.hostname !== start.hostname) continue;
-          const segs = href.pathname.split('/').filter(Boolean);
-          const text = m[2].replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#0?39;|&apos;/g, "'").replace(/\s+/g, ' ').trim();
-          // Camera pages sit deeper than category pages (e.g. /country/city/camera)
-          if (segs.length < 3 || !text || text.length < 3) continue;
+          let href; try { href = new URL(m[1].replace(/&amp;/g, '&'), url); } catch { continue; }
+          if (href.hostname !== start.hostname || href.pathname === start.pathname) continue;
+          const text = clean(m[2]);
           if (mustContain && !href.href.includes(mustContain)) continue;
-          href.search = ''; href.hash = '';
-          if (!links.has(href.href) || links.get(href.href).length < text.length) links.set(href.href, text);
+          href.hash = '';
+          if (!here.has(href.href) || here.get(href.href).length < text.length) here.set(href.href, text);
         }
+        pageLinks.push(here);
+        // next page
+        const nextM = html.match(/<(?:a|link)\b[^>]*rel=["'][^"']*\bnext\b[^"']*["'][^>]*href=["']([^"']+)["']/i)
+          || html.match(/<(?:a|link)\b[^>]*href=["']([^"']+)["'][^>]*rel=["'][^"']*\bnext\b/i)
+          || html.match(/<a\b[^>]*href=["']([^"']+)["'][^>]*>\s*(?:next(?:\s*page)?|›|»|&raquo;|&rsaquo;)\s*(?:<[^>]+>\s*)*<\/a>/i);
+        let next = null;
+        if (nextM) { try { next = new URL(nextM[1].replace(/&amp;/g, '&'), url).href; } catch {} }
+        if (!next && pg < pages) { const u = new URL(start.href); u.searchParams.set('page', String(pg + 1)); next = u.href; }
+        url = next && next !== url ? next : null;
         await new Promise(r => setTimeout(r, 400));
       }
+
+      // 2) Camera links = links that are NOT on (nearly) every listing page —
+      //    menus, footers and category links repeat; the cameras change.
+      const count = new Map(), text = new Map();
+      pageLinks.forEach(m => m.forEach((t, h) => { count.set(h, (count.get(h) || 0) + 1); if (!text.has(h) || text.get(h).length < t.length) text.set(h, t); }));
+      const n = pageLinks.length;
+      const links = new Map();
+      for (const [h, c] of count) {
+        const segs = new URL(h).pathname.split('/').filter(Boolean);
+        const camLike = /cam|webcam|live|stream/i.test(h);
+        const isNav = n >= 3 ? c > n * 0.5 : (segs.length < 3 && !camLike);   // one page: fall back to address depth
+        if (isNav || !segs.length) continue;
+        if (/\/(page|tag|category|author|search|login|signup|privacy|terms|contact|about)(\/|$)/i.test(h)) continue;
+        links.set(h, text.get(h) || segs[segs.length - 1]);
+        if (links.size >= 5000) break;
+      }
+
+      // 3) Not a directory? The page itself may hold one or several cameras.
       if (!links.size) {
-        // Not a directory — maybe the page itself is a single camera
         let html0 = ''; try { html0 = await fetchTextOverHttp(start.href); } catch (_) {}
-        const one = findPlayerInPage(html0, start.href);
-        if (!one) throw new Error("No list of cameras on that page, and no camera player we recognize on it either");
-        if (known(one.ref)) return res.json({ ok: true, found: 1, queued: 0, skipped: 1, noPlayer: 0, report: ['That camera is already on the map or in the queue'] });
-        const title = decodeEntities(((html0.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || html0.match(/<title>([^<]+)<\/title>/i) || [])[1] || start.hostname)).trim();
+        const found = findAllPlayersInPage(html0, start.href).filter(p => !known(p.ref));
+        if (!found.length) throw new Error('No camera links on that page, and no camera player or camera image we recognize on it either');
+        const title = clean((html0.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || html0.match(/<title>([^<]+)<\/title>/i) || [])[1] || start.hostname);
         const { hit, confident, place } = await placeFromParts(title, countryHint(title + ' ' + start.hostname));
-        db.queue.push({ id: uid(), ...one, page: one.page || start.href, name: title.slice(0, 120), confident,
-          thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : null,
+        found.forEach((one, i) => db.queue.push({ id: uid(), ...one, name: (found.length > 1 ? `${title} — camera ${i + 1}` : title).slice(0, 120), confident,
+          thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : one.kind === 'image' ? one.ref : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From page title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
-          source: 'import', foundAt: Date.now() });
+          source: 'import', foundAt: Date.now() }));
         await save();
-        return res.json({ ok: true, found: 1, queued: 1, skipped: 0, noPlayer: 0,
-          report: [`This page is a single camera (${one.provider || one.kind}) — added to the review queue. (For one page, "Add a camera" works too.)`] });
+        return res.json({ ok: true, found: found.length, queued: found.length, skipped: 0, noPlayer: 0,
+          report: [`This page holds ${found.length} camera${found.length > 1 ? 's' : ''} (${[...new Set(found.map(f => f.provider || f.kind))].join(', ')}) — added to the review queue.`] });
       }
+
+      // 4) Open each camera page and queue every camera on it
       const deslug = (x) => decodeURIComponent(x || '').replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      let n = 0, queued = 0, skipped = 0, noPlayer = 0;
+      let i = 0, queued = 0, skipped = 0, noPlayer = 0;
       const report = [];
-      for (const [href, text] of links) {
-        n++;
-        job.progress = `Checking camera ${n} of ${links.size}: ${text.slice(0, 60)}`;
-        let p;
-        try {
-          const html = await fetchTextOverHttp(href);
-          p = findPlayerInPage(html, href);
-        } catch (_) { p = null; }
-        if (!p) { noPlayer++; report.push(`– no usable player: ${text}`); continue; }
-        if (known(p.ref)) { skipped++; continue; }
+      for (const [href, txt] of links) {
+        i++;
+        job.progress = `Checking camera page ${i} of ${links.size} (from ${n} listing pages): ${txt.slice(0, 60)} · ${queued} queued`;
+        let found = [], html = '';
+        try { html = await fetchTextOverHttp(href); found = findAllPlayersInPage(html, href); } catch (_) {}
+        if (!found.length) { noPlayer++; if (report.length < 400) report.push(`– no usable player: ${txt}`); continue; }
         const segs = new URL(href).pathname.split('/').filter(Boolean);
         const country = deslug(segs[0]), city = deslug(segs[1]);
-        const fromTitle = text.includes(':') ? text.split(':')[0].trim() : city;
-        const place = [fromTitle, country].filter(Boolean).join(', ').replace(/, United States$/, ', USA');
-        const cc = countryHint(text, segs[0]);
-        const { hit, confident } = await placeIt(place, cc, [city, country].join(', '));
-        db.queue.push({
-          id: uid(), ...p, page: p.page || href, name: decodeEntities(text).slice(0, 120), confident,
-          thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : null,
-          lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
-          locationGuess: hit ? `${place} → ${hit.label}` : `Couldn't place "${place}"${cc ? ' in ' + country : ''} — set it on the map`,
-          source: 'import', foundAt: Date.now(),
+        const pageTitle = clean((html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || html.match(/<title>([^<]+)<\/title>/i) || [])[1]);
+        const name0 = txt.length >= 4 ? txt : (pageTitle || deslug(segs[segs.length - 1]));
+        const cc = countryHint(name0 + ' ' + pageTitle, segs[0]);
+        // place: the link text "Place: Spot", else the page title, else the address
+        let pl = txt.includes(':') ? { ...(await placeIt(txt.split(':')[0].trim() + (country && COUNTRY[country.toLowerCase()] ? ', ' + country : ''), cc)), place: txt.split(':')[0] } : null;
+        if (!pl || !pl.hit) pl = await placeFromParts(pageTitle || name0, cc);
+        if (!pl.hit && city) pl = { ...(await placeIt([city, country].join(', '), cc)), place: [city, country].join(', ') };
+        found.forEach((one, k) => {
+          if (known(one.ref)) { skipped++; return; }
+          db.queue.push({ id: uid(), ...one, name: (found.length > 1 ? `${name0} — camera ${k + 1}` : name0).slice(0, 120), confident: !!pl.confident,
+            thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : one.kind === 'image' ? one.ref : one.kind === 'link' ? one.preview : null,
+            lat: pl.hit ? pl.hit.lat : null, lng: pl.hit ? pl.hit.lng : null,
+            locationGuess: pl.hit ? `${pl.place} → ${pl.hit.label}` : `Couldn't place "${pl.place || name0}" — set it on the map`,
+            source: 'import', foundAt: Date.now() });
+          queued++;
         });
-        queued++;
-        report.push(`${hit ? '✓' : '?'} ${text}`);
-        if (queued % 10 === 0) await save();
+        if (report.length < 400) report.push(`${pl.hit ? '✓' : '?'} ${name0}${found.length > 1 ? ` (${found.length} cameras)` : ''}`);
+        if (i % 10 === 0) await save();
         await new Promise(r => setTimeout(r, 300));
       }
-      db.queue = db.queue.slice(-800);
+      db.queue = db.queue.slice(-5000);
       await save();
-      res.json({ ok: true, found: links.size, queued, skipped, noPlayer, report: report.slice(0, 400) });
+      res.json({ ok: true, found: links.size, pagesRead: n, queued, skipped, noPlayer, report });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 

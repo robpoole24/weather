@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791082800 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791097200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -662,7 +662,7 @@
           and embeds the <strong>original</strong> stream it finds (YouTube, Nest, live video) — not the directory's page. Places come from each camera's title. Takes a few minutes for big lists.</div>
         <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
           <input id="cc-dir" type="text" placeholder="https://worldcams.tv/cities/" style="font-size:0.8rem;margin:0;" size="34">
-          <label style="font-size:0.78rem;color:var(--muted)">Pages <input id="cc-dir-pages" type="number" min="1" max="40" value="1" style="font-size:0.8rem;margin:0;" style="width:60px;font-size:0.8rem;margin:0"></label>
+          <label style="font-size:0.78rem;color:var(--muted)">Pages <input id="cc-dir-pages" type="number" min="1" max="300" value="1" style="font-size:0.8rem;margin:0;" style="width:60px;font-size:0.8rem;margin:0"></label>
           <input id="cc-dir-has" type="text" placeholder="Only links containing… (optional)" style="font-size:0.8rem;margin:0;" size="26">
           <button class="btn btn-primary btn-sm" id="cc-dir-btn" onclick="ccDirectory()">Import directory</button>
         </div>
@@ -3252,7 +3252,7 @@ async function ccDirectory() {
   btn.disabled = true; out.textContent = 'Starting directory import…';
   try {
     const j = await ccRunJob('import-directory', { url: v('cc-dir'), pages: v('cc-dir-pages'), contains: v('cc-dir-has') }, out);
-    out.textContent = `Found ${j.found} camera pages · queued ${j.queued} · already listed ${j.skipped} · no usable player ${j.noPlayer}\n\n` + j.report.join('\n');
+    out.textContent = (j.pagesRead ? `Read ${j.pagesRead} listing pages · ` : '') + `Found ${j.found} camera pages · queued ${j.queued} cameras · already listed ${j.skipped} · no usable player ${j.noPlayer}\n\n` + j.report.join('\n');
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;
@@ -3358,9 +3358,10 @@ async function ccAdd() {
   try {
     if ((!v('cc-lat') || !v('cc-lng')) && v('cc-where')) await ccLookup('cc-where', 'cc-lat', 'cc-lng', 'cc-where-hit');
     const j = await ccPost('add', { url: v('cc-url'), name: v('cc-name') || v('cc-where'), lat: v('cc-lat'), lng: v('cc-lng') });
+    const more = j.more ? ' — this page has ' + j.more + ' more camera' + (j.more > 1 ? 's' : '') + ': paste it into "Import every camera from a directory site" to queue them all' : '';
     out.innerHTML = '<span style="color:var(--green)">✓ Added in ' + lvEsc(j.cam.state) + (j.cam.live ? ' · live now' : j.cam.live === false
       ? ' · not live right now (hidden until it is)' + (j.cam.lastError ? ' — ' + lvEsc(j.cam.lastError) : '')
-      : ' · live status not confirmed yet — shown on the map' + (j.cam.lastError ? ' (' + lvEsc(j.cam.lastError) + ')' : '')) + '</span>';
+      : ' · live status not confirmed yet — shown on the map' + (j.cam.lastError ? ' (' + lvEsc(j.cam.lastError) + ')' : '')) + lvEsc(more) + '</span>';
     ['cc-url', 'cc-name', 'cc-where', 'cc-lat', 'cc-lng'].forEach(id => { document.getElementById(id).value = ''; });
     document.getElementById('cc-where-hit').textContent = '';
     loadCommunity();

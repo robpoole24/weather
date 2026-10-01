@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-02T02:00:00Z build.1790964000
+// WeatherTV Server — updated 2026-10-02T12:00:00Z build.1791097200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2268,6 +2268,48 @@ function _inState(code, lat, lng, edgeMi = 8, allowOtherState = false) {
   return rings.some(r => _milesToRing(lat, lng, r) <= edgeMi);
 }
 
+// ── Cal OES California Webcams (public ArcGIS layer, via FEMA open data) ─────
+// Consolidates ALERTCalifornia + ALERTWildfire mountaintop fire cameras (images
+// refresh every ~15 s, 60+ mile views — ideal for watching weather come in),
+// tsunami cameras and others. Traffic cameras are skipped (Caltrans covers
+// those). Cached 30 min; the image links always point at the latest frame.
+const CALOES_LAYER = 'https://services.arcgis.com/BLN4oKB0N1YSgvY8/arcgis/rest/services/CalOES_California_Webcams/FeatureServer/0';
+let _caloes = { list: null, ts: 0, pending: null };
+function _loadCalOES() {
+  if (_caloes.list && Date.now() - _caloes.ts < 30 * 60 * 1000) return Promise.resolve(_caloes.list);
+  if (_caloes.pending) return _caloes.pending;
+  _caloes.pending = (async () => {
+    const out = [];
+    for (let offset = 0, page = 0; page < 10; page++) {
+      const q = `${CALOES_LAYER}/query?where=${encodeURIComponent("CameraType <> 'Traffic'")}&outFields=Location,Source,Source_URL,Display_Type,View_Direction,Webcam_URL,PopUp_URL,NearBy_Place,CameraType,Thumbnail_Url,Camera_ID,OBJECTID`
+        + `&returnGeometry=true&outSR=4326&f=json&resultOffset=${offset}&resultRecordCount=2000`;
+      const j = JSON.parse(await fetchTextOverHttp(q));
+      if (j.error) throw new Error(j.error.message || 'Cal OES query failed');
+      for (const f of j.features || []) {
+        const a = f.attributes || {}, g = f.geometry || {};
+        if (!Number.isFinite(g.x) || !Number.isFinite(g.y)) continue;
+        const url = String(a.Webcam_URL || '').trim(), thumb = String(a.Thumbnail_Url || '').trim();
+        const isHls = /\.m3u8(\?|$)/i.test(url);
+        const isImg = /^https?:\/\//i.test(url) && (/picture/i.test(a.Display_Type || '') || /\.(jpe?g|png|webp)(\?|$)/i.test(url));
+        const img = isImg ? url : (/^https?:\/\//i.test(thumb) ? thumb : null);
+        if (!isHls && !img) continue;
+        out.push({
+          id: 'caloes-' + (a.Camera_ID || a.OBJECTID), name: [a.Location, a.NearBy_Place && a.NearBy_Place !== a.Location ? `(${a.NearBy_Place})` : ''].filter(Boolean).join(' '),
+          lat: g.y, lng: g.x, imageUrl: isHls ? null : img, videoUrl: isHls ? url : null, direction: a.View_Direction || null,
+          source: 'caloes', provider: a.Source || 'Cal OES', pageUrl: a.PopUp_URL || a.Source_URL || null, cameraType: a.CameraType,
+        });
+      }
+      if (!j.exceededTransferLimit || !(j.features || []).length) break;
+      offset += (j.features || []).length;
+    }
+    console.log(`[Cameras] Cal OES: ${out.length} fire/tsunami/other cameras (traffic skipped)`);
+    _caloes.list = out; _caloes.ts = Date.now();
+    return out;
+  })().catch(e => { console.warn('[Cameras] Cal OES failed:', e.message); return _caloes.list || []; })
+      .finally(() => { _caloes.pending = null; });
+  return _caloes.pending;
+}
+
 // ── PennDOT (static images, agreement on file) — data/penndot-cameras.json ──
 let _penndot = null;
 function _loadPennDOT() {
@@ -2468,13 +2510,14 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Find the STATE_DOTS entry for this state, if we have one
     const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
 
-    const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams] = await Promise.all([
+    const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams, calOesCams] = await Promise.all([
       _loadOTC().catch(() => []),
       dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
       REGION ? Promise.resolve([]) : _loadWindy(code).catch(() => []),   // too large to grid-search
       REGION ? Promise.resolve([]) : _loadNPS(code).catch(() => []),
       code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
       community.forState(code).catch(() => []),
+      REGION ? Promise.resolve([]) : _loadCalOES().then(l => l.filter(c => _inState(code, c.lat, c.lng, 2))).catch(() => []),
     ]);
 
     // Drop cameras with impossible coordinates (0,0, swapped lat/lng…). One bad
@@ -2493,7 +2536,7 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     // Deduplicate at 100m so we don't show two cameras from different sources
     // that are essentially at the same location.
     const merged = [...stateDOT];
-    for (const cam of [...communityCams, ...usgsCams, ...npsCams, ...otcForState, ...windyCams]) {
+    for (const cam of [...communityCams, ...usgsCams, ...calOesCams, ...npsCams, ...otcForState, ...windyCams]) {
       const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
       if (!tooClose) merged.push(cam);
     }
