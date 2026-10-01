@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791064800
+// WeatherTV Community Cams — build.1791082800
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -69,6 +69,55 @@ function parseCoord(v, axis) {
   return n;
 }
 
+// "Pat&#39;s Pier &amp; Grill" → "Pat's Pier & Grill" (YouTube search + directory
+// pages send titles HTML-escaped)
+const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘',
+  ldquo: '“', rdquo: '”', hellip: '…', eacute: 'é', egrave: 'è', aacute: 'á', oacute: 'ó', uacute: 'ú', iacute: 'í', ntilde: 'ñ',
+  uuml: 'ü', ouml: 'ö', auml: 'ä', ccedil: 'ç', deg: '°' };
+function decodeEntities(t) {
+  let s = String(t == null ? '' : t);
+  for (let i = 0; i < 2 && /&(#\d+|#x[0-9a-f]+|[a-z]+);/i.test(s); i++) {        // twice: catches "&amp;#39;"
+    s = s.replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (m, e) => {
+      if (e[0] === '#') { const n = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return Number.isFinite(n) ? String.fromCodePoint(n) : m; }
+      return ENT[e.toLowerCase()] ?? m;
+    });
+  }
+  return s;
+}
+
+// Which country is a camera in? From the directory address (/united-kingdom/…)
+// or its title ("…, Maui Hawaii", "… Spain"). Used to keep place lookups in
+// the right country — "Cornwall" exists in England, Canada and Australia.
+const COUNTRY = {
+  'united states': 'us', usa: 'us', 'u.s.a.': 'us', america: 'us', 'united kingdom': 'gb', uk: 'gb', england: 'gb', scotland: 'gb',
+  wales: 'gb', 'northern ireland': 'gb', britain: 'gb', ireland: 'ie', canada: 'ca', mexico: 'mx', japan: 'jp', china: 'cn',
+  taiwan: 'tw', 'hong kong': 'hk', 'south korea': 'kr', korea: 'kr', thailand: 'th', philippines: 'ph', indonesia: 'id', bali: 'id',
+  singapore: 'sg', malaysia: 'my', vietnam: 'vn', india: 'in', nepal: 'np', australia: 'au', 'new zealand': 'nz', fiji: 'fj',
+  'french polynesia': 'pf', netherlands: 'nl', holland: 'nl', belgium: 'be', germany: 'de', france: 'fr', italy: 'it', spain: 'es',
+  portugal: 'pt', switzerland: 'ch', austria: 'at', 'czech republic': 'cz', czechia: 'cz', poland: 'pl', slovenia: 'si', croatia: 'hr',
+  serbia: 'rs', romania: 'ro', hungary: 'hu', greece: 'gr', malta: 'mt', denmark: 'dk', sweden: 'se', norway: 'no', finland: 'fi',
+  iceland: 'is', greenland: 'gl', latvia: 'lv', russia: 'ru', israel: 'il', 'saudi arabia': 'sa', vatican: 'va', 'south africa': 'za',
+  rsa: 'za', namibia: 'na', brazil: 'br', argentina: 'ar', chile: 'cl', 'costa rica': 'cr', honduras: 'hn', jamaica: 'jm',
+  'dominican republic': 'do', 'puerto rico': 'pr', 'us virgin islands': 'vi', 'virgin islands': 'vi', 'british virgin islands': 'vg',
+  'cayman islands': 'ky', 'grand cayman': 'ky', 'turks and caicos': 'tc', barbados: 'bb', aruba: 'aw', curacao: 'cw', bonaire: 'bq',
+  'sint maarten': 'sx', 'saint barthelemy': 'bl', 'st barts': 'bl', anguilla: 'ai', bahamas: 'bs', 'cape verde': 'cv',
+};
+const US_STATES = ['alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware','florida','georgia','hawaii','idaho',
+  'illinois','indiana','iowa','kansas','kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi','missouri',
+  'montana','nebraska','nevada','new hampshire','new jersey','new mexico','new york','north carolina','north dakota','ohio','oklahoma','oregon',
+  'pennsylvania','rhode island','south carolina','south dakota','tennessee','texas','utah','vermont','virginia','washington','west virginia',
+  'wisconsin','wyoming','district of columbia'];
+const US_ABBR = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\b/;
+function countryHint(text, slug) {
+  const sl = String(slug || '').toLowerCase().replace(/-/g, ' ').trim();
+  if (sl && COUNTRY[sl]) return COUNTRY[sl];
+  const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z.\s]/g, ' ').replace(/\s+/g, ' ') + ' ';
+  // longest names first ("british virgin islands" before "virgin islands")
+  for (const name of Object.keys(COUNTRY).sort((a, b) => b.length - a.length)) if (t.includes(' ' + name + ' ')) return COUNTRY[name];
+  if (US_STATES.some(st => t.includes(' ' + st + ' ')) || US_ABBR.test(String(text || ''))) return 'us';
+  return null;
+}
+
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 
 module.exports = function setupCommunityCams(app, deps) {
@@ -82,6 +131,18 @@ module.exports = function setupCommunityCams(app, deps) {
     if (saved && Array.isArray(saved.cams)) db = { ...db, ...saved };
     if (!db.channels) db.channels = {};
     loaded = true;
+    // One-time: fix escaped characters ("&#39;", "&amp;") in names already saved
+    if (!db.namesDecoded) {
+      let fixed = 0;
+      for (const c of [...db.cams, ...db.queue]) {
+        for (const f of ['name', 'channelTitle', 'streamTitle']) {
+          if (c[f] && /&(#\d+|#x[0-9a-f]+|[a-z]+);/i.test(c[f])) { c[f] = decodeEntities(c[f]); fixed++; }
+        }
+      }
+      db.namesDecoded = true;
+      await save();
+      if (fixed) console.log(`[Community] Fixed ${fixed} names with escaped characters (&#39; → ', &amp; → &)`);
+    }
   }
   async function save() { await rSet(STORE_KEY, db); }
 
@@ -160,22 +221,23 @@ module.exports = function setupCommunityCams(app, deps) {
   // Open-Meteo's city search. Limited to the US and its territories.
   const geoCache = new Map();
   let geoChain = Promise.resolve();
-  function geocode(q) {
-    const key = String(q || '').trim().toLowerCase();
+  function geocode(q, cc) {
+    cc = cc ? String(cc).toLowerCase() : '';
+    const key = String(q || '').trim().toLowerCase() + (cc ? '|' + cc : '');
     if (key.length < 3) return Promise.resolve([]);
     if (geoCache.has(key)) return Promise.resolve(geoCache.get(key));
     const job = geoChain.then(async () => {
       let out = [];
       try {
         const txt = await fetchTextOverHttp('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5'
-          + ''
+          + (cc ? `&countrycodes=${cc}` : '')
           + `&q=${encodeURIComponent(q)}`, { 'User-Agent': 'WeatherTV/1.0 (https://watchweathertv.com)', 'Accept-Language': 'en' });
         out = (JSON.parse(txt) || []).map(r => ({ lat: +r.lat, lng: +r.lon, label: r.display_name, source: 'OpenStreetMap' }));
       } catch (_) { /* fall through */ }
       if (!out.length) {
         try {
           const j = JSON.parse(await fetchTextOverHttp(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en&format=json`));
-          out = (j.results || [])
+          out = (j.results || []).filter(r => !cc || String(r.country_code || '').toLowerCase() === cc)
             .map(r => ({ lat: r.latitude, lng: r.longitude, label: [r.name, r.admin1, r.country_code].filter(Boolean).join(', '), source: 'Open-Meteo' }));
         } catch (_) { /* nothing found */ }
       }
@@ -187,6 +249,41 @@ module.exports = function setupCommunityCams(app, deps) {
     });
     geoChain = job.catch(() => {});
     return job;
+  }
+
+  const revCache = new Map();
+  function reverseCountry(lat, lng) {
+    const key = `${lat.toFixed(1)},${lng.toFixed(1)}`;
+    if (revCache.has(key)) return Promise.resolve(revCache.get(key));
+    const job = geoChain.then(async () => {
+      let cc = null;
+      try {
+        const j = JSON.parse(await fetchTextOverHttp(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=5&addressdetails=1&lat=${lat}&lon=${lng}`,
+          { 'User-Agent': 'WeatherTV/1.0 (https://watchweathertv.com)', 'Accept-Language': 'en' }));
+        cc = (j.address && j.address.country_code) || null;
+        if (cc === 'us' && j.address && /puerto rico/i.test(j.address.state || '')) cc = 'pr';
+      } catch (_) {}
+      revCache.set(key, cc);
+      await new Promise(r => setTimeout(r, 1100));
+      return cc;
+    });
+    geoChain = job.catch(() => {});
+    return job;
+  }
+  // The place a camera's own name points to: "Amsterdam: Dam Square" → "Amsterdam"
+  const placeFromName = (c) => decodeEntities(c.name).split(/[:|–—-]\s/)[0].replace(/\b(live|cam|webcam|camera|stream)\b/ig, '').trim();
+  const pageSlug = (c) => { try { const u = new URL(c.page || ''); return u.pathname.split('/').filter(Boolean)[0] || ''; } catch { return ''; } };
+
+  // Place a camera. With a known country, only results IN that country count
+  // (✓ confirmed). Without one, the best guess is used but marked ⚠ check.
+  async function placeIt(place, cc, fallbackPlace) {
+    if (!place || place.length < 3) return { hit: null, confident: false };
+    if (cc) {
+      const hit = (await geocode(place, cc))[0] || (fallbackPlace ? (await geocode(fallbackPlace, cc))[0] : null);
+      return { hit: hit || null, confident: !!hit };
+    }
+    const hit = (await geocode(place))[0] || (fallbackPlace ? (await geocode(fallbackPlace))[0] : null);
+    return { hit: hit || null, confident: false };
   }
 
   // "Ashland, Virginia USA | Virtual Railfan LIVE" → "Ashland, Virginia USA"
@@ -219,9 +316,12 @@ module.exports = function setupCommunityCams(app, deps) {
           const it = byId.get(c.ref);
           if (!it) { c.live = false; c.ended = true; c.lastError = 'Video not found (removed or private)'; }
           else {
+            // Live and embeddable are separate: a live stream whose owner blocks
+            // embedding is still shown — as a live snapshot + "Watch on YouTube"
             c.embeddable = !(it.status && it.status.embeddable === false);
-            c.live = c.embeddable && it.snippet && it.snippet.liveBroadcastContent === 'live';
-            c.lastError = !c.embeddable ? 'The owner does not allow embedding this stream' : c.live ? null : 'Not live on YouTube right now';
+            c.live = !!(it.snippet && it.snippet.liveBroadcastContent === 'live');
+            c.lastError = !c.live ? 'Not live on YouTube right now'
+              : !c.embeddable ? 'Owner blocks embedding — shown as a live snapshot with a Watch on YouTube button' : null;
             if (it.snippet) {
               if (!c.channelTitle) c.channelTitle = it.snippet.channelTitle || '';
               if (!c.channelId) c.channelId = it.snippet.channelId || null;
@@ -352,8 +452,8 @@ module.exports = function setupCommunityCams(app, deps) {
         // Probably a restarted stream of a camera we already have? Leave it to replaceEnded()
         if (db.cams.some(c => c.channelId === channelId && titleSimilarity(c.streamTitle, v.title, v.channelTitle) >= 0.6)) continue;
         const place = placeFromTitle(v.title, v.channelTitle);
-        const hit = place.length >= 3 ? (await geocode(place))[0] : null;
-        db.queue.push({ id: uid(), kind: 'yt-video', ref: id, name: (v.title || '').slice(0, 120), channelTitle: v.channelTitle || '',
+        const { hit, confident } = await placeIt(place, countryHint(v.title));
+        db.queue.push({ id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(v.title).slice(0, 120), channelTitle: decodeEntities(v.channelTitle), confident,
           thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
           source: 'channel', foundAt: Date.now() });
@@ -400,7 +500,7 @@ module.exports = function setupCommunityCams(app, deps) {
       const text = `${sn.title || ''} ${sn.description || ''}`;
       if (!CAM_WORDS.test(text) || NOT_CAM_WORDS.test(text)) continue;
       db.queue.push({
-        id: uid(), kind: 'yt-video', ref: id, name: (sn.title || '').slice(0, 120), channelTitle: sn.channelTitle || '',
+        id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(sn.title).slice(0, 120), channelTitle: decodeEntities(sn.channelTitle), confident: false,
         thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: Number.isFinite(lat) ? lat : null, lng: Number.isFinite(lng) ? lng : null,
         locationGuess: place ? `Near ${place} (from the search — check before approving)` : 'Search area center',
         source: 'discovery', foundAt: Date.now(),
@@ -430,6 +530,13 @@ module.exports = function setupCommunityCams(app, deps) {
 
   // ── Map output ─────────────────────────────────────────────────────────────
   function toCamera(c) {
+    // Owner blocks embedding: YouTube's live thumbnail (refreshes every few
+    // minutes) + a button to watch on YouTube — like the HDOnTap preview cards
+    if (c.kind === 'yt-video' && c.embeddable === false) {
+      return { id: 'comm-' + c.id, name: c.name, lat: c.lat, lng: c.lng, source: 'community', playerUrl: null,
+               imageUrl: `https://i.ytimg.com/vi/${c.ref}/hqdefault_live.jpg`, videoUrl: null, direction: null,
+               pageUrl: `https://www.youtube.com/watch?v=${c.ref}`, provider: 'YouTube', isStreaming: true };
+    }
     const player = c.kind === 'yt-video' ? `https://www.youtube-nocookie.com/embed/${c.ref}?autoplay=1&mute=1&playsinline=1`
       : c.kind === 'yt-channel' ? `https://www.youtube.com/embed/live_stream?channel=${c.ref}&autoplay=1&mute=1`
       : c.kind === 'embed' ? c.ref : null;
@@ -497,7 +604,7 @@ module.exports = function setupCommunityCams(app, deps) {
     const state = stateFor(lat, lng);
     if (!state) throw new Error('Could not work out where that is — check the coordinates');
     const cam = { id: base.id || uid(), kind: base.kind, ref: base.ref, page: base.page || null, preview: base.preview || null, provider: base.provider || null,
-                  name: String(body.name || base.name || base.suggestedName || 'Community camera').slice(0, 120),
+                  name: decodeEntities(String(body.name || base.name || base.suggestedName || 'Community camera')).slice(0, 120),
                   channelTitle: base.channelTitle || '', lat, lng, state, addedAt: Date.now(), source: base.source || 'admin', live: null };
     await checkOne(cam);
     db.cams.push(cam);
@@ -586,10 +693,10 @@ module.exports = function setupCommunityCams(app, deps) {
         let p;
         try { p = await parseUrl(line); } catch (e) { report.push(`✗ ${line.slice(0, 60)} — ${e.message}`); skipped++; continue; }
         if (known(p.ref)) { report.push(`• already listed: ${place || line.slice(0, 40)}`); skipped++; continue; }
-        const hit = place ? (await geocode(place))[0] : null;
+        const { hit, confident } = await placeIt(place, countryHint(place));
         if (!hit) noPlace++;
         db.queue.push({
-          id: uid(), ...p, name: place || 'Imported camera',
+          id: uid(), ...p, name: decodeEntities(place) || 'Imported camera', confident,
           thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : p.kind === 'link' ? p.preview : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `Looked up: ${hit.label}` : (place ? `Couldn't find "${place}" — set it on the map` : 'No place given'),
@@ -611,6 +718,11 @@ module.exports = function setupCommunityCams(app, deps) {
       await load();
       if (!youtubeKey) throw new Error('YOUTUBE_API_KEY not set');
       const raw = String((req.body || {}).channel || '').trim();
+      // This box is for YouTube channels only — point other sites to the right tool
+      if (/^https?:/i.test(raw) && !/^https?:\/\/(www\.|m\.)?youtube\.com\//i.test(raw)) {
+        throw new Error('This box is for YouTube channels (like @VirtualRailfan). For a website that lists cameras, '
+          + 'use "Import every camera from a directory site" below. For a single camera page, use "Add a camera" above');
+      }
       const p = await parseUrl(/^https?:/i.test(raw) ? raw : `https://www.youtube.com/${raw.startsWith('@') ? raw : '@' + raw}`);
       if (p.kind !== 'yt-channel') throw new Error('Give a channel link or @handle');
       const maxPages = Math.min(6, Math.max(1, parseInt((req.body || {}).maxPages || '4', 10) || 4));
@@ -664,9 +776,9 @@ module.exports = function setupCommunityCams(app, deps) {
         if (req._job) req._job.progress = `Placing stream ${++n} of ${found.size}: ${String(v.title || '').slice(0, 60)}`;
         if (known(id)) { skipped++; continue; }
         const place = placeFromTitle(v.title, v.channelTitle);
-        const hit = place.length >= 3 ? (await geocode(place))[0] : null;
+        const { hit, confident } = await placeIt(place, countryHint(v.title));
         db.queue.push({
-          id: uid(), kind: 'yt-video', ref: id, name: (v.title || '').slice(0, 120), channelTitle: v.channelTitle || '',
+          id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(v.title).slice(0, 120), channelTitle: decodeEntities(v.channelTitle), confident,
           thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
           source: 'channel', foundAt: Date.now(),
@@ -735,12 +847,13 @@ module.exports = function setupCommunityCams(app, deps) {
         const country = deslug(segs[0]), city = deslug(segs[1]);
         const fromTitle = text.includes(':') ? text.split(':')[0].trim() : city;
         const place = [fromTitle, country].filter(Boolean).join(', ').replace(/, United States$/, ', USA');
-        const hit = (await geocode(place))[0] || (await geocode([city, country].join(', ')))[0];
+        const cc = countryHint(text, segs[0]);
+        const { hit, confident } = await placeIt(place, cc, [city, country].join(', '));
         db.queue.push({
-          id: uid(), ...p, page: p.page || href, name: text.slice(0, 120),
+          id: uid(), ...p, page: p.page || href, name: decodeEntities(text).slice(0, 120), confident,
           thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
-          locationGuess: hit ? `${place} → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+          locationGuess: hit ? `${place} → ${hit.label}` : `Couldn't place "${place}"${cc ? ' in ' + country : ''} — set it on the map`,
           source: 'import', foundAt: Date.now(),
         });
         queued++;
@@ -754,10 +867,87 @@ module.exports = function setupCommunityCams(app, deps) {
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
+  // ── Check placements: is every camera on the map in the country it should be?
+  background('/api/admin/community/check-placements', async (req, res) => {
+    await load();
+    const job = req._job || {};
+    const issues = []; let checked = 0, unknown = 0;
+    const cams = db.cams.filter(c => !c.placementOk);
+    for (const c of cams) {
+      checked++;
+      job.progress = `Checking ${checked} of ${cams.length}: ${decodeEntities(c.name).slice(0, 50)} · ${issues.length} look misplaced so far`;
+      const expected = countryHint(c.name + ' ' + (c.channelTitle || ''), pageSlug(c));
+      if (!expected) { unknown++; continue; }                 // nothing says which country — can't judge
+      const actual = await reverseCountry(c.lat, c.lng);
+      if (!actual || actual === expected || (expected === 'us' && ['pr', 'vi', 'gu', 'as', 'mp'].includes(actual))) continue;
+      const { hit } = await placeIt(placeFromName(c), expected);
+      issues.push({ id: c.id, name: c.name, lat: c.lat, lng: c.lng, expected, actual,
+                    suggestion: hit ? { lat: hit.lat, lng: hit.lng, label: hit.label } : null });
+    }
+    db.placementReport = { at: Date.now(), issues, checked, unknown };
+    await save();
+    res.json({ ok: true, checked, unknown, issues });
+  });
+  app.get('/api/admin/community/placement-report', async (req, res) => { await load(); res.json(db.placementReport || null); });
+  // Move a camera (from the report or the map picker), or mark its placement as fine
+  app.post('/api/admin/community/move', async (req, res) => {
+    await load();
+    const b = req.body || {};
+    const c = db.cams.find(x => x.id === b.id);
+    if (!c) return res.status(404).json({ error: 'Camera not found' });
+    if (b.ok) c.placementOk = true;
+    else {
+      const lat = parseCoord(b.lat, 'lat'), lng = parseCoord(b.lng, 'lng');
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Bad coordinates' });
+      c.lat = lat; c.lng = lng; c.state = stateFor(lat, lng) || c.state; c.placementOk = true;
+    }
+    if (db.placementReport) db.placementReport.issues = db.placementReport.issues.filter(i => i.id !== c.id);
+    await save();
+    res.json({ ok: true, cam: c });
+  });
+
+  // ── Rejected cameras: which are live right now? (YouTube videos.list, 1 unit / 50)
+  background('/api/admin/community/rejected-check', async (req, res) => {
+    await load();
+    if (!youtubeKey) throw new Error('YOUTUBE_API_KEY not set');
+    const ids = [...new Set(db.rejected.filter(r => /^[A-Za-z0-9_-]{11}$/.test(r)))].filter(id => !db.cams.some(c => c.ref === id));
+    const out = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      if (req._job) req._job.progress = `Asking YouTube about ${Math.min(i + 50, ids.length)} of ${ids.length} rejected videos…`;
+      const batch = ids.slice(i, i + 50);
+      const j = JSON.parse(await fetchTextOverHttp(`https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${batch.join(',')}&key=${encodeURIComponent(youtubeKey)}`));
+      if (j.error) throw new Error(j.error.message || 'YouTube API error');
+      for (const it of j.items || []) {
+        out.push({ ref: it.id, title: decodeEntities(it.snippet.title), channelTitle: decodeEntities(it.snippet.channelTitle),
+                   live: it.snippet.liveBroadcastContent === 'live', embeddable: !(it.status && it.status.embeddable === false) });
+      }
+    }
+    out.sort((a, b) => (b.live - a.live) || a.title.localeCompare(b.title));
+    res.json({ ok: true, total: ids.length, live: out.filter(x => x.live).length, items: out });
+  });
+  // Restore a rejected camera to the review queue (location guessed from its title)
+  app.post('/api/admin/community/unreject', async (req, res) => {
+    await load();
+    const b = req.body || {};
+    const ref = String(b.ref || '');
+    if (!db.rejected.includes(ref)) return res.status(404).json({ error: 'Not in the rejected list' });
+    db.rejected = db.rejected.filter(r => r !== ref);
+    const title = decodeEntities(b.title || 'Restored camera');
+    const place = placeFromTitle(title, b.channelTitle || '');
+    const { hit, confident } = await placeIt(place, countryHint(title));
+    db.queue.push({ id: uid(), kind: 'yt-video', ref, name: title.slice(0, 120), channelTitle: decodeEntities(b.channelTitle || ''), confident,
+      thumb: `https://i.ytimg.com/vi/${ref}/hqdefault_live.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+      locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+      source: 'restored', foundAt: Date.now() });
+    await save();
+    res.json({ ok: true });
+  });
+
   // Approve every queued camera that already has a location (one click after a big import)
   app.post('/api/admin/community/approve-located', async (req, res) => {
     await load();
-    const ready = db.queue.filter(q => Number.isFinite(q.lat) && Number.isFinite(q.lng));
+    const onlyConfirmed = !!(req.body || {}).confirmedOnly;
+    const ready = db.queue.filter(q => Number.isFinite(q.lat) && Number.isFinite(q.lng) && (!onlyConfirmed || q.confident));
     let approved = 0; const failed = [];
     for (const q of ready) {
       try {

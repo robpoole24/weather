@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791064800 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791082800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -653,7 +653,7 @@
         <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Import a channel's live streams</div>
         <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Pulls every stream a channel has live right now (e.g. <strong>@VirtualRailfan</strong>, <strong>@earthcam</strong>), reads the place from each title and queues them. <strong>100 quota units per 50 streams.</strong></div>
         <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
-          <input id="cc-chan" type="text" placeholder="@VirtualRailfan or channel link" style="font-size:0.8rem;margin:0;" size="30">
+          <input id="cc-chan" type="text" placeholder="YouTube channel: @VirtualRailfan or youtube.com/@…" style="font-size:0.8rem;margin:0;" size="30">
           <button class="btn btn-primary btn-sm" id="cc-chan-btn" onclick="ccChannel()">Import channel</button>
         </div>
         <pre id="cc-chan-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
@@ -675,9 +675,26 @@
       <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
         <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.5rem;">
           <div style="font-weight:600;font-size:0.875rem">Review queue <span id="cc-qcount" style="color:var(--muted);font-weight:400"></span></div>
-          <button class="btn btn-ghost btn-sm" onclick="ccApproveLocated()" title="Approve every queued camera that already has a location">✓ Approve all with locations</button>
+          <button class="btn btn-primary btn-sm" onclick="ccApproveLocated(true)" title="Approve only cameras whose location was confirmed in the right country">✓ Approve confirmed only</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccApproveLocated(false)" title="Approve every queued camera that has any location, including ⚠ ones">Approve all with locations</button>
+          <span id="cc-qconf" style="font-size:0.75rem;color:var(--muted)"></span>
         </div>
         <div id="cc-queue" style="display:flex;flex-direction:column;gap:0.6rem;"></div>
+      </div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Check placements</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Looks at every camera on the map, works out which country it should be in (from its source or title) and checks its pin is actually there.
+          About 1 second per camera, so a big list takes several minutes. Cameras you mark "It's fine" (or move) aren't checked again.</div>
+        <button class="btn btn-primary btn-sm" id="cc-pl-btn" onclick="ccCheckPlacements()">Check placements</button>
+        <pre id="cc-pl-status" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0"></pre>
+        <div id="cc-pl-list" style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.4rem"></div>
+
+        <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Rejected cameras</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Asks YouTube which cameras you rejected are live right now (about 1 quota unit per 50), so you can bring back any you turned down by mistake.</div>
+        <button class="btn btn-ghost btn-sm" id="cc-rj-btn" onclick="ccCheckRejected()">Check rejected cameras</button>
+        <pre id="cc-rj-status" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0"></pre>
+        <div id="cc-rj-list" style="display:flex;flex-direction:column;gap:0.35rem;margin-top:0.4rem;max-height:520px;overflow:auto"></div>
       </div>
 
       <div>
@@ -3240,6 +3257,72 @@ async function ccDirectory() {
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;
 }
+// ── Check placements ─────────────────────────────────────────────────────────
+const CC_COUNTRY = { us: 'USA', gb: 'United Kingdom', ca: 'Canada', mx: 'Mexico', jp: 'Japan', es: 'Spain', it: 'Italy', fr: 'France', de: 'Germany',
+  nl: 'Netherlands', au: 'Australia', nz: 'New Zealand', th: 'Thailand', pr: 'Puerto Rico', ie: 'Ireland', jm: 'Jamaica' };
+const ccCountry = (cc) => CC_COUNTRY[cc] || (cc || '?').toUpperCase();
+function ccRenderPlacement(r) {
+  const list = document.getElementById('cc-pl-list');
+  if (!r) { list.innerHTML = ''; return; }
+  document.getElementById('cc-pl-status').textContent = `Last check ${fmtTs(new Date(r.at).toISOString())}: ${r.checked} checked · ${r.unknown} with no country to compare · ${r.issues.length} look misplaced`;
+  list.innerHTML = r.issues.map(i => `
+    <div style="padding:0.5rem 0.6rem;border:1px solid var(--border);border-radius:6px;font-size:0.78rem;">
+      <div><strong>${lvEsc(i.name)}</strong> — should be in <strong>${lvEsc(ccCountry(i.expected))}</strong>, but its pin is in <span style="color:var(--red)">${lvEsc(ccCountry(i.actual))}</span></div>
+      <div style="color:var(--muted)">${i.suggestion ? '📍 Suggested: ' + lvEsc(i.suggestion.label) : 'No suggestion found — pick it on the map'}</div>
+      <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.35rem;align-items:center;">
+        <input id="pl-lat-${i.id}" value="${i.suggestion ? i.suggestion.lat.toFixed(5) : ''}" placeholder="Latitude" size="9" style="font-size:0.76rem;margin:0">
+        <input id="pl-lng-${i.id}" value="${i.suggestion ? i.suggestion.lng.toFixed(5) : ''}" placeholder="Longitude" size="10" style="font-size:0.76rem;margin:0">
+        <button class="btn btn-ghost btn-sm" onclick="ccPickOnMap('pl-lat-${i.id}','pl-lng-${i.id}',null)">🗺 Pick on map</button>
+        <button class="btn btn-primary btn-sm" onclick="ccMove('${i.id}',false)">Move it</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccMove('${i.id}',true)">It's fine</button>
+      </div></div>`).join('');
+}
+async function ccCheckPlacements() {
+  const out = document.getElementById('cc-pl-status'), btn = document.getElementById('cc-pl-btn');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try { const j = await ccRunJob('check-placements', {}, out); ccRenderPlacement({ at: Date.now(), ...j }); }
+  catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccMove(id, ok) {
+  try {
+    await ccPost('move', ok ? { id, ok: true } : { id, lat: v('pl-lat-' + id), lng: v('pl-lng-' + id) });
+    ccRenderPlacement(await (await fetch('/api/admin/community/placement-report')).json());
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
+
+// ── Rejected cameras ─────────────────────────────────────────────────────────
+let _ccRejected = [];
+async function ccCheckRejected() {
+  const out = document.getElementById('cc-rj-status'), btn = document.getElementById('cc-rj-btn');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try {
+    const j = await ccRunJob('rejected-check', {}, out);
+    _ccRejected = j.items;
+    out.textContent = `${j.total} rejected YouTube cameras · ${j.live} are live right now (shown first)`;
+    ccRenderRejected();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+function ccRenderRejected() {
+  document.getElementById('cc-rj-list').innerHTML = _ccRejected.map((r, n) => `
+    <div style="display:flex;gap:0.6rem;align-items:center;font-size:0.78rem;padding:0.3rem 0;border-bottom:1px solid var(--border);">
+      <img src="https://i.ytimg.com/vi/${r.ref}/hqdefault_live.jpg" onerror="this.onerror=null;this.src='https://i.ytimg.com/vi/${r.ref}/hqdefault.jpg'" alt="" style="width:96px;height:54px;object-fit:cover;border-radius:3px;background:#000">
+      <div style="flex:1;min-width:0">
+        <div>${r.live ? '<span style="color:var(--green)">● Live</span>' : '<span style="color:var(--muted)">● Not live</span>'} ${lvEsc(r.title)}</div>
+        <div style="color:var(--muted)">${lvEsc(r.channelTitle)}${r.embeddable ? '' : ' · owner blocks embedding (would show as a snapshot)'}</div>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="https://www.youtube.com/watch?v=${r.ref}" target="_blank" rel="noopener">Open</a>
+      <button class="btn btn-primary btn-sm" onclick="ccUnreject(${n})">Restore to queue</button>
+    </div>`).join('');
+}
+async function ccUnreject(n) {
+  const r = _ccRejected[n];
+  try { await ccPost('unreject', { ref: r.ref, title: r.title, channelTitle: r.channelTitle }); _ccRejected.splice(n, 1); ccRenderRejected(); loadCommunity(); }
+  catch (e) { alert(e.message); }
+}
+
 async function ccChannelAct(action, channelId) {
   if (action === 'remove' && !confirm('Stop watching this channel? Cameras already on the map stay.')) return;
   try {
@@ -3248,10 +3331,10 @@ async function ccChannelAct(action, channelId) {
     loadCommunity();
   } catch (e) { alert(e.message); }
 }
-async function ccApproveLocated() {
-  if (!confirm('Approve every queued camera that already has a location?')) return;
+async function ccApproveLocated(confirmedOnly) {
+  if (!confirm(confirmedOnly ? 'Approve every queued camera whose location was confirmed?' : 'Approve EVERY queued camera that has a location, including ⚠ unconfirmed ones?')) return;
   try {
-    const j = await ccPost('approve-located', {});
+    const j = await ccPost('approve-located', { confirmedOnly: !!confirmedOnly });
     alert(`Approved ${j.approved}.` + (j.failed.length ? `\n\nNot approved:\n${j.failed.slice(0, 20).join('\n')}` : ''));
     loadCommunity();
   } catch (e) { alert(e.message); }
@@ -3323,16 +3406,19 @@ async function loadCommunity() {
       (d.discovery.lastRun ? ', last run ' + fmtTs(new Date(d.discovery.lastRun).toISOString()) : '') :
       'nightly discovery off (set COMMUNITY_DISCOVERY=true to turn on)');
   document.getElementById('cc-qcount').textContent = d.queue.length ? '(' + d.queue.length + ')' : '';
+  const conf = d.queue.filter(q => q.confident && q.lat != null).length;
+  document.getElementById('cc-qconf').textContent = d.queue.length ? `${conf} confirmed · ${d.queue.length - conf} to check` : '';
   const src = { suggestion: '💬 Viewer suggestion', discovery: '🔎 Found by search', admin: 'Added', import: '📋 Imported list', channel: '📺 Channel import' };
   document.getElementById('cc-queue').innerHTML = d.queue.slice(0, 50).map(q => {
     const link = q.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + q.ref : q.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + q.ref + '/live' : q.ref;
     return `<div style="display:flex;gap:0.75rem;align-items:flex-start;padding:0.6rem;border:1px solid var(--border);border-radius:6px;">
-      ${q.thumb ? `<img src="${lvEsc(q.thumb)}" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex:0 0 auto;background:#000">` : ''}
+      ${q.thumb ? `<img src="${lvEsc(q.thumb)}" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex:0 0 auto;background:#000"
+          onerror="const v=(this.src.match(/\/vi\/([\w-]{11})\//)||[])[1];if(v&&!this.dataset.f){this.dataset.f=1;this.src='https://i.ytimg.com/vi/'+v+'/hqdefault_live.jpg'}else if(v&&this.dataset.f==='1'){this.dataset.f=2;this.src='https://i.ytimg.com/vi/'+v+'/hqdefault.jpg'}">` : ''}
       <div style="flex:1;min-width:0;font-size:0.78rem;">
         <div style="color:var(--muted);font-size:0.7rem">${src[q.source] || q.source}${q.channelTitle ? ' · ' + lvEsc(q.channelTitle) : ''}</div>
         <input id="ccq-name-${q.id}" type="text" value="${lvEsc(q.name)}" style="width:100%;font-size:0.8rem;margin:0.2rem 0;">
         ${q.note ? `<div style="color:var(--muted)">Note: ${lvEsc(q.note)}</div>` : ''}
-        ${q.locationGuess ? `<div style="color:var(--gold)">📍 ${lvEsc(q.locationGuess)}</div>` : ''}
+        ${q.locationGuess ? `<div style="color:${q.confident ? 'var(--green)' : 'var(--gold)'}">${q.confident ? '✓ confirmed' : (q.lat != null ? '⚠ check location' : '⚠ needs a location')} · 📍 ${lvEsc(q.locationGuess)}</div>` : ''}
         <div style="display:flex;gap:0.35rem;margin-top:0.35rem;flex-wrap:wrap;align-items:center;">
           <input id="ccq-lat-${q.id}" type="text" value="${q.lat ?? ''}" placeholder="Latitude" size="9" style="font-size:0.78rem;margin:0">
           <input id="ccq-lng-${q.id}" type="text" value="${q.lng ?? ''}" placeholder="Longitude" size="10" style="font-size:0.78rem;margin:0">
@@ -3345,6 +3431,7 @@ async function loadCommunity() {
       </div></div>`;
   }).join('') || '<div style="font-size:0.8rem;color:var(--muted)">Nothing waiting. Search above, or wait for viewer suggestions / nightly discovery.</div>';
   document.getElementById('cc-ccount').textContent = d.cams.length ? '(' + d.cams.length + ')' : '';
+  if (!document.getElementById('cc-pl-list').innerHTML) fetch('/api/admin/community/placement-report').then(r => r.json()).then(r => { if (r) ccRenderPlacement(r); }).catch(() => {});
   const chans = d.channels || [];
   document.getElementById('cc-channels').innerHTML = chans.length ? chans.map(c =>
     `<div style="display:flex;gap:0.5rem;align-items:center;padding:0.3rem 0;border-bottom:1px solid var(--border);">
@@ -3357,11 +3444,14 @@ async function loadCommunity() {
     d.cams.map(c => {
       const link = c.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + c.ref : c.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + c.ref + '/live' : c.ref;
       const why = c.lastError ? ` title="${lvEsc(c.lastError)}"` : '';
-      const st = c.live ? '<span style="color:var(--green)">● Live</span>'
+      const noEmbed = c.embeddable === false || /embedding/i.test(c.lastError || '');
+      const st = c.live && noEmbed ? `<span style="color:var(--green)"${why}>● Live</span> <span style="color:var(--gold);font-size:0.72rem">(snapshot — owner blocks embedding)</span>`
+        : c.live ? '<span style="color:var(--green)">● Live</span>'
         : c.live === false ? (c.visible ? `<span style="color:var(--gold)"${why}>● Offline (recent)</span>` : `<span style="color:var(--red)"${why}>● Offline — hidden</span>`)
         : `<span style="color:var(--muted)"${why}>● Unknown — shown</span>`;
+      const reason = !c.live && c.lastError ? `<div style="font-size:0.7rem;color:var(--muted);max-width:220px">${lvEsc(c.lastError)}</div>` : '';
       const swapped = c.replacements ? ` <span title="The stream ended and was replaced by the channel's new live stream automatically" style="color:var(--accent);font-size:0.7rem">↻ ${c.replacements}</span>` : '';
-      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}${swapped}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}</td>
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}${swapped}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}${reason}</td>
         <td style="${LV_TD}color:var(--muted)">${c.lastChecked ? fmtTs(new Date(c.lastChecked).toISOString()) : '—'}</td>
         <td style="${LV_TD}white-space:nowrap"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>
         <button class="btn btn-ghost btn-sm" onclick="ccAct('check','${c.id}')">Check</button>
