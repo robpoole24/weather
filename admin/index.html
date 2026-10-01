@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791050400 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791064800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -657,6 +657,17 @@
           <button class="btn btn-primary btn-sm" id="cc-chan-btn" onclick="ccChannel()">Import channel</button>
         </div>
         <pre id="cc-chan-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+        <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Import every camera from a directory site</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">For sites that <strong>list</strong> cameras (e.g. <strong>worldcams.tv/cities/</strong>, 13 pages). Reads each listing page, opens every camera
+          and embeds the <strong>original</strong> stream it finds (YouTube, Nest, live video) — not the directory's page. Places come from each camera's title. Takes a few minutes for big lists.</div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-dir" type="text" placeholder="https://worldcams.tv/cities/" style="font-size:0.8rem;margin:0;" size="34">
+          <label style="font-size:0.78rem;color:var(--muted)">Pages <input id="cc-dir-pages" type="number" min="1" max="40" value="1" style="font-size:0.8rem;margin:0;" style="width:60px;font-size:0.8rem;margin:0"></label>
+          <input id="cc-dir-has" type="text" placeholder="Only links containing… (optional)" style="font-size:0.8rem;margin:0;" size="26">
+          <button class="btn btn-primary btn-sm" id="cc-dir-btn" onclick="ccDirectory()">Import directory</button>
+        </div>
+        <pre id="cc-dir-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+
         <div style="font-weight:600;font-size:0.8rem;margin:0.8rem 0 0.3rem">Watched channels <span style="color:var(--muted);font-weight:400">— checked every night for new live streams (~4 quota units each)</span></div>
         <div id="cc-channels" style="font-size:0.78rem;"></div>
       </div>
@@ -3215,6 +3226,16 @@ async function ccChannel() {
   try {
     const j = await ccRunJob('import-channel', { channel: document.getElementById('cc-chan').value }, out);
     out.textContent = `${j.channelTitle}: queued ${j.queued}, skipped ${j.skipped} (already listed) · used ${j.unitsUsed} quota units\n\n` + j.report.join('\n');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccDirectory() {
+  const out = document.getElementById('cc-dir-result'), btn = document.getElementById('cc-dir-btn');
+  btn.disabled = true; out.textContent = 'Starting directory import…';
+  try {
+    const j = await ccRunJob('import-directory', { url: v('cc-dir'), pages: v('cc-dir-pages'), contains: v('cc-dir-has') }, out);
+    out.textContent = `Found ${j.found} camera pages · queued ${j.queued} · already listed ${j.skipped} · no usable player ${j.noPlayer}\n\n` + j.report.join('\n');
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;

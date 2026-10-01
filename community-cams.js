@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791057600
+// WeatherTV Community Cams — build.1791064800
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -681,6 +681,76 @@ module.exports = function setupCommunityCams(app, deps) {
       db.queue = db.queue.slice(-600);
       await save();
       res.json({ ok: true, channelTitle: channelTitle || p.ref, pages, unitsUsed: units, queued, skipped, report: report.slice(0, 300) });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // Directory import: a page that LISTS cameras (e.g. worldcams.tv/cities/,
+  // 13 pages). Reads every listing page, collects the camera links, opens each
+  // one and finds the real player inside (YouTube / Nest / live stream). The
+  // ORIGINAL stream is embedded, not the directory's page. Place comes from the
+  // camera's title ("Amsterdam: Dam Square") + the country/city in its address.
+  background('/api/admin/community/import-directory', async (req, res) => {
+    try {
+      await load();
+      const b = req.body || {};
+      let start; try { start = new URL(String(b.url || '').trim()); } catch { throw new Error('Paste the address of the page that lists the cameras'); }
+      const pages = Math.max(1, Math.min(40, parseInt(b.pages || '1', 10) || 1));
+      const mustContain = String(b.contains || '').trim();
+      const job = req._job || {};
+      const links = new Map();   // url → link text
+      for (let pg = 1; pg <= pages; pg++) {
+        const pu = new URL(start.href);
+        if (pg > 1) pu.searchParams.set('page', String(pg));
+        job.progress = `Reading listing page ${pg} of ${pages}… (${links.size} camera links so far)`;
+        let html;
+        try { html = await fetchTextOverHttp(pu.href); } catch (e) { if (pg === 1) throw new Error("Couldn't open that page: " + e.message); break; }
+        for (const m of html.matchAll(/<a\s[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+          let href; try { href = new URL(m[1], pu.href); } catch { continue; }
+          if (href.hostname !== start.hostname) continue;
+          const segs = href.pathname.split('/').filter(Boolean);
+          const text = m[2].replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&#0?39;|&apos;/g, "'").replace(/\s+/g, ' ').trim();
+          // Camera pages sit deeper than category pages (e.g. /country/city/camera)
+          if (segs.length < 3 || !text || text.length < 3) continue;
+          if (mustContain && !href.href.includes(mustContain)) continue;
+          href.search = ''; href.hash = '';
+          if (!links.has(href.href) || links.get(href.href).length < text.length) links.set(href.href, text);
+        }
+        await new Promise(r => setTimeout(r, 400));
+      }
+      if (!links.size) throw new Error('No camera links found on that page');
+      const deslug = (x) => decodeURIComponent(x || '').replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      let n = 0, queued = 0, skipped = 0, noPlayer = 0;
+      const report = [];
+      for (const [href, text] of links) {
+        n++;
+        job.progress = `Checking camera ${n} of ${links.size}: ${text.slice(0, 60)}`;
+        let p;
+        try {
+          const html = await fetchTextOverHttp(href);
+          p = findPlayerInPage(html, href);
+        } catch (_) { p = null; }
+        if (!p) { noPlayer++; report.push(`– no usable player: ${text}`); continue; }
+        if (known(p.ref)) { skipped++; continue; }
+        const segs = new URL(href).pathname.split('/').filter(Boolean);
+        const country = deslug(segs[0]), city = deslug(segs[1]);
+        const fromTitle = text.includes(':') ? text.split(':')[0].trim() : city;
+        const place = [fromTitle, country].filter(Boolean).join(', ').replace(/, United States$/, ', USA');
+        const hit = (await geocode(place))[0] || (await geocode([city, country].join(', ')))[0];
+        db.queue.push({
+          id: uid(), ...p, page: p.page || href, name: text.slice(0, 120),
+          thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : null,
+          lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+          locationGuess: hit ? `${place} → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
+          source: 'import', foundAt: Date.now(),
+        });
+        queued++;
+        report.push(`${hit ? '✓' : '?'} ${text}`);
+        if (queued % 10 === 0) await save();
+        await new Promise(r => setTimeout(r, 300));
+      }
+      db.queue = db.queue.slice(-800);
+      await save();
+      res.json({ ok: true, found: links.size, queued, skipped, noPlayer, report: report.slice(0, 400) });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
