@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791097200
+// WeatherTV Community Cams — build.1791111600
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -241,6 +241,18 @@ module.exports = function setupCommunityCams(app, deps) {
     return out;
   }
   const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return null; } };
+  // A camera page's MAIN player: the first <iframe>/<video>/player script on
+  // the page, in page order. Directory crawls use this — sidebars of "related
+  // webcams" (links, thumbnails) are other cameras and must not be counted.
+  function findMainPlayer(html, base) {
+    const tags = [...String(html).matchAll(/<(iframe|video|source|script)\b[^>]*\b(?:src|data-src)=["']([^"']+)["'][^>]*>/gi)];
+    for (const t of tags) {
+      const hit = findAllPlayersInPage(t[0], base)[0];
+      if (hit && hit.kind !== 'image') return hit;
+    }
+    // no embedded player tag: a direct stream in a script (but never a still image / thumbnail)
+    return findAllPlayersInPage(html, base).find(p => p.kind === 'hls') || null;
+  }
   const findPlayerInPage = (html, base) => findAllPlayersInPage(html, base)[0] || null;
   // ── Place → coordinates (so nobody has to look up lat/long) ──────────────
   // OpenStreetMap Nominatim: street addresses and landmarks ("Broad St,
@@ -723,6 +735,25 @@ module.exports = function setupCommunityCams(app, deps) {
       res.json({ ok: true, jobId: job.id });
     });
   }
+  app.post('/api/admin/community/job/:id/cancel', (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    job.cancel = true; job.progress = 'Stopping…';
+    res.json({ ok: true });
+  });
+  // Undo one import (by its id), or remove queued imports added in the last N hours
+  app.post('/api/admin/community/queue-clear', async (req, res) => {
+    await load();
+    const b = req.body || {};
+    const before = db.queue.length;
+    if (b.importId) db.queue = db.queue.filter(q => q.importId !== b.importId);
+    else if (b.hours) {
+      const since = Date.now() - Math.max(0.1, Math.min(720, +b.hours)) * 3600 * 1000;
+      db.queue = db.queue.filter(q => !(['import', 'channel'].includes(q.source) && q.foundAt >= since));
+    } else return res.status(400).json({ error: 'Nothing to clear' });
+    await save();
+    res.json({ ok: true, removed: before - db.queue.length, left: db.queue.length });
+  });
   app.get('/api/admin/community/job/:id', (req, res) => {
     const job = jobs.get(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found (the server may have restarted)' });
@@ -861,6 +892,7 @@ module.exports = function setupCommunityCams(app, deps) {
       const pages = Math.max(1, Math.min(300, parseInt(b.pages || '1', 10) || 1));
       const mustContain = String(b.contains || '').trim();
       const job = req._job || {};
+      const importId = job.id || uid();
       const clean = (t) => decodeEntities(String(t || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 
       // 1) Read the listing pages, following the site's own "Next" link
@@ -868,6 +900,7 @@ module.exports = function setupCommunityCams(app, deps) {
       const pageLinks = [];                       // one Map(url → text) per listing page
       let url = start.href;
       for (let pg = 1; pg <= pages && url; pg++) {
+        if (job.cancel) break;
         job.progress = `Reading listing page ${pg} of ${pages}…`;
         let html;
         try { html = await fetchTextOverHttp(url); } catch (e) { if (pg === 1) throw new Error("Couldn't open that page: " + e.message); break; }
@@ -897,16 +930,28 @@ module.exports = function setupCommunityCams(app, deps) {
       const count = new Map(), text = new Map();
       pageLinks.forEach(m => m.forEach((t, h) => { count.set(h, (count.get(h) || 0) + 1); if (!text.has(h) || text.get(h).length < t.length) text.set(h, t); }));
       const n = pageLinks.length;
-      const links = new Map();
+      const cands = [];
       for (const [h, c] of count) {
-        const segs = new URL(h).pathname.split('/').filter(Boolean);
-        const camLike = /cam|webcam|live|stream/i.test(h);
-        const isNav = n >= 3 ? c > n * 0.5 : (segs.length < 3 && !camLike);   // one page: fall back to address depth
-        if (isNav || !segs.length) continue;
-        if (/\/(page|tag|category|author|search|login|signup|privacy|terms|contact|about)(\/|$)/i.test(h)) continue;
-        links.set(h, text.get(h) || segs[segs.length - 1]);
-        if (links.size >= 5000) break;
+        const u = new URL(h);
+        const segs = u.pathname.split('/').filter(Boolean);
+        if (!segs.length) continue;
+        if (n >= 3 && c > n * 0.5) continue;                                  // menus/footers repeat on most pages
+        if (u.searchParams.has('page') || u.searchParams.has('p') || /\/page\/\d+/i.test(u.pathname)) continue;   // page-number links
+        if (u.pathname === start.pathname) continue;
+        if (/\/(page|tag|tags|category|categories|country|countries|region|author|search|login|signup|register|privacy|terms|contact|about|faq|blog|news)(\/|$)/i.test(u.pathname)) continue;
+        cands.push({ h, segs });
       }
+      // Camera links share ONE address pattern (e.g. /webcam/<name>). Group by
+      // shape (first segment + depth) and keep the dominant group(s); scattered
+      // links (countries, tags, ads) fall away.
+      const shape = (x) => (x.segs.length > 1 ? x.segs[0] : '') + '/' + x.segs.length;
+      const groups = new Map();
+      cands.forEach(x => { const k = shape(x); groups.set(k, (groups.get(k) || []).concat([x])); });
+      const sorted = [...groups.values()].sort((a, b) => b.length - a.length);
+      const keep = sorted.filter((g, i) => i === 0 || g.length >= sorted[0].length * 0.25);   // the main pattern (+ any big sibling pattern)
+      const links = new Map();
+      for (const g of keep) for (const x of g) { if (links.size < 6000) links.set(x.h, text.get(x.h) || x.segs[x.segs.length - 1]); }
+      if (n > 1) job.progress = `Found ${links.size} camera links (pattern ${keep.map(g => '/' + shape(g[0])).join(', ')}) across ${n} listing pages`;
 
       // 3) Not a directory? The page itself may hold one or several cameras.
       if (!links.size) {
@@ -915,13 +960,13 @@ module.exports = function setupCommunityCams(app, deps) {
         if (!found.length) throw new Error('No camera links on that page, and no camera player or camera image we recognize on it either');
         const title = clean((html0.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || html0.match(/<title>([^<]+)<\/title>/i) || [])[1] || start.hostname);
         const { hit, confident, place } = await placeFromParts(title, countryHint(title + ' ' + start.hostname));
-        found.forEach((one, i) => db.queue.push({ id: uid(), ...one, name: (found.length > 1 ? `${title} — camera ${i + 1}` : title).slice(0, 120), confident,
+        found.forEach((one, i) => db.queue.push({ id: uid(), importId, ...one, name: (found.length > 1 ? `${title} — camera ${i + 1}` : title).slice(0, 120), confident,
           thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : one.kind === 'image' ? one.ref : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From page title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
           source: 'import', foundAt: Date.now() }));
         await save();
-        return res.json({ ok: true, found: found.length, queued: found.length, skipped: 0, noPlayer: 0,
+        return res.json({ ok: true, importId, found: found.length, queued: found.length, skipped: 0, noPlayer: 0,
           report: [`This page holds ${found.length} camera${found.length > 1 ? 's' : ''} (${[...new Set(found.map(f => f.provider || f.kind))].join(', ')}) — added to the review queue.`] });
       }
 
@@ -930,10 +975,11 @@ module.exports = function setupCommunityCams(app, deps) {
       let i = 0, queued = 0, skipped = 0, noPlayer = 0;
       const report = [];
       for (const [href, txt] of links) {
+        if (job.cancel) { report.unshift('⏹ Stopped by you — everything queued so far is kept (use "Undo this import" to remove it).'); break; }
         i++;
         job.progress = `Checking camera page ${i} of ${links.size} (from ${n} listing pages): ${txt.slice(0, 60)} · ${queued} queued`;
         let found = [], html = '';
-        try { html = await fetchTextOverHttp(href); found = findAllPlayersInPage(html, href); } catch (_) {}
+        try { html = await fetchTextOverHttp(href); const main = findMainPlayer(html, href); found = main ? [main] : []; } catch (_) {}
         if (!found.length) { noPlayer++; if (report.length < 400) report.push(`– no usable player: ${txt}`); continue; }
         const segs = new URL(href).pathname.split('/').filter(Boolean);
         const country = deslug(segs[0]), city = deslug(segs[1]);
@@ -946,7 +992,7 @@ module.exports = function setupCommunityCams(app, deps) {
         if (!pl.hit && city) pl = { ...(await placeIt([city, country].join(', '), cc)), place: [city, country].join(', ') };
         found.forEach((one, k) => {
           if (known(one.ref)) { skipped++; return; }
-          db.queue.push({ id: uid(), ...one, name: (found.length > 1 ? `${name0} — camera ${k + 1}` : name0).slice(0, 120), confident: !!pl.confident,
+          db.queue.push({ id: uid(), importId, ...one, name: (found.length > 1 ? `${name0} — camera ${k + 1}` : name0).slice(0, 120), confident: !!pl.confident,
             thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : one.kind === 'image' ? one.ref : one.kind === 'link' ? one.preview : null,
             lat: pl.hit ? pl.hit.lat : null, lng: pl.hit ? pl.hit.lng : null,
             locationGuess: pl.hit ? `${pl.place} → ${pl.hit.label}` : `Couldn't place "${pl.place || name0}" — set it on the map`,
@@ -959,7 +1005,99 @@ module.exports = function setupCommunityCams(app, deps) {
       }
       db.queue = db.queue.slice(-5000);
       await save();
-      res.json({ ok: true, found: links.size, pagesRead: n, queued, skipped, noPlayer, report });
+      res.json({ ok: true, importId, found: links.size, pagesRead: n, queued, skipped, noPlayer, report });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Fix names & locations for queued cameras ──────────────────────────────
+  // 1) YouTube: each camera's REAL title, description and channel (+ the owner's
+  //    own map location if they set one) — videos.list, 1 unit per 50.
+  // 2) Read the whole title + description for the place: Claude (Haiku) pulls
+  //    out "Rauris, Salzburg, Austria" from marketing-heavy titles. Needs
+  //    ANTHROPIC_API_KEY; without it, the built-in title reader is used.
+  // 3) Confirm with OpenStreetMap in that country. ✓ confirmed only when OSM
+  //    agrees (within ~75 km of the AI's estimate); otherwise ⚠ check.
+  const kmBetween = (a, b, c, d) => { const R = 6371, t = Math.PI / 180, x = (d - b) * t * Math.cos((a + c) / 2 * t), y = (c - a) * t; return R * Math.hypot(x, y); };
+  async function aiExtractPlaces(items) {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) return null;
+    const list = items.map((it, i) => `${i}. TITLE: ${it.title}\n   CHANNEL: ${it.channel || ''}\n   DESCRIPTION: ${String(it.description || '').replace(/\s+/g, ' ').slice(0, 350)}`).join('\n');
+    const prompt = `Each item below is a live webcam. Work out WHERE the camera is: the most specific real place (town/city, or a landmark plus its town), its region/state, and country. Ignore marketing words ("Live", "4K", "Webcam", "Views", "Ski", "Beach" used as descriptions). If you cannot tell, use null.\n\nReply with ONLY a JSON array, one object per item, in order: {"i":0,"place":"Rauris","region":"Salzburg","country_code":"at","lat":47.22,"lon":12.99}\n\n${list}`;
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001', max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!r.ok) throw new Error(`Anthropic API ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    const j = await r.json();
+    const text = (j.content || []).map(c => c.text || '').join('');
+    const arr = JSON.parse(text.slice(text.indexOf('['), text.lastIndexOf(']') + 1));
+    upstreamCount('anthropicPlaceLookups');
+    return Array.isArray(arr) ? arr : null;
+  }
+  background('/api/admin/community/fix-queue', async (req, res) => {
+    try {
+      await load();
+      const job = req._job || {};
+      const onlyUnconfirmed = (req.body || {}).scope !== 'all';
+      const items = db.queue.filter(q => !onlyUnconfirmed || !q.confident);
+      // 1) YouTube truth
+      const yt = items.filter(q => q.kind === 'yt-video');
+      let renamed = 0, geotagged = 0;
+      if (youtubeKey) {
+        for (let i = 0; i < yt.length; i += 50) {
+          if (job.cancel) break;
+          job.progress = `Asking YouTube for the real titles: ${Math.min(i + 50, yt.length)} of ${yt.length}…`;
+          const batch = yt.slice(i, i + 50);
+          const j = JSON.parse(await fetchTextOverHttp(`https://www.googleapis.com/youtube/v3/videos?part=snippet,recordingDetails&id=${batch.map(q => q.ref).join(',')}&key=${encodeURIComponent(youtubeKey)}`));
+          if (j.error) throw new Error(j.error.message || 'YouTube API error');
+          upstreamCount('youtubeVideosCommunity');
+          const by = new Map((j.items || []).map(it => [it.id, it]));
+          for (const q of batch) {
+            const it = by.get(q.ref);
+            if (!it) continue;
+            const t = decodeEntities(it.snippet.title || '');
+            if (t && t !== q.name) { q.name = t.slice(0, 120); renamed++; }
+            q.description = decodeEntities(it.snippet.description || '').slice(0, 600);
+            q.channelTitle = decodeEntities(it.snippet.channelTitle || q.channelTitle || '');
+            const loc = it.recordingDetails && it.recordingDetails.location;
+            if (loc && Number.isFinite(loc.latitude) && Number.isFinite(loc.longitude) && !(loc.latitude === 0 && loc.longitude === 0)) {
+              q.lat = loc.latitude; q.lng = loc.longitude; q.confident = true; q.locationGuess = "The owner's own map location on YouTube"; q.geotagged = true; geotagged++;
+            }
+          }
+        }
+        await save();
+      }
+      // 2 + 3) place each camera that still needs one
+      const todo = items.filter(q => !q.geotagged);
+      let confirmed = 0, guessed = 0, failed = 0, aiUsed = !!process.env.ANTHROPIC_API_KEY;
+      for (let i = 0; i < todo.length; i += 20) {
+        if (job.cancel) break;
+        const batch = todo.slice(i, i + 20);
+        job.progress = `Finding places: ${Math.min(i + 20, todo.length)} of ${todo.length} · ✓ ${confirmed} confirmed · ⚠ ${guessed} to check · ${failed} unknown`;
+        let ai = null;
+        if (aiUsed) { try { ai = await aiExtractPlaces(batch.map(q => ({ title: q.name, channel: q.channelTitle, description: q.description }))); } catch (e) { job.progress += ` (AI: ${e.message})`; ai = null; } }
+        for (let k = 0; k < batch.length; k++) {
+          const q = batch[k];
+          const a = ai && ai.find(x => x && x.i === k);
+          let hit = null, conf = false, label = '';
+          if (a && a.place) {
+            const cc = String(a.country_code || '').toLowerCase() || countryHint(q.name + ' ' + (q.description || ''));
+            const query = [a.place, a.region].filter(Boolean).join(', ');
+            const osm = (await geocode(query, cc))[0] || (await geocode(a.place, cc))[0];
+            if (osm && (!Number.isFinite(a.lat) || kmBetween(osm.lat, osm.lng, a.lat, a.lon) < 75)) { hit = osm; conf = true; label = `${query} → ${osm.label}`; }
+            else if (Number.isFinite(a.lat) && Number.isFinite(a.lon)) { hit = { lat: a.lat, lng: a.lon }; label = `AI estimate for ${query} (OpenStreetMap didn't confirm it — check)`; }
+          } else {
+            const r = await placeFromParts(q.name + (q.description ? ' | ' + q.description.split('\n')[0] : ''), countryHint(q.name + ' ' + (q.description || '')));
+            if (r.hit) { hit = r.hit; conf = !!r.confident; label = `${r.place} → ${r.hit.label}`; }
+          }
+          if (hit) { q.lat = hit.lat; q.lng = hit.lng; q.confident = conf; q.locationGuess = label; conf ? confirmed++ : guessed++; }
+          else { failed++; q.locationGuess = q.locationGuess && /Couldn/.test(q.locationGuess) ? q.locationGuess : "Couldn't work out where this is — set it on the map"; }
+        }
+        if ((i / 20) % 5 === 0) await save();
+      }
+      await save();
+      res.json({ ok: true, checked: items.length, renamed, geotagged, confirmed, guessed, failed, ai: aiUsed });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 

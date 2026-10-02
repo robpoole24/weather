@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791097200 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791111600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -678,7 +678,10 @@
           <button class="btn btn-primary btn-sm" onclick="ccApproveLocated(true)" title="Approve only cameras whose location was confirmed in the right country">✓ Approve confirmed only</button>
           <button class="btn btn-ghost btn-sm" onclick="ccApproveLocated(false)" title="Approve every queued camera that has any location, including ⚠ ones">Approve all with locations</button>
           <span id="cc-qconf" style="font-size:0.75rem;color:var(--muted)"></span>
+          <button class="btn btn-primary btn-sm" id="cc-fix-btn" onclick="ccFixQueue()" title="Gets each camera's real title from YouTube, reads title + description for the place, and confirms it with OpenStreetMap">🧭 Fix names &amp; locations</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccClearRecent()" title="Remove queued cameras that came from imports in the last few hours (approved cameras are not touched)">🧹 Remove recent imports…</button>
         </div>
+        <pre id="cc-fix-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0 0 0.5rem"></pre>
         <div id="cc-queue" style="display:flex;flex-direction:column;gap:0.6rem;"></div>
       </div>
 
@@ -3216,6 +3219,13 @@ function ccPickerUse() {
 async function ccRunJob(path, body, out) {
   const start = await ccPost(path, body);
   if (!start.jobId) return start;                       // older server: finished inline
+  const stop = document.createElement('button');
+  stop.className = 'btn btn-ghost btn-sm'; stop.textContent = '⏹ Stop'; stop.style.marginLeft = '0.5rem';
+  stop.onclick = async () => { stop.disabled = true; await fetch('/api/admin/community/job/' + start.jobId + '/cancel', { method: 'POST' }); };
+  out.insertAdjacentElement('afterend', stop);
+  try { return await ccPoll(start, out); } finally { stop.remove(); }
+}
+async function ccPoll(start, out) {
   for (;;) {
     await new Promise(r => setTimeout(r, 2000));
     let job;
@@ -3253,6 +3263,13 @@ async function ccDirectory() {
   try {
     const j = await ccRunJob('import-directory', { url: v('cc-dir'), pages: v('cc-dir-pages'), contains: v('cc-dir-has') }, out);
     out.textContent = (j.pagesRead ? `Read ${j.pagesRead} listing pages · ` : '') + `Found ${j.found} camera pages · queued ${j.queued} cameras · already listed ${j.skipped} · no usable player ${j.noPlayer}\n\n` + j.report.join('\n');
+    if (j.importId && j.queued) {
+      const undo = document.createElement('button');
+      undo.className = 'btn btn-ghost btn-sm'; undo.textContent = '↶ Undo this import (remove its ' + j.queued + ' queued cameras)';
+      undo.onclick = async () => { if (!confirm('Remove the ' + j.queued + ' cameras this import added to the review queue?')) return;
+        const r = await ccPost('queue-clear', { importId: j.importId }); undo.remove(); out.textContent += '\n\n↶ Removed ' + r.removed + ' queued cameras.'; loadCommunity(); };
+      out.insertAdjacentElement('afterend', undo);
+    }
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;
@@ -3323,6 +3340,24 @@ async function ccUnreject(n) {
   catch (e) { alert(e.message); }
 }
 
+async function ccFixQueue() {
+  const out = document.getElementById('cc-fix-result'), btn = document.getElementById('cc-fix-btn');
+  const all = confirm('Fix names & locations for EVERY queued camera?\n\nOK = all queued cameras\nCancel = only the ones not yet ✓ confirmed');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try {
+    const j = await ccRunJob('fix-queue', { scope: all ? 'all' : 'unconfirmed' }, out);
+    out.textContent = `Checked ${j.checked} · real YouTube titles applied to ${j.renamed} · owner map locations ${j.geotagged} · ✓ ${j.confirmed} confirmed · ⚠ ${j.guessed} to check · ${j.failed} still unknown`
+      + (j.ai ? '' : '\n(Tip: add ANTHROPIC_API_KEY in Railway so titles and descriptions are read by AI — far better at finding the place.)');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccClearRecent() {
+  const h = prompt('Remove queued cameras added by imports in the last how many hours? (Cameras already on the map are not touched.)', '3');
+  if (!h) return;
+  try { const r = await ccPost('queue-clear', { hours: parseFloat(h) }); alert('Removed ' + r.removed + ' queued cameras. ' + r.left + ' left in the queue.'); loadCommunity(); }
+  catch (e) { alert(e.message); }
+}
 async function ccChannelAct(action, channelId) {
   if (action === 'remove' && !confirm('Stop watching this channel? Cameras already on the map stay.')) return;
   try {
