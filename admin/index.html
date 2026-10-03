@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791111600 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791125000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3347,7 +3347,8 @@ async function ccFixQueue() {
   try {
     const j = await ccRunJob('fix-queue', { scope: all ? 'all' : 'unconfirmed' }, out);
     out.textContent = `Checked ${j.checked} · real YouTube titles applied to ${j.renamed} · owner map locations ${j.geotagged} · ✓ ${j.confirmed} confirmed · ⚠ ${j.guessed} to check · ${j.failed} still unknown`
-      + (j.ai ? '' : '\n(Tip: add ANTHROPIC_API_KEY in Railway so titles and descriptions are read by AI — far better at finding the place.)');
+      + (j.placeList === false ? '\n⚠ The world place list (GeoNames) could not be downloaded, so most cameras could not be matched. Check the Railway log for a [Gazetteer] line, then run this again.' : '')
+      + (j.aiStopped ? '\n(The optional AI step stopped: ' + j.aiStopped + ' — everything else still ran.)' : '');
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;

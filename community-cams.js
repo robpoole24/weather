@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791111600
+// WeatherTV Community Cams — build.1791125000
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -121,6 +121,8 @@ function countryHint(text, slug) {
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 
 module.exports = function setupCommunityCams(app, deps) {
+  const gazetteer = require('./gazetteer');
+  setTimeout(() => gazetteer.load(), 20 * 1000).unref?.();   // warm the world place list after startup
   const { rGet, rSet, fetchTextOverHttp, youtubeKey, stateFor, upstreamCount = () => {} } = deps;
   let db = { cams: [], queue: [], rejected: [], lastDiscovery: null, nextPlace: 0, channels: {} };
   let loaded = false;
@@ -352,6 +354,16 @@ module.exports = function setupCommunityCams(app, deps) {
     return t.slice(0, 100);
   }
 
+  // The review queue is never trimmed silently. (Old per-feature limits of
+  // 400/600 cut a 5,000-camera queue down to its newest 400 — gone.) Only if it
+  // ever passes 25,000 are the oldest entries dropped, and that is logged.
+  const QUEUE_MAX = 25000;
+  function trimQueue() {
+    if (db.queue.length <= QUEUE_MAX) return;
+    const drop = db.queue.length - QUEUE_MAX;
+    db.queue = db.queue.slice(drop);
+    console.warn(`[Community] Review queue passed ${QUEUE_MAX} — dropped the ${drop} oldest entries`);
+  }
   const known = (ref) => db.cams.some(c => c.ref === ref) || db.queue.some(q => q.ref === ref) || db.rejected.includes(ref);
 
   // ── Live checks ───────────────────────────────────────────────────────────
@@ -523,7 +535,7 @@ module.exports = function setupCommunityCams(app, deps) {
         queued++;
       }
     }
-    db.queue = db.queue.slice(-600);
+    trimQueue();
     await save();
     return queued;
   }
@@ -570,7 +582,7 @@ module.exports = function setupCommunityCams(app, deps) {
       });
       added++;
     }
-    db.queue = db.queue.slice(-400);
+    trimQueue();
     await save();
     return { found: (j.items || []).length, added };
   }
@@ -644,7 +656,7 @@ module.exports = function setupCommunityCams(app, deps) {
         locationGuess: guess, note: String(note || '').slice(0, 300),
         source: 'suggestion', foundAt: Date.now(),
       });
-      db.queue = db.queue.slice(-400);
+      trimQueue();
       await save();
       res.json({ ok: true, message: 'Thanks! We will review it soon.' });
     } catch (e) { res.status(400).json({ error: e.message }); }
@@ -787,7 +799,7 @@ module.exports = function setupCommunityCams(app, deps) {
         queued++;
         report.push(`${hit ? '✓' : '?'} ${place || '(no place)'}${hit ? ' → ' + hit.label.split(',').slice(0, 3).join(',') : ''}`);
       }
-      db.queue = db.queue.slice(-600);
+      trimQueue();
       await save();
       res.json({ ok: true, queued, skipped, noPlace, report });
     } catch (e) { res.status(400).json({ error: e.message }); }
@@ -872,7 +884,7 @@ module.exports = function setupCommunityCams(app, deps) {
       db.channels[p.ref] = { ...(db.channels[p.ref] || {}), title: channelTitle || p.ref, addedAt: (db.channels[p.ref] || {}).addedAt || Date.now(),
                              lastScan: Date.now(), liveCount: found.size };
       report.unshift(`Now watching this channel — new live streams will be found nightly.`);
-      db.queue = db.queue.slice(-600);
+      trimQueue();
       await save();
       res.json({ ok: true, channelTitle: channelTitle || p.ref, pages, unitsUsed: units, queued, skipped, report: report.slice(0, 300) });
     } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1003,7 +1015,7 @@ module.exports = function setupCommunityCams(app, deps) {
         if (i % 10 === 0) await save();
         await new Promise(r => setTimeout(r, 300));
       }
-      db.queue = db.queue.slice(-5000);
+      trimQueue();
       await save();
       res.json({ ok: true, importId, found: links.size, pagesRead: n, queued, skipped, noPlayer, report });
     } catch (e) { res.status(400).json({ error: e.message }); }
@@ -1058,7 +1070,7 @@ module.exports = function setupCommunityCams(app, deps) {
             if (!it) continue;
             const t = decodeEntities(it.snippet.title || '');
             if (t && t !== q.name) { q.name = t.slice(0, 120); renamed++; }
-            q.description = decodeEntities(it.snippet.description || '').slice(0, 600);
+            q.description = decodeEntities(it.snippet.description || '').slice(0, 300);
             q.channelTitle = decodeEntities(it.snippet.channelTitle || q.channelTitle || '');
             const loc = it.recordingDetails && it.recordingDetails.location;
             if (loc && Number.isFinite(loc.latitude) && Number.isFinite(loc.longitude) && !(loc.latitude === 0 && loc.longitude === 0)) {
@@ -1068,36 +1080,53 @@ module.exports = function setupCommunityCams(app, deps) {
         }
         await save();
       }
-      // 2 + 3) place each camera that still needs one
+      // 2) the world place list (free, instant): read title + description
       const todo = items.filter(q => !q.geotagged);
-      let confirmed = 0, guessed = 0, failed = 0, aiUsed = !!process.env.ANTHROPIC_API_KEY;
-      for (let i = 0; i < todo.length; i += 20) {
+      let confirmed = 0, guessed = 0, failed = 0, aiUsed = false, aiStopped = '';
+      const gzOk = await gazetteer.load();
+      const leftovers = [];
+      todo.forEach((q, n) => {
+        if (n % 200 === 0) job.progress = `Matching titles to the world place list: ${n} of ${todo.length}…`;
+        const text = q.name + ' | ' + String(q.description || '').split('\n').slice(0, 2).join(' ');
+        const g = gzOk ? gazetteer.locate(text, countryHint(q.name + ' ' + (q.description || ''))) : null;
+        if (g && g.confident) { q.lat = g.lat; q.lng = g.lng; q.confident = true; q.locationGuess = 'Place list: ' + g.why; confirmed++; }
+        else leftovers.push({ q, g });
+      });
+      await save();
+      // 3) leftovers: AI (optional — stops at the first billing/credit error), then OpenStreetMap
+      const aiKey = !!process.env.ANTHROPIC_API_KEY && (req.body || {}).useAi !== false;
+      for (let i = 0; i < leftovers.length; i += 20) {
         if (job.cancel) break;
-        const batch = todo.slice(i, i + 20);
-        job.progress = `Finding places: ${Math.min(i + 20, todo.length)} of ${todo.length} · ✓ ${confirmed} confirmed · ⚠ ${guessed} to check · ${failed} unknown`;
+        const batch = leftovers.slice(i, i + 20);
+        job.progress = `Harder cases: ${Math.min(i + 20, leftovers.length)} of ${leftovers.length} · ✓ ${confirmed} confirmed · ⚠ ${guessed} to check · ${failed} unknown${aiStopped ? ' · AI stopped: ' + aiStopped : ''}`;
         let ai = null;
-        if (aiUsed) { try { ai = await aiExtractPlaces(batch.map(q => ({ title: q.name, channel: q.channelTitle, description: q.description }))); } catch (e) { job.progress += ` (AI: ${e.message})`; ai = null; } }
+        if (aiKey && !aiStopped) {
+          try { ai = await aiExtractPlaces(batch.map(({ q }) => ({ title: q.name, channel: q.channelTitle, description: q.description }))); aiUsed = true; }
+          catch (e) { aiStopped = /credit|billing|balance|429|quota/i.test(e.message) ? 'out of credits' : e.message.slice(0, 80); ai = null; }
+        }
         for (let k = 0; k < batch.length; k++) {
-          const q = batch[k];
+          const { q, g } = batch[k];
           const a = ai && ai.find(x => x && x.i === k);
           let hit = null, conf = false, label = '';
           if (a && a.place) {
             const cc = String(a.country_code || '').toLowerCase() || countryHint(q.name + ' ' + (q.description || ''));
             const query = [a.place, a.region].filter(Boolean).join(', ');
             const osm = (await geocode(query, cc))[0] || (await geocode(a.place, cc))[0];
-            if (osm && (!Number.isFinite(a.lat) || kmBetween(osm.lat, osm.lng, a.lat, a.lon) < 75)) { hit = osm; conf = true; label = `${query} → ${osm.label}`; }
-            else if (Number.isFinite(a.lat) && Number.isFinite(a.lon)) { hit = { lat: a.lat, lng: a.lon }; label = `AI estimate for ${query} (OpenStreetMap didn't confirm it — check)`; }
-          } else {
+            if (osm && (!Number.isFinite(a.lat) || kmBetween(osm.lat, osm.lng, a.lat, a.lon) < 75)) { hit = osm; conf = true; label = `AI: ${query} → ${osm.label}`; }
+            else if (Number.isFinite(a.lat) && Number.isFinite(a.lon)) { hit = { lat: a.lat, lng: a.lon }; label = `AI estimate for ${query} (not confirmed — check)`; }
+          }
+          if (!hit && g) { hit = g; label = 'Place list (no country/region in the title to confirm it): ' + g.why; }
+          if (!hit) {
             const r = await placeFromParts(q.name + (q.description ? ' | ' + q.description.split('\n')[0] : ''), countryHint(q.name + ' ' + (q.description || '')));
             if (r.hit) { hit = r.hit; conf = !!r.confident; label = `${r.place} → ${r.hit.label}`; }
           }
           if (hit) { q.lat = hit.lat; q.lng = hit.lng; q.confident = conf; q.locationGuess = label; conf ? confirmed++ : guessed++; }
-          else { failed++; q.locationGuess = q.locationGuess && /Couldn/.test(q.locationGuess) ? q.locationGuess : "Couldn't work out where this is — set it on the map"; }
+          else { failed++; q.locationGuess = "Couldn't work out where this is — set it on the map"; }
         }
         if ((i / 20) % 5 === 0) await save();
       }
       await save();
-      res.json({ ok: true, checked: items.length, renamed, geotagged, confirmed, guessed, failed, ai: aiUsed });
+      res.json({ ok: true, checked: items.length, renamed, geotagged, confirmed, guessed, failed, ai: aiUsed, aiStopped, placeList: gzOk });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
