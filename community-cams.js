@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791146600
+// WeatherTV Community Cams — build.1791153800
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -406,7 +406,12 @@ module.exports = function setupCommunityCams(app, deps) {
               } catch (_) { /* keep the API's answer */ }
             }
             c.live = !!(it.snippet && it.snippet.liveBroadcastContent === 'live');
-            c.lastError = !c.live ? 'Not live on YouTube right now'
+            // A regular upload (tour, timelapse, walking video) has no live-stream
+            // details at all — it is never a webcam, so it is never shown
+            c.recorded = !it.liveStreamingDetails;
+            if (c.recorded) c.live = false;
+            c.lastError = c.recorded ? 'This is a recorded video (a tour/upload, not a live stream) — hidden'
+              : !c.live ? 'Not live on YouTube right now'
               : !c.embeddable ? 'Owner blocks embedding — shown as a live snapshot with a Watch on YouTube button' : null;
             if (it.snippet) {
               if (!c.channelTitle) c.channelTitle = it.snippet.channelTitle || '';
@@ -566,7 +571,7 @@ module.exports = function setupCommunityCams(app, deps) {
       if (db.cams.length) console.log(`[Community] live check: ${live}/${db.cams.length} live` + (unknown ? `, ${unknown} unknown` : ''));
     } finally { checking = false; }
   }
-  const visible = (c) => c.live !== false || (c.lastLive && Date.now() - c.lastLive < HIDE_AFTER_OFFLINE_MS);
+  const visible = (c) => !c.recorded && (c.live !== false || (c.lastLive && Date.now() - c.lastLive < HIDE_AFTER_OFFLINE_MS));
 
   // A search result is placed from ITS OWN title + description — YouTube
   // returns live cams from anywhere for "New Orleans live cam", so the search
@@ -806,6 +811,7 @@ module.exports = function setupCommunityCams(app, deps) {
     try {
       await load();
       const lines = String((req.body || {}).text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 400);
+      const importId = (req._job && req._job.id) || uid();
       let place = '', queued = 0, skipped = 0, noPlace = 0;
       const report = [];
       const totalLinks = lines.filter(l => /^https?:\/\//i.test(l)).length;
@@ -818,7 +824,7 @@ module.exports = function setupCommunityCams(app, deps) {
         const { hit, confident } = await placeIt(place, countryHint(place));
         if (!hit) noPlace++;
         db.queue.push({
-          id: uid(), ...p, name: decodeEntities(place) || 'Imported camera', confident,
+          id: uid(), importId, ...p, name: decodeEntities(place) || 'Imported camera', confident,
           thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : p.kind === 'link' ? p.preview : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `Looked up: ${hit.label}` : (place ? `Couldn't find "${place}" — set it on the map` : 'No place given'),
@@ -829,7 +835,11 @@ module.exports = function setupCommunityCams(app, deps) {
       }
       trimQueue();
       await save();
-      res.json({ ok: true, queued, skipped, noPlace, report });
+      let dropped = { recorded: 0, ended: 0, gone: 0 };
+      try { dropped = await dropRecordedFromQueue(importId, req._job); } catch (_) {}
+      const droppedN = dropped.recorded + dropped.ended + dropped.gone;
+      if (droppedN) report.unshift(`🎞 Removed ${droppedN} that aren't live webcams (${dropped.recorded} recorded videos, ${dropped.ended} long-ended streams, ${dropped.gone} deleted/private)`);
+      res.json({ ok: true, queued: queued - droppedN, skipped, noPlace, report });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
@@ -1045,7 +1055,74 @@ module.exports = function setupCommunityCams(app, deps) {
       }
       trimQueue();
       await save();
-      res.json({ ok: true, importId, found: links.size, pagesRead: n, queued, skipped, noPlayer, report });
+      // keep only live streams: tours / walking videos / old ended streams are dropped
+      let dropped = { recorded: 0, ended: 0, gone: 0 };
+      try { dropped = await dropRecordedFromQueue(importId, job); } catch (e) { report.unshift('(Could not check for recorded videos: ' + e.message + ')'); }
+      const droppedN = dropped.recorded + dropped.ended + dropped.gone;
+      if (droppedN) report.unshift(`🎞 Removed ${droppedN} that aren't live webcams (${dropped.recorded} recorded videos, ${dropped.ended} long-ended streams, ${dropped.gone} deleted/private)`);
+      res.json({ ok: true, importId, found: links.size, pagesRead: n, queued: queued - droppedN, skipped, noPlayer, dropped, report });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Recorded videos vs live streams ────────────────────────────────────────
+  // YouTube marks every live stream (current or past) with liveStreamingDetails;
+  // regular uploads (tours, walking videos, timelapses) have none.
+  //   'live'     — streaming now (or scheduled)
+  //   'ended'    — was a live stream, finished long ago (no restart found)
+  //   'recorded' — a regular upload: never a webcam
+  async function ytStreamKinds(ids) {
+    const out = new Map();
+    if (!youtubeKey) return out;
+    for (let i = 0; i < ids.length; i += 50) {
+      const batch = ids.slice(i, i + 50);
+      const j = JSON.parse(await fetchTextOverHttp(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${batch.join(',')}&key=${encodeURIComponent(youtubeKey)}`));
+      if (j.error) throw new Error(j.error.message || 'YouTube API error');
+      upstreamCount('youtubeVideosCommunity');
+      for (const it of j.items || []) {
+        const lbc = it.snippet && it.snippet.liveBroadcastContent;
+        const lsd = it.liveStreamingDetails;
+        const endedAt = lsd && lsd.actualEndTime ? Date.parse(lsd.actualEndTime) : 0;
+        out.set(it.id, !lsd ? 'recorded' : (lbc === 'live' || lbc === 'upcoming') ? 'live'
+          : (endedAt && Date.now() - endedAt > 7 * 86400 * 1000) ? 'ended' : 'live');   // ended within a week: may restart
+      }
+      batch.forEach(id => { if (!out.has(id)) out.set(id, 'gone'); });   // deleted / private
+    }
+    return out;
+  }
+  // Drop recorded/ended/gone YouTube videos from the queue (optionally one import only)
+  async function dropRecordedFromQueue(importId, job) {
+    const qs = db.queue.filter(q => q.kind === 'yt-video' && (!importId || q.importId === importId));
+    if (!qs.length || !youtubeKey) return { recorded: 0, ended: 0, gone: 0 };
+    if (job) job.progress = `Checking ${qs.length} YouTube videos: live streams or recorded videos?`;
+    const kinds = await ytStreamKinds([...new Set(qs.map(q => q.ref))]);
+    const counts = { recorded: 0, ended: 0, gone: 0 };
+    db.queue = db.queue.filter(q => {
+      if (q.kind !== 'yt-video' || (importId && q.importId !== importId)) return true;
+      const k = kinds.get(q.ref);
+      if (k && k !== 'live') { counts[k]++; if (k === 'recorded') db.rejected.push(q.ref); return false; }
+      return true;
+    });
+    db.rejected = [...new Set(db.rejected)].slice(-20000);
+    await save();
+    return counts;
+  }
+  // One-time cleanup: queue + map
+  background('/api/admin/community/drop-recorded', async (req, res) => {
+    try {
+      await load();
+      const job = req._job || {};
+      const q = await dropRecordedFromQueue(null, job);
+      job.progress = 'Checking cameras on the map…';
+      const camIds = [...new Set(db.cams.filter(c => c.kind === 'yt-video').map(c => c.ref))];
+      const kinds = await ytStreamKinds(camIds);
+      const removed = [];
+      db.cams = db.cams.filter(c => {
+        if (c.kind === 'yt-video' && kinds.get(c.ref) === 'recorded') { removed.push(c.name); db.rejected.push(c.ref); return false; }
+        return true;
+      });
+      db.rejected = [...new Set(db.rejected)];
+      await save();
+      res.json({ ok: true, queue: q, mapRemoved: removed.length, examples: removed.slice(0, 25) });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 

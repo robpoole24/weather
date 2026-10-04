@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791146600 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791153800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -679,6 +679,7 @@
           <button class="btn btn-ghost btn-sm" onclick="ccApproveLocated(false)" title="Approve every queued camera that has any location, including ⚠ ones">Approve all with locations</button>
           <span id="cc-qconf" style="font-size:0.75rem;color:var(--muted)"></span>
           <button class="btn btn-primary btn-sm" id="cc-fix-btn" onclick="ccFixQueue()" title="Gets each camera's real title from YouTube, reads title + description for the place, and confirms it with OpenStreetMap">🧭 Fix names &amp; locations</button>
+          <button class="btn btn-ghost btn-sm" id="cc-rec-btn" onclick="ccDropRecorded()" title="Removes YouTube videos that aren't live streams (tours, walking videos, timelapses) from the queue and the map">🎞 Remove recorded videos</button>
           <button class="btn btn-ghost btn-sm" onclick="ccClearRecent()" title="Remove queued cameras that came from imports in the last few hours (approved cameras are not touched)">🧹 Remove recent imports…</button>
         </div>
         <pre id="cc-fix-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0 0 0.5rem"></pre>
@@ -3357,6 +3358,18 @@ async function ccFixQueue() {
     out.textContent = `Checked ${j.checked} · real YouTube titles applied to ${j.renamed} · owner map locations ${j.geotagged} · ✓ ${j.confirmed} confirmed · ⚠ ${j.guessed} to check · ${j.failed} still unknown`
       + (j.placeList === false ? '\n⚠ The world place list (GeoNames) could not be downloaded, so most cameras could not be matched. Check the Railway log for a [Gazetteer] line, then run this again.' : '')
       + (j.aiStopped ? '\n(The optional AI step stopped: ' + j.aiStopped + ' — everything else still ran.)' : '');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccDropRecorded() {
+  if (!confirm('Check every YouTube camera in the queue and on the map, and remove the ones that are recorded videos (tours, walking videos, timelapses) rather than live streams?')) return;
+  const out = document.getElementById('cc-fix-result'), btn = document.getElementById('cc-rec-btn');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try {
+    const j = await ccRunJob('drop-recorded', {}, out);
+    out.textContent = `Queue: removed ${j.queue.recorded} recorded videos, ${j.queue.ended} long-ended streams, ${j.queue.gone} deleted/private · Map: removed ${j.mapRemoved} recorded videos`
+      + (j.examples.length ? '\nRemoved from the map: ' + j.examples.join(' · ') : '') + '\n(Removed videos go to your rejected list, so imports won\'t bring them back.)';
     loadCommunity();
   } catch (e) { out.textContent = '✗ ' + e.message; }
   btn.disabled = false;
