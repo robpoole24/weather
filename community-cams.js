@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791125000
+// WeatherTV Community Cams — build.1791132200
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -54,7 +54,7 @@ const DISCOVERY_PLACES = [
   ['Cleveland, OH', 41.50, -81.69], ['Buffalo, NY', 42.89, -78.88], ['Pittsburgh, PA', 40.44, -80.00],
   ['Nashville, TN', 36.16, -86.78], ['Atlanta, GA', 33.75, -84.39], ['Jacksonville, FL', 30.33, -81.66],
 ];
-const CAM_WORDS = /\b(cam|webcam|live ?view|live ?stream|beach|pier|harbou?r|marina|downtown|main street|skyline|traffic|weather|port|bay|lake|river|boardwalk|surf|island)\b/i;
+const CAM_WORDS = /\b(cam|webcam|live ?view|live ?stream|beach|pier|harbou?r|marina|downtown|main street|skyline|traffic|weather|port|bay|lake|river|boardwalk|surf|island|wildlife|waterhole|safari|volcano|mountain|ski)\b|en vivo|ao vivo|en direct|in diretta|c[aá]mara|cam[eé]ra|kamera|telecamera|panor[aá]mic|vista|playa|plage|spiaggia|strand|praia/i;
 const NOT_CAM_WORDS = /\b(music|lofi|lo-fi|gaming|gameplay|sermon|church service|podcast|radio|asmr|news|press conference|concert|dj set)\b/i;
 
 // "42.9375° N", "87.9969 W", "-87.99", 42.9 → signed decimal degrees
@@ -101,6 +101,17 @@ const COUNTRY = {
   'dominican republic': 'do', 'puerto rico': 'pr', 'us virgin islands': 'vi', 'virgin islands': 'vi', 'british virgin islands': 'vg',
   'cayman islands': 'ky', 'grand cayman': 'ky', 'turks and caicos': 'tc', barbados: 'bb', aruba: 'aw', curacao: 'cw', bonaire: 'bq',
   'sint maarten': 'sx', 'saint barthelemy': 'bl', 'st barts': 'bl', anguilla: 'ai', bahamas: 'bs', 'cape verde': 'cv',
+  kenya: 'ke', tanzania: 'tz', uganda: 'ug', rwanda: 'rw', botswana: 'bw', zambia: 'zm', zimbabwe: 'zw', morocco: 'ma', egypt: 'eg',
+  tunisia: 'tn', mauritius: 'mu', seychelles: 'sc', madagascar: 'mg', 'united arab emirates': 'ae', uae: 'ae', dubai: 'ae', qatar: 'qa',
+  jordan: 'jo', lebanon: 'lb', turkey: 'tr', cyprus: 'cy', armenia: 'am', ukraine: 'ua', estonia: 'ee', lithuania: 'lt',
+  bulgaria: 'bg', slovakia: 'sk', bosnia: 'ba', montenegro: 'me', albania: 'al', 'north macedonia': 'mk', luxembourg: 'lu', monaco: 'mc',
+  liechtenstein: 'li', andorra: 'ad', 'san marino': 'sm', cambodia: 'kh', laos: 'la', myanmar: 'mm', 'sri lanka': 'lk', maldives: 'mv',
+  mongolia: 'mn', peru: 'pe', colombia: 'co', ecuador: 'ec', bolivia: 'bo', uruguay: 'uy', paraguay: 'py', venezuela: 've', panama: 'pa',
+  nicaragua: 'ni', guatemala: 'gt', belize: 'bz', 'el salvador': 'sv', cuba: 'cu', haiti: 'ht', 'trinidad and tobago': 'tt', grenada: 'gd',
+  'saint lucia': 'lc', 'st lucia': 'lc', antigua: 'ag', dominica: 'dm', 'st kitts': 'kn', bermuda: 'bm', guam: 'gu', samoa: 'ws', tonga: 'to',
+  'cook islands': 'ck', 'new caledonia': 'nc', tahiti: 'pf', 'faroe islands': 'fo', 'isle of man': 'im', jersey: 'je', guernsey: 'gg', gibraltar: 'gi',
+  'canary islands': 'es', tenerife: 'es', mallorca: 'es', majorca: 'es', ibiza: 'es', sardinia: 'it', sicily: 'it', corsica: 'fr', crete: 'gr',
+  'mexico city': 'mx', yucatan: 'mx', 'quintana roo': 'mx', 'baja california': 'mx',
 };
 const US_STATES = ['alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware','florida','georgia','hawaii','idaho',
   'illinois','indiana','iowa','kansas','kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi','missouri',
@@ -557,8 +568,25 @@ module.exports = function setupCommunityCams(app, deps) {
   }
   const visible = (c) => c.live !== false || (c.lastLive && Date.now() - c.lastLive < HIDE_AFTER_OFFLINE_MS);
 
+  // A search result is placed from ITS OWN title + description — YouTube
+  // returns live cams from anywhere for "New Orleans live cam", so the search
+  // area means nothing. No clue in the title → no location (flagged for you).
+  async function placeDiscovered(sn, searchedPlace) {
+    const text = decodeEntities(`${sn.title || ''} | ${String(sn.description || '').split('\n')[0]}`);
+    const cc = countryHint(text);
+    const g = gazetteer.locate(text, cc);
+    if (g) return { lat: g.lat, lng: g.lng, confident: !!g.confident, locationGuess: 'From the title: ' + g.why };
+    if (cc) {   // the title names a country but no town we know: ask OpenStreetMap inside that country
+      const r = await placeFromParts(decodeEntities(sn.title || ''), cc);
+      if (r.hit) return { lat: r.hit.lat, lng: r.hit.lng, confident: !!r.confident, locationGuess: `From the title "${r.place}" → ${r.hit.label}` };
+    }
+    return { lat: null, lng: null, confident: false,
+             locationGuess: `The title doesn't say where this is (found while searching ${searchedPlace || 'YouTube'}) — set it on the map, or run 🧭 Fix names & locations` };
+  }
+
   // ── Discovery (YouTube Data API: 100 units per search) ───────────────────
   async function discover({ place, lat, lng, radiusKm }) {
+    await gazetteer.load();
     if (!youtubeKey) throw new Error('YOUTUBE_API_KEY not set');
     const q = place ? `${place} live cam` : 'live cam';
     let url = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&eventType=live&maxResults=25'
@@ -576,8 +604,7 @@ module.exports = function setupCommunityCams(app, deps) {
       if (!CAM_WORDS.test(text) || NOT_CAM_WORDS.test(text)) continue;
       db.queue.push({
         id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(sn.title).slice(0, 120), channelTitle: decodeEntities(sn.channelTitle), confident: false,
-        thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: Number.isFinite(lat) ? lat : null, lng: Number.isFinite(lng) ? lng : null,
-        locationGuess: place ? `Near ${place} (from the search — check before approving)` : 'Search area center',
+        thumb: `https://i.ytimg.com/vi/${id}/hqdefault_live.jpg`, ...(await placeDiscovered(sn, place)),
         source: 'discovery', foundAt: Date.now(),
       });
       added++;
@@ -1082,6 +1109,7 @@ module.exports = function setupCommunityCams(app, deps) {
       }
       // 2) the world place list (free, instant): read title + description
       const todo = items.filter(q => !q.geotagged);
+      todo.forEach(q => { q.locationGuessWas = q.locationGuess; });
       let confirmed = 0, guessed = 0, failed = 0, aiUsed = false, aiStopped = '';
       const gzOk = await gazetteer.load();
       const leftovers = [];
@@ -1121,7 +1149,12 @@ module.exports = function setupCommunityCams(app, deps) {
             if (r.hit) { hit = r.hit; conf = !!r.confident; label = `${r.place} → ${r.hit.label}`; }
           }
           if (hit) { q.lat = hit.lat; q.lng = hit.lng; q.confident = conf; q.locationGuess = label; conf ? confirmed++ : guessed++; }
-          else { failed++; q.locationGuess = "Couldn't work out where this is — set it on the map"; }
+          else {
+            failed++;
+            q.locationGuess = "Couldn't work out where this is — set it on the map";
+            // a pin that only came from WHERE A SEARCH RAN is not a location — clear it
+            if (q.source === 'discovery' || /from the search|search area/i.test(String(q.locationGuessWas || ''))) { q.lat = null; q.lng = null; }
+          }
         }
         if ((i / 20) % 5 === 0) await save();
       }
