@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-02 build.1791125000 -->
+<!-- WeatherTV Admin — updated 2026-10-02 build.1791146600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -701,7 +701,14 @@
       </div>
 
       <div>
-        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.5rem">On the map <span id="cc-ccount" style="color:var(--muted);font-weight:400"></span></div>
+        <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+          <div style="font-weight:600;font-size:0.875rem">On the map <span id="cc-ccount" style="color:var(--muted);font-weight:400"></span></div>
+          <input id="cc-cam-filter" type="search" placeholder="Search cameras (name, state, region…)" oninput="ccRenderCams()" style="flex:1;min-width:220px;font-size:0.8rem;margin:0;">
+          <select id="cc-cam-sort" onchange="ccRenderCams()" style="font-size:0.78rem;margin:0;width:auto">
+            <option value="newest">Newest approved first</option><option value="name">Name A–Z</option><option value="state">State / region</option>
+          </select>
+          <span id="cc-cam-count" style="font-size:0.74rem;color:var(--muted)"></span>
+        </div>
         <div id="cc-cams" style="overflow-x:auto;"></div>
       </div>
     </div>
@@ -3212,6 +3219,7 @@ function ccPickerUse() {
   document.getElementById(_ccTarget.latId).value = p.lat.toFixed(5);
   document.getElementById(_ccTarget.lngId).value = p.lng.toFixed(5);
   document.getElementById('cc-picker').style.display = 'none';
+  if (typeof _ccTarget.onUse === 'function') _ccTarget.onUse(p.lat, p.lng);
 }
 
 // Imports run as background jobs (big ones take minutes — longer than
@@ -3359,6 +3367,65 @@ async function ccClearRecent() {
   try { const r = await ccPost('queue-clear', { hours: parseFloat(h) }); alert('Removed ' + r.removed + ' queued cameras. ' + r.left + ' left in the queue.'); loadCommunity(); }
   catch (e) { alert(e.message); }
 }
+let _ccCams = [];
+// The "On the map" table, filtered by the search box (name, state/region, channel)
+function ccRenderCams() {
+  const f = (document.getElementById('cc-cam-filter') || {}).value || '';
+  const terms = f.toLowerCase().split(/\s+/).filter(Boolean);
+  const sortBy = (document.getElementById('cc-cam-sort') || {}).value || 'newest';
+  const list = _ccCams.filter(c => { const hay = [c.name, c.state, c.channelTitle, c.provider, c.placedBy].join(' ').toLowerCase(); return terms.every(t => hay.includes(t)); })
+    .sort(sortBy === 'name' ? (a, b) => String(a.name).localeCompare(String(b.name))
+        : sortBy === 'state' ? (a, b) => String(a.state).localeCompare(String(b.state)) || String(a.name).localeCompare(String(b.name))
+        : (a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  const note = document.getElementById('cc-cam-count');
+  if (note) note.textContent = terms.length ? `${list.length} match${list.length === 1 ? '' : 'es'}` + (list.length > 300 ? ' (showing the first 300)' : '') : (list.length > 300 ? 'showing the first 300 — search to find others' : '');
+  document.getElementById('cc-cams').innerHTML = list.length ? `<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+    <thead><tr style="background:var(--surface2)"><th style="${LV_TD}text-align:left">Camera</th><th style="${LV_TD}text-align:left">Approved</th><th style="${LV_TD}text-align:left">Located at</th><th style="${LV_TD}text-align:left">Status</th><th style="${LV_TD}"></th></tr></thead><tbody>` +
+    list.slice(0, 300).map(c => {
+      const link = c.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + c.ref : c.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + c.ref + '/live' : c.ref;
+      const why = c.lastError ? ` title="${lvEsc(c.lastError)}"` : '';
+      const noEmbed = c.embeddable === false || /embedding/i.test(c.lastError || '');
+      const st = c.live && noEmbed ? `<span style="color:var(--green)"${why}>● Live</span> <span style="color:var(--gold);font-size:0.72rem">(snapshot — owner blocks embedding)</span>`
+        : c.live ? '<span style="color:var(--green)">● Live</span>'
+        : c.live === false ? (c.visible ? `<span style="color:var(--gold)"${why}>● Offline (recent)</span>` : `<span style="color:var(--red)"${why}>● Offline — hidden</span>`)
+        : `<span style="color:var(--muted)"${why}>● Unknown — shown</span>`;
+      const reason = !c.live && c.lastError ? `<div style="font-size:0.7rem;color:var(--muted);max-width:220px">${lvEsc(c.lastError)}</div>` : '';
+      const swapped = c.replacements ? ` <span title="The stream ended and was replaced by the channel's new live stream automatically" style="color:var(--accent);font-size:0.7rem">↻ ${c.replacements}</span>` : '';
+      const lat = (+c.lat).toFixed(4), lng = (+c.lng).toFixed(4);
+      const osm = `https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lng}#map=13/${c.lat}/${c.lng}`;
+      const placed = `<div><a href="${osm}" target="_blank" rel="noopener" title="See this spot on OpenStreetMap" style="color:var(--accent);text-decoration:none">📍 ${lat}, ${lng}</a> <span style="color:var(--muted)">· ${lvEsc(c.state)}</span></div>`
+        + `<div style="font-size:0.7rem;color:var(--muted);max-width:300px">${c.placedBy ? lvEsc(c.placedBy) : 'Approved before placement notes were kept'}</div>`;
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}min-width:190px">${lvEsc(c.name)}${swapped}</td>
+        <td style="${LV_TD}color:var(--muted);white-space:nowrap">${c.addedAt ? fmtTs(new Date(c.addedAt).toISOString()) : '—'}</td>
+        <td style="${LV_TD}min-width:260px">${placed}</td><td style="${LV_TD}">${st}${reason}</td>
+        <td style="${LV_TD}"><div style="display:flex;flex-wrap:wrap;gap:0.25rem;max-width:230px"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>
+        <button class="btn btn-ghost btn-sm" onclick="ccAct('check','${c.id}')">Check</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccEditCam('${c.id}')" title="Fix this camera's location on the map">📍 Move</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccUnapprove('${c.id}')" title="Take it off the map and back into the review queue">↩ Back to queue</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccAct('remove','${c.id}')">Remove</button></div></td></tr>`;
+    }).join('') + '</tbody></table>' : (_ccCams.length ? '<div style="font-size:0.8rem;color:var(--muted)">No cameras match that search.</div>' : '<div style="font-size:0.8rem;color:var(--muted)">No community cameras yet.</div>');
+}
+// 📍 Move: fix an approved camera's location on the map — saved right away
+function ccEditCam(id) {
+  const c = _ccCams.find(x => x.id === id); if (!c) return;
+  let la = document.getElementById('cc-edit-lat'), lo = document.getElementById('cc-edit-lng');
+  if (!la) { la = document.createElement('input'); la.type = 'hidden'; la.id = 'cc-edit-lat'; document.body.appendChild(la);
+             lo = document.createElement('input'); lo.type = 'hidden'; lo.id = 'cc-edit-lng'; document.body.appendChild(lo); }
+  la.value = c.lat; lo.value = c.lng;
+  ccPickOnMap('cc-edit-lat', 'cc-edit-lng', null).then(() => {
+    document.getElementById('cc-picker-q').value = c.name;
+    _ccTarget.onUse = async (lat, lng) => {
+      try { await ccPost('move', { id, lat, lng }); loadCommunity(); }
+      catch (e) { alert('Could not save: ' + e.message); }
+    };
+  });
+}
+async function ccUnapprove(id) {
+  const c = _ccCams.find(x => x.id === id);
+  if (!confirm('Take "' + (c ? c.name : 'this camera') + '" off the map and put it back in the review queue?')) return;
+  try { await ccPost('unapprove', { id }); loadCommunity(); } catch (e) { alert(e.message); }
+}
+
 async function ccChannelAct(action, channelId) {
   if (action === 'remove' && !confirm('Stop watching this channel? Cameras already on the map stay.')) return;
   try {
@@ -3476,24 +3543,8 @@ async function loadCommunity() {
        <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('rescan','${c.id}')">Check now</button>
        <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('remove','${c.id}')">Stop watching</button></div>`).join('')
     : '<span style="color:var(--muted)">None yet — channels you import are watched automatically.</span>';
-  document.getElementById('cc-cams').innerHTML = d.cams.length ? `<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
-    <thead><tr style="background:var(--surface2)"><th style="${LV_TD}text-align:left">Camera</th><th style="${LV_TD}text-align:left">State</th><th style="${LV_TD}text-align:left">Status</th><th style="${LV_TD}text-align:left">Checked</th><th style="${LV_TD}"></th></tr></thead><tbody>` +
-    d.cams.map(c => {
-      const link = c.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + c.ref : c.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + c.ref + '/live' : c.ref;
-      const why = c.lastError ? ` title="${lvEsc(c.lastError)}"` : '';
-      const noEmbed = c.embeddable === false || /embedding/i.test(c.lastError || '');
-      const st = c.live && noEmbed ? `<span style="color:var(--green)"${why}>● Live</span> <span style="color:var(--gold);font-size:0.72rem">(snapshot — owner blocks embedding)</span>`
-        : c.live ? '<span style="color:var(--green)">● Live</span>'
-        : c.live === false ? (c.visible ? `<span style="color:var(--gold)"${why}>● Offline (recent)</span>` : `<span style="color:var(--red)"${why}>● Offline — hidden</span>`)
-        : `<span style="color:var(--muted)"${why}>● Unknown — shown</span>`;
-      const reason = !c.live && c.lastError ? `<div style="font-size:0.7rem;color:var(--muted);max-width:220px">${lvEsc(c.lastError)}</div>` : '';
-      const swapped = c.replacements ? ` <span title="The stream ended and was replaced by the channel's new live stream automatically" style="color:var(--accent);font-size:0.7rem">↻ ${c.replacements}</span>` : '';
-      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}">${lvEsc(c.name)}${swapped}</td><td style="${LV_TD}">${lvEsc(c.state)}</td><td style="${LV_TD}">${st}${reason}</td>
-        <td style="${LV_TD}color:var(--muted)">${c.lastChecked ? fmtTs(new Date(c.lastChecked).toISOString()) : '—'}</td>
-        <td style="${LV_TD}white-space:nowrap"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>
-        <button class="btn btn-ghost btn-sm" onclick="ccAct('check','${c.id}')">Check</button>
-        <button class="btn btn-ghost btn-sm" onclick="ccAct('remove','${c.id}')">Remove</button></td></tr>`;
-    }).join('') + '</tbody></table>' : '<div style="font-size:0.8rem;color:var(--muted)">No community cameras yet.</div>';
+  _ccCams = d.cams;
+  ccRenderCams();
 }
 
 // ── Alert Tests ──────────────────────────────────────────────────────────────

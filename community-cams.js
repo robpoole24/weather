@@ -1,4 +1,4 @@
-// WeatherTV Community Cams — build.1791132200
+// WeatherTV Community Cams — build.1791146600
 //
 // Town, beach, harbor and other public webcams that aren't part of any DOT or
 // Windy feed — mostly YouTube 24/7 livestreams (embedding is allowed by
@@ -707,7 +707,8 @@ module.exports = function setupCommunityCams(app, deps) {
     if (!state) throw new Error('Could not work out where that is — check the coordinates');
     const cam = { id: base.id || uid(), kind: base.kind, ref: base.ref, page: base.page || null, preview: base.preview || null, provider: base.provider || null,
                   name: decodeEntities(String(body.name || base.name || base.suggestedName || 'Community camera')).slice(0, 120),
-                  channelTitle: base.channelTitle || '', lat, lng, state, addedAt: Date.now(), source: base.source || 'admin', live: null };
+                  channelTitle: base.channelTitle || '', lat, lng, state, addedAt: Date.now(), source: base.source || 'admin', live: null,
+                  placedBy: (Number.isFinite(+body.lat) && base.lat != null && Math.abs(+body.lat - base.lat) > 1e-6) ? 'Set by you' : (base.locationGuess || 'Set by you') };
     await checkOne(cam);
     db.cams.push(cam);
     return cam;
@@ -1196,10 +1197,25 @@ module.exports = function setupCommunityCams(app, deps) {
       const lat = parseCoord(b.lat, 'lat'), lng = parseCoord(b.lng, 'lng');
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'Bad coordinates' });
       c.lat = lat; c.lng = lng; c.state = stateFor(lat, lng) || c.state; c.placementOk = true;
+      c.placedBy = 'Moved by you on the map'; c.movedAt = Date.now();
     }
     if (db.placementReport) db.placementReport.issues = db.placementReport.issues.filter(i => i.id !== c.id);
     await save();
     res.json({ ok: true, cam: c });
+  });
+
+  // Send an approved camera back to the review queue (e.g. approved with the wrong location)
+  app.post('/api/admin/community/unapprove', async (req, res) => {
+    await load();
+    const c = db.cams.find(x => x.id === (req.body || {}).id);
+    if (!c) return res.status(404).json({ error: 'Camera not found' });
+    db.cams = db.cams.filter(x => x.id !== c.id);
+    db.queue.push({ ...c, confident: false, source: c.source || 'admin', foundAt: Date.now(),
+      thumb: c.kind === 'yt-video' ? `https://i.ytimg.com/vi/${c.ref}/hqdefault_live.jpg` : c.kind === 'image' ? c.ref : c.kind === 'link' ? c.preview : null,
+      locationGuess: `Sent back from the map (was at ${(+c.lat).toFixed(4)}, ${(+c.lng).toFixed(4)} in ${c.state}) — fix the location and approve again` });
+    trimQueue();
+    await save();
+    res.json({ ok: true });
   });
 
   // ── Rejected cameras: which are live right now? (YouTube videos.list, 1 unit / 50)
@@ -1250,6 +1266,7 @@ module.exports = function setupCommunityCams(app, deps) {
         const state = stateFor(q.lat, q.lng);
         if (!state) throw new Error('could not work out where that is');
         db.cams.push({ id: q.id, kind: q.kind, ref: q.ref, page: q.page || null, preview: q.preview || null, provider: q.provider || null,
+                       placedBy: q.locationGuess || null,
                        name: q.name, channelTitle: q.channelTitle || '', lat: q.lat, lng: q.lng,
                        state, addedAt: Date.now(), source: q.source, live: null });
         db.queue = db.queue.filter(x => x.id !== q.id);
