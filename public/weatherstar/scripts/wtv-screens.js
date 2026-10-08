@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791590000
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791600000
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor · You're Watching WeatherTV
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
@@ -148,7 +148,7 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
         .wtv-custom .wtv-storm-lbl { position:absolute; left:16px; top:-12px; white-space:nowrap; font-size:16px; }
         .wtv-custom .wtv-track { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
         .wtv-brand-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:0; }
-        .wtv-brand-logo { max-width:85%; max-height:72%; image-rendering:pixelated; display:block; }
+        .wtv-brand-logo { max-width:92%; max-height:70%; image-rendering:pixelated; display:block; filter:drop-shadow(3px 3px 0 #000); }
         .wtv-brand-tagline { font-family:${FONT}; color:#00d4f5; font-size:22px; letter-spacing:0.08em; text-align:center;
           text-shadow:2px 2px 0 #000, 0 0 18px rgba(0,212,245,0.5); margin-top:10px; }`;
       document.head.appendChild(style);
@@ -156,72 +156,9 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectMarkup);
     else injectMarkup();
 
-    // ── Scroll / ticker management
-    // The WeatherStar scroll bar has two parts:
-    //   .fixed  — static text left of the ticker (we set "You're watching WeatherTV" here)
-    //   .scroll-header / ticker — scrolling marquee text (we strip WTV promo out of it)
-    //
-    // WeatherStar itself populates the ticker with text from the page; older WTV
-    // scripts also injected lines like "WeatherStar on WeatherTV · watchweathertv.com"
-    // and "ad-free weather & live storm chasers". We remove those and leave only
-    // "You're watching WeatherTV" as a permanent static label in .fixed.
-
-    const WTV_FIXED_MSG = "You're watching WeatherTV";
-    // Show the tagline in .fixed every N screens for 12 seconds
-    const WTV_FIXED_EVERY = 10;
-    let _fixedTick = 0;
-
-    // Patterns to strip from the scrolling ticker text
-    const TICKER_STRIP = /watch.*?weather\s*tv|weather\s*star\s+on\s+weather\s*tv|watchweather|altruistic|ad.free.*chaser|storm.chas|free.*ad.free/gi;
-
-    function manageScroll() {
-      // ── .fixed: show tagline every WTV_FIXED_EVERY screens for 12 s ───────────
-      const fixed = document.querySelector('.scroll .scroll-container .fixed');
-      if (fixed) {
-        _fixedTick += 1;
-        if (_fixedTick % WTV_FIXED_EVERY === 0) {
-          fixed.textContent = WTV_FIXED_MSG;
-          setTimeout(() => { if (fixed.textContent === WTV_FIXED_MSG) fixed.textContent = ''; }, 12000);
-        }
-      }
-
-      // ── ticker: strip any WTV promo sentences from the scrolling text ──────────
-      // WeatherStar stores its ticker text in a few possible places
-      const ticker = document.querySelector('.scroll .scroll-container .scroll-header')
-                  || document.querySelector('.scroll-header')
-                  || document.querySelector('.ticker');
-      if (ticker) {
-        // The ticker may be a marquee or a span with children — handle both
-        if (ticker.childNodes.length) {
-          ticker.childNodes.forEach(node => {
-            if (node.nodeType === Node.TEXT_NODE && TICKER_STRIP.test(node.textContent)) {
-              // Reset lastIndex since the regex is global
-              TICKER_STRIP.lastIndex = 0;
-              node.textContent = node.textContent.replace(TICKER_STRIP, '').replace(/\s{2,}/g, ' ').trim();
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-              TICKER_STRIP.lastIndex = 0;
-              if (TICKER_STRIP.test(node.textContent)) {
-                TICKER_STRIP.lastIndex = 0;
-                node.textContent = node.textContent.replace(TICKER_STRIP, '').replace(/\s{2,}/g, ' ').trim();
-              }
-            }
-            TICKER_STRIP.lastIndex = 0;
-          });
-        }
-      }
-    }
-
-    // Hook into WeatherStar's screen-advance event
-    const _origFinish = WeatherDisplay.prototype.finishDraw;
-    WeatherDisplay.prototype.finishDraw = function (...args) {
-      const r = _origFinish.apply(this, args);
-      try { manageScroll(); } catch (_) {}
-      return r;
-    };
-    // Run once on load and again shortly after (ticker text may load async)
-    const _initScroll = () => { manageScroll(); setTimeout(manageScroll, 2000); setTimeout(manageScroll, 5000); };
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initScroll);
-    else _initScroll();
+    // Bottom-scroll text is handled by WeatherStar's own "custom text" setting
+    // (set in public/index.html → buildWSUrl), which rotates one line into the
+    // scroll now and then. Nothing here touches the scroll.
 
     // ── Base class: fetch → store → report status → draw, the WeatherStar way
     class WTVScreen extends WeatherDisplay {
