@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791407700
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791590000
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor · You're Watching WeatherTV
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
@@ -95,11 +95,11 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
 
     // ── Markup + styling for the four screens (same header as built-in screens)
     const SCREENS = [
+      { id: 'wtv-brand', top: "You're", bottom: 'Watching' },
       { id: 'aqi-ws', top: 'Air', bottom: 'Quality' },
       { id: 'smoke-ws', top: 'Smoke &amp;', bottom: 'Wildfire' },
       { id: 'hurricane-ws', top: 'Tropical', bottom: 'Storms' },
       { id: 'astronomy-ws', top: 'UV &amp;', bottom: 'Outdoor' },
-      { id: 'wtv-brand', top: "You're", bottom: 'Watching' },
     ];
     function injectMarkup() {
       const container = document.querySelector('#container');
@@ -156,41 +156,72 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectMarkup);
     else injectMarkup();
 
-    // ── Scroll / .fixed management
-    // Clears any old WeatherTV promo text (storm chasers, etc.) and occasionally
-    // shows "You're watching WeatherTV" as a static line in the bottom bar.
-    // Runs once the DOM is ready, then repeats on an interval.
+    // ── Scroll / ticker management
+    // The WeatherStar scroll bar has two parts:
+    //   .fixed  — static text left of the ticker (we set "You're watching WeatherTV" here)
+    //   .scroll-header / ticker — scrolling marquee text (we strip WTV promo out of it)
+    //
+    // WeatherStar itself populates the ticker with text from the page; older WTV
+    // scripts also injected lines like "WeatherStar on WeatherTV · watchweathertv.com"
+    // and "ad-free weather & live storm chasers". We remove those and leave only
+    // "You're watching WeatherTV" as a permanent static label in .fixed.
+
     const WTV_FIXED_MSG = "You're watching WeatherTV";
-    // Show the tagline on roughly 1 in 5 rotation ticks (~every 5 screens)
+    // Show the tagline in .fixed every N screens for 12 seconds
+    const WTV_FIXED_EVERY = 10;
     let _fixedTick = 0;
+
+    // Patterns to strip from the scrolling ticker text
+    const TICKER_STRIP = /watch.*?weather\s*tv|weather\s*star\s+on\s+weather\s*tv|watchweather|altruistic|ad.free.*chaser|storm.chas|free.*ad.free/gi;
+
     function manageScroll() {
+      // ── .fixed: show tagline every WTV_FIXED_EVERY screens for 12 s ───────────
       const fixed = document.querySelector('.scroll .scroll-container .fixed');
-      if (!fixed) return;
-      // Erase any legacy WeatherTV promo injected by older scripts
-      if (fixed.textContent && /storm.chas|WeatherTV|altruistic/i.test(fixed.textContent)) {
-        fixed.textContent = '';
+      if (fixed) {
+        _fixedTick += 1;
+        if (_fixedTick % WTV_FIXED_EVERY === 0) {
+          fixed.textContent = WTV_FIXED_MSG;
+          setTimeout(() => { if (fixed.textContent === WTV_FIXED_MSG) fixed.textContent = ''; }, 12000);
+        }
       }
-      _fixedTick += 1;
-      if (_fixedTick % 5 === 0) {
-        fixed.textContent = WTV_FIXED_MSG;
-        // Clear it again after 12 seconds so it doesn't stay permanently
-        setTimeout(() => { if (fixed.textContent === WTV_FIXED_MSG) fixed.textContent = ''; }, 12000);
+
+      // ── ticker: strip any WTV promo sentences from the scrolling text ──────────
+      // WeatherStar stores its ticker text in a few possible places
+      const ticker = document.querySelector('.scroll .scroll-container .scroll-header')
+                  || document.querySelector('.scroll-header')
+                  || document.querySelector('.ticker');
+      if (ticker) {
+        // The ticker may be a marquee or a span with children — handle both
+        if (ticker.childNodes.length) {
+          ticker.childNodes.forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE && TICKER_STRIP.test(node.textContent)) {
+              // Reset lastIndex since the regex is global
+              TICKER_STRIP.lastIndex = 0;
+              node.textContent = node.textContent.replace(TICKER_STRIP, '').replace(/\s{2,}/g, ' ').trim();
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+              TICKER_STRIP.lastIndex = 0;
+              if (TICKER_STRIP.test(node.textContent)) {
+                TICKER_STRIP.lastIndex = 0;
+                node.textContent = node.textContent.replace(TICKER_STRIP, '').replace(/\s{2,}/g, ' ').trim();
+              }
+            }
+            TICKER_STRIP.lastIndex = 0;
+          });
+        }
       }
     }
-    // Hook into WeatherStar's screen-advance event if present; fall back to polling
+
+    // Hook into WeatherStar's screen-advance event
     const _origFinish = WeatherDisplay.prototype.finishDraw;
     WeatherDisplay.prototype.finishDraw = function (...args) {
       const r = _origFinish.apply(this, args);
       try { manageScroll(); } catch (_) {}
       return r;
     };
-    // Also run once on load to clear any pre-existing promo text
-    const _clearOnLoad = () => {
-      const fixed = document.querySelector('.scroll .scroll-container .fixed');
-      if (fixed && /storm.chas|WeatherTV|altruistic/i.test(fixed.textContent || '')) fixed.textContent = '';
-    };
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _clearOnLoad);
-    else _clearOnLoad();
+    // Run once on load and again shortly after (ticker text may load async)
+    const _initScroll = () => { manageScroll(); setTimeout(manageScroll, 2000); setTimeout(manageScroll, 5000); };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initScroll);
+    else _initScroll();
 
     // ── Base class: fetch → store → report status → draw, the WeatherStar way
     class WTVScreen extends WeatherDisplay {
@@ -398,15 +429,32 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
       }
     }
 
-    // ── You're Watching WeatherTV (always shows — logo screen, no data needed)
+    // ── You're Watching WeatherTV (always on — can't be disabled via URL or UI)
     class WatchingWTV extends WTVScreen {
       constructor(navId, elemId, name) {
         super(navId, elemId, name);
-        this.refreshTime = 60 * 60 * 1000;  // effectively never auto-refreshes
+        this.refreshTime = 60 * 60 * 1000;
+        this._wtvAlwaysOn = true;
       }
-      async fetchData() {
-        return {};  // always show — returning non-null means "I have data"
+      get isEnabled() { return true; }
+      set isEnabled(_) { /* locked on */ }
+
+      // Override getData entirely to bypass the base-class enabled/status gate
+      async getData(weatherParameters, refresh) {
+        this.weatherParameters = weatherParameters;
+        if (!refresh && this.data) {
+          this.setStatus(STATUS.loaded);
+          return;
+        }
+        this.data = { ready: true };
+        this.setStatus(STATUS.loading);
+        this.getDataCallback();
+        this.setStatus(STATUS.loaded);
       }
+
+      // fetchData never called (getData overrides the whole flow), but satisfy the base class
+      async fetchData() { return { ready: true }; }
+
       render() {
         return `<div class="wtv-brand-wrap">
           <img class="wtv-brand-logo" src="images/weathertv-pixel.png" alt="WeatherTV"
@@ -422,10 +470,11 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
     // back-to-back: a gap in the list breaks WeatherStar's rotation.
     let nextId = 13;
     const freeId = () => { while (getDisplay(nextId)) nextId += 1; return nextId++; };
+    // WatchingWTV is first so it plays at load and at the top of each rotation cycle
+    registerDisplay(new WatchingWTV(freeId(), 'wtv-brand', "You're Watching WeatherTV"));
     registerDisplay(new AirQuality(freeId(), 'aqi-ws', 'Air Quality'));
     registerDisplay(new SmokeFire(freeId(), 'smoke-ws', 'Smoke & Wildfire'));
     registerDisplay(new Tropical(freeId(), 'hurricane-ws', 'Tropical Storms'));
     registerDisplay(new Outdoor(freeId(), 'astronomy-ws', 'UV & Outdoor'));
-    registerDisplay(new WatchingWTV(freeId(), 'wtv-brand', "You're Watching WeatherTV"));
   },
 }, (rt) => rt(rt.s = 9001)]);
