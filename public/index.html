@@ -109,7 +109,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background: radial-gradient(ellipse at center, #0d1b2a 0%, #050a0f 100%);
+    background: #000;
     gap: 1rem;
   }
 
@@ -215,9 +215,10 @@
   .radar-ring {
     position: absolute;
     border-radius: 50%;
-    border: 2px solid rgba(0,180,216,0.35);
+    border: 2px solid rgba(0,212,245,0.45);
     animation: radarPulse 4.5s ease-out infinite;
   }
+  .radar-ring:nth-child(2) { border-color: rgba(249,115,22,0.45); }
   @keyframes radarPulse {
     0% { transform: scale(0.3); opacity: 0.8; }
     100% { transform: scale(3); opacity: 0; }
@@ -1270,7 +1271,7 @@
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:1.5s"></div>
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:3s"></div>
     </div>
-    <img src="images/weathertv-logo.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:1;" />
+    <img src="images/weathertv-logo-stacked.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:1;" />
     <div id="channel-hint" style="position:absolute;bottom:0.6rem;left:0;right:0;text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted);letter-spacing:0.1em;text-transform:uppercase;z-index:3;transition:opacity 0.2s;padding:0 1rem;">Select a channel below to begin</div>
   </div>
 
