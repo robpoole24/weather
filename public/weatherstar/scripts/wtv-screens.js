@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791600000
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791610000
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor · You're Watching WeatherTV
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
@@ -394,7 +394,7 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
 
       render() {
         return `<div class="wtv-brand-wrap">
-          <img class="wtv-brand-logo" src="images/weathertv-pixel.png" alt="WeatherTV"
+          <img class="wtv-brand-logo" src="images/weathertv-pixel.png?v=2" alt="WeatherTV"
             onerror="this.style.display='none'">
           <div class="wtv-brand-tagline">YOU&rsquo;RE WATCHING WEATHERTV</div>
         </div>`;
