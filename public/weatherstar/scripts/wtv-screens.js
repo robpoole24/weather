@@ -1,5 +1,5 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1790978400
-// Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791407700
+// Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor · You're Watching WeatherTV
 //
 // WHY THIS VERSION WORKS (and the old one didn't):
 // The old screens imitated WeatherStar's display class. WeatherStar tracks
@@ -99,6 +99,7 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
       { id: 'smoke-ws', top: 'Smoke &amp;', bottom: 'Wildfire' },
       { id: 'hurricane-ws', top: 'Tropical', bottom: 'Storms' },
       { id: 'astronomy-ws', top: 'UV &amp;', bottom: 'Outdoor' },
+      { id: 'wtv-brand', top: "You're", bottom: 'Watching' },
     ];
     function injectMarkup() {
       const container = document.querySelector('#container');
@@ -145,11 +146,51 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
           background-repeat:no-repeat; image-rendering:auto; }
         .wtv-custom .wtv-storm { position:absolute; transform:translate(-50%,-50%); }
         .wtv-custom .wtv-storm-lbl { position:absolute; left:16px; top:-12px; white-space:nowrap; font-size:16px; }
-        .wtv-custom .wtv-track { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }`;
+        .wtv-custom .wtv-track { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
+        .wtv-brand-wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:0; }
+        .wtv-brand-logo { max-width:85%; max-height:72%; image-rendering:pixelated; display:block; }
+        .wtv-brand-tagline { font-family:${FONT}; color:#00d4f5; font-size:22px; letter-spacing:0.08em; text-align:center;
+          text-shadow:2px 2px 0 #000, 0 0 18px rgba(0,212,245,0.5); margin-top:10px; }`;
       document.head.appendChild(style);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectMarkup);
     else injectMarkup();
+
+    // ── Scroll / .fixed management
+    // Clears any old WeatherTV promo text (storm chasers, etc.) and occasionally
+    // shows "You're watching WeatherTV" as a static line in the bottom bar.
+    // Runs once the DOM is ready, then repeats on an interval.
+    const WTV_FIXED_MSG = "You're watching WeatherTV";
+    // Show the tagline on roughly 1 in 5 rotation ticks (~every 5 screens)
+    let _fixedTick = 0;
+    function manageScroll() {
+      const fixed = document.querySelector('.scroll .scroll-container .fixed');
+      if (!fixed) return;
+      // Erase any legacy WeatherTV promo injected by older scripts
+      if (fixed.textContent && /storm.chas|WeatherTV|altruistic/i.test(fixed.textContent)) {
+        fixed.textContent = '';
+      }
+      _fixedTick += 1;
+      if (_fixedTick % 5 === 0) {
+        fixed.textContent = WTV_FIXED_MSG;
+        // Clear it again after 12 seconds so it doesn't stay permanently
+        setTimeout(() => { if (fixed.textContent === WTV_FIXED_MSG) fixed.textContent = ''; }, 12000);
+      }
+    }
+    // Hook into WeatherStar's screen-advance event if present; fall back to polling
+    const _origFinish = WeatherDisplay.prototype.finishDraw;
+    WeatherDisplay.prototype.finishDraw = function (...args) {
+      const r = _origFinish.apply(this, args);
+      try { manageScroll(); } catch (_) {}
+      return r;
+    };
+    // Also run once on load to clear any pre-existing promo text
+    const _clearOnLoad = () => {
+      const fixed = document.querySelector('.scroll .scroll-container .fixed');
+      if (fixed && /storm.chas|WeatherTV|altruistic/i.test(fixed.textContent || '')) fixed.textContent = '';
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _clearOnLoad);
+    else _clearOnLoad();
 
     // ── Base class: fetch → store → report status → draw, the WeatherStar way
     class WTVScreen extends WeatherDisplay {
@@ -357,6 +398,24 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
       }
     }
 
+    // ── You're Watching WeatherTV (always shows — logo screen, no data needed)
+    class WatchingWTV extends WTVScreen {
+      constructor(navId, elemId, name) {
+        super(navId, elemId, name);
+        this.refreshTime = 60 * 60 * 1000;  // effectively never auto-refreshes
+      }
+      async fetchData() {
+        return {};  // always show — returning non-null means "I have data"
+      }
+      render() {
+        return `<div class="wtv-brand-wrap">
+          <img class="wtv-brand-logo" src="images/weathertv-pixel.png" alt="WeatherTV"
+            onerror="this.style.display='none'">
+          <div class="wtv-brand-tagline">YOU&rsquo;RE WATCHING WEATHERTV</div>
+        </div>`;
+      }
+    }
+
     // Slots right after WeatherStar's built-in screens (13+). If an older copy of
     // the custom screens already took some (WeatherStar refuses duplicate slots
     // — "nav ID 13 already in use"), take the next free ones. Slots stay
@@ -367,5 +426,6 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
     registerDisplay(new SmokeFire(freeId(), 'smoke-ws', 'Smoke & Wildfire'));
     registerDisplay(new Tropical(freeId(), 'hurricane-ws', 'Tropical Storms'));
     registerDisplay(new Outdoor(freeId(), 'astronomy-ws', 'UV & Outdoor'));
+    registerDisplay(new WatchingWTV(freeId(), 'wtv-brand', "You're Watching WeatherTV"));
   },
 }, (rt) => rt(rt.s = 9001)]);

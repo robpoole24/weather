@@ -1,8 +1,14 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1791097200 -->
 <html lang="en">
 <head>
-<!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-01YSHDNG74"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-01YSHDNG74');
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Live Weather Radar &amp; Severe Storm Alerts — WeatherTV</title>
@@ -171,15 +177,67 @@
   .leg-row { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.18rem; }
   .leg-sw { width:16px; height:12px; border-radius:2px; flex-shrink:0; }
 
+  /* ── STARTUP / LOADING SCREEN ── */
   #radar-loading {
-    position:absolute; top:44px; left:0; right:0; bottom:0;
-    background:var(--bg); z-index:500;
+    position:absolute; top:0; left:0; right:0; bottom:0;
+    background:#000; z-index:500;
     display:flex; align-items:center; justify-content:center;
-    flex-direction:column; gap:1rem; transition:opacity 0.5s;
+    flex-direction:column; gap:0; transition:opacity 0.6s;
   }
-  .spin { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--green); border-radius:50%; animation:spin 0.8s linear infinite; }
+
+  /* Pulsing radar rings — alternating cyan / orange from the logo */
+  .wtv-rings {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    pointer-events:none;
+  }
+  .wtv-ring {
+    position:absolute; border-radius:50%; border-width:1.5px; border-style:solid;
+    animation:ringPulse 3s ease-out infinite;
+  }
+  .wtv-ring:nth-child(1) { width:220px; height:220px; border-color:#00d4f5; animation-delay:0s; }
+  .wtv-ring:nth-child(2) { width:360px; height:360px; border-color:#f97316; animation-delay:0.5s; }
+  .wtv-ring:nth-child(3) { width:500px; height:500px; border-color:#00d4f5; animation-delay:1s; }
+  .wtv-ring:nth-child(4) { width:640px; height:640px; border-color:#f97316; animation-delay:1.5s; }
+  .wtv-ring:nth-child(5) { width:780px; height:780px; border-color:#00d4f5; animation-delay:2s; }
+  @keyframes ringPulse {
+    0%   { opacity:0; transform:scale(0.55); }
+    20%  { opacity:0.55; }
+    80%  { opacity:0.18; }
+    100% { opacity:0; transform:scale(1.08); }
+  }
+
+  /* Logo block */
+  .wtv-logo-wrap {
+    position:relative; z-index:2;
+    display:flex; flex-direction:column; align-items:center; gap:0;
+  }
+  .wtv-logo-img {
+    width: min(72vw, 340px);
+    filter: drop-shadow(0 0 28px rgba(0,212,245,0.45)) drop-shadow(0 0 60px rgba(249,115,22,0.25));
+    animation: logoBreathe 3s ease-in-out infinite;
+  }
+  @keyframes logoBreathe {
+    0%,100% { filter: drop-shadow(0 0 22px rgba(0,212,245,0.4)) drop-shadow(0 0 50px rgba(249,115,22,0.2)); }
+    50%     { filter: drop-shadow(0 0 38px rgba(0,212,245,0.65)) drop-shadow(0 0 80px rgba(249,115,22,0.38)); }
+  }
+
+  /* Spinner + text below logo */
+  .wtv-load-row {
+    display:flex; align-items:center; gap:0.65rem; margin-top:2.2rem;
+  }
+  .spin {
+    width:18px; height:18px;
+    border:2px solid rgba(0,212,245,0.25);
+    border-top-color:#00d4f5;
+    border-radius:50%;
+    animation:spin 0.8s linear infinite;
+    flex-shrink:0;
+  }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .load-txt { font-family:'Barlow Condensed',sans-serif; font-size:0.82rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
+  .load-txt {
+    font-family:'Barlow Condensed',sans-serif; font-size:0.78rem;
+    letter-spacing:0.14em; text-transform:uppercase; color:rgba(0,212,245,0.7);
+  }
 
   /* ── WARNING BANNER ── */
   #warning-banner {
@@ -283,11 +341,6 @@
     background: #00b4d8;
     box-shadow: 0 0 4px rgba(0,180,216,0.7);
   }
-  /* National Park Service webcams — green; USGS volcano webcams — lava red */
-  .cam-dot.cam-dot-nps  { background:#22c55e; box-shadow:0 0 4px rgba(34,197,94,0.7); }
-  .cam-dot.cam-dot-usgs { background:#ef4444; box-shadow:0 0 5px rgba(239,68,68,0.8); }
-  .cam-dot.cam-dot-community { background:#a855f7; box-shadow:0 0 5px rgba(168,85,247,0.8); }
-  .cam-dot.cam-dot-mountain { background:#eab308; box-shadow:0 0 5px rgba(234,179,8,0.85); }   /* Cal OES / ALERTCalifornia */
   .cam-dot {
     width:10px; height:10px; border-radius:50%;
     background:#f97316; border:2px solid rgba(255,255,255,0.7);
@@ -313,8 +366,6 @@
     background:#0a0e14; border:1px solid rgba(249,115,22,0.5);
     border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,0.7);
     overflow:hidden; display:none; resize:both;
-    height:310px; min-height:220px; max-height:90vh;
-    flex-direction:column;
   }
   #camera-overlay-header {
     display:flex; align-items:center; gap:0.5rem;
@@ -328,19 +379,10 @@
     background:none; border:none; padding:0 0.1rem; line-height:1;
   }
   #camera-overlay-header .cam-close:hover { color:#f97316; }
-  #camera-overlay-header .cam-expand { margin-left:auto; font-size:1.05rem; }
-  #camera-overlay-header .cam-expand + .cam-close { margin-left:0.4rem; }
-  /* Expanded: a big centered viewer (the corner can still resize it) */
-  #camera-overlay.cam-big {
-    top:50% !important; left:50% !important; right:auto !important; transform:translate(-50%,-50%);
-    width:min(92vw, 1100px) !important; height:min(82vh, 720px) !important; z-index:1300;
-  }
-  /* Body fills whatever size the user drags the box to (bottom-right corner) */
-  #camera-overlay-body { position:relative; background:#000; min-height:160px; flex:1 1 auto; overflow:hidden; }
+  #camera-overlay-body { position:relative; background:#000; min-height:180px; }
   #camera-overlay-body video,
-  #camera-overlay-body img,
-  #camera-overlay-body iframe {
-    width:100%; height:100%; display:block; object-fit:contain; border:none;
+  #camera-overlay-body img {
+    width:100%; display:block; max-height:280px; object-fit:cover;
   }
   #camera-overlay-status {
     position:absolute; inset:0; display:flex; align-items:center;
@@ -718,64 +760,6 @@
     #radar-minimize-btn { cursor: default !important; }
   }
 </style>
-<script src="/js/wtv-alerts-core.js"></script>
-<script src="/js/wtv-alerts.js"></script>
-<style>
-  #storm-eta { display:none; position:fixed; left:12px; bottom:96px; z-index:850; max-width:min(360px, calc(100vw - 24px));
-    background:rgba(10,14,20,0.92); border:1px solid var(--eta-color, #ff8c00); border-left-width:4px; border-radius:8px;
-    padding:0.5rem 0.7rem; color:#e6edf3; font:600 0.8rem/1.35 'Barlow', system-ui, sans-serif; cursor:pointer;
-    box-shadow:0 4px 18px rgba(0,0,0,0.45); }
-  #storm-eta .eta-main { font-family:'Barlow Condensed', system-ui, sans-serif; font-size:1rem; letter-spacing:0.02em; }
-  #storm-eta .eta-sub { color:#94a3b8; font-weight:500; font-size:0.72rem; margin-top:2px; }
-  #wtv-toast { display:none; position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:2000;
-    background:rgba(10,14,20,0.95); border:1px solid var(--accent, #00b4d8); color:#e6edf3; border-radius:6px;
-    padding:0.5rem 0.9rem; font:600 0.8rem 'Barlow', system-ui, sans-serif; }
-</style>
-<style>
-  .fpm-intro { font-size:0.72rem; color:var(--muted); line-height:1.45; margin-bottom:0.5rem; }
-  .fpm-btn { width:100%; padding:0.5rem; border-radius:6px; border:1px solid var(--accent, #00b4d8); background:transparent; color:var(--accent, #00b4d8);
-             font:700 0.78rem 'Barlow Condensed', sans-serif; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer; }
-  .fpm-btn:hover { background:rgba(0,180,216,0.12); }
-  .fpm-tabs { display:flex; gap:0.3rem; margin-bottom:0.4rem; }
-  .fpm-tabs button { flex:1; padding:0.3rem; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--muted);
-                     font:600 0.72rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer; }
-  .fpm-tabs button.on { color:#fff; border-color:var(--accent, #00b4d8); background:rgba(0,180,216,0.15); }
-  #fp-models-chart svg { width:100%; height:auto; display:block; }
-  .fpm-legend { display:flex; flex-wrap:wrap; gap:0.25rem 0.5rem; margin:0.35rem 0 0.5rem; }
-  .fpm-legend button { display:flex; align-items:center; gap:0.3rem; background:none; border:none; color:var(--text, #e6edf3); cursor:pointer;
-                       font:500 0.7rem 'Barlow', sans-serif; padding:0.1rem 0; }
-  .fpm-legend button.off { opacity:0.35; }
-  .fpm-legend i { width:14px; height:3px; border-radius:2px; display:inline-block; }
-  .fpm-days { display:flex; flex-direction:column; gap:0.2rem; }
-  .fpm-day { display:grid; grid-template-columns:3.2rem 1fr auto; gap:0.4rem; align-items:center; font-size:0.72rem; padding:0.25rem 0; border-bottom:1px solid var(--border); }
-  .fpm-day b { font-family:'Barlow Condensed', sans-serif; font-size:0.8rem; }
-  .fpm-agree { font:700 0.62rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; padding:0.1rem 0.35rem; border-radius:3px; }
-  .fpm-foot { font-size:0.62rem; color:var(--muted); margin-top:0.4rem; }
-</style>
-<style>
-  #lnw-chip { display:none; position:fixed; right:12px; top:92px; z-index:860; background:#b0101e; color:#fff; border:none; border-radius:999px;
-    padding:0.4rem 0.8rem; font:700 0.78rem 'Barlow Condensed', sans-serif; letter-spacing:0.08em; text-transform:uppercase; cursor:pointer;
-    box-shadow:0 4px 16px rgba(0,0,0,0.5); }
-  #lnw-chip .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#fff; margin-right:0.4rem; animation:lnwPulse 1.2s infinite; }
-  @keyframes lnwPulse { 50% { opacity:0.25; } }
-  #lnw-panel { display:none; position:fixed; right:12px; top:128px; z-index:860; width:min(340px, calc(100vw - 24px)); max-height:60vh; overflow-y:auto;
-    background:rgba(10,14,20,0.97); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:0.6rem; box-shadow:0 8px 28px rgba(0,0,0,0.6);
-    font-family:'Barlow', system-ui, sans-serif; color:#e6edf3; }
-  .lnw-w { border-left:4px solid var(--c, #ff8c00); padding:0.35rem 0.5rem; margin-bottom:0.6rem; background:rgba(255,255,255,0.03); border-radius:0 6px 6px 0; }
-  .lnw-w h4 { margin:0; font:700 0.9rem 'Barlow Condensed', sans-serif; letter-spacing:0.04em; color:var(--c, #ff8c00); cursor:pointer; }
-  .lnw-w .area { font-size:0.7rem; color:#7a9bb5; margin:0.1rem 0 0.35rem; line-height:1.3; }
-  .lnw-c { display:flex; align-items:center; gap:0.4rem; padding:0.25rem 0; border-top:1px solid rgba(255,255,255,0.06); font-size:0.78rem; }
-  .lnw-c .nm { flex:1; font-weight:600; }
-  .lnw-c .where { font-size:0.68rem; color:#94a3b8; }
-  .lnw-c button { border:none; border-radius:4px; cursor:pointer; font:700 0.68rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; padding:0.25rem 0.45rem; }
-  .lnw-watch { background:#e11d48; color:#fff; } .lnw-find { background:rgba(255,255,255,0.1); color:#e6edf3; }
-  #lnw-player { display:none; position:fixed; right:12px; bottom:96px; z-index:870; width:min(400px, calc(100vw - 24px)); background:#000;
-    border:1px solid rgba(255,255,255,0.15); border-radius:8px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,0.6); }
-  #lnw-player .bar { display:flex; justify-content:space-between; align-items:center; padding:0.3rem 0.5rem; background:#101826;
-    font:700 0.75rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; color:#e6edf3; }
-  #lnw-player .bar button { background:none; border:none; color:#e6edf3; font-size:1.1rem; cursor:pointer; }
-  #lnw-player iframe { width:100%; aspect-ratio:16/9; border:0; display:block; }
-</style>
 </head>
 <body>
 
@@ -791,7 +775,6 @@
     <button type="submit" class="tb-btn">Go</button>
   </form>
   <button class="tb-btn" id="location-btn" onclick="goToMyLocation()">📍 My Location</button>
-  <button class="tb-btn" id="share-btn" onclick="shareRadarView()" title="Share this exact map view">🔗 Share</button>
 
   <div class="tb-div"></div>
   <button class="tb-btn warn-on" id="btn-alerts" onclick="toggleAlerts()">⚠️ Alerts</button>
@@ -802,29 +785,7 @@
       min-width:240px;box-shadow:0 4px 16px rgba(0,0,0,0.5);font-family:'Barlow',sans-serif;"></div>
   </div>
   <button class="tb-btn"         id="btn-spc"    onclick="toggleSPC()" title="SPC Convective Outlook" style="display:none;">🗺 SPC Outlook</button>
-  <div style="position:relative;display:inline-block;">
-    <button class="tb-btn" id="btn-meso" onclick="toggleMesoMenu()" title="SPC Mesoscale Discussions and Mesoscale Analysis" aria-expanded="false" aria-controls="meso-menu">📡 Mesoscale Updates</button>
-    <div id="meso-menu" style="display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:1000;background:#101826;border:1px solid rgba(255,255,255,0.12);
-         border-radius:6px;padding:0.45rem;box-shadow:0 4px 16px rgba(0,0,0,0.5);min-width:260px;">
-      <div style="display:flex;gap:0.35rem;">
-        <button class="tb-btn" id="btn-mcd" onclick="toggleOverlayFromToolbar('mcd')" title="SPC Mesoscale Discussions" style="flex:1;">💬 Discussions</button>
-        <button class="tb-btn" id="btn-mesoanalysis" onclick="toggleOverlayFromToolbar('mesoanalysis')" title="Severe-weather ingredients from the latest HRRR hour" style="flex:1;">📈 Analysis</button>
-      </div>
-      <div id="meso-analysis-opts" style="display:none;margin-top:0.45rem;">
-        <select id="meso-param" class="lp-select" onchange="setMesoParam(this.value)" style="width:100%;margin:0 0 0.35rem;">
-          <option value="mlcape">Instability — Mixed-layer CAPE</option>
-          <option value="sbcape">Instability — Surface-based CAPE</option>
-          <option value="srh01">Spin — 0–1 km helicity</option>
-          <option value="srh03">Spin — 0–3 km helicity</option>
-          <option value="shear06">Organization — 0–6 km bulk shear</option>
-          <option value="stp">Tornado potential — Significant Tornado Parameter</option>
-        </select>
-        <div id="meso-legend" style="display:flex;height:8px;border-radius:2px;overflow:hidden;"></div>
-        <div id="meso-legend-labels" style="display:flex;justify-content:space-between;font-size:0.62rem;color:#7a9bb5;margin-top:2px;font-family:'Barlow',sans-serif;"></div>
-        <div id="meso-valid" style="font-size:0.66rem;color:#7a9bb5;margin-top:0.3rem;font-family:'Barlow',sans-serif;line-height:1.35;"></div>
-      </div>
-    </div>
-  </div>
+  <button class="tb-btn"         id="btn-mcd"    onclick="toggleMCD()" title="SPC Mesoscale Discussions" style="display:none;">💬 Mesoscale Discussions</button>
   <div class="tb-div"></div>
 
   <!-- SPC Day selector — shown when SPC is active -->
@@ -862,19 +823,12 @@
 </div>
 
 <div id="map"></div>
-<div id="storm-eta" role="status" aria-live="polite" onclick="focusStormEta()"></div>
-<button id="lnw-chip" type="button" onclick="toggleLnwPanel()" aria-expanded="false" aria-controls="lnw-panel"><span class="dot"></span><span id="lnw-chip-text"></span></button>
-<div id="lnw-panel" role="region" aria-label="Live chasers in warnings"></div>
-<div id="lnw-player" role="dialog" aria-label="Live chaser stream"><div class="bar"><span id="lnw-player-title"></span><button type="button" onclick="closeLnwPlayer()" aria-label="Close">×</button></div><iframe id="lnw-frame" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen title="Live chaser stream"></iframe></div>
-<div id="wtv-toast" role="status" aria-live="polite"></div>
 
 <!-- ── Traffic Camera overlay ─────────────────────────────────────────────── -->
 <div id="camera-overlay">
   <div id="camera-overlay-header">
     <span>📷</span>
     <span id="camera-overlay-title">Traffic Camera</span>
-    <button class="cam-close cam-expand" id="camera-overlay-expand" type="button" onclick="toggleCameraExpand()"
-      aria-label="Make the camera bigger" title="Bigger (double-click the picture too)">⤢</button>
     <button class="cam-close" id="camera-overlay-close" aria-label="Close camera">✕</button>
   </div>
   <div id="camera-overlay-body">
@@ -985,23 +939,6 @@
       <div id="fp-daily" class="fp-daily-list"></div>
     </div>
 
-    <!-- ── Model comparison (loads only when asked) ── -->
-    <div id="fp-models-wrap" style="display:none;">
-      <div class="fp-section-label">Model Comparison</div>
-      <div class="fpm-intro">What each forecast model predicts for this spot. Lines close together = high confidence; spread apart = uncertain forecast.</div>
-      <button type="button" id="fp-models-btn" class="fpm-btn" onclick="loadModelComparison()">Compare 8 forecast models</button>
-      <div id="fp-models-body" style="display:none;">
-        <div class="fpm-tabs" role="tablist">
-          <button type="button" data-v="temp" class="on" onclick="setModelView('temp')">Temperature</button>
-          <button type="button" data-v="precip" onclick="setModelView('precip')">Total precipitation</button>
-        </div>
-        <div id="fp-models-chart"></div>
-        <div id="fp-models-legend" class="fpm-legend"></div>
-        <div id="fp-models-days" class="fpm-days"></div>
-        <div class="fpm-foot">Models: ECMWF, ECMWF AI, GFS, ICON, GEM, UK Met Office, JMA, Météo-France · via Open-Meteo</div>
-      </div>
-    </div>
-
     <!-- ── Storm indicators ── -->
     <div id="fp-storm-wrap" style="display:none;">
       <div class="fp-section-label fp-storm-head">⚡ Storm Indicators</div>
@@ -1038,9 +975,8 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Radar</div>
+    <div class="lp-section-label">Base Map</div>
     <div id="lp-basemap"></div>
-    <div id="lp-radar-canada"></div>
     <div style="margin-top:0.55rem;display:flex;align-items:center;gap:0.5rem;">
       <span style="font-size:0.68rem;color:var(--muted);font-family:'Barlow Condensed',sans-serif;
         text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">Opacity</span>
@@ -1052,7 +988,7 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Radar Tools <span style="text-transform:none;letter-spacing:0;opacity:0.7">(one station)</span></div>
+    <div class="lp-section-label">Radar Options</div>
     <div id="lp-radaropts"></div>
     <div id="site-picker" style="display:none;">
       <div id="site-message" style="font-size:0.68rem;color:var(--muted);margin-bottom:0.45rem;line-height:1.4;min-height:2.5em">
@@ -1075,13 +1011,7 @@
 
   </div>
 
-  <div class="lp-section">
-    <div class="lp-section-label">Satellite &amp; Temperature</div>
-    <div id="lp-satellite"></div>
-  </div>
-
-  <!-- Extended Coverage section — now empty: Canadian radar lives under Radar,
-       Canadian alerts under Alerts & Warnings. Kept hidden for layout safety. -->
+  <!-- Extended Coverage section — visibility driven by EXTENDED_ITEMS.length at render time -->
   <div class="lp-section" id="lp-extended-section" style="display:none;">
     <div class="lp-section-label">Extended Coverage</div>
     <div id="lp-extended"></div>
@@ -1090,12 +1020,6 @@
   <div class="lp-section">
     <div class="lp-section-label">Alerts &amp; Warnings</div>
     <div id="lp-alerts"></div>
-    <div id="lp-alerts-ca"></div>
-  </div>
-
-  <div class="lp-section">
-    <div class="lp-section-label">Mesoscale</div>
-    <div id="lp-meso"></div>
   </div>
 
   <div class="lp-section">
@@ -1109,32 +1033,30 @@
     <!-- Live DOT Cameras -->
     <div id="lp-cameras"></div>
     <div id="lp-cameras-state" style="display:none;margin-top:0.5rem;">
-      <!-- One switch for every camera source. Colors only tell them apart. -->
-      <div style="font-size:0.64rem;color:var(--muted);line-height:1.6;margin-bottom:0.5rem;">
-        <span style="color:#f97316">●</span> Traffic &nbsp;
-        <span style="color:#00b4d8">●</span> Windy &nbsp;
-        <span style="color:#a855f7">●</span> Community &nbsp;
-        <span style="color:#22c55e">●</span> National Parks &nbsp;
-        <span style="color:#eab308">●</span> Mountain/Fire &nbsp;
-        <span style="color:#ef4444">●</span> Volcanoes
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
+        <span style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);">🟠 Live DOT Cams</span>
+        <label class="lp-toggle-label" title="Toggle live DOT traffic cameras">
+          <input type="checkbox" id="cam-dot-toggle" checked onchange="onCamSourceToggle()">
+          <span class="lp-toggle-track"></span>
+        </label>
       </div>
-      <label class="lp-select-label">Pick a state to show its cameras</label>
+      <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-bottom:0.5rem;">Live traffic cameras from state DOT feeds. Images refresh every 5–30 seconds.</div>
+
+      <!-- Windy Timelapse Cameras -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem;">
+        <span style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:var(--text);">🔵 Windy Timelapse</span>
+        <label class="lp-toggle-label" title="Toggle Windy timelapse webcams">
+          <input type="checkbox" id="cam-windy-toggle" checked onchange="onCamSourceToggle()">
+          <span class="lp-toggle-track"></span>
+        </label>
+      </div>
+      <div style="font-size:0.62rem;color:var(--muted);line-height:1.5;margin-bottom:0.5rem;">Scenic &amp; weather webcams from <a href="https://www.windy.com/webcams" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">Windy.com</a>. Timelapse player — not a live feed.</div>
+
+      <label class="lp-select-label">Select a state to load cameras</label>
       <select id="cam-state-select" class="lp-select" onchange="onCamStateChange(this.value)">
         <option value="">— Pick a state —</option>
       </select>
       <div id="cam-state-status" style="font-size:0.66rem;color:var(--muted);margin-top:0.35rem;line-height:1.5;min-height:1.2em;"></div>
-
-      <!-- Viewers can suggest a public camera (YouTube live cam or camera image). Reviewed before it appears. -->
-      <button type="button" onclick="toggleSuggestCam()" style="margin-top:0.5rem;width:100%;background:none;border:1px dashed rgba(168,85,247,0.6);color:#c084fc;
-        border-radius:4px;padding:0.3rem;font:700 0.7rem 'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;cursor:pointer;">＋ Suggest a camera</button>
-      <div id="suggest-cam" style="display:none;margin-top:0.45rem;font-size:0.68rem;color:var(--muted);line-height:1.45;">
-        Know a public live cam — a town, beach, harbor or skyline? Paste the YouTube link (or a direct camera image link). We review every suggestion first.
-        <input id="sc-url" class="lp-select" type="text" placeholder="https://www.youtube.com/watch?v=…" style="margin:0.35rem 0 0.25rem;">
-        <input id="sc-place" class="lp-select" type="text" placeholder="Where is it? (e.g. Broad St, Greendale WI)" style="margin:0 0 0.25rem;">
-        <label style="display:flex;align-items:center;gap:0.35rem;margin:0.15rem 0 0.35rem;"><input type="checkbox" id="sc-center" checked> It's near the center of the map right now</label>
-        <button type="button" onclick="submitSuggestCam()" class="lp-select" style="cursor:pointer;color:#fff;background:rgba(168,85,247,0.25);border-color:rgba(168,85,247,0.6);">Send suggestion</button>
-        <div id="sc-result" style="margin-top:0.3rem;min-height:1em;"></div>
-      </div>
     </div>
   </div>
 
@@ -1161,7 +1083,7 @@
   <div class="lp-section" style="border-bottom:none;">
     <div class="lp-section-label">Models (forecast mode)</div>
     <label class="lp-select-label">Forecast model</label>
-    <select id="model-select" class="lp-select" onchange="pickForecastModel(this.value)"></select>
+    <select id="model-select" class="lp-select" onchange="onModelChange(this.value)"></select>
     <div id="model-note" style="font-size:0.64rem;color:var(--muted);margin-top:0.4rem;line-height:1.5;"></div>
   </div>
 
@@ -1292,7 +1214,24 @@
   </div>
 </div>
 
-<div id="radar-loading"><div class="spin"></div><div class="load-txt">Loading radar...</div></div>
+<div id="radar-loading">
+  <!-- pulsing radar rings -->
+  <div class="wtv-rings">
+    <div class="wtv-ring"></div>
+    <div class="wtv-ring"></div>
+    <div class="wtv-ring"></div>
+    <div class="wtv-ring"></div>
+    <div class="wtv-ring"></div>
+  </div>
+  <!-- stacked logo: tornado on top of wordmark -->
+  <div class="wtv-logo-wrap">
+    <img class="wtv-logo-img" src="/images/weathertv-logo-stacked.png" alt="WeatherTV" onerror="this.style.display='none'">
+    <div class="wtv-load-row">
+      <div class="spin"></div>
+      <div class="load-txt">Loading radar…</div>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── ALERT STYLES ─────────────────────────────────────────────────────────────
@@ -1493,7 +1432,8 @@ map.on('popupopen', function(e) {
   });
 });
 
-// (Mesoscale Discussions now live inside the "Mesoscale Updates" menu.)
+// Show MCD button — always visible since MCDs are fetched on demand
+document.getElementById('btn-mcd').style.display = '';
 updateZoomIndicator();
 
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -1508,7 +1448,7 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // but all are opacity:0 except the active one. This keeps tiles loaded
 // in the browser cache so switching is instant with no flash.
 
-function makeRawFrameLayer(f, idx) {
+const frameLayers = FRAMES.map((f, idx) => {
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
     {
@@ -1540,10 +1480,7 @@ function makeRawFrameLayer(f, idx) {
     }
   );
   return layer;
-}
-const frameLayers = FRAMES.map((f, idx) => makeRawFrameLayer(f, idx));
-// (Past-mode frames start as raw NEXRAD and are swapped to the filtered
-//  "weather only" MRMS mosaic right after load — see setRadarSource below.)
+});
 
 // Resource-safe: only the ACTIVE frame layer stays attached to the map.
 // Others are detached during pan/zoom (see movestart/moveend below) and
@@ -1553,76 +1490,6 @@ const frameLayers = FRAMES.map((f, idx) => makeRawFrameLayer(f, idx));
 frameLayers[FRAMES.length - 1].addTo(map);
 
 let currentFrame = FRAMES.length - 1;
-
-// ── RADAR SOURCE: weather-only (default) vs raw "birds & bugs" ───────────────
-// IEM's NEXRAD mosaic is raw base reflectivity: at night, especially during
-// spring/fall migration, radars also see birds and insects, painting green
-// circles around every radar site. NOAA's MRMS mosaic is quality-controlled
-// (non-weather echoes removed) and time-enabled for the past 4 hours, so it
-// becomes the default. The raw view stays one toggle away — migration nights
-// are genuinely interesting and often in the news.
-const MRMS_WMS = 'https://mapservices.weather.noaa.gov/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer';
-let radarRaw = false, _mrmsInfo = null, _rawLabels = FRAMES.map(f => f.label);
-async function _mrmsCapabilities() {
-  if (_mrmsInfo && Date.now() - _mrmsInfo.ts < 5 * 60000) return _mrmsInfo;
-  const txt = await (await fetch(`${MRMS_WMS}?request=GetCapabilities&service=WMS&version=1.3.0`)).text();
-  const xml = new DOMParser().parseFromString(txt, 'text/xml');
-  const layer = [...xml.getElementsByTagName('Layer')].find(l =>
-    [...l.children].some(c => c.tagName === 'Name') &&
-    [...l.getElementsByTagName('Dimension')].some(d => (d.getAttribute('name') || '').toLowerCase() === 'time'));
-  if (!layer) throw new Error('MRMS layer not found');
-  const name = [...layer.children].find(c => c.tagName === 'Name').textContent.trim();
-  const dim = [...layer.getElementsByTagName('Dimension')].find(d => (d.getAttribute('name') || '').toLowerCase() === 'time');
-  const times = _parseWmsTimes(dim.textContent).sort((a, b) => a - b);
-  if (!times.length) throw new Error('MRMS has no times');
-  _mrmsInfo = { name, times, ts: Date.now() };
-  return _mrmsInfo;
-}
-function _pastRadarVisible() { return radarVisible && radarMode === 'past' && activePaint === 'reflectivity'; }
-function _swapFrameLayers(newLayers) {
-  frameLayers.forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
-  frameLayers.length = 0;
-  newLayers.forEach(l => frameLayers.push(l));
-  if (_pastRadarVisible()) { ensureAttached(frameLayers[currentFrame]); frameLayers[currentFrame].setOpacity(0.72); }
-}
-async function setRadarSource(raw) {
-  radarRaw = !!raw;
-  if (radarRaw) {
-    FRAMES.forEach((f, i) => { f.label = _rawLabels[i]; });
-    _swapFrameLayers(FRAMES.map((f, idx) => makeRawFrameLayer(f, idx)));
-  } else {
-    let info;
-    try { info = await _mrmsCapabilities(); }
-    catch (e) {
-      console.warn('[Radar] Filtered MRMS unavailable, showing raw NEXRAD:', e.message);
-      radarRaw = true;
-      if (_pastRadarVisible()) { ensureAttached(frameLayers[currentFrame]); frameLayers[currentFrame].setOpacity(0.72); }
-      return;
-    }
-    if (radarRaw) return;   // user switched back while we were loading
-    // Match each of the 12 animation slots to the closest earlier MRMS time
-    const now = Date.now();
-    const layers = FRAMES.map((f, idx) => {
-      const target = now - (FRAMES.length - 1 - idx) * 5 * 60000;
-      const t = [...info.times].reverse().find(x => x <= target) || info.times[0];
-      f.label = new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      return L.tileLayer.wms(MRMS_WMS, {
-        layers: info.name, TIME: new Date(t).toISOString().split('.')[0] + 'Z', format: 'image/png', transparent: true,
-        version: '1.3.0', opacity: 0, zIndex: 200 + idx, maxNativeZoom: 9, keepBuffer: 1, updateWhenIdle: true,
-        // No crossOrigin: that makes the browser send an Origin header, and
-        // NOAA's map server answers those requests with 403 Forbidden. Plain
-        // image tiles don't need CORS to display.
-        updateWhenZooming: false,
-        attribution: idx === 0 ? 'Radar: NOAA MRMS (quality-controlled)' : '',
-      });
-    });
-    _swapFrameLayers(layers);
-  }
-  if (typeof updateFrameLabel === 'function') updateFrameLabel();
-}
-// Start in weather-only mode; hide the raw frame meanwhile so birds don't flash up
-frameLayers[currentFrame].setOpacity(0);
-setTimeout(() => setRadarSource(false), 0);
 let radarVisible = true;
 let isPlaying = false;
 let playTimer = null;
@@ -1990,168 +1857,6 @@ async function loadSPC() {
   }
 }
 
-// ── LIVE NEAR THIS WARNING ──────────────────────────────────────────────────
-// Shows which WeatherTV chasers are streaming inside (or within 10 mi of) an
-// active storm warning, grouped by warning and sorted by severity. Appears
-// only when there's something to show.
-const LNW_COLORS = { 'TORNADO EMERGENCY':'#ff00ff', 'PDS Tornado Warning':'#ff1493', 'Tornado Warning':'#ff2a2a',
-  'FLASH FLOOD EMERGENCY':'#00ff7f', 'Extreme Wind Warning':'#ff6a00', 'Severe Thunderstorm Warning':'#ffa500', 'Flash Flood Warning':'#2ecc71' };
-let _lnwTimer = null, _lnwData = null, _lnwOutline = null;
-function _lnwEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
-async function refreshLiveNear() {
-  // Test mode: radar.html?testLiveNear=1 — fake warnings + chasers around the map center
-  if (new URLSearchParams(location.search).has('testLiveNear')) {
-    const c = map.getCenter(), d = 0.25;
-    const box = (dy, dx) => ({ type: 'Polygon', coordinates: [[[c.lng + dx - d, c.lat + dy - d], [c.lng + dx + d, c.lat + dy - d], [c.lng + dx + d, c.lat + dy + d], [c.lng + dx - d, c.lat + dy + d], [c.lng + dx - d, c.lat + dy - d]]] });
-    _lnwData = { warnings: [
-      { id: 't1', displayEvent: 'PDS Tornado Warning', area: 'TEST — not a real warning', expires: new Date(Date.now() + 1800e3).toISOString(), geometry: box(0, 0),
-        chasers: [{ name: 'Test Chaser One', videoId: null, inside: true, distanceMi: 0, lat: c.lat, lng: c.lng, movement: 'NE (45)' },
-                  { name: 'Test Chaser Two', videoId: null, inside: false, distanceMi: 4.2, lat: c.lat + 0.3, lng: c.lng, movement: 'Stationary' }] },
-      { id: 't2', displayEvent: 'Severe Thunderstorm Warning', area: 'TEST — not a real warning', expires: new Date(Date.now() + 2700e3).toISOString(), geometry: box(0.6, 0.8),
-        chasers: [{ name: 'Test Chaser Three', videoId: null, inside: true, distanceMi: 0, lat: c.lat + 0.6, lng: c.lng + 0.8, movement: 'E (90)' }] },
-    ] };
-    renderLiveNear();
-    return;
-  }
-  try {
-    const r = await fetch('/api/live-near-warnings');
-    if (!r.ok) return;
-    _lnwData = await r.json();
-    renderLiveNear();
-  } catch (_) { /* keep last state */ }
-}
-function renderLiveNear() {
-  const chip = document.getElementById('lnw-chip'), panel = document.getElementById('lnw-panel');
-  const ws = (_lnwData && _lnwData.warnings) || [];
-  const n = ws.reduce((k, w) => k + w.chasers.length, 0);
-  if (!n) { chip.style.display = 'none'; panel.style.display = 'none'; return; }
-  const top = ws[0].displayEvent;
-  chip.style.display = 'block';
-  chip.style.background = /TORNADO|Tornado/.test(top) ? '#b0101e' : '#b45309';
-  document.getElementById('lnw-chip-text').textContent = `${n} chaser${n > 1 ? 's' : ''} live in ${ws.length > 1 ? ws.length + ' warnings' : 'a warning'}`;
-  panel.innerHTML = ws.map((w, i) => {
-    const col = LNW_COLORS[w.displayEvent] || '#ffa500';
-    const until = w.expires ? ' · until ' + new Date(w.expires).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-    return `<div class="lnw-w" style="--c:${col}"><h4 onclick="focusLnwWarning(${i})" title="Show on map">${_lnwEsc(w.displayEvent)}</h4>
-      <div class="area">${_lnwEsc(w.area)}${until}</div>` +
-      w.chasers.map((c, j) => `<div class="lnw-c"><span class="nm">${_lnwEsc(c.name)}<br><span class="where">${c.inside ? 'Inside the warning' : c.distanceMi + ' mi away'}${c.movement && c.movement !== 'Stationary' ? ' · moving ' + _lnwEsc(c.movement) : ''}</span></span>
-        ${c.videoId ? `<button class="lnw-watch" type="button" onclick="openLnwPlayer(${i},${j})">▶ Watch</button>` : ''}
-        <button class="lnw-find" type="button" onclick="focusLnwChaser(${i},${j})" aria-label="Show ${_lnwEsc(c.name)} on the map">📍</button></div>`).join('') + '</div>';
-  }).join('') + `<div style="font-size:0.62rem;color:#7a9bb5;">Chaser positions from Spotter Network · updates every minute</div>`;
-}
-function toggleLnwPanel() {
-  const p = document.getElementById('lnw-panel');
-  const open = p.style.display !== 'block';
-  p.style.display = open ? 'block' : 'none';
-  document.getElementById('lnw-chip').setAttribute('aria-expanded', String(open));
-}
-function _lnwShowOutline(w) {
-  if (_lnwOutline) map.removeLayer(_lnwOutline);
-  _lnwOutline = L.geoJSON(w.geometry, { style: { color: LNW_COLORS[w.displayEvent] || '#ffa500', weight: 4, fillOpacity: 0.08 } }).addTo(map);
-  return _lnwOutline;
-}
-function focusLnwWarning(i) {
-  const w = _lnwData.warnings[i];
-  map.fitBounds(_lnwShowOutline(w).getBounds(), { padding: [40, 40], maxZoom: 10 });
-}
-function focusLnwChaser(i, j) {
-  const w = _lnwData.warnings[i], c = w.chasers[j];
-  _lnwShowOutline(w);
-  map.setView([c.lat, c.lng], Math.max(map.getZoom(), 10));
-}
-function openLnwPlayer(i, j) {
-  const c = _lnwData.warnings[i].chasers[j];
-  document.getElementById('lnw-player-title').textContent = `🔴 ${c.name} · ${_lnwData.warnings[i].displayEvent}`;
-  document.getElementById('lnw-frame').src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(c.videoId)}?autoplay=1&mute=1&playsinline=1`;
-  document.getElementById('lnw-player').style.display = 'block';
-  focusLnwChaser(i, j);
-}
-function closeLnwPlayer() {
-  document.getElementById('lnw-frame').src = 'about:blank';   // stop the stream, not just hide it
-  document.getElementById('lnw-player').style.display = 'none';
-}
-function startLiveNear() {
-  if (_lnwTimer) return;
-  refreshLiveNear();
-  _lnwTimer = setInterval(() => { if (!document.hidden) refreshLiveNear(); }, 60 * 1000);
-}
-function stopLiveNear() {
-  clearInterval(_lnwTimer); _lnwTimer = null; _lnwData = null;
-  if (_lnwOutline) { map.removeLayer(_lnwOutline); _lnwOutline = null; }
-  renderLiveNear();
-}
-
-// ── MESOSCALE UPDATES menu (Discussions + Analysis) ─────────────────────────
-function toggleMesoMenu() {
-  const m = document.getElementById('meso-menu');
-  const open = m.style.display === 'none';
-  m.style.display = open ? 'block' : 'none';
-  document.getElementById('btn-meso').setAttribute('aria-expanded', String(open));
-}
-// Toolbar buttons go through the same overlay state as the Layers panel, so
-// the two always agree.
-function toggleOverlayFromToolbar(id) {
-  const on = !overlayState[id];
-  overlayState[id] = on;
-  applyOverlay(id, on);
-  renderPanel();
-}
-function syncMesoButtons() {
-  const d = !!overlayState['mcd'], a = !!overlayState['mesoanalysis'];
-  const set = (id, on) => { const b = document.getElementById(id); if (b) b.className = 'tb-btn' + (on ? ' on' : ''); };
-  set('btn-mcd', d); set('btn-mesoanalysis', a); set('btn-meso', d || a);   // parent lights up when either is on
-  const opts = document.getElementById('meso-analysis-opts'); if (opts) opts.style.display = a ? 'block' : 'none';
-}
-
-// ── MESOSCALE ANALYSIS (HRRR ingredients rendered by the Radar Sidecar) ──────
-let mesoLayer = null, mesoParam = 'mlcape', mesoMeta = null, mesoTimer = null;
-async function startMesoAnalysis() {
-  try {
-    const r = await fetch(`${WXTILES_BASE}/meta/meso`);
-    mesoMeta = await r.json();
-  } catch (_) { mesoMeta = null; }
-  const valid = document.getElementById('meso-valid');
-  if (!mesoMeta || !mesoMeta.available) {
-    if (valid) valid.textContent = 'Mesoscale Analysis is temporarily unavailable. Try again in a few minutes.';
-    return;
-  }
-  drawMesoLayer();
-  clearInterval(mesoTimer);
-  mesoTimer = setInterval(async () => {          // new HRRR hour → refresh
-    if (document.hidden || !overlayState['mesoanalysis']) return;
-    try {
-      const m = await (await fetch(`${WXTILES_BASE}/meta/meso`)).json();
-      if (m.available && m.cycle !== (mesoMeta && mesoMeta.cycle)) { mesoMeta = m; drawMesoLayer(); }
-    } catch (_) {}
-  }, 10 * 60 * 1000);
-}
-function drawMesoLayer() {
-  if (mesoLayer) { map.removeLayer(mesoLayer); mesoLayer = null; }
-  if (!mesoMeta || !mesoMeta.available) return;
-  mesoLayer = L.tileLayer(`${WXTILES_BASE}/tiles/meso/${mesoParam}/${mesoMeta.cycle}/{z}/{x}/{y}.png`, {
-    opacity: 0.75, zIndex: 250, maxNativeZoom: 8, crossOrigin: true,
-    attribution: 'Mesoscale analysis: NOAA HRRR',
-  }).addTo(map);
-  const p = mesoMeta.params[mesoParam];
-  document.getElementById('meso-legend').innerHTML = p.colors.map(c => `<span style="flex:1;background:${c}"></span>`).join('');
-  document.getElementById('meso-legend-labels').innerHTML = `<span>${p.stops[0]}</span><span>${p.stops[Math.floor(p.stops.length / 2)]}</span><span>${p.stops[p.stops.length - 1]}+ ${p.units}</span>`;
-  const t = new Date(mesoMeta.validIso);
-  const help = {
-    mlcape: 'Energy available for rising air. 1,000+ supports strong storms; 2,500+ is very unstable.',
-    sbcape: 'Instability for air lifted from the surface. Can overstate things when the surface is capped.',
-    srh01: 'Low-level spin a storm can tap. 100+ supports tornadoes; 200+ is significant.',
-    srh03: 'Spin through the lowest 3 km. 150+ favors rotating supercells.',
-    shear06: 'Change in wind through 6 km. 40+ kt organizes storms into supercells.',
-    stp: 'Combines instability, spin, shear and cloud base. Above 1 marks environments where significant tornadoes become more likely.',
-  }[mesoParam];
-  document.getElementById('meso-valid').textContent = `${p.label} · HRRR analysis for ${t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. ${help}`;
-}
-function setMesoParam(v) { mesoParam = v; drawMesoLayer(); }
-function stopMesoAnalysis() {
-  clearInterval(mesoTimer); mesoTimer = null;
-  if (mesoLayer) { map.removeLayer(mesoLayer); mesoLayer = null; }
-}
-
 // ── MESOSCALE DISCUSSIONS ─────────────────────────────────────────────────────
 let mcdVisible = false;
 let mcdLayer = L.layerGroup();
@@ -2323,8 +2028,7 @@ let activeAlertFeatures = [];
 let activeMCDFeatures = [];
 
 async function loadAlerts() {
-  // Always fetch: even with the Alerts layer hidden, the "you're in a warning"
-  // banner and notifications must keep working. (Polygons only draw when visible.)
+  if (!alertsVisible) return;
   const status = document.getElementById('alerts-status');
   status.textContent = 'Updating alerts...';
   try {
@@ -2333,7 +2037,6 @@ async function loadAlerts() {
       { headers:{ 'Accept':'application/geo+json' } }
     );
     lastAlertsData = await res.json();
-    injectTestAlert(lastAlertsData);
     renderAlertLayers();
   } catch(e) {
     status.textContent = 'Alerts unavailable';
@@ -2428,11 +2131,8 @@ async function renderAlertLayers() {
     const props = feature.properties;
     const event = props.event || 'Advisory';
     count++;
-    // The Alert Types filter controls what's DRAWN. Life-safety warnings still
-    // reach the location banner even if the user hid them from the map.
-    const _typeShown = isAlertTypeEnabled(event);
-    if (!_typeShown && !BANNER_ALWAYS.has(event)) return;
-    if (_typeShown) shownCount++;
+    if (!isAlertTypeEnabled(event)) return; // filtered out by user's type selection
+    shownCount++;
 
     const s = ALERT_STYLE[event] || DEFAULT_STYLE;
     const layer = L.geoJSON(geom, {
@@ -2449,7 +2149,7 @@ async function renderAlertLayers() {
         });
       }
     });
-    if (_typeShown) alertsLayer.addLayer(layer);
+    alertsLayer.addLayer(layer);
 
     const expires = props.expires
       ? new Date(props.expires).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
@@ -2457,14 +2157,14 @@ async function renderAlertLayers() {
     const fullText = [props.description, props.instruction]
       .filter(Boolean).join('\n\n').replace(/\*/g,'').trim();
 
-    if (_typeShown) activeAlertFeatures.push({
+    activeAlertFeatures.push({
       event, color: s.color, headline: props.headline || event,
       areaDesc: props.areaDesc || '', expires, fullText,
       geometry: geom,
     });
 
     // Check if user is inside this alert polygon
-    if (typeof userLat === 'number' && typeof userLng === 'number') {
+    if (userLat && userLng && !bannerDismissed) {
       const inPoly = geom ? pointInPolygon(userLat, userLng, geom) : false;
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
@@ -2483,11 +2183,13 @@ async function renderAlertLayers() {
         });
         // Fire a browser system notification for this alert (works when tab is
         // open but in background — lock screen, other apps, etc.)
-        const _aid = props.id || (event + (props.onset||''));
-        if (!dismissedAlertIds.has(_aid)) {
-          maybeNotifyAlert(_aid, event, props.headline || '', props.areaDesc || '', s.color);
-          playAlertSound(_aid, event, props.parameters);
-        }
+        maybeNotifyAlert(
+          props.id || (event + props.onset),
+          event,
+          props.headline || '',
+          props.areaDesc || '',
+          s.color
+        );
       }
     }
   });
@@ -2496,8 +2198,8 @@ async function renderAlertLayers() {
   activeAlertFeatures.sort((a, b) => alertPriorityRank(a.event) - alertPriorityRank(b.event));
 
   // Show or hide banner based on whether user is in a zone
-  if (activeBannerAlerts.length > 0 && overlayState['banner'] !== false) {
-    showBanner(activeBannerAlerts);      // showBanner skips individually dismissed alerts
+  if (activeBannerAlerts.length > 0 && !bannerDismissed) {
+    showBanner(activeBannerAlerts);
   } else if (activeBannerAlerts.length === 0) {
     bannerDismissed = false; // reset dismiss if alerts cleared
     dismissedAlertIds.clear(); // clear per-alert dismissals too
@@ -2592,73 +2294,12 @@ let activeBannerAlerts = [];
 // the user dismisses the previous one.
 const dismissedAlertIds = new Set();
 
-// Warnings that always reach the location banner, regardless of the map filter
-const BANNER_ALWAYS = new Set(['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning']);
-
-// ── In-page alert sounds (while the radar is open) ──────────────────────────
-// Outdoor-siren for tornado-level warnings, soft chime for other warnings.
-// Plays once per alert; dismissing the banner stops it. Browsers may block
-// sound until the user has interacted with the page at least once.
-const _soundPlayed = new Set();
-let _alertAudio = null;
-function _soundUrl(name) {
-  const a = document.createElement('audio');
-  return `/sounds/${name}.` + (a.canPlayType('audio/ogg; codecs="vorbis"') ? 'ogg' : 'mp3');
-}
-function playAlertSound(alertId, event, params) {
-  if (localStorage.getItem('wtv-alert-sound') === 'off' || _soundPlayed.has(alertId)) return;
-  const ffCat = ((params && params.flashFloodDamageThreat) || [])[0] === 'CATASTROPHIC';
-  let name = null;
-  if (event === 'Tornado Warning' || event === 'Extreme Wind Warning' || ffCat) name = 'tornado_siren';
-  else if (event === 'Severe Thunderstorm Warning' || event === 'Flash Flood Warning') name = 'alert_chime';
-  if (!name) return;
-  _soundPlayed.add(alertId);
-  try {
-    stopAlertSound();
-    _alertAudio = new Audio(_soundUrl(name));
-    _alertAudio.play().catch(() => {});
-  } catch (_) {}
-}
-function stopAlertSound() {
-  if (_alertAudio) { try { _alertAudio.pause(); } catch (_) {} _alertAudio = null; }
-}
-
-// ── Test mode: radar.html?testAlert=tornado | svr | flood | emergency ───────
-// Drops a clearly-labelled fake warning on your location (or the map center)
-// so the banner, notification and sound can be checked without real weather.
-function injectTestAlert(data) {
-  const kind = new URLSearchParams(location.search).get('testAlert');
-  if (!kind || !data || !Array.isArray(data.features)) return;
-  if (typeof userLat !== 'number' || typeof userLng !== 'number') {
-    const c = map.getCenter(); userLat = c.lat; userLng = c.lng;
-  }
-  const events = { tornado: 'Tornado Warning', emergency: 'Tornado Warning', svr: 'Severe Thunderstorm Warning', flood: 'Flash Flood Warning' };
-  const event = events[kind] || 'Tornado Warning';
-  const d = 0.15;
-  data.features = data.features.filter(f => !String(f.properties?.id || '').startsWith('wtv-test-'));
-  data.features.unshift({
-    type: 'Feature',
-    geometry: { type: 'Polygon', coordinates: [[[userLng - d, userLat - d], [userLng + d, userLat - d], [userLng + d, userLat + d], [userLng - d, userLat + d], [userLng - d, userLat - d]]] },
-    properties: {
-      id: 'wtv-test-' + kind, event,
-      headline: `TEST — ${kind === 'emergency' ? 'TORNADO EMERGENCY' : event} (not a real warning)`,
-      areaDesc: 'WeatherTV test alert — not a real warning',
-      description: 'This is a WeatherTV test of the location banner, notification and alert sound. No real warning is in effect.',
-      instruction: '', onset: new Date().toISOString(),
-      expires: new Date(Date.now() + 30 * 60000).toISOString(),
-      parameters: kind === 'emergency' ? { tornadoDamageThreat: ['CATASTROPHIC'] } : {},
-      geocode: { UGC: [] },
-    },
-  });
-}
-
 function dismissBanner() {
   // Dismiss all currently active banner alerts by ID
   activeBannerAlerts.forEach(a => {
     if (a.id) dismissedAlertIds.add(a.id);
   });
   bannerDismissed = true;
-  stopAlertSound();
   document.getElementById('warning-banner').style.display = 'none';
   document.getElementById('map').classList.remove('banner-visible');
 }
@@ -2785,13 +2426,9 @@ let canadaFrameLayers = [];
 let canadaFrameIdx    = 0;
 let canadaAnimTimer   = null;
 
-// Handles P1D, PT1H, PT3H, PT10M, PT1H30M. (The old version only understood
-// minutes, so hourly model steps like PT1H silently became 10 minutes.)
 function parseISO8601Duration(dur) {
-  const m = String(dur || '').match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/i);
-  if (!m) return 10 * 60 * 1000;
-  const ms = ((+m[1] || 0) * 1440 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 60 * 1000;
-  return ms || 10 * 60 * 1000;
+  const m = dur.match(/PT?(\d+)M/i);
+  return m ? parseInt(m[1]) * 60 * 1000 : 10 * 60 * 1000;
 }
 
 async function getCanadaTimestamps() {
@@ -3250,10 +2887,6 @@ const ALL_STATES = [
   ['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],
   ['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],
   ['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming'],
-  ['PR','Puerto Rico'],['VI','U.S. Virgin Islands'],
-  // Outside the US — community cameras (towns, beaches, ski resorts, cities)
-  ['CAN','🌎 Canada'],['CAR','🌎 Caribbean'],['MEX','🌎 Mexico & Central America'],['SAM','🌎 South America'],
-  ['EUR','🌍 Europe'],['MEA','🌍 Middle East & Africa'],['ASI','🌏 Asia'],['OCE','🌏 Oceania & Pacific'],['WLD','🌐 Everywhere else'],
 ];
 
 // Fetch which states have camera coverage and populate the dropdown
@@ -3309,7 +2942,7 @@ async function onCamStateChange(code) {
 
     for (const cam of data.cameras) {
       const el = document.createElement('div');
-      el.className = 'cam-dot' + ({ windy: ' cam-dot-windy', nps: ' cam-dot-nps', usgs: ' cam-dot-usgs', community: ' cam-dot-community', caloes: ' cam-dot-mountain' }[cam.source] || '');
+      el.className = cam.source === 'windy' ? 'cam-dot cam-dot-windy' : 'cam-dot';
       const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
       const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
       mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
@@ -3326,12 +2959,8 @@ async function onCamStateChange(code) {
       camMarkers[cam.id] = mk;
     }
 
-    // Fly to the selected state. Use the state's own bounds from the server, so
-    // one camera with bad coordinates can't pull the map out to the whole
-    // world (that was Georgia). Fall back to the cameras' spread.
-    if (Array.isArray(data.bounds)) {
-      map.fitBounds(data.bounds, { padding: [30, 30], maxZoom: 9 });
-    } else if (data.cameras.length > 0) {
+    // Fly to the selected state so cameras are visible
+    if (data.cameras.length > 0) {
       const lats = data.cameras.map(c => c.lat);
       const lngs = data.cameras.map(c => c.lng);
       map.fitBounds([
@@ -3387,7 +3016,7 @@ function openCameraOverlay(cam) {
   const footer  = document.getElementById('camera-overlay-footer');
 
   title.textContent = cam.name + (cam.direction ? ` — ${cam.direction}` : '');
-  overlay.style.display = 'flex';
+  overlay.style.display = 'block';
 
   _stopCameraMedia();
   body.innerHTML = '<div id="camera-overlay-status">Loading…</div>';
@@ -3397,26 +3026,18 @@ function openCameraOverlay(cam) {
     // Free tier requires linking back to windy.com (attribution built into player).
     const iframe = document.createElement('iframe');
     iframe.src = cam.playerUrl;
-    iframe.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
-    iframe.style.cssText = 'width:100%;height:100%;border:none;background:#000;display:block;';
+    iframe.allow = 'autoplay; fullscreen';
+    iframe.style.cssText = 'width:100%;height:250px;border:none;background:#000;display:block;';
     body.innerHTML = '';
     body.appendChild(iframe);
-    if (cam.source === 'windy') {
-      footer.innerHTML = `Live webcam · <a href="https://www.windy.com/webcams/${cam.windyId}"
-        target="_blank" rel="noopener"
-        style="color:var(--accent);text-decoration:none">View on Windy.com ↗</a>`;
-    } else if (cam.source === 'haddonfield') {
-      footer.innerHTML = `🎃 ${cam.creditLine || `Ambience by ${cam.credit}`} · <a href="${cam.pageUrl}" target="_blank" rel="noopener"
-        style="color:var(--accent);text-decoration:none">Watch on YouTube ↗</a>`;
-    } else {                       // e.g. an NPS camera streaming on YouTube
-      footer.textContent = 'Live stream · ' + cam.name;
-      _camSourceLink(cam, footer);
-    }
+    footer.innerHTML = `Live webcam · <a href="https://www.windy.com/webcams/${cam.windyId}"
+      target="_blank" rel="noopener"
+      style="color:var(--accent);text-decoration:none">View on Windy.com ↗</a>`;
 
   } else if (cam.videoUrl) {
     const video = document.createElement('video');
     video.autoplay = true; video.muted = true; video.controls = true; video.playsInline = true;
-    video.style.cssText = 'width:100%;height:100%;display:block;object-fit:contain;background:#000;';
+    video.style.cssText = 'width:100%;display:block;max-height:280px;background:#000;';
     body.innerHTML = '';
     body.appendChild(video);
 
@@ -3447,54 +3068,9 @@ function openCameraOverlay(cam) {
   } else if (cam.imageUrl) {
     _startImageStream(cam, body);
     footer.textContent = `Refreshes every ${CAM_IMG_REFRESH_MS/1000}s · ${cam.name}`;
-    _camSourceLink(cam, footer);
-  } else if (cam.pageUrl) {
-    // e.g. an NPS live stream with no still image — send people to the source
-    body.innerHTML = '<div id="camera-overlay-status">This camera streams on its own page</div>';
-    footer.textContent = cam.name;
-    _camSourceLink(cam, footer);
   } else {
     body.innerHTML = '<div id="camera-overlay-status">No feed available for this camera</div>';
     footer.textContent = cam.name;
-  }
-}
-
-// ── Suggest a camera ─────────────────────────────────────────────────────────
-function toggleSuggestCam() {
-  const el = document.getElementById('suggest-cam');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-async function submitSuggestCam() {
-  const out = document.getElementById('sc-result');
-  const url = document.getElementById('sc-url').value.trim();
-  if (!url) { out.textContent = 'Paste a link first.'; return; }
-  const body = { url, place: document.getElementById('sc-place').value.trim() };
-  if (document.getElementById('sc-center').checked) { const c = map.getCenter(); body.lat = c.lat.toFixed(5); body.lng = c.lng.toFixed(5); }
-  out.textContent = 'Sending…';
-  try {
-    const r = await fetch('/api/community/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json().catch(() => ({}));
-    out.style.color = r.ok ? '#22c55e' : '#f87171';
-    out.textContent = r.ok ? (j.message || 'Thanks!') : (j.error || 'Could not send — try again later');
-    if (r.ok) { document.getElementById('sc-url').value = ''; document.getElementById('sc-place').value = ''; }
-  } catch (e) { out.style.color = '#f87171'; out.textContent = 'Could not send — try again later'; }
-}
-
-// Link back to the camera's own page (NPS / USGS) — credit + their live view
-function _camSourceLink(cam, footer) {
-  if (!cam.pageUrl) return;
-  const who = cam.provider || (cam.source === 'nps' ? 'NPS.gov' : cam.source === 'usgs' ? 'USGS' : cam.source === 'community' ? 'YouTube' : 'source');
-  const a = document.createElement('a');
-  a.href = cam.pageUrl; a.target = '_blank'; a.rel = 'noopener';
-  a.style.cssText = 'color:var(--accent);text-decoration:none;margin-left:0.4rem;';
-  a.textContent = cam.isStreaming ? `▶ Watch live on ${who} ↗` : `View on ${who} ↗`;
-  footer.appendChild(document.createTextNode(' · '));
-  footer.appendChild(a);
-  if (cam.statusMessage) {          // e.g. NPS: "This webcam is currently experiencing technical issues."
-    const note = document.createElement('div');
-    note.style.cssText = 'color:#f4a261;margin-top:0.25rem;';
-    note.textContent = '⚠ ' + cam.statusMessage;
-    footer.appendChild(note);
   }
 }
 
@@ -3509,7 +3085,7 @@ function _startImageStream(cam, body) {
 
   const img = document.createElement('img');
   img.alt = cam.name;
-  img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:none;';
+  img.style.cssText = 'width:100%;display:block;max-height:280px;object-fit:cover;display:none;';
 
   let errorCount = 0;
   const MAX_RETRIES = 2;
@@ -3563,29 +3139,7 @@ function _stopCameraMedia() {
   if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
 }
 
-// ⤢ button / double-click: toggle the camera between the corner box and a big viewer
-function toggleCameraExpand(force) {
-  const ov = document.getElementById('camera-overlay');
-  const big = typeof force === 'boolean' ? force : !ov.classList.contains('cam-big');
-  if (big) { ov.dataset.prevW = ov.style.width; ov.dataset.prevH = ov.style.height; ov.style.width = ''; ov.style.height = ''; }
-  else { ov.style.width = ov.dataset.prevW || ''; ov.style.height = ov.dataset.prevH || ''; }
-  ov.classList.toggle('cam-big', big);
-  const btn = document.getElementById('camera-overlay-expand');
-  btn.textContent = big ? '⤡' : '⤢';
-  btn.setAttribute('aria-label', big ? 'Make the camera smaller' : 'Make the camera bigger');
-  btn.title = big ? 'Smaller' : 'Bigger (double-click the picture too)';
-}
-document.getElementById('camera-overlay-body').addEventListener('dblclick', () => toggleCameraExpand());
-// Escape while expanded shrinks it back (first), instead of closing the camera
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.getElementById('camera-overlay').classList.contains('cam-big')) {
-    toggleCameraExpand(false);
-    e.stopImmediatePropagation();
-  }
-}, true);
-
 function closeCameraOverlay() {
-  toggleCameraExpand(false);
   _stopCameraMedia();
   camActiveCamId = null;
   const overlay = document.getElementById('camera-overlay');
@@ -3835,7 +3389,6 @@ function setAppTempMode(mode) {
 
 async function showAppTemp() {
   clearAppTemp();
-  const _seq = _appTempSeq;
   appTempLayer = L.layerGroup().addTo(map);
   const mode = _appTempMode;
   setStatus(`Loading ${mode === 'feelslike' ? 'feels-like' : 'forecast'} temperatures…`);
@@ -3847,7 +3400,7 @@ async function showAppTemp() {
     Promise.all(TEMP_CITIES.map(fetcher))
   ]);
 
-  if (!appTempLayer || _seq !== _appTempSeq) return; // turned off (or restarted) while loading
+  if (!appTempLayer) return; // cleared while loading
   const cities = cityResults.filter(Boolean);
 
   // Build state → avg temp lookup for choropleth
@@ -3939,13 +3492,9 @@ async function showAppTemp() {
 }
 
 function clearAppTemp() {
-  _appTempSeq++;                         // cancels any load still in flight
   if (appTempLayer) { map.removeLayer(appTempLayer); appTempLayer = null; }
-  const tl = document.getElementById('temp-legend');   // the Feels Like color bar
-  if (tl) tl.style.display = 'none';
   hideProductLegend();
 }
-var _appTempSeq = 0;   // var: hoisted, so clearAppTemp() is safe to call at any point during startup
 
 let activePaint = 'reflectivity'; // can become null — "no base layer selected" is now a valid state
 function clearAllPaint(){
@@ -4010,19 +3559,10 @@ function activateSingleSiteProduct(member) {
 // a whole can now be empty. Click the active layer again to turn it off;
 // click a different one to switch (auto-clearing the previous, same as
 // before).
-function syncTempButtons(){
-  const mode = activePaint === 'apptemp' ? (_appTempMode || 'feelslike') : 'none';
-  if (typeof _mapTempMode !== 'undefined') _mapTempMode = mode;
-  ['none','feelslike','forecast'].forEach(m => {
-    const b = document.getElementById('btn-' + m);
-    if (b) b.className = m === mode ? 'active' : '';
-  });
-}
 function togglePaint(member){
   if (activePaint === member) {
     clearAllPaint();
     activePaint = null;
-    syncTempButtons();
     setStatus('Base layer off');
     hideProductLegend();
     document.getElementById('site-picker').style.display = overlayState['cc'] ? 'block' : 'none';
@@ -4059,7 +3599,6 @@ function setPaint(member){
     case 'velocity': case 'srv': case 'echotops': showSS(member); break;
   }
   setStatus(paintStatusText(member));
-  syncTempButtons();
   // Show product color legend for single-site products; hide for others.
   // CC is intentionally excluded here — it manages its own legend via
   // applyOverlay('cc', ...) since it's a toggle, not a paint selection, and
@@ -4880,11 +4419,7 @@ async function refreshStormCells() {
       if (!b.contains([lat, lng])) return;
       const dbz = p.MAX_DBZ || p.max_dbz || 0;
       const color = dbz >= 65 ? '#ff00ff' : dbz >= 55 ? '#ff0000' : dbz >= 45 ? '#ff8c00' : '#ffff00';
-      const spd = p.SKNT || p.sknt || p.storm_speed || 0;
-      // IEM storm attributes give DRCT as the direction the storm is coming FROM
-      // (a "west" storm moves west→east), so the arrow heading is DRCT + 180.
-      const fromDir = p.DRCT || p.drct || p.storm_drct || 0;
-      const dir = (fromDir + 180) % 360;
+      const spd = p.SKNT || p.storm_speed || 0, dir = p.DRCT || p.storm_drct || 0;
       // Vector endpoint 45 min ahead
       const dist = spd * 0.75 * 1.852 / 111; // knots → deg lat
       const endLat = lat + dist * Math.cos(dir * Math.PI / 180);
@@ -4897,9 +4432,9 @@ async function refreshStormCells() {
       const mk = L.circleMarker([lat, lng], { radius: 6, color, fillColor: color, fillOpacity: 0.85, weight: 2 });
       mk.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${color}">🎯 Storm Cell</div>
         <div style="margin-top:4px">Max dBZ: <strong>${dbz}</strong></div>
-        <div>Moving toward: <strong>${compassName(dir)} at ${fmtSpeedKt(spd)}</strong></div>
-        ${stormFlag(p.TVS ?? p.tvs) ? '<div style="color:#ff0000;margin-top:2px">⚠ Tornado vortex signature (TVS)</div>' : ''}
-        ${stormFlag(p.MESO ?? p.meso) ? '<div style="color:#ff8c00;margin-top:2px">⚠ Mesocyclone detected</div>' : ''}
+        <div>Movement: <strong>${dir}° at ${spd} kt</strong></div>
+        ${(p.TVS||p.tvs) ? '<div style="color:#ff0000;margin-top:2px">⚠ TVS detected</div>' : ''}
+        ${(p.MESO||p.meso) ? '<div style="color:#ff8c00;margin-top:2px">⚠ Meso detected</div>' : ''}
         <div class="exp">IEM NEXRAD Storm Attributes</div></div>`, { maxWidth: 240 });
       _stormCellLayer.addLayer(mk);
     });
@@ -6046,111 +5581,6 @@ async function updateFeelsLike(lat, lng) {
 let _forecastPanelOpen = false;
 let _forecastAutoLoaded = false;
 let _forecastData = null;
-
-// ── Model comparison ─────────────────────────────────────────────────────────
-const MM_COLORS = { ecmwf_ifs025:'#ff3b84', ecmwf_aifs025_single:'#f4a261', gfs_seamless:'#00b4d8', icon_seamless:'#a78bfa',
-                    gem_seamless:'#ef4444', ukmo_seamless:'#22c55e', jma_seamless:'#facc15', meteofrance_seamless:'#60a5fa' };
-let _mmData = null, _mmView = 'temp';
-const _mmHidden = new Set();
-
-async function loadModelComparison() {
-  const loc = _forecastData && _forecastData.location;
-  const btn = document.getElementById('fp-models-btn');
-  if (!loc || !Number.isFinite(loc.lat)) return;
-  btn.disabled = true; btn.textContent = 'Loading models…';
-  try {
-    const r = await fetch(`/api/forecast/models?lat=${loc.lat.toFixed(4)}&lon=${loc.lon.toFixed(4)}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    _mmData = await r.json();
-    if (!_mmData.models || !_mmData.models.length) throw new Error('no model data');
-    btn.style.display = 'none';
-    document.getElementById('fp-models-body').style.display = 'block';
-    renderModelComparison();
-  } catch (e) {
-    btn.disabled = false; btn.textContent = 'Model comparison unavailable — tap to retry';
-  }
-}
-function setModelView(v) {
-  _mmView = v;
-  document.querySelectorAll('.fpm-tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  renderModelComparison();
-}
-function toggleModelLine(id) {
-  if (_mmHidden.has(id)) _mmHidden.delete(id); else _mmHidden.add(id);
-  renderModelComparison();
-}
-function renderModelComparison() {
-  const d = _mmData; if (!d) return;
-  // Open-Meteo times are local to the forecast location; compare in that clock
-  const nowLocal = Date.now() + (d.utc_offset_seconds || 0) * 1000;
-  const tms = d.hourlyTime.map(t => Date.parse(t + 'Z'));
-  let i0 = tms.findIndex(t => t >= nowLocal - 30 * 60000); if (i0 < 0) i0 = 0;
-  const N = Math.min(tms.length - i0, 168);
-  const shown = d.models.filter(m => !_mmHidden.has(m.id));
-  // Series: temperature, or running precipitation total from now
-  const series = shown.map(m => {
-    const src = _mmView === 'temp' ? m.hourly.temp : m.hourly.precip;
-    let acc = 0;
-    const vals = [];
-    for (let k = 0; k < N; k++) {
-      const v = src ? src[i0 + k] : null;
-      if (_mmView === 'temp') vals.push(v);
-      else { if (v != null) acc += v; vals.push(src ? +acc.toFixed(2) : null); }
-    }
-    return { m, vals };
-  });
-  const all = series.flatMap(s => s.vals).filter(v => v != null);
-  const W = 340, H = 170, L = 30, R = 334, T = 10, B = 140;
-  let lo = all.length ? Math.min(...all) : 0, hi = all.length ? Math.max(...all) : 1;
-  if (_mmView === 'precip') { lo = 0; hi = Math.max(hi, 0.25); } else { lo = Math.floor(lo / 5) * 5; hi = Math.ceil(hi / 5) * 5; if (hi === lo) hi = lo + 5; }
-  const x = k => L + (R - L) * k / Math.max(1, N - 1);
-  const y = v => B - (B - T) * (v - lo) / (hi - lo);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${_mmView === 'temp' ? 'Temperature' : 'Precipitation total'} by forecast model">`;
-  // gridlines + y labels
-  for (let g = 0; g <= 4; g++) {
-    const v = lo + (hi - lo) * g / 4, yy = y(v);
-    svg += `<line x1="${L}" x2="${R}" y1="${yy}" y2="${yy}" stroke="rgba(255,255,255,0.07)"/>`;
-    svg += `<text x="${L - 4}" y="${yy + 3}" fill="#7a9bb5" font-size="8" text-anchor="end">${_mmView === 'temp' ? Math.round(v) + '°' : v.toFixed(v < 1 ? 2 : 1) + '"'}</text>`;
-  }
-  // day separators + labels (local midnight)
-  for (let k = 1; k < N; k++) {
-    const t = new Date(tms[i0 + k]);
-    if (t.getUTCHours() === 0) {
-      svg += `<line x1="${x(k)}" x2="${x(k)}" y1="${T}" y2="${B}" stroke="rgba(255,255,255,0.10)" stroke-dasharray="2 3"/>`;
-      if (x(k) < R - 14) svg += `<text x="${x(k) + 3}" y="${B + 12}" fill="#7a9bb5" font-size="8">${t.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</text>`;
-    }
-  }
-  series.forEach(({ m, vals }) => {
-    let path = '', pen = false;
-    vals.forEach((v, k) => { if (v == null) { pen = false; return; } path += (pen ? 'L' : 'M') + x(k).toFixed(1) + ',' + y(v).toFixed(1); pen = true; });
-    svg += `<path d="${path}" fill="none" stroke="${MM_COLORS[m.id] || '#ccc'}" stroke-width="1.6" stroke-linejoin="round" opacity="0.95"/>`;
-  });
-  svg += `<text x="${L}" y="${H - 4}" fill="#7a9bb5" font-size="8">Now</text>`;
-  svg += `<text x="${R}" y="${H - 4}" fill="#7a9bb5" font-size="8" text-anchor="end">+7 days</text></svg>`;
-  document.getElementById('fp-models-chart').innerHTML = svg;
-
-  document.getElementById('fp-models-legend').innerHTML = d.models.map(m =>
-    `<button type="button" class="${_mmHidden.has(m.id) ? 'off' : ''}" onclick="toggleModelLine('${m.id}')" aria-pressed="${!_mmHidden.has(m.id)}"><i style="background:${MM_COLORS[m.id] || '#ccc'}"></i>${m.label}</button>`).join('');
-
-  // Day-by-day range across models, with an agreement badge
-  const nowDay = new Date(nowLocal).toISOString().slice(0, 10);
-  const rows = [];
-  d.dailyTime.forEach((day, k) => {
-    if (day < nowDay || rows.length >= 6) return;
-    const hiV = shown.map(m => m.daily.max && m.daily.max[k]).filter(v => v != null);
-    const loV = shown.map(m => m.daily.min && m.daily.min[k]).filter(v => v != null);
-    const pV  = shown.map(m => m.daily.precip && m.daily.precip[k]).filter(v => v != null);
-    if (!hiV.length) return;
-    const spread = Math.max(...hiV) - Math.min(...hiV);
-    const [txt, col] = spread <= 3 ? ['Agree', '#22c55e'] : spread <= 7 ? ['Some spread', '#f4a261'] : ['Disagree', '#ef4444'];
-    const label = k === 0 || day === nowDay ? 'Today' : new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
-    const rng = (a, f) => { const mn = Math.min(...a), mx = Math.max(...a); return f(mn) === f(mx) ? f(mn) : `${f(mn)}–${f(mx)}`; };
-    rows.push(`<div class="fpm-day"><b>${label}</b><span>H ${rng(hiV, v => Math.round(v))}° · L ${rng(loV, v => Math.round(v))}°` +
-      (pV.length && Math.max(...pV) >= 0.01 ? ` · ${rng(pV, v => v.toFixed(2))}"` : '') +
-      `</span><span class="fpm-agree" style="color:${col};border:1px solid ${col}">${txt}</span></div>`);
-  });
-  document.getElementById('fp-models-days').innerHTML = rows.join('');
-}
 let _mapTempMode = 'none'; // 'none' | 'feelslike' | 'forecast'
 
 function toggleForecastPanel(force) {
@@ -6703,12 +6133,6 @@ function renderForecast(data) {
     dailyEl.appendChild(row);
   });
   document.getElementById('fp-daily-wrap').style.display = 'block';
-  // New location → offer the comparison again (loads only if the user asks)
-  _mmData = null;
-  document.getElementById('fp-models-wrap').style.display = 'block';
-  document.getElementById('fp-models-body').style.display = 'none';
-  const _mmBtn = document.getElementById('fp-models-btn');
-  _mmBtn.style.display = ''; _mmBtn.disabled = false; _mmBtn.textContent = 'Compare 8 forecast models';
 
   // ── Storm indicators ──────────────────────────────────────────────────────
   const futureIdx = Math.min(startIdx + 12, times.length);
@@ -6770,232 +6194,56 @@ function onCamSourceToggle() {
 
 const MODELS = {
   hrrr: {
-    label: 'HRRR — Simulated Reflectivity (0–3h)',
-    note:  'High-Resolution Rapid Refresh · 3 km · updates hourly · 15-min steps to +3h. Best for near-term storm timing.',
+    label: 'HRRR — Simulated Reflectivity',
+    note:  'High-Resolution Rapid Refresh · 3km · Updates hourly · 15-min steps to +3h. Best for near-term storm timing. The only free forecast reflectivity tile source available — RRFS replaces it August 31, 2026 with improved resolution.',
     kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
     urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFD-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
   },
   hrrrp: {
-    label: 'HRRR — Precipitation Type (0–3h)',
+    label: 'HRRR — Precipitation Type',
     note:  'High-Resolution Rapid Refresh · Same HRRR model data, different color scheme. Color-codes precipitation by type: blue = rain, purple = freezing rain, green = snow, pink = ice pellets. Most useful for winter storms.',
     kind:  'iem', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
     urlFn: mins => `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/hrrr::REFP-F${String(mins).padStart(4,'0')}-0/{z}/{x}/{y}.png`,
   },
   rrfs: {
-    label: 'RRFS — Simulated Reflectivity (0–18h)',
-    note:  "Rapid Refresh Forecast System · 3 km · NOAA's next-generation storm-scale model, replacing NAM and HREF. Running as NOAA's pre-operational parallel feed until its scheduled Oct 14, 2026 launch; the same data source continues after launch. Hourly steps out to 18h.",
-    kind:  'sidecar', model: 'rrfs', maxNativeZoom: 8,
-  },
-  gfs: {
-    label: 'GFS — Simulated Reflectivity (0–48h)',
-    note:  'Global Forecast System · NOAA global model · ~25 km · 3-hour steps to +48h. Coarser than HRRR/RRFS — good for the big picture and timing of large systems, not individual storms.',
-    kind:  'sidecar', model: 'gfs', maxNativeZoom: 6,
-  },
-  ecmwf: {
-    label: 'ECMWF (Euro) — Precipitation Rate (3–48h)',
-    note:  'ECMWF IFS · the "Euro" model · ~25 km · 3-hour steps. Shows precipitation rate (3-hr average), not simulated radar — ECMWF open data does not include reflectivity. Colors: light blue = light, yellow/orange = heavy, red/purple = extreme. Contains ECMWF open data (CC BY 4.0).',
-    kind:  'sidecar', model: 'ecmwf', maxNativeZoom: 6,
-    attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> (CC BY 4.0)',
-  },
-  refs: {
-    label: 'REFS ensemble — Most Likely Radar (1–48h)',
-    note:  "NOAA's new storm-scale ensemble (replaces the HREF): many RRFS runs combined into one 'most likely' radar picture (probability-matched mean) — sharper than a simple average. 3 km · hourly. Becomes operational Oct 14, 2026; shown from NOAA's parallel feed until then.",
-    kind:  'sidecar', model: 'refs', maxNativeZoom: 8,
-    attribution: 'Forecast: NOAA/NCEP REFS',
-  },
-  refsprob: {
-    label: 'REFS ensemble — Chance of Strong Storms (1–48h)',
-    note:  "Percent of REFS ensemble members showing radar of 40 dBZ or more (heavy rain / strong storms) at each spot. Green 10–30% · yellow–orange 40–60% · red–purple 70%+. The higher the number, the more the models agree a storm will be there.",
-    kind:  'sidecar', model: 'refsprob', maxNativeZoom: 8,
-    attribution: 'Forecast: NOAA/NCEP REFS',
-  },
-  aifs: {
-    label: 'ECMWF AI (AIFS) — Precipitation Rate (6–48h)',
-    note:  "ECMWF's machine-learning forecast model — trained on decades of weather data instead of solving physics equations, and competitive with the physics-based Euro. ~25 km · 6-hour steps · precipitation rate. Contains ECMWF open data (CC BY 4.0).",
-    kind:  'sidecar', model: 'aifs', maxNativeZoom: 6,
-    attribution: 'Forecast: © <a href="https://www.ecmwf.int/">ECMWF</a> AIFS (CC BY 4.0)',
-  },
-  rdps: {
-    label: 'Canadian RDPS (GEM Regional) — Precipitation (0–84h)',
-    note:  "Environment Canada's regional model · ~10 km · covers Canada and the US · served directly by MSC GeoMet (no load on our servers).",
-    kind:  'geomet', prefix: /^RDPS[._]/i, layers: ['RDPS.ETA_RT', 'RDPS.ETA_PR'], maxFrames: 24,
-    attribution: 'Forecast: <a href="https://eccc-msc.github.io/open-data/">ECCC MSC GeoMet</a>',
-  },
-  hrdps: {
-    label: 'Canadian HRDPS (2.5 km) — Precipitation (0–48h)',
-    note:  "Environment Canada's high-resolution model · 2.5 km · covers Canada and areas along the US border only · served directly by MSC GeoMet.",
-    kind:  'geomet', prefix: /^HRDPS[._-]/i, layers: ['HRDPS.CONTINENTAL_RT', 'HRDPS.CONTINENTAL_PR'], maxFrames: 24,
-    attribution: 'Forecast: <a href="https://eccc-msc.github.io/open-data/">ECCC MSC GeoMet</a>',
+    label: 'RRFS — Coming Aug 31',
+    note:  "Rapid Refresh Forecast System — replaces both HRRR and NAM on August 31, 2026. Higher resolution, better convective physics, sharper storm representation. We will activate it on launch day. HRRR is the best available option until then.",
+    kind:  'soon', maxMins: 180, stepMins: 15, maxNativeZoom: 8,
+    urlFn: () => '',
   },
 };
-
-// ── MSC GeoMet (Canadian models) ─────────────────────────────────────────────
-// Layer names have changed over the years, so each model lists candidates and
-// uses the first one GeoMet actually publishes. The layer's own title (e.g.
-// "Precipitation rate [mm/h]") is shown in the note so it's clear what's drawn.
-// GetCapabilities goes through our existing cached proxy; the map tiles load
-// straight from geo.weather.gc.ca.
-function _parseWmsTimes(text) {
-  const out = [];
-  String(text || '').trim().split(',').forEach(part => {
-    const bits = part.trim().split('/');
-    if (bits.length >= 2) {
-      const step = parseISO8601Duration(bits[2] || 'PT1H');
-      for (let t = Date.parse(bits[0]), end = Date.parse(bits[1]); t <= end && out.length < 2000; t += step) out.push(t);
-    } else if (bits[0]) out.push(Date.parse(bits[0]));
-  });
-  return out.filter(Number.isFinite);
-}
-// Rank GeoMet's own precipitation layers for a model: a precipitation RATE on
-// the current grid first, accumulations only as a fallback.
-function _rankGeometLayers(list, cfg) {
-  const score = l => {
-    const t = (l.title + ' ' + l.name).toLowerCase();
-    let sc = 0;
-    if (/rate|taux|mm\/h/.test(t)) sc += 10;
-    if (/accum/.test(t)) sc -= 4;
-    if (/\d+(\.\d+)?km/.test(l.name)) sc += 3;                       // current-generation names (RDPS_10km_…)
-    if (/prob|pctl|percent|contour|ens|type|snow|rain_|freezing|ice/.test(t)) sc -= 20;
-    return sc;
-  };
-  return list.filter(l => cfg.prefix.test(l.name)).sort((a, b) => score(b) - score(a)).map(l => l.name);
-}
-async function _geometLayerInfo(cfg) {
-  let names = [];
-  try {
-    const r = await fetch('/api/geomet/precip-layers');
-    if (r.ok) names = _rankGeometLayers((await r.json()).layers || [], cfg).slice(0, 4);
-  } catch (_) { /* fall back to the known names below */ }
-  names = [...new Set([...names, ...cfg.layers])];
-  for (const name of names) {
-    try {
-      const txt = await (await fetch(`/api/canada-radar/capabilities?layer=${encodeURIComponent(name)}`)).text();
-      const xml = new DOMParser().parseFromString(txt, 'text/xml');
-      const layer = [...xml.getElementsByTagName('Layer')].find(l => {
-        const n = [...l.children].find(c => c.tagName === 'Name'); return n && n.textContent.trim() === name;
-      });
-      if (!layer) continue;
-      const title = ([...layer.children].find(c => c.tagName === 'Title') || {}).textContent || name;
-      const dim = [...layer.getElementsByTagName('Dimension')].find(dd => (dd.getAttribute('name') || '').toLowerCase() === 'time');
-      const times = dim ? _parseWmsTimes(dim.textContent) : [];
-      if (times.length) return { name, title: title.trim(), times };
-    } catch (_) { /* try the next candidate */ }
-  }
-  return null;
-}
 let currentModel = 'hrrr';
-let _modelMeta = null, _modelMetaTs = 0, _modelBuildSeq = 0;
-
-async function getModelMeta() {
-  if (_modelMeta && Date.now() - _modelMetaTs < 5 * 60 * 1000) return _modelMeta;
-  const r = await fetch(`${WXTILES_BASE}/meta/models`);
-  if (!r.ok) throw new Error('meta HTTP ' + r.status);
-  _modelMeta = (await r.json()).models || {};
-  _modelMetaTs = Date.now();
-  return _modelMeta;
-}
-
-function _frameLabel(validMs, fh) {
-  const d = new Date(validMs);
-  const day = d.toLocaleDateString([], { weekday: 'short' });
-  const t = d.toLocaleTimeString([], { hour: 'numeric' });
-  // Day + time is what viewers need; the model's forecast-hour number ("F11")
-  // meant nothing to most people, so it's no longer shown.
-  void fh;
-  return `${day} ${t}`;
-}
-
-// Builds the new frame set completely, then swaps it in — so the animation
-// loop never sees an empty or half-built frame list.
-async function buildForecastFrames(model, seq) {
+function buildForecastFrames(model) {
   const cfg = MODELS[model] || MODELS.hrrr;
-  const next = [];
-  if (cfg.kind === 'iem') {
-    for (let m = 0; m <= cfg.maxMins; m += cfg.stepMins) {
-      next.push({ url: cfg.urlFn(m), label: _frameLabel(Date.now() + m * 60000, null), mins: m });
-    }
-  } else if (cfg.kind === 'sidecar') {
-    const info = (await getModelMeta())[cfg.model];
-    if (!info || !info.available) return { ok: false, reason: info && info.error ? info.error : 'no current run published' };
-    const cycleMs = Date.parse(info.cycleIso);
-    const nowMs = Date.now();
-    info.fhours.forEach(fh => {
-      const validMs = cycleMs + fh * 3600000;
-      if (validMs < nowMs - 45 * 60000) return;          // skip hours already in the past
-      next.push({
-        url: `${WXTILES_BASE}/tiles/model/${cfg.model}/${info.cycle}/${fh}/{z}/{x}/{y}.png`,
-        label: _frameLabel(validMs, fh), mins: Math.round((validMs - nowMs) / 60000),
-      });
-    });
-    if (!next.length) return { ok: false, reason: 'latest run has no future hours yet' };
-  } else if (cfg.kind === 'geomet') {
-    const info = await _geometLayerInfo(cfg);
-    if (!info) return { ok: false, reason: 'GeoMet layer not found' };
-    const nowMs = Date.now();
-    let future = info.times.filter(t => t >= nowMs - 45 * 60000);
-    const stride = Math.max(1, Math.ceil(future.length / (cfg.maxFrames || 24)));   // keep the loop a sensible length
-    future = future.filter((_, k) => k % stride === 0);
-    if (!future.length) return { ok: false, reason: 'no future times published' };
-    cfg._layerTitle = info.title;
-    future.forEach(t => next.push({
-      wms: { layer: info.name, time: new Date(t).toISOString().split('.')[0] + 'Z' },
-      label: _frameLabel(t, Math.round((t - future[0]) / 3600000)), mins: Math.round((t - nowMs) / 60000),
-    }));
-  }
-  // A newer model choice started while we were waiting — don't clobber its frames
-  if (seq != null && seq !== _modelBuildSeq) return { ok: false, stale: true };
   forecastFrames.forEach(f => { if (map.hasLayer(f.layer)) map.removeLayer(f.layer); });
   forecastFrames.length = 0;
-  next.forEach((f, idx) => {
-    const layer = f.wms
-      ? L.tileLayer.wms('https://geo.weather.gc.ca/geomet', {
-          layers: f.wms.layer, TIME: f.wms.time, format: 'image/png', transparent: true, version: '1.3.0',
-          opacity: 0, zIndex: 300 + idx, attribution: idx === 0 ? (cfg.attribution || '') : '',
-        })
-      : L.tileLayer(f.url, {
-          opacity: 0, tileSize: 256, zIndex: 300 + idx, crossOrigin: true,
-          maxNativeZoom: cfg.maxNativeZoom, attribution: idx === 0 ? (cfg.attribution || '') : '',
-        });
+  if (cfg.kind === 'soon') return;
+  const steps = [];
+  for (let m = 0; m <= cfg.maxMins; m += cfg.stepMins) steps.push(m);
+  steps.forEach((mins, idx) => {
+    const frameTime = new Date(Date.now() + mins * 60000);
+    const label = frameTime.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    const url = cfg.urlFn(mins);
+    const layer = L.tileLayer(url, {
+      opacity: 0, tileSize: 256, zIndex: 300 + idx,
+      crossOrigin: true, maxNativeZoom: cfg.maxNativeZoom,
+    });
     if (idx === 0) layer.addTo(map);
-    forecastFrames.push({ layer, label: f.label, mins: f.mins });
+    forecastFrames.push({ layer, label, mins });
   });
   currentForecastFrame = 0;
-  return { ok: true };
 }
-
-// Picking a model from the dropdown clearly means "show me this forecast":
-// turn on the radar layer and switch to Future mode instead of silently
-// loading frames that stay hidden (the old behavior in Past mode or with radar off).
-async function pickForecastModel(model) {
-  await onModelChange(model);
-  if (activePaint !== 'reflectivity') setPaint('reflectivity');
-  if (radarMode !== 'forecast') setRadarMode('forecast');
-  const note = document.getElementById('model-note');
-  if (forecastFrames.length && note && !/unavailable/.test(note.textContent)) {
-    setStatus(`${MODELS[currentModel].label.split(' —')[0]} forecast · ${forecastFrames.length} frames · press ▶ Play to animate`);
-  }
-}
-
-async function onModelChange(model) {
-  const seq = ++_modelBuildSeq;
-  const noteEl = document.getElementById('model-note');
-  const sel = document.getElementById('model-select');
-  noteEl.textContent = MODELS[model].kind === 'sidecar' ? 'Loading latest model run…' : MODELS[model].note;
-  let res;
-  try { res = await buildForecastFrames(model, seq); }
-  catch (e) { res = { ok: false, reason: 'model service unreachable' }; }
-  if (res.stale || seq !== _modelBuildSeq) return;          // user picked another model meanwhile
-  if (!res.ok) {
-    noteEl.textContent = `${MODELS[model].label.split(' —')[0]} is temporarily unavailable (${res.reason}). Showing HRRR instead.`;
-    model = 'hrrr';
-    await buildForecastFrames('hrrr', seq);
-    if (seq !== _modelBuildSeq) return;
-  } else {
-    noteEl.textContent = MODELS[model].note + (MODELS[model]._layerTitle ? ` Showing: ${MODELS[model]._layerTitle}.` : '');
+function onModelChange(model) {
+  if (MODELS[model]?.kind === 'soon') {
+    document.getElementById('model-note').textContent = MODELS[model].note;
+    document.getElementById('model-select').value = currentModel; // revert UI
+    return;
   }
   currentModel = model;
-  sel.value = model;
-  if (radarMode === 'forecast' && activePaint === 'reflectivity' && forecastFrames.length) {
+  document.getElementById('model-note').textContent = MODELS[model].note;
+  buildForecastFrames(model);
+  if (radarMode === 'forecast' && activePaint === 'reflectivity') {
+    // Clamp frame index to new frame count
     if (currentForecastFrame >= forecastFrames.length) currentForecastFrame = 0;
     forecastFrames.forEach(f => f.layer.setOpacity(0));
     ensureAttached(forecastFrames[currentForecastFrame].layer);
@@ -7005,10 +6253,9 @@ async function onModelChange(model) {
 }
 
 const BASEMAP_ITEMS=[
-  {id:'reflectivity', ico:'🌧', name:'US Radar',           sub:'NOAA · most detailed · United States'},
-  {id:'global-radar', ico:'🌍', name:'Worldwide Radar',    sub:'150+ countries · use outside the US'},
+  {id:'global-radar', ico:'🌍', name:'Global Radar',       sub:'LibreWXR · global radar · 150+ countries · animated'},
+  {id:'reflectivity', ico:'🌧', name:'US Radar (NEXRAD)',  sub:'IEM mosaic · high-res CONUS only'},
   {id:'goes',         ico:'🛰', name:'GOES Satellite',     sub:'Infrared cloud imagery'},
-  {id:'apptemp',      ico:'🌡', name:'Feels Like Temperatures', sub:'Wind chill & heat index · regional/national view'},
 ];
 const RADAR_ITEMS=[
   // Single-site products — require selecting a nearby WSR-88D station.
@@ -7019,10 +6266,9 @@ const RADAR_ITEMS=[
 ];
 const CC_ITEMS=[
   {id:'cc',ico:'💧',name:'Correlation Coefficient',sub:'Dual-pol · debris signature',def:false},
-  {id:'raw-radar',ico:'🐦',name:'Birds & Bugs (Raw Radar)',sub:'Unfiltered NEXRAD · migrations, insects & clutter',def:false},
 ];
 const EXTENDED_ITEMS=[
-  {id:'canada',    ico:'🇨🇦',name:'Add Canada',             sub:'Environment Canada radar · shows alongside US Radar', def:false},
+  {id:'canada',    ico:'🇨🇦',name:'Canadian Radar',         sub:'MSC GeoMet composite — animated',              def:false},
   {id:'ca-alerts', ico:'🍁', name:'Canadian Weather Alerts', sub:'Environment Canada · warnings/watches/advisories',def:false},
 ];
 const ALERT_ITEMS=[
@@ -7031,7 +6277,7 @@ const ALERT_ITEMS=[
 ];
 const CHASER_ITEMS=[
   {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
-  {id:'live-near',  ico:'🔴', name:'Live Near Warnings',     sub:'Chasers streaming inside or near a warning', def:true},
+  {id:'mcd',       ico:'💬', name:'Mesoscale Discussions',  sub:'Active MCDs',                     def:false},
   {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
   {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
   {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
@@ -7055,13 +6301,9 @@ const FIRE_ITEMS=[
   {id:'aqi',              ico:'😷',name:'Air Quality Index',     sub:'AirNow monitoring stations · requires key',   def:false},
 ];
 const CAM_ITEMS=[
-  {id:'cameras',ico:'📷',name:'Location Cams',sub:'Traffic, parks, volcanoes & scenic webcams · pick a state',def:false},
+  {id:'cameras',ico:'📷',name:'Traffic Cameras',sub:'DOT feeds · US · coverage expanding',def:false},
 ];
-const MESO_ITEMS=[
-  {id:'mcd',          ico:'💬', name:'Mesoscale Discussions', sub:'SPC forecaster updates · active MCDs', def:false},
-  {id:'mesoanalysis', ico:'📈', name:'Mesoscale Analysis',    sub:'CAPE · helicity · shear · tornado parameter (HRRR, hourly)', def:false},
-];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(MESO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
+const OVERLAY_ITEMS=ALERT_ITEMS.concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -7085,10 +6327,7 @@ function applyOverlay(id,on){
   switch(id){
     case 'alerts':    if (on!==alertsVisible) toggleAlerts(); break;
     case 'spc':       if (on!==spcVisible) toggleSPC(); break;
-    case 'mcd':       if (on!==mcdVisible) toggleMCD(); syncMesoButtons(); break;
-    case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
-    case 'live-near':    if (on) startLiveNear(); else stopLiveNear(); break;
-    case 'raw-radar':    setRadarSource(on); break;
+    case 'mcd':       if (on!==mcdVisible) toggleMCD(); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
@@ -7125,21 +6364,16 @@ function toggleRowHTML(item){
   return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-toggle"></span></div>`;
 }
 function renderPanel(){
-  const _radarIds = ['reflectivity', 'global-radar'];
-  document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.filter(b=>_radarIds.includes(b.id)).map(exclusiveToggleRowHTML).join('');
-  document.getElementById('lp-satellite').innerHTML=BASEMAP_ITEMS.filter(b=>!_radarIds.includes(b.id)).map(exclusiveToggleRowHTML).join('');
-  document.getElementById('lp-radar-canada').innerHTML=EXTENDED_ITEMS.filter(x=>x.id==='canada').map(toggleRowHTML).join('');
-  document.getElementById('lp-alerts-ca').innerHTML=EXTENDED_ITEMS.filter(x=>x.id==='ca-alerts').map(toggleRowHTML).join('');
+  document.getElementById('lp-basemap').innerHTML=BASEMAP_ITEMS.map(exclusiveToggleRowHTML).join('');
   // RADAR_ITEMS (paint-style, e.g. future Velocity/SRV/Echo Tops re-add) and
   // CC_ITEMS (toggle-style) share the same panel section — CC needs
   // toggleRowHTML so it behaves as an independent on/off overlay rather
   // than a mutually-exclusive radio option.
   document.getElementById('lp-radaropts').innerHTML=
     RADAR_ITEMS.map(exclusiveToggleRowHTML).join('') + CC_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-extended').innerHTML='';
-  document.getElementById('lp-extended-section').style.display = 'none';
+  document.getElementById('lp-extended').innerHTML=EXTENDED_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-extended-section').style.display = EXTENDED_ITEMS.length ? '' : 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-meso').innerHTML=MESO_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
   // Vibration sub-row under the lightning toggle
   const _vr = document.createElement('div');
@@ -7176,7 +6410,7 @@ function resetLayers(){
 (function initModelSelect() {
   const sel = document.getElementById('model-select');
   sel.innerHTML = Object.entries(MODELS).map(([k, v]) =>
-    `<option value="${k}">${v.label}</option>`
+    `<option value="${k}" ${v.kind === 'soon' ? 'disabled' : ''}>${v.label}</option>`
   ).join('');
   sel.value = currentModel;
   document.getElementById('model-note').textContent = MODELS[currentModel].note;
@@ -7212,8 +6446,6 @@ function goToMyLocation() {
     currentSite = null;
     fetchUserZone(lat, lng); // get zone codes for reliable banner triggering
     map.flyTo([lat, lng], 8);
-    startStormEta(); updateStormEta();
-    if (window.WTVAlerts) WTVAlerts.setLocation(lat, lng).catch(() => {});
     updateViewButtons('local');
     if (typeof updateFeelsLike === 'function') updateFeelsLike(lat, lng);
     if (typeof resolveRadarSites === 'function') resolveRadarSites(lat, lng);
@@ -7269,32 +6501,13 @@ async function searchLocation(e) {
   e.preventDefault();
   const q = document.getElementById('zip-input').value.trim();
   if (!q) return;
-  // 🎃 Easter-egg searches. The plain names ("Haddonfield", "Smiths Grove")
-  // still find the REAL towns in New Jersey and Kentucky.
-  const EGGS = [
-    { re: /^haddonfield\s*,?\s*(il|ill|illinois)\.?$/i, at: [40.5952, -88.8168], z: 15, name: 'Haddonfield, IL' },
-    { re: /^smith'?s\s+grove\s*(,?\s*(il|ill|illinois)\.?|\s+sanitarium|\s+sanatorium|\s+asylum)$/i, at: [37.8035, -88.9590], z: 15, name: "Smith's Grove Sanitarium" },
-    { re: /^(the\s+)?ambulance\s+(accident|crash|wreck)(\s+site)?$/i, at: [38.5280, -88.9225], z: 16, name: 'Ambulance crash site' },
-  ];
-  const egg = EGGS.find(e => e.re.test(q));
-  if (egg) {
-    map.setView(egg.at, egg.z);
-    document.getElementById('alerts-status').textContent = egg.name;
-    document.getElementById('zip-input').value = '';
-    return;
-  }
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=jsonv2&limit=8`,
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=json&limit=1`,
       { headers:{'Accept-Language':'en'} }
     );
-    const all = await res.json();
-    // Prefer an actual town over a county/state with the same name: "Marion, IL"
-    // should be the city of Marion, not Marion County (whose centre is Salem).
-    const TOWN = /^(city|town|village|hamlet|suburb|neighbourhood|quarter|borough|municipality|locality|postcode)$/;
-    const rank = (r) => (TOWN.test(r.addresstype || r.type || '') ? 0 : /^(county|state|region|administrative)$/.test(r.addresstype || r.type || '') ? 2 : 1);
-    const data = Array.isArray(all) ? all.slice().sort((a, b) => rank(a) - rank(b) || (b.importance || 0) - (a.importance || 0)) : [];
+    const data = await res.json();
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
       const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
@@ -7376,13 +6589,7 @@ window.onFcmToken = function(token) {
 };
 
 async function registerFcmToken() {
-  if (!fcmToken || typeof userLat !== 'number' || typeof userLng !== 'number') return;
-  // Privacy-first: location stays on the device; only topic subscriptions go out
-  try {
-    await WTVAlerts.setLocation(userLat, userLng);
-    await WTVAlerts.sync(fcmToken);
-  } catch (e) { console.warn('[Radar] Alert subscription failed:', e.message); }
-  return;
+  if (!fcmToken || !userLat || !userLng) return;
   try {
     const res = await fetch('/api/radar/register', {
       method: 'POST',
@@ -7441,166 +6648,16 @@ function maybeNotifyAlert(alertId, event, headline, areaDesc, color) {
   }
 }
 
-// ── Small helpers ─────────────────────────────────────────────────────────────
-// IEM sends tvs/meso as "NONE" when absent — a non-empty string, so the old
-// truthiness check flagged EVERY storm cell as having a TVS and a meso.
-function stormFlag(v) { return v != null && v !== '' && v !== 0 && String(v).toUpperCase() !== 'NONE'; }
-function compassName(deg) {
-  return ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
-}
-function fmtSpeedKt(kt) { return `${Math.round(kt * 1.15078)} mph`; }
-let _toastTimer = null;
-function showToast(msg) {
-  const t = document.getElementById('wtv-toast'); if (!t) return;
-  t.textContent = msg; t.style.display = 'block';
-  clearTimeout(_toastTimer); _toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2600);
-}
-
-// ── Shareable radar links ────────────────────────────────────────────────────
-// ?at=lat,lng,zoom &base=reflectivity &layers=alerts,lightning &mode=forecast
-// &model=rrfs &site=KMKX — opens exactly the view someone was looking at.
-// Only what's on the map is shared; the sharer's own location is never added.
-function buildShareUrl() {
-  const c = map.getCenter();
-  const q = new URLSearchParams();
-  q.set('at', `${c.lat.toFixed(3)},${c.lng.toFixed(3)},${map.getZoom()}`);
-  if (activePaint) q.set('base', activePaint);
-  const on = OVERLAY_ITEMS.filter(o => overlayState[o.id]).map(o => o.id);
-  q.set('layers', on.join(','));
-  if (radarMode === 'forecast') { q.set('mode', 'forecast'); q.set('model', currentModel); }
-  if (currentSite && ((activePaint in SS_PRODUCTS) || overlayState['cc'])) q.set('site', currentSite);
-  return `${location.origin}${location.pathname}?${q.toString()}`;
-}
-async function shareRadarView() {
-  const url = buildShareUrl();
-  try {
-    if (navigator.share && /Mobi|Android/i.test(navigator.userAgent)) {
-      await navigator.share({ title: 'WeatherTV Radar', text: 'Check out this radar view on WeatherTV', url });
-      return;
-    }
-  } catch (e) { if (e && e.name === 'AbortError') return; }
-  try { await navigator.clipboard.writeText(url); showToast('🔗 Link copied — paste it anywhere'); }
-  catch (_) { window.prompt('Copy this link:', url); }
-}
-const _shareParams = new URLSearchParams(location.search);
-const _sharedView = _shareParams.has('at') || (_shareParams.has('lat') && _shareParams.has('lng'));   // links keep their own view
-function applySharedView() {
-  const p = _shareParams;
-  if (p.has('at')) {
-    const [lat, lng, z] = p.get('at').split(',').map(Number);
-    if ([lat, lng].every(Number.isFinite) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
-      map.setView([lat, lng], Number.isFinite(z) ? Math.min(Math.max(Math.round(z), 3), 12) : 8);
-    }
-  }
-  if (p.has('site') && /^[A-Z0-9]{3,4}$/i.test(p.get('site'))) {
-    currentSite = p.get('site').toUpperCase();
-    const sel = document.getElementById('site-select'); if (sel) sel.value = currentSite;
-  }
-  if (p.has('base')) {
-    const base = p.get('base');
-    const valid = BASEMAP_ITEMS.concat(RADAR_ITEMS).some(i => i.id === base);
-    if (valid && base !== activePaint) setPaint(base);
-  }
-  if (p.has('layers')) {
-    const want = new Set(p.get('layers').split(',').filter(Boolean));
-    OVERLAY_ITEMS.forEach(o => {
-      const on = want.has(o.id);
-      if (!!overlayState[o.id] !== on) { overlayState[o.id] = on; applyOverlay(o.id, on); }
-    });
-    renderPanel();
-  }
-  if (p.get('mode') === 'forecast') {
-    const m = p.get('model');
-    if (m && MODELS[m]) onModelChange(m).then(() => setRadarMode('forecast'));
-    else setRadarMode('forecast');
-  }
-}
-if (_shareParams.has('at') || _shareParams.has('layers') || _shareParams.has('base')) {
-  try { applySharedView(); } catch (e) { console.warn('[Share] Could not apply shared view:', e.message); }
-}
-
-// ── Storm arrival time for your location ─────────────────────────────────────
-// Uses the NWS radar storm-tracking attributes (via IEM): each tracked cell's
-// position, speed and direction. Projects every nearby cell forward and asks:
-// does its path cross your location, and when? Runs in the browser only.
-let _stormEtaTimer = null, _stormEtaTarget = null;
-const STORM_ETA_MAX_MIN = 90;
-async function updateStormEta() {
-  const chip = document.getElementById('storm-eta');
-  if (!chip || typeof userLat !== 'number' || typeof userLng !== 'number') return;
-  try {
-    const data = await (await fetch('https://mesonet.agron.iastate.edu/geojson/nexrad_attr.py')).json();
-    const best = computeStormEta(data.features || [], userLat, userLng);
-    _stormEtaTarget = best;
-    if (!best) { chip.style.display = 'none'; return; }
-    const color = best.dbz >= 60 ? '#ff00ff' : best.dbz >= 50 ? '#ff0000' : '#ff8c00';
-    chip.style.setProperty('--eta-color', color);
-    const when = best.minutes < 5 ? 'arriving now' : `arriving in ~${Math.round(best.minutes / 5) * 5} min`;
-    const tags = [
-      `${best.dbz} dBZ`,
-      best.hail >= 0.75 ? `hail to ${best.hail}"` : null,
-      best.tvs ? 'TORNADO SIGNATURE' : best.meso ? 'rotation' : null,
-    ].filter(Boolean).join(' · ');
-    chip.innerHTML = `<div class="eta-main">${best.tvs ? '🌪' : '⛈'} Storm ${best.direct ? when : `passing ~${Math.round(best.missMi)} mi away, ${when.replace('arriving', 'closest')}`}</div>
-      <div class="eta-sub">${tags} · moving ${compassName(best.heading)} at ${Math.round(best.mph)} mph · radar estimate, storms can change · tap to view</div>`;
-    chip.style.display = 'block';
-  } catch (e) { /* storm tracking unavailable — leave chip as is */ }
-}
-// Pure function (testable): returns the soonest storm whose track crosses near the point
-function computeStormEta(features, lat, lng) {
-  const toRad = Math.PI / 180, kmPerDegLat = 111.2, kmPerDegLng = 111.2 * Math.cos(lat * toRad);
-  let best = null;
-  for (const f of features) {
-    const p = f.properties || {}, c = f.geometry && f.geometry.coordinates;
-    if (!c) continue;
-    const dbz = p.max_dbz ?? p.MAX_DBZ ?? 0, kt = p.sknt ?? p.SKNT ?? 0;
-    if (dbz < 40 || kt < 5) continue;
-    if (p.valid && Date.now() - Date.parse(p.valid) > 20 * 60000) continue;       // stale cell
-    const heading = (((p.drct ?? p.DRCT ?? 0) + 180) % 360);
-    const kmh = kt * 1.852;
-    // You, relative to the storm, in km (east, north)
-    const dx = (lng - c[0]) * kmPerDegLng, dy = (lat - c[1]) * kmPerDegLat;
-    const ux = Math.sin(heading * toRad), uy = Math.cos(heading * toRad);
-    const along = dx * ux + dy * uy;               // km ahead of the storm along its path
-    const cross = Math.abs(dx * uy - dy * ux);     // km off to the side of its path
-    if (along <= -3) continue;                     // storm already past you
-    const minutes = Math.max(0, along) / kmh * 60;
-    if (minutes > STORM_ETA_MAX_MIN) continue;
-    // Storm "width" grows with intensity; tracking error grows with distance
-    const halfWidth = (dbz >= 55 ? 10 : dbz >= 50 ? 8 : 6) + 0.12 * Math.max(0, along);
-    if (cross > halfWidth * 2) continue;
-    const cand = {
-      minutes, dbz, heading, mph: kmh / 1.609, direct: cross <= halfWidth, missMi: cross / 1.609,
-      hail: +(p.max_size ?? 0), tvs: stormFlag(p.tvs ?? p.TVS), meso: stormFlag(p.meso ?? p.MESO),
-      lat: c[1], lng: c[0],
-    };
-    // Prefer storms that hit directly, then the soonest, then the strongest
-    const score = (cand.direct ? 0 : 1000) + cand.minutes - dbz / 10 - (cand.tvs ? 30 : 0);
-    if (!best || score < best._score) best = { ...cand, _score: score };
-  }
-  return best;
-}
-function focusStormEta() {
-  if (!_stormEtaTarget) return;
-  map.setView([_stormEtaTarget.lat, _stormEtaTarget.lng], Math.max(map.getZoom(), 9));
-}
-function startStormEta() {
-  if (_stormEtaTimer) return;
-  updateStormEta();
-  _stormEtaTimer = setInterval(() => { if (!document.hidden) updateStormEta(); }, 2 * 60 * 1000);
-}
-
 // ── AUTO GEOLOCATE ON LOAD ───────────────────────────────────────────────────
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     pos => {
       userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-      if (!_sharedView) { map.setView([userLat, userLng], 8); updateViewButtons('local'); } // a shared link keeps its own view
-      startStormEta();
+      map.setView([userLat, userLng], 8);
+      updateViewButtons('local');
       fetchUserZone(userLat, userLng);
       loadAlerts();
-      registerFcmToken(); // Android app bridge: subscribe the app's token to this area
-      if (window.WTVAlerts) WTVAlerts.setLocation(userLat, userLng).catch(() => {}); // keep device-side alert location current
+      registerFcmToken(); // register now that we have location
       requestNotificationPermission(); // ask for browser notification permission
       if (typeof updateFeelsLike === 'function') updateFeelsLike(userLat, userLng);
     },
@@ -7608,286 +6665,6 @@ if (navigator.geolocation) {
     { timeout:6000 }
   );
 }
-</script>
-<!-- 🎃 Easter egg: Haddonfield, Illinois (fictional) -->
-<script>
-// A small town drawn in the basemap's own style (OpenStreetMap colors, road
-// casings, building footprints, label halos) so it blends into the real map.
-// Layout follows WeatherTV's Haddonfield reference map. Just east of I-55
-// between Towanda and Lexington, NE of Bloomington. Only drawn at
-// neighbourhood zoom, so people have to stumble onto it. Ambience videos by
-// Sinister (YouTube) sit at their locations as pumpkins.
-(function haddonfield() {
-  const N = 40.6060, S = 40.5844, W = -88.8310, E = -88.8025;               // ~2.4 km square, clear of I-55
-  const K = 1000 / 1254;                                                    // reference-map pixels → plan units
-  const at = (x, y) => [N - (y * K / 1000) * (N - S), W + (x * K / 1000) * (E - W)];
-  const C = { res: '#e0dfdf', road: '#ffffff', casing: '#c6bcb2', major: '#fcd6a4', majorCase: '#c09c6f', bldg: '#d9d0c9', bldgLine: '#c4b6ab',
-              park: '#c8facc', parkLine: '#a5d6a7', school: '#fffff0', schoolLine: '#e8d9b0', hosp: '#ffffe5', water: '#aad3df',
-              cemetery: '#aacbaf', farm: '#eef0d5', farmyard: '#f5dcba', industrial: '#ebdbe8', retail: '#ffd6d1', golf: '#def6c0',
-              wood: '#add19e', text: '#333', poi: '#734a08' };
-  const FONT = "'Noto Sans','DejaVu Sans','Helvetica Neue',Arial,sans-serif";
-  const k = (v) => (v * K).toFixed(1);
-  const casings = [], roads = [], labels = [];
-  let landuse = '', bldgs = '';
-  function road(pts, name, o = {}) {
-    const d = 'M' + pts.map(([x, y]) => `${k(x)} ${k(y)}`).join(' L');
-    const w = o.major ? 13 : 8.5;
-    casings.push(`<path d="${d}" fill="none" stroke="${o.major ? C.majorCase : C.casing}" stroke-width="${w + 3}" stroke-linecap="round" stroke-linejoin="round"/>`);
-    roads.push(`<path d="${d}" fill="none" stroke="${o.major ? C.major : C.road}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`);
-    if (name) {
-      const [a, b] = o.seg || [pts[0], pts[pts.length - 1]];
-      const x = (o.lx ?? (a[0] + b[0]) / 2) * K, y = (o.ly ?? (a[1] + b[1]) / 2) * K;
-      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-      const rot = ang > 90 || ang < -90 ? ang + 180 : ang;
-      labels.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" dy="3" font-family="${FONT}" font-size="8.5" fill="${C.text}" text-anchor="middle"
-        stroke="#fff" stroke-width="2.6" paint-order="stroke" transform="rotate(${rot.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)})">${name}</text>`);
-    }
-  }
-  const rect = (x, y, w, h, fill, line) => `<rect x="${k(x)}" y="${k(y)}" width="${k(w)}" height="${k(h)}" fill="${fill}" ${line ? `stroke="${line}"` : ''}/>`;
-  const bldg = (x, y, w, h) => rect(x, y, w, h, C.bldg, C.bldgLine);
-
-  // ── Streets ───────────────────────────────────────────────────────────────
-  road([[150, 65], [1254, 62]], 'Crabapple Road', { lx: 330 });
-  road([[150, 150], [330, 150]], 'Crescent Avenue');
-  road([[150, 215], [570, 215]], 'Yew Street', { lx: 250 });
-  road([[0, 298], [1254, 298]], null);
-  road([[150, 298], [420, 298]], 'Fable Street', { lx: 230 });
-  road([[420, 298], [800, 298]], 'Montrose Avenue', { lx: 640 });
-  road([[800, 298], [1085, 298]], 'Cornhuskers Road', { lx: 930 });
-  road([[150, 385], [580, 385]], 'Orange Grove', { lx: 240 });
-  road([[150, 465], [800, 465]], 'Violet Avenue', { lx: 240 });
-  road([[150, 545], [580, 545]], 'Field Street', { lx: 240 });
-  road([[0, 500], [60, 540], [150, 600], [150, 637], [1085, 637], [1180, 610], [1254, 575]], 'Main Street', { major: true, seg: [[150, 637], [700, 637]], lx: 240 });
-  road([[150, 735], [580, 735]], 'Washington Avenue', { lx: 250 });
-  road([[150, 800], [580, 800]], 'Bell Street', { lx: 230 });
-  road([[630, 830], [1085, 830]], 'South Street', { lx: 700 });
-  road([[0, 940], [350, 940], [630, 915], [1085, 870]], 'Lost River Road', { major: true, seg: [[350, 940], [630, 915]] });
-  road([[335, 215], [335, 298]], 'Red Avenue', { ly: 250 });
-  road([[570, 65], [570, 298]], 'Oxley Street', { ly: 170 });
-  road([[495, 385], [495, 545]], 'Lampkin Lane', { ly: 460 });
-  road([[320, 545], [320, 637]], 'Little Street', { ly: 595 });
-  road([[415, 735], [415, 800]], 'Line Street', { ly: 765 });
-  road([[585, 637], [585, 800], [630, 830]], 'Copper Avenue', { seg: [[585, 650], [585, 790]], ly: 720 });
-  road([[715, 735], [715, 830]], 'Clay Avenue', { ly: 780 });
-  road([[800, 637], [800, 830]], 'Barkley Lane', { ly: 760 });
-  road([[855, 465], [855, 630]], 'Old Church Road', { ly: 545 });
-  road([[1020, 637], [1020, 830]], 'Stone Road', { ly: 760 });
-  road([[150, 65], [150, 900]], null);
-  road([[1085, 215], [1085, 870]], null);
-  road([[345, 940], [345, 1254]], null);
-  road([[0, 1100], [345, 1100]], null);
-  // exits
-  labels.push(`<text x="${k(70)}" y="${k(270)}" font-family="${FONT}" font-size="9" fill="#555" text-anchor="middle" stroke="#fff" stroke-width="2.6" paint-order="stroke">← To Russellville</text>`);
-  labels.push(`<text x="${k(70)}" y="${k(470)}" font-family="${FONT}" font-size="9" fill="#555" text-anchor="middle" stroke="#fff" stroke-width="2.6" paint-order="stroke">To Highway 31</text>`);
-  labels.push(`<text x="${k(1170)}" y="${k(560)}" font-family="${FONT}" font-size="9" fill="#555" text-anchor="middle" stroke="#fff" stroke-width="2.6" paint-order="stroke">To Smith's Grove →</text>`);
-
-  // ── Places (from the reference map) ──────────────────────────────────────
-  const P = {};
-  function place(key, x, y, label, extra) {
-    P[key] = [x * K, y * K];
-    if (extra) landuse += extra;
-    labels.push(`<text x="${k(x)}" y="${k(y)}" font-family="${FONT}" font-size="8.5" fill="${C.poi}" text-anchor="middle"
-      stroke="#fff" stroke-width="2.6" paint-order="stroke" font-style="italic">${label}</text>`);
-  }
-  place('strode', 490, 140, 'Strode House');                          bldgs += bldg(460, 100, 60, 26);
-  place('stoop', 560, 100, "Laurie's Pumpkin Stoop");
-  place('carruthers', 245, 190, 'Carruthers House');                  bldgs += bldg(225, 160, 40, 20);
-  P.clothesline = [481 * K, 89 * K + 24];                              // Strode back yard, behind the house (pumpkin sits on the line)
-  landuse += `<line x1="${k(462)}" y1="${k(84)}" x2="${k(500)}" y2="${k(84)}" stroke="#9e9e9e" stroke-width="1"/>`
-           + `<line x1="${k(462)}" y1="${k(90)}" x2="${k(500)}" y2="${k(90)}" stroke="#9e9e9e" stroke-width="1"/>`;
-  P.alley = [452 * K, 345 * K];                                        // alley in the block between the Wallace and Elrod houses
-  landuse += `<line x1="${k(452)}" y1="${k(312)}" x2="${k(452)}" y2="${k(380)}" stroke="#fff" stroke-width="3.5"/>`;
-  place('brackett', 480, 280, 'Brackett House');                      bldgs += bldg(450, 235, 60, 28);
-  place('gleeson', 615, 285, "Old Man Gleeson's House");              bldgs += bldg(595, 245, 40, 22);
-  place('hedge', 675, 262, 'The Hedge', `<rect x="${k(645)}" y="${k(268)}" width="${k(60)}" height="${k(9)}" fill="${C.wood}" rx="3"/>`);
-  place('lynda', 750, 285, "Lynda's House");                          bldgs += bldg(725, 245, 45, 24);
-  place('festival', 960, 190, 'Haddonfield Harvest Festival', rect(790, 95, 400, 110, C.park, C.parkLine));
-  place('wallace', 290, 360, 'Wallace House');                        bldgs += bldg(295, 318, 80, 30);
-  place('elrod', 540, 375, "Mrs. Elrod's House");                     bldgs += bldg(515, 320, 50, 30);
-  place('doyle', 300, 445, 'Doyle House');                            bldgs += bldg(235, 400, 80, 30);
-  place('myers', 545, 490, 'Myers House');                            bldgs += bldg(515, 400, 60, 38);
-  place('highschool', 700, 440, 'Haddonfield High School', rect(595, 395, 210, 60, C.school, C.schoolLine)); bldgs += bldg(605, 400, 90, 45);
-  place('elementary', 690, 520, 'Haddonfield Elementary', rect(595, 470, 210, 65, C.school, C.schoolLine)); bldgs += bldg(700, 480, 95, 40);
-  place('cemetery', 940, 450, 'Mt. Sinclaire Cemetery', rect(870, 465, 140, 150, C.cemetery, '#8fb095'));
-  place('earls', 240, 612, "Earl's Bar");                             bldgs += bldg(180, 565, 70, 40);
-  place('hardware', 370, 612, "Nichol's Hardware");                    bldgs += bldg(335, 580, 70, 30);
-  place('square', 500, 605, 'Town Square', rect(425, 550, 150, 75, C.park, C.parkLine)); bldgs += bldg(488, 575, 24, 20);
-  place('vincents', 690, 625, "Vincent's Drug");                      bldgs += bldg(595, 575, 110, 36) + bldg(715, 580, 80, 36);
-  place('meeker', 757, 800, 'Meeker House');                          bldgs += bldg(735, 772, 44, 22);
-  P.coppermain = [598 * K, 675 * K];                                   // corner of Copper Avenue and Main Street
-  P.townvideo  = [830 * K, 600 * K];                                   // right under the "Haddonfield" label
-  place('library', 290, 715, 'Library');                              bldgs += bldg(260, 660, 75, 34);
-  place('townhall', 500, 715, 'Town Hall');                           bldgs += bldg(465, 655, 70, 40);
-  place('sheriff', 650, 715, 'Sheriff Dept.');                        bldgs += bldg(600, 662, 105, 30);
-  place('shopping', 910, 725, 'Shopping Center', rect(815, 650, 190, 75, C.retail, '#e8b5ae')); bldgs += bldg(825, 660, 170, 40);
-  place('countryclub', 1170, 690, 'Tavistock Country Club', rect(1095, 650, 159, 180, C.golf, '#b8d99a')); bldgs += bldg(1105, 680, 110, 40);
-  place('hospital', 430, 905, 'Haddonfield Memorial Hospital', rect(250, 815, 330, 100, C.hosp, C.schoolLine)); bldgs += bldg(320, 825, 210, 60);
-  place('powerplant', 60, 770, 'Power Plant', rect(0, 650, 125, 140, C.industrial, '#d4bccf')); bldgs += bldg(30, 670, 70, 50);
-  place('drivein', 650, 985, 'Lost River Drive-In', rect(695, 925, 110, 60, '#eeeeee', '#cccccc'));
-  place('naturetrail', 1170, 880, 'Lost River Nature Trail');
-  place('river', 1140, 1030, 'Lost River');
-  place('childrens', 120, 1090, "Haddonfield Children's Hospital", rect(20, 1010, 200, 70, C.hosp, C.schoolLine)); bldgs += bldg(40, 1025, 160, 40);
-  place('towerfarm', 95, 1205, 'Tower Farm', rect(0, 1110, 190, 144, C.farm) + rect(40, 1130, 110, 60, C.farmyard)); bldgs += bldg(55, 1140, 50, 36) + bldg(115, 1135, 18, 40);
-  place('coldwind', 260, 1200, 'Coldwind Farm', rect(190, 1110, 150, 144, C.farm) + rect(220, 1130, 90, 55, C.farmyard)); bldgs += bldg(250, 1135, 45, 34);
-
-  // Houses along the residential blocks
-  let houses = '';
-  const blocks = [[165, 80, 330, 140], [340, 80, 410, 140], [165, 225, 330, 285], [340, 225, 410, 285], [425, 310, 480, 380],
-    [165, 480, 305, 535], [330, 480, 410, 535], [425, 480, 480, 535], [590, 310, 800, 380], [815, 310, 1010, 380],
-    [815, 225, 1010, 285], [165, 745, 410, 790], [425, 745, 575, 790], [600, 740, 705, 820], [725, 740, 790, 820],
-    [815, 740, 1010, 820], [640, 840, 1050, 865], [585, 150, 780, 205], [1030, 310, 1070, 620], [820, 470, 845, 620]];
-  for (const [x0, y0, x1, y1] of blocks) {
-    for (let x = x0 + 4; x < x1 - 14; x += 22) {
-      houses += bldg(x, y0 + 3, 14 + (x % 5), 10);
-      if (y1 - y0 > 40) houses += bldg(x + 2, y1 - 13, 13 + (x % 4), 10);
-    }
-  }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
-    <path d="M${k(140)} ${k(50)} L${k(1100)} ${k(50)} L${k(1100)} ${k(880)} L${k(640)} ${k(925)} L${k(140)} ${k(950)}Z" fill="${C.res}" opacity="0.95"/>
-    ${landuse}
-    <path d="M0 ${k(960)} C ${k(150)} ${k(930)}, ${k(260)} ${k(1010)}, ${k(380)} ${k(990)} S ${k(640)} ${k(1060)}, ${k(820)} ${k(1010)} S ${k(1100)} ${k(960)}, ${k(1254)} ${k(1000)}
-      L${k(1254)} ${k(1080)} C ${k(1100)} ${k(1050)}, ${k(900)} ${k(1090)}, ${k(820)} ${k(1060)} S ${k(600)} ${k(1100)}, ${k(380)} ${k(1040)} S ${k(150)} ${k(990)}, 0 ${k(1010)} Z" fill="${C.water}"/>
-    <path d="M${k(1010)} ${k(915)} C ${k(1060)} ${k(900)}, ${k(1100)} ${k(930)}, ${k(1150)} ${k(905)} S ${k(1220)} ${k(895)}, ${k(1254)} ${k(900)}" fill="none" stroke="#a0724c" stroke-width="1.6" stroke-dasharray="4 3"/>
-    ${houses}${bldgs}
-    ${casings.join('')}${roads.join('')}${labels.join('')}
-  </svg>`;
-  const el = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement;
-  const plan = L.svgOverlay(el, [[S, W], [N, E]], { opacity: 1, interactive: false, zIndex: 150 });
-  const atPlan = (x, y) => [N - (y / 1000) * (N - S), W + (x / 1000) * (E - W)];
-
-  // ── Pumpkin cameras: each video names its place; several at one place fan out
-  const CREDIT = 'Sinister';
-  const VIDEOS = [
-    { vid: 'tuwnJGjoqpc', place: 'townvideo',   name: 'Haddonfield, Illinois', creditLine: 'Halloween 4 Homage by Witching Season Films' },
-    { vid: 'A_H3lvwqrXA', place: 'hedge',       name: 'The Hedge' },
-    { vid: 'cNPkwyOmUxQ', place: 'elrod',       name: "Mrs. Elrod's House" },
-    { vid: 'w9Wx0vzszZI', place: 'meeker',      name: "Ben Meeker's House" },
-    { vid: 'It-Ggve39yo', place: 'coppermain',  name: 'Copper Avenue & Main Street' },
-    { vid: 'rQJQxscTtDE', place: 'myers',       name: 'The Myers House' },
-    { vid: 'nzeJJwUD6aQ', place: 'doyle',       name: 'The Doyle House' },
-    { vid: '9fu4tuWhkXk', place: 'wallace',     name: 'The Wallace House' },
-    { vid: 'jgzFH22GDII', place: 'carruthers',  name: 'The Carruthers House' },
-    { vid: 'zs2mXj9C5Os', place: 'stoop',       name: "Laurie's Pumpkin Stoop" },
-    { vid: '7fOIOmhvu78', place: 'clothesline', name: 'The clothesline behind the Strode house' },
-    { vid: 'DSxPHUS2j_I', place: 'alley',       name: 'The alley behind Orange Grove' },
-    { vid: 'G0Pt5WQpWQI', place: 'hospital',    name: 'Haddonfield Memorial Hospital' },
-    { vid: '5ywgdylcM_o', place: 'hospital',    name: 'Haddonfield Memorial Hospital — inside' },
-  ];
-  // Clicking the town's name plays the video that sums up Haddonfield
-  const TOWN_VIDEO = { vid: 'tuwnJGjoqpc', name: 'Haddonfield, Illinois', creditLine: 'Halloween 4 Homage by Witching Season Films' };
-  const perPlace = {};
-  const icon = L.divIcon({ className: '', html: '<div style="font-size:15px;line-height:15px;filter:drop-shadow(0 0 3px #ff7a00);cursor:pointer" title="Camera">🎃</div>', iconSize: [16, 16], iconAnchor: [8, 8] });
-  const pumpkins = VIDEOS.filter(v => P[v.place]).map(v => {
-    const n = perPlace[v.place] = (perPlace[v.place] || 0) + 1;
-    const [px, py] = P[v.place];
-    // on the building, above its name; extra videos at the same place line up beside it
-    const ll = atPlan(px + (n - 1) * 20, py - 24);
-    return L.marker(ll, { icon, keyboard: false, title: v.name }).on('click', () => openCameraOverlay({
-      id: 'haddonfield-' + v.vid, name: v.name, source: 'haddonfield', credit: CREDIT, creditLine: v.creditLine, lat: ll[0], lng: ll[1],
-      playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&loop=1&playlist=${v.vid}&playsinline=1`,
-      pageUrl: `https://www.youtube.com/watch?v=${v.vid}`,
-    }));
-  });
-  const townLL = atPlan(830 * K, 553 * K);
-  const townName = L.marker(townLL, { keyboard: false, title: 'Haddonfield', icon: L.divIcon({ className: '', iconSize: [140, 26], iconAnchor: [70, 13],
-    html: `<div style="text-align:center;font:20px ${FONT};color:#555;cursor:pointer;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 4px #fff,0 0 4px #fff">Haddonfield</div>` }) })
-    .on('click', () => openCameraOverlay({
-      id: 'haddonfield-' + TOWN_VIDEO.vid, name: TOWN_VIDEO.name, source: 'haddonfield', credit: CREDIT, creditLine: TOWN_VIDEO.creditLine, lat: townLL[0], lng: townLL[1],
-      playerUrl: `https://www.youtube-nocookie.com/embed/${TOWN_VIDEO.vid}?autoplay=1&loop=1&playlist=${TOWN_VIDEO.vid}&playsinline=1`,
-      pageUrl: `https://www.youtube.com/watch?v=${TOWN_VIDEO.vid}`,
-    }));
-  // The town itself shows from zoom 10 (a small grey patch of streets you can
-  // stumble on); its name and the pumpkin cameras appear from zoom 13.
-  const SHOW_AT = 10, DETAIL_AT = 13;
-  const group = L.layerGroup([plan]), detail = L.layerGroup([townName, ...pumpkins]);
-  const townBounds = L.latLngBounds([[S, W], [N, E]]);
-  function update() {
-    const z = map.getZoom(), near = map.getBounds().intersects(townBounds);
-    [[group, z >= SHOW_AT], [detail, z >= DETAIL_AT]].forEach(([g, on]) => {
-      const want = on && near;
-      if (want && !map.hasLayer(g)) g.addTo(map); else if (!want && map.hasLayer(g)) map.removeLayer(g);
-    });
-  }
-  map.on('zoomend moveend', update);
-  update();
-
-  // ── The road from Smith's Grove (Halloween 4) ─────────────────────────────
-  // Southwest of Haddonfield: the real fastest route is I-74 east → I-57 south,
-  // ~3¾–4 hours. Smith's Grove sits in the countryside west of I-57 north of
-  // Marion; the ambulance crash is about an hour north on I-57; the gas station
-  // is a short walk from the crash. Each is hidden like Haddonfield.
-  const SG = { N: 37.8125, S: 37.7945, W: -88.9705, E: -88.9475 };          // ~2 km campus
-  const sgSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
-    <rect x="40" y="40" width="920" height="920" fill="${C.hosp}" stroke="${C.schoolLine}" stroke-width="3" rx="6"/>
-    <path d="M1000 520 L720 520 L720 480 L420 480" fill="none" stroke="${C.casing}" stroke-width="30" stroke-linejoin="round"/>
-    <path d="M1000 520 L720 520 L720 480 L420 480" fill="none" stroke="${C.road}" stroke-width="24" stroke-linejoin="round"/>
-    <rect x="200" y="330" width="220" height="330" fill="${C.bldg}" stroke="${C.bldgLine}" stroke-width="2"/>
-    <rect x="420" y="380" width="180" height="80" fill="${C.bldg}" stroke="${C.bldgLine}" stroke-width="2"/>
-    <rect x="620" y="180" width="160" height="110" fill="${C.bldg}" stroke="${C.bldgLine}" stroke-width="2"/>
-    <rect x="620" y="650" width="160" height="110" fill="${C.bldg}" stroke="${C.bldgLine}" stroke-width="2"/>
-    <rect x="120" y="760" width="240" height="140" fill="${C.park}" stroke="${C.parkLine}" stroke-width="2"/>
-    <text x="500" y="860" font-family="${FONT}" font-size="46" fill="${C.poi}" text-anchor="middle" font-style="italic"
-      stroke="#fff" stroke-width="10" paint-order="stroke">Smith's Grove Sanitarium</text>
-    <text x="860" y="505" font-family="${FONT}" font-size="30" fill="${C.text}" text-anchor="middle" stroke="#fff" stroke-width="8" paint-order="stroke">Asylum Road</text>
-  </svg>`;
-  const sgPlan = L.svgOverlay(new DOMParser().parseFromString(sgSvg, 'image/svg+xml').documentElement,
-    [[SG.S, SG.W], [SG.N, SG.E]], { opacity: 1, interactive: false, zIndex: 150 });
-  const spotLabel = (text) => L.divIcon({ className: '', iconSize: [180, 16], iconAnchor: [90, -8],
-    html: `<div style="text-align:center;font:italic 11px ${FONT};color:${C.poi};text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">${text}</div>` });
-  const pumpkinAt = (ll, v) => L.marker(ll, { icon, keyboard: false, title: v.name }).on('click', () => openCameraOverlay({
-    id: 'haddonfield-' + v.vid, name: v.name, source: 'haddonfield', credit: CREDIT, lat: ll[0], lng: ll[1],
-    playerUrl: `https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1&loop=1&playlist=${v.vid}&playsinline=1`,
-    pageUrl: `https://www.youtube.com/watch?v=${v.vid}`,
-  }));
-  const LABEL_AT = 11;   // place names appear once you're looking at a county-sized area
-  const SPOTS = [
-    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], layers: [sgPlan] },
-    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], labelOnly: true, layers: [
-        L.marker([SG.N, (SG.W + SG.E) / 2], { icon: spotLabel("Smith's Grove Sanitarium"), interactive: false, keyboard: false }) ] },
-    { bounds: [[38.5230, -88.9300], [38.5330, -88.9160]], labelOnly: true, layers: [
-        L.marker([38.5280, -88.9225], { icon: spotLabel('Ambulance crash site'), interactive: false, keyboard: false }) ] },
-    { bounds: [[38.5390, -88.9240], [38.5460, -88.9140]], labelOnly: true, layers: [
-        L.marker([38.5425, -88.9190], { icon: spotLabel('⛽ Gas station'), interactive: false, keyboard: false }) ] },
-    { bounds: [[SG.S, SG.W], [SG.N, SG.E]], detail: true, layers: [pumpkinAt([37.8050, -88.9630], { vid: 'WlA1eAzeJnU', name: "Smith's Grove Sanitarium" })] },
-    // Ambulance/bridge crash — ~1 hour north of Smith's Grove on I-57 (Halloween 4)
-    { bounds: [[38.5230, -88.9300], [38.5330, -88.9160]], detail: true, layers: [
-        pumpkinAt([38.5280, -88.9225], { vid: 'JQ-T8ksVcaA', name: 'The ambulance crash (Halloween 4)' }) ] },
-  ];
-  const spotGroups = SPOTS.map(sp => ({ bounds: L.latLngBounds(sp.bounds), group: L.layerGroup(sp.layers),
-    minZoom: sp.detail ? DETAIL_AT : sp.labelOnly ? LABEL_AT : SHOW_AT }));
-  function updateSpots() {
-    const z = map.getZoom(), vb = map.getBounds();
-    for (const sp of spotGroups) {
-      const want = z >= sp.minZoom && vb.intersects(sp.bounds);
-      if (want && !map.hasLayer(sp.group)) sp.group.addTo(map);
-      else if (!want && map.hasLayer(sp.group)) map.removeLayer(sp.group);
-    }
-  }
-  map.on('zoomend moveend', updateSpots);
-  updateSpots();
-})();
-</script>
-
-<!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1790913600"></script>
-<script>
-  if (window.WTV_TV && WTV_TV.active) {
-    window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
-    // Back closes the most recently opened thing first
-    WTV_TV.onBack(() => {
-      const ov = document.getElementById('camera-overlay');
-      if (ov && ov.classList.contains('cam-big')) { toggleCameraExpand(false); return true; }
-      const meso = document.getElementById('meso-menu');
-      if (meso && meso.style.display === 'block') { toggleMesoMenu(); return true; }
-      const lnw = document.getElementById('lnw-panel');
-      if (lnw && lnw.style.display === 'block') { toggleLnwPanel(); return true; }
-      const pl = document.getElementById('lnw-player');
-      if (pl && pl.style.display === 'block') { closeLnwPlayer(); return true; }
-      return false;
-    });
-    // ▶❚❚ on the remote plays/pauses the radar loop
-    WTV_TV.onMedia((a) => { if (a === 'playpause' || a === 'play' || a === 'pause') togglePlay(); else if (a === 'next') stepFrame(1); else if (a === 'prev') stepFrame(-1); });
-  }
 </script>
 </body>
 </html>
