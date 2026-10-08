@@ -2549,12 +2549,8 @@ function buildWSUrl(ver) {
     // WeatherStar's own "custom text" feature: adds ONE extra line to the
     // bottom scroll's rotation (after any hazards), so it appears now and
     // then between the normal current-conditions lines — not constantly.
-    // Several messages separated by | are picked from at random each time.
     p.set('customTextEnable', 'true');
-    p.set('customText', [
-      "You're watching WeatherStar on WeatherTV · watchweathertv.com",
-      'WeatherTV · free, ad-free weather & live storm chasers · watchweathertv.com',
-    ].join('|'));
+    p.set('customText', "You're Watching WeatherTV");
     p.set('scanLines',        s.scanLines ? 'true' : 'false');
     p.set('viewMode',         s.viewMode);
     p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
