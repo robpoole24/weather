@@ -6972,7 +6972,7 @@ async function buildForecastFrames(model, seq) {
     const nowMs = Date.now();
     info.fhours.forEach(fh => {
       const validMs = cycleMs + fh * 3600000;
-      if (validMs < nowMs - 4 * 60 * 60000) return;      // skip hours more than 4h in the past (model cycles up to 3h old)
+      if (validMs < nowMs - 45 * 60000) return;          // skip hours already in the past
       next.push({
         url: `${WXTILES_BASE}/tiles/model/${cfg.model}/${info.cycle}/${fh}/{z}/{x}/{y}.png`,
         label: _frameLabel(validMs, fh), mins: Math.round((validMs - nowMs) / 60000),
