@@ -5656,6 +5656,54 @@ async function refreshTropicalPanel() {
     });
   });
 
+  // ── Fallback: if MapServer returned no named storms, use NHC CurrentStorms.json ──
+  // mapservices.weather.noaa.gov often lags behind or returns empty slots even
+  // when storms are active. CurrentStorms.json is always authoritative.
+  if (!activeStorms.length) {
+    try {
+      const nhcRes = await fetch('/api/nhc-storms');
+      const nhcData = await nhcRes.json();
+      const storms = nhcData.activeStorms || [];
+      storms.forEach(s => {
+        // Map NHC classification to ssnum for color coding
+        const cls = (s.classification || '').toUpperCase();
+        let ssnum = 0;
+        if (cls === 'HU') {
+          const kt = s.intensity || 0;
+          if (kt >= 137) ssnum = 5;
+          else if (kt >= 113) ssnum = 4;
+          else if (kt >= 96)  ssnum = 3;
+          else if (kt >= 83)  ssnum = 2;
+          else                ssnum = 1;
+        }
+        // Determine basin from storm id prefix (al = atl, ep = pac, cp = cpac)
+        const idPfx = (s.id || '').toLowerCase().slice(0, 2);
+        const basin = idPfx === 'al' ? 'atl' : idPfx === 'cp' ? 'cpac' : 'pac';
+        // tcdvlp string used for color/label
+        const tcdvlp = cls === 'HU' ? `Hurricane` : cls === 'TS' ? `Tropical Storm` : cls === 'TD' ? `Tropical Depression` : s.classification || '';
+        const lat = s.latitudeNumeric;
+        const lon = s.longitudeNumeric;
+        activeStorms.push({
+          basin,
+          name: s.name || s.id || 'Unknown',
+          tcdvlp,
+          ssnum,
+          maxwind: s.intensity,          // intensity from NHC is in kt
+          gust: null,
+          tcspd: s.movementSpeed,
+          tcdir: s.movementDir,
+          points: (lat != null && lon != null) ? [{ lat, lon, tau: 0, ssnum, tcdvlp, maxwind: s.intensity }] : [],
+          _fromCurrentStorms: true,      // flag: no track data, just current position
+        });
+        // Register current position for fly-to
+        if (lat != null && lon != null) {
+          const safeName = (s.name || s.id || '').replace(/[^a-zA-Z0-9]/g, '');
+          window[`_nhcCurrentPos_${safeName}`] = { lat, lon };
+        }
+      });
+    } catch (_) { /* silent — no fallback data */ }
+  }
+
   // ── Collect invests ───────────────────────────────────────────────────────
   const invests = investFeats.status === 'fulfilled' ? investFeats.value : [];
 
@@ -5742,6 +5790,9 @@ async function refreshTropicalPanel() {
     // Storm name + category pill label at current position
     const cur = all[0];
     if (cur?.lat != null) {
+      // Register for panel fly-to handler
+      const _sn = storm.name.replace(/[^a-zA-Z0-9]/g,'');
+      window[`_nhcCurrentPos_${_sn}`] = { lat: cur.lat, lon: cur.lon };
       const curCol = nhcCatColor(cur.ssnum||0, cur.tcdvlp||'');
       const curLbl = nhcCatLabel(cur.ssnum||0, cur.tcdvlp||'');
       L.marker([cur.lat, cur.lon], {
@@ -6921,7 +6972,7 @@ async function buildForecastFrames(model, seq) {
     const nowMs = Date.now();
     info.fhours.forEach(fh => {
       const validMs = cycleMs + fh * 3600000;
-      if (validMs < nowMs - 45 * 60000) return;          // skip hours already in the past
+      if (validMs < nowMs - 4 * 60 * 60000) return;      // skip hours more than 4h in the past (model cycles up to 3h old)
       next.push({
         url: `${WXTILES_BASE}/tiles/model/${cfg.model}/${info.cycle}/${fh}/{z}/{x}/{y}.png`,
         label: _frameLabel(validMs, fh), mins: Math.round((validMs - nowMs) / 60000),
