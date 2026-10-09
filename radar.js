@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
 // radar.js — WeatherTV NWS Alert Push Notifications (privacy-first)
-// build.1791050400
+// build.1791800000
 // ═══════════════════════════════════════════════════════════════════
 // HOW IT WORKS — the server never learns or stores where anyone is:
 //
@@ -77,7 +77,10 @@ let redisClient = null;
 let pollTimer = null;
 // Latest storm-based warnings with polygons, for "Live near this warning"
 let activeStormWarnings = { updatedAt: null, list: [] };
-const STORM_WARNING_EVENTS = new Set(['Tornado Warning', 'Severe Thunderstorm Warning', 'Extreme Wind Warning', 'Flash Flood Warning']);
+// Warnings checked for "Live near this warning" (not push alerts — those use classify()).
+// Tropical warnings added so chasers in a landfalling hurricane are counted.
+const STORM_WARNING_EVENTS = new Set(['Tornado Warning', 'Severe Thunderstorm Warning', 'Extreme Wind Warning', 'Flash Flood Warning',
+  'Hurricane Warning', 'Storm Surge Warning', 'Tropical Storm Warning']);
 const SENT_PREFIX = 'wt:alertpush:sent:';
 const stats = { day: null, polls: 0, alertsSent: 0, messages: 0, errors: 0, subscribeCalls: 0, lastPoll: null, lastError: null, recent: [] };
 function bump(k, n = 1) {

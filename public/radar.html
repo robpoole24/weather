@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-09-27 build.1791097200 -->
+<!-- WeatherTV Radar — updated 2026-10-09 build.1791800000 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -1995,7 +1995,8 @@ async function loadSPC() {
 // active storm warning, grouped by warning and sorted by severity. Appears
 // only when there's something to show.
 const LNW_COLORS = { 'TORNADO EMERGENCY':'#ff00ff', 'PDS Tornado Warning':'#ff1493', 'Tornado Warning':'#ff2a2a',
-  'FLASH FLOOD EMERGENCY':'#00ff7f', 'Extreme Wind Warning':'#ff6a00', 'Severe Thunderstorm Warning':'#ffa500', 'Flash Flood Warning':'#2ecc71' };
+  'FLASH FLOOD EMERGENCY':'#00ff7f', 'Extreme Wind Warning':'#ff6a00', 'Severe Thunderstorm Warning':'#ffa500', 'Flash Flood Warning':'#2ecc71',
+  'Hurricane Warning':'#ff3b5c', 'Storm Surge Warning':'#c04dff', 'Tropical Storm Warning':'#ff7a45' };
 let _lnwTimer = null, _lnwData = null, _lnwOutline = null;
 function _lnwEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 async function refreshLiveNear() {
@@ -2027,7 +2028,7 @@ function renderLiveNear() {
   if (!n) { chip.style.display = 'none'; panel.style.display = 'none'; return; }
   const top = ws[0].displayEvent;
   chip.style.display = 'block';
-  chip.style.background = /TORNADO|Tornado/.test(top) ? '#b0101e' : '#b45309';
+  chip.style.background = /TORNADO|Tornado|Hurricane|Surge/.test(top) ? '#b0101e' : '#b45309';
   document.getElementById('lnw-chip-text').textContent = `${n} chaser${n > 1 ? 's' : ''} live in ${ws.length > 1 ? ws.length + ' warnings' : 'a warning'}`;
   panel.innerHTML = ws.map((w, i) => {
     const col = LNW_COLORS[w.displayEvent] || '#ffa500';

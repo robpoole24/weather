@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-09T04:30:00Z build.1791760000
+// WeatherTV Server — updated 2026-10-09T22:40:00Z build.1791800000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -1051,6 +1051,7 @@ app.get('/api/chasers', (req, res) => {
 // to), so three chasers on three storms show up as three separate entries.
 const NEAR_WARNING_MI = 10;
 const WARNING_RANK = { 'TORNADO EMERGENCY': 0, 'PDS Tornado Warning': 1, 'Tornado Warning': 2, 'FLASH FLOOD EMERGENCY': 3,
+                       'Hurricane Warning': 4.2, 'Storm Surge Warning': 4.4, 'Tropical Storm Warning': 6.5,
                        'Extreme Wind Warning': 4, 'Severe Thunderstorm Warning': 5, 'Flash Flood Warning': 6 };
 let _nearWarnCache = { data: null, ts: 0 };
 
