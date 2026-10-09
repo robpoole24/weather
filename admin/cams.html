@@ -1,0 +1,810 @@
+<!-- WeatherTV Admin — Webcams control panel — updated 2026-10-09 build.1791860000 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WeatherTV Admin — Webcams</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --bg:#0a0e14; --surface:#111820; --surface2:#1a2433;
+    --accent:#00b4d8; --accent2:#0077b6; --gold:#f4a261;
+    --text:#e8f4fd; --muted:#7a9bb5; --border:rgba(0,180,216,0.2);
+    --red:#e63946; --green:#52b788;
+  }
+  body { background:var(--bg); color:var(--text); font-family:'Barlow',sans-serif; min-height:100vh; }
+
+  header {
+    background:var(--surface); border-bottom:1px solid var(--border);
+    padding:1rem 2rem; display:flex; align-items:center; gap:1rem;
+  }
+  .admin-logo { font-family:'Barlow Condensed',sans-serif; font-size:1.5rem; font-weight:700; color:var(--accent); letter-spacing:0.05em; }
+  .admin-logo span { color:var(--gold); }
+  .admin-badge { font-family:'Barlow Condensed',sans-serif; font-size:0.7rem; font-weight:700; letter-spacing:0.12em; padding:0.2rem 0.6rem; background:rgba(244,162,97,0.15); border:1px solid rgba(244,162,97,0.3); color:var(--gold); border-radius:3px; }
+  .header-link { margin-left:auto; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:0.85rem; color:var(--accent); text-decoration:none; letter-spacing:0.05em; }
+  .header-link:hover { text-decoration:underline; }
+
+  .container { max-width:960px; margin:2rem auto; padding:0 2rem; display:flex; flex-direction:column; gap:2rem; }
+
+  .section { background:var(--surface); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .section-header { padding:1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:0.5rem; }
+  .section-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.1rem; letter-spacing:0.05em; }
+  .section-body { padding:1.5rem; }
+
+  label { display:block; font-size:0.75rem; font-family:'Barlow Condensed',sans-serif; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem; }
+  input[type=text], input[type=password], select {
+    width:100%; background:var(--surface2); border:1px solid var(--border);
+    color:var(--text); font-family:'Barlow',sans-serif; font-size:0.9rem;
+    padding:0.5rem 0.75rem; border-radius:4px; outline:none; transition:border-color 0.2s; margin-bottom:1rem;
+  }
+  input[type=text]:focus, input[type=password]:focus, select:focus { border-color:var(--accent); }
+
+  .btn { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.85rem; letter-spacing:0.1em; text-transform:uppercase; padding:0.5rem 1.25rem; border-radius:4px; cursor:pointer; transition:all 0.2s; border:none; }
+  .btn-primary { background:var(--accent); color:#000; }
+  .btn-primary:hover { background:#00c8f0; }
+  .btn-danger { background:transparent; border:1px solid var(--red); color:var(--red); }
+  .btn-danger:hover { background:var(--red); color:white; }
+  .btn-sm { padding:0.3rem 0.75rem; font-size:0.75rem; }
+  .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--muted); }
+  .btn-ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .btn-gold { background:var(--gold); color:#000; }
+  .btn-gold:hover { background:#f7b733; }
+
+  /* Group card */
+  .group-card { background:var(--surface2); border:1px solid var(--border); border-radius:6px; margin-bottom:1rem; overflow:hidden; }
+  .group-card-header {
+    padding:0.75rem 1rem; display:flex; align-items:center; gap:0.75rem;
+    border-bottom:1px solid var(--border); cursor:pointer;
+  }
+  .group-card-header:hover { background:rgba(0,180,216,0.05); }
+  .group-icon { font-size:1.1rem; flex-shrink:0; }
+  .group-name { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1rem; flex:1; }
+  .group-count { font-size:0.75rem; color:var(--muted); }
+  .group-body { display:none; padding:1rem; }
+  .group-body.open { display:block; }
+
+  /* Channel row */
+  .channel-row {
+    display:flex; align-items:center; gap:0.5rem;
+    padding:0.5rem 0.75rem; border-radius:4px;
+    border:1px solid rgba(0,180,216,0.1);
+    margin-bottom:0.4rem; background:var(--bg);
+    transition: background 0.1s, border-color 0.1s;
+  }
+  .channel-row:hover { border-color:var(--border); }
+  .channel-row.drag-over-row { background:rgba(0,180,216,0.08); border-color:var(--accent); border-top:2px solid var(--accent); }
+  .ch-name { flex:1; font-size:0.875rem; }
+  .ch-id { font-size:0.7rem; color:var(--muted); font-family:monospace; flex:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .order-btns { display:flex; flex-direction:column; gap:2px; flex-shrink:0; }
+  .order-btn { background:transparent; border:1px solid var(--border); color:var(--muted); font-size:0.6rem; padding:1px 4px; cursor:pointer; border-radius:2px; line-height:1; }
+  .order-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+  /* Toggle */
+  .toggle { position:relative; display:inline-block; width:36px; height:20px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; cursor:pointer; top:0;left:0;right:0;bottom:0; background:var(--surface2); border:1px solid var(--border); border-radius:20px; transition:0.2s; }
+  .toggle-slider::before { content:''; position:absolute; width:12px;height:12px; left:3px;top:3px; background:var(--muted); border-radius:50%; transition:0.2s; }
+  .toggle input:checked + .toggle-slider { background:rgba(0,180,216,0.2); border-color:var(--accent); }
+  .toggle input:checked + .toggle-slider::before { transform:translateX(16px); background:var(--accent); }
+
+  /* Add form */
+  .add-form { display:none; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:1rem; margin-top:0.75rem; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; }
+  .add-form.open { display:flex; }
+  .add-form > div { flex:1; min-width:120px; }
+  .add-form > div label { margin-bottom:0.3rem; }
+  .add-form > div input { margin-bottom:0; }
+
+  /* Collections */
+  .collection-section { margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border); }
+  .collection-header { font-family:'Barlow Condensed',sans-serif; font-size:0.75rem; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; color:var(--gold); margin-bottom:0.5rem; display:flex; align-items:center; justify-content:space-between; }
+  .collection-row { background:var(--surface2); border:1px solid rgba(244,162,97,0.2); border-radius:4px; padding:0.5rem 0.75rem; margin-bottom:0.4rem; }
+  .collection-row-header { display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem; }
+  .collection-name { font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:0.85rem; color:var(--gold); flex:1; }
+  .collection-channels { font-size:0.72rem; color:var(--muted); margin-top:0.3rem; }
+
+  /* Cache section */
+  .cache-row { display:flex; align-items:center; justify-content:space-between; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; margin-bottom:0.5rem; }
+  .cache-row-info { display:flex; flex-direction:column; gap:0.2rem; }
+  .cache-row-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.9rem; }
+  .cache-row-sub { font-size:0.75rem; color:var(--muted); }
+
+  /* Toast */
+  #toast { position:fixed; bottom:2rem; right:2rem; background:var(--green); color:#000; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.9rem; letter-spacing:0.05em; padding:0.75rem 1.5rem; border-radius:6px; opacity:0; transform:translateY(10px); transition:all 0.3s; pointer-events:none; z-index:999; }
+  #toast.show { opacity:1; transform:translateY(0); }
+
+  /* Modal */
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:100; align-items:center; justify-content:center; }
+  .modal-overlay.open { display:flex; }
+  .modal { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1.5rem; max-width:500px; width:90%; max-height:80vh; overflow-y:auto; }
+  .modal-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.1rem; margin-bottom:1rem; color:var(--accent); }
+  .channel-picker { display:flex; flex-direction:column; gap:0.3rem; max-height:300px; overflow-y:auto; margin-bottom:1rem; }
+  .picker-item { display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.5rem; border-radius:4px; cursor:pointer; }
+  .picker-item:hover { background:var(--surface2); }
+  .picker-item input { accent-color:var(--accent); }
+  .picker-item-name { font-size:0.85rem; }
+  .picker-item-group { font-size:0.7rem; color:var(--muted); margin-left:auto; }
+  /* App link inputs expand on focus so full URL is visible/editable */
+  .app-link-input {
+    width: 2.5rem;
+    min-width: 0;
+    transition: width 0.2s ease, box-shadow 0.2s ease;
+    position: relative;
+    z-index: 1;
+  }
+  .app-link-input:focus {
+    width: 260px;
+    position: relative;
+    z-index: 10;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+  }
+
+  /* Chaser Mapping panel */
+  .chaser-tab {
+    border-radius: 6px 6px 0 0;
+    border: 1px solid transparent;
+    border-bottom: none;
+    color: var(--muted);
+  }
+  .chaser-tab.active {
+    color: var(--accent);
+    background: var(--surface2);
+    border-color: var(--border);
+  }
+  .chaser-tab-badge {
+    display: inline-block;
+    margin-left: 0.3rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--gold);
+  }
+  .chaser-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .chaser-row:last-child { border-bottom: none; }
+  .chaser-row-name {
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+  .chaser-row-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .chaser-status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+</style>
+<style>
+  /* Webcams page: one tab at a time so no list has to be scrolled past */
+  .cams-tabs { position:sticky; top:0; z-index:50; display:flex; gap:0.35rem; flex-wrap:wrap;
+    background:var(--bg); padding:0.75rem 0; margin-bottom:0.75rem; border-bottom:1px solid var(--border); }
+  .cams-tab { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.9rem; letter-spacing:0.04em;
+    text-transform:uppercase; padding:0.5rem 0.9rem; border-radius:6px; border:1px solid var(--border);
+    background:var(--surface); color:var(--muted); cursor:pointer; }
+  .cams-tab:hover { color:var(--text, #fff); border-color:var(--accent, #00b4d8); }
+  .cams-tab.active { background:var(--accent, #00b4d8); border-color:var(--accent, #00b4d8); color:#001018; }
+  .cams-tab .n { font-weight:600; opacity:0.85; margin-left:0.25rem; }
+  .cams-panel { display:none; }
+  .cams-panel.active { display:block; }
+  .cams-panel > div:last-child { border-bottom:none !important; margin-bottom:0 !important; padding-bottom:0 !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="admin-logo">Weather<span>TV</span></div>
+  <div class="admin-badge">WEBCAMS</div>
+  <a href="/admin/" class="header-link">← Admin Panel</a>
+</header>
+
+<div class="container">
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">📷 Community Cams</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadCommunity()">Refresh</button>
+    </div>
+    <div class="section-body">
+      <div id="cc-status" style="font-size:0.78rem;color:var(--muted);margin-bottom:1rem"></div>
+
+
+      <div class="cams-tabs" role="tablist">
+        <button class="cams-tab" data-tab="queue" onclick="camsTab('queue')">Review queue<span class="n" id="tab-n-queue"></span></button>
+        <button class="cams-tab" data-tab="map" onclick="camsTab('map')">On the map<span class="n" id="tab-n-map"></span></button>
+        <button class="cams-tab" data-tab="add" onclick="camsTab('add')">Add &amp; import</button>
+        <button class="cams-tab" data-tab="checks" onclick="camsTab('checks')">Placements &amp; rejected</button>
+      </div>
+
+      <div class="cams-panel" id="panel-queue">
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.5rem;">
+          <div style="font-weight:600;font-size:0.875rem">Review queue <span id="cc-qcount" style="color:var(--muted);font-weight:400"></span></div>
+          <button class="btn btn-primary btn-sm" onclick="ccApproveLocated(true)" title="Approve only cameras whose location was confirmed in the right country">✓ Approve confirmed only</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccApproveLocated(false)" title="Approve every queued camera that has any location, including ⚠ ones">Approve all with locations</button>
+          <span id="cc-qconf" style="font-size:0.75rem;color:var(--muted)"></span>
+          <button class="btn btn-primary btn-sm" id="cc-fix-btn" onclick="ccFixQueue()" title="Gets each camera's real title from YouTube, reads title + description for the place, and confirms it with OpenStreetMap">🧭 Fix names &amp; locations</button>
+          <button class="btn btn-ghost btn-sm" id="cc-rec-btn" onclick="ccDropRecorded()" title="Removes YouTube videos that aren't live streams (tours, walking videos, timelapses) from the queue and the map">🎞 Remove recorded videos</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccClearRecent()" title="Remove queued cameras that came from imports in the last few hours (approved cameras are not touched)">🧹 Remove recent imports…</button>
+        </div>
+        <pre id="cc-fix-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0 0 0.5rem"></pre>
+        <div id="cc-queue" style="display:flex;flex-direction:column;gap:0.6rem;"></div>
+      </div>
+
+      </div>
+
+      <div class="cams-panel" id="panel-map">
+      <div>
+        <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+          <div style="font-weight:600;font-size:0.875rem">On the map <span id="cc-ccount" style="color:var(--muted);font-weight:400"></span></div>
+          <input id="cc-cam-filter" type="search" placeholder="Search cameras (name, state, region…)" oninput="ccRenderCams()" style="flex:1;min-width:220px;font-size:0.8rem;margin:0;">
+          <select id="cc-cam-sort" onchange="ccRenderCams()" style="font-size:0.78rem;margin:0;width:auto">
+            <option value="newest">Newest approved first</option><option value="name">Name A–Z</option><option value="state">State / region</option>
+          </select>
+          <span id="cc-cam-count" style="font-size:0.74rem;color:var(--muted)"></span>
+        </div>
+        <div id="cc-cams" style="overflow-x:auto;"></div>
+      </div>
+      </div>
+
+      <div class="cams-panel" id="panel-add">
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Add a camera</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Paste a YouTube live/video/channel link, or a direct link to a camera image (.jpg). Set where it is — it goes straight onto the map.</div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-url" type="text" placeholder="https://www.youtube.com/watch?v=…" style="font-size:0.8rem;margin:0;" size="42">
+          <input id="cc-name" type="text" placeholder="Name (e.g. Greendale — Broad St)" style="font-size:0.8rem;margin:0;" size="28">
+          <button class="btn btn-primary btn-sm" onclick="ccAdd()">Add to map</button>
+        </div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;margin-top:0.4rem;">
+          <input id="cc-where" type="text" placeholder="Where is it? (e.g. Broad St, Greendale WI)" style="font-size:0.8rem;margin:0;" size="34"
+                 onkeydown="if(event.key==='Enter')ccLookup('cc-where','cc-lat','cc-lng','cc-where-hit')">
+          <button class="btn btn-ghost btn-sm" onclick="ccLookup('cc-where','cc-lat','cc-lng','cc-where-hit')">🔎 Look up</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccPickOnMap('cc-lat','cc-lng','cc-where')">🗺 Pick on map</button>
+          <input id="cc-lat" type="text" placeholder="Latitude" style="font-size:0.8rem;margin:0;" size="9">
+          <input id="cc-lng" type="text" placeholder="Longitude" style="font-size:0.8rem;margin:0;" size="10">
+        </div>
+        <div id="cc-where-hit" style="font-size:0.74rem;color:var(--muted);margin-top:0.25rem"></div>
+        <div id="cc-add-result" style="font-size:0.8rem;margin-top:0.4rem;color:var(--muted)"></div>
+      </div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Find live cams on YouTube</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Searches YouTube for live cameras near a place and adds likely ones to the review queue. <strong>Costs 100 units of your daily YouTube quota per search.</strong> The location is a starting guess — adjust it before approving.</div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-place" type="text" placeholder="Place (e.g. Key West, FL)" style="font-size:0.8rem;margin:0;" size="26">
+          <input id="cc-dlat" type="text" placeholder="Latitude" style="font-size:0.8rem;margin:0;" size="9">
+          <input id="cc-dlng" type="text" placeholder="Longitude" style="font-size:0.8rem;margin:0;" size="10">
+          <button class="btn btn-ghost btn-sm" onclick="ccUseLocation('cc-dlat','cc-dlng')">📍 My location</button>
+          <button class="btn btn-primary btn-sm" id="cc-disc-btn" onclick="ccDiscover()">Search</button>
+        </div>
+        <div id="cc-disc-result" style="font-size:0.8rem;margin-top:0.4rem;color:var(--muted)"></div>
+      </div>
+
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Bulk import a list</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Paste a list: a place line, then its link(s) — like <em>Venice Beach</em> ⏎ <em>https://www.youtube.com/live/…</em>. Each place is looked up and the cameras land in the review queue with locations filled in.</div>
+        <textarea id="cc-bulk" rows="6" style="width:100%;font-size:0.78rem;font-family:monospace;" placeholder="Telluride&#10;https://www.youtube.com/live/8Et9fVZld7E&#10;&#10;Clayton, NC&#10;https://www.youtube.com/live/BWtr3Od7lTk"></textarea>
+        <button class="btn btn-primary btn-sm" id="cc-bulk-btn" onclick="ccBulk()" style="margin-top:0.35rem">Import list</button>
+        <pre id="cc-bulk-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+
+        <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Import a channel's live streams</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Pulls every stream a channel has live right now (e.g. <strong>@VirtualRailfan</strong>, <strong>@earthcam</strong>), reads the place from each title and queues them. <strong>100 quota units per 50 streams.</strong></div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-chan" type="text" placeholder="YouTube channel: @VirtualRailfan or youtube.com/@…" style="font-size:0.8rem;margin:0;" size="30">
+          <button class="btn btn-primary btn-sm" id="cc-chan-btn" onclick="ccChannel()">Import channel</button>
+        </div>
+        <pre id="cc-chan-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+        <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Import every camera from a directory site</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">For sites that <strong>list</strong> cameras (e.g. <strong>worldcams.tv/cities/</strong>, 13 pages). Reads each listing page, opens every camera
+          and embeds the <strong>original</strong> stream it finds (YouTube, Nest, live video) — not the directory's page. Places come from each camera's title. Takes a few minutes for big lists.</div>
+        <div style="display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;">
+          <input id="cc-dir" type="text" placeholder="https://worldcams.tv/cities/" style="font-size:0.8rem;margin:0;" size="34">
+          <label style="font-size:0.78rem;color:var(--muted)">Pages <input id="cc-dir-pages" type="number" min="1" max="300" value="1" style="font-size:0.8rem;margin:0;" style="width:60px;font-size:0.8rem;margin:0"></label>
+          <input id="cc-dir-has" type="text" placeholder="Only links containing… (optional)" style="font-size:0.8rem;margin:0;" size="26">
+          <button class="btn btn-primary btn-sm" id="cc-dir-btn" onclick="ccDirectory()">Import directory</button>
+        </div>
+        <pre id="cc-dir-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0;max-height:220px;overflow:auto"></pre>
+
+        <div style="font-weight:600;font-size:0.8rem;margin:0.8rem 0 0.3rem">Watched channels <span style="color:var(--muted);font-weight:400">— checked every night for new live streams (~4 quota units each)</span></div>
+        <div id="cc-channels" style="font-size:0.78rem;"></div>
+      </div>
+
+      </div>
+
+      <div class="cams-panel" id="panel-checks">
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Check placements</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Looks at every camera on the map, works out which country it should be in (from its source or title) and checks its pin is actually there.
+          About 1 second per camera, so a big list takes several minutes. Cameras you mark "It's fine" (or move) aren't checked again.</div>
+        <button class="btn btn-primary btn-sm" id="cc-pl-btn" onclick="ccCheckPlacements()">Check placements</button>
+        <pre id="cc-pl-status" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0"></pre>
+        <div id="cc-pl-list" style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.4rem"></div>
+
+        <div style="font-weight:600;font-size:0.875rem;margin:1rem 0 0.25rem">Rejected cameras</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Asks YouTube which cameras you rejected are live right now (about 1 quota unit per 50), so you can bring back any you turned down by mistake.</div>
+        <button class="btn btn-ghost btn-sm" id="cc-rj-btn" onclick="ccCheckRejected()">Check rejected cameras</button>
+        <pre id="cc-rj-status" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0"></pre>
+        <div id="cc-rj-list" style="display:flex;flex-direction:column;gap:0.35rem;margin-top:0.4rem;max-height:520px;overflow:auto"></div>
+      </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function fmtTs(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString('en-US', {
+    month:'2-digit', day:'2-digit', year:'numeric',
+    hour:'2-digit', minute:'2-digit', second:'2-digit',
+    timeZoneName:'short'
+  });
+}
+
+function lvEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+const LV_TD = 'padding:0.35rem 0.75rem;';
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function camsTab(name) {
+  document.querySelectorAll('.cams-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.cams-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+  try { localStorage.setItem('wtv-cams-tab', name); } catch (e) {}
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+}
+(function () {
+  let t = (location.hash || '').slice(1);
+  if (!t) { try { t = localStorage.getItem('wtv-cams-tab') || ''; } catch (e) {} }
+  camsTab(['queue', 'map', 'add', 'checks'].includes(t) ? t : 'queue');
+})();
+window.addEventListener('hashchange', () => {
+  const t = location.hash.slice(1);
+  if (['queue', 'map', 'add', 'checks'].includes(t)) camsTab(t);
+});
+// Counts on the tabs mirror the ones inside each panel
+function camsSyncCounts() {
+  [['cc-qcount', 'tab-n-queue'], ['cc-ccount', 'tab-n-map']].forEach(([from, to]) => {
+    const t = document.getElementById(from).textContent, el = document.getElementById(to);
+    if (el.textContent !== t) el.textContent = t;
+  });
+}
+['cc-qcount', 'cc-ccount'].forEach(id =>
+  new MutationObserver(camsSyncCounts).observe(document.getElementById(id), { subtree: true, childList: true, characterData: true }));
+
+// ── Community Cams ───────────────────────────────────────────────────────────
+// Place lookup: fill latitude/longitude from a typed place (server: OSM Nominatim)
+async function ccLookup(qId, latId, lngId, outId) {
+  const q = (document.getElementById(qId).value || '').trim();
+  const out = outId ? document.getElementById(outId) : null;
+  if (q.length < 3) { if (out) out.textContent = 'Type a place first.'; return; }
+  if (out) out.textContent = 'Looking up…';
+  try {
+    const r = await (await fetch('/api/admin/community/geocode?q=' + encodeURIComponent(q))).json();
+    const hit = (r.results || [])[0];
+    if (!hit) { if (out) out.textContent = 'Not found — try adding the city/state, or pick it on the map.'; else alert('Not found — pick it on the map instead.'); return; }
+    document.getElementById(latId).value = hit.lat.toFixed(5);
+    document.getElementById(lngId).value = hit.lng.toFixed(5);
+    if (out) out.innerHTML = '📍 ' + lvEsc(hit.label) + ' <span style="opacity:0.6">· © OpenStreetMap</span>';
+  } catch (e) { if (out) out.textContent = 'Lookup failed: ' + e.message; }
+}
+
+// Pick-on-map window: search, click to drop the pin, "Use this spot"
+let _ccMap = null, _ccPin = null, _ccTarget = null;
+function _ccLoadLeaflet() {
+  if (window.L) return Promise.resolve();
+  return new Promise((ok, fail) => {
+    const css = document.createElement('link'); css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(css);
+    const js = document.createElement('script'); js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    js.onload = ok; js.onerror = () => fail(new Error('Map library failed to load')); document.head.appendChild(js);
+  });
+}
+async function ccPickOnMap(latId, lngId, labelId) {
+  _ccTarget = { latId, lngId };
+  let m = document.getElementById('cc-picker');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'cc-picker';
+    m.style.cssText = 'position:fixed;inset:0;z-index:5000;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;';
+    m.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:min(92vw,820px);padding:0.75rem;">
+      <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;align-items:center;">
+        <input id="cc-picker-q" type="text" placeholder="Search a place, or click the map" style="flex:1;font-size:0.82rem;margin:0" onkeydown="if(event.key==='Enter')ccPickerSearch()">
+        <button class="btn btn-ghost btn-sm" onclick="ccPickerSearch()">🔎 Search</button>
+        <button class="btn btn-primary btn-sm" onclick="ccPickerUse()">Use this spot</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cc-picker').style.display='none'">Cancel</button>
+      </div>
+      <div id="cc-picker-map" style="height:min(62vh,480px);border-radius:6px;"></div>
+      <div id="cc-picker-info" style="font-size:0.74rem;color:var(--muted);margin-top:0.35rem">Click where the camera is. Drag the pin to fine-tune.</div></div>`;
+    document.body.appendChild(m);
+  }
+  m.style.display = 'flex';
+  try { await _ccLoadLeaflet(); } catch (e) { alert(e.message); return; }
+  const la = parseFloat(document.getElementById(latId).value), lo = parseFloat(document.getElementById(lngId).value);
+  const start = Number.isFinite(la) && Number.isFinite(lo) ? [la, lo] : [39.5, -96], zoom = Number.isFinite(la) ? 15 : 4;
+  if (!_ccMap) {
+    _ccMap = L.map('cc-picker-map').setView(start, zoom);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(_ccMap);
+    _ccMap.on('click', (e) => _ccSetPin(e.latlng.lat, e.latlng.lng));
+  } else { _ccMap.setView(start, zoom); }
+  setTimeout(() => _ccMap.invalidateSize(), 50);
+  if (Number.isFinite(la) && Number.isFinite(lo)) _ccSetPin(la, lo); else if (_ccPin) { _ccMap.removeLayer(_ccPin); _ccPin = null; }
+  const label = labelId && document.getElementById(labelId) ? document.getElementById(labelId).value : '';
+  document.getElementById('cc-picker-q').value = label || '';
+}
+function _ccSetPin(lat, lng) {
+  if (_ccPin) _ccPin.setLatLng([lat, lng]);
+  else { _ccPin = L.marker([lat, lng], { draggable: true }).addTo(_ccMap); _ccPin.on('dragend', () => { const p = _ccPin.getLatLng(); _ccSetPin(p.lat, p.lng); }); }
+  document.getElementById('cc-picker-info').textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)} — "Use this spot" to fill it in.`;
+}
+async function ccPickerSearch() {
+  const q = document.getElementById('cc-picker-q').value.trim();
+  if (q.length < 3) return;
+  const info = document.getElementById('cc-picker-info');
+  info.textContent = 'Searching…';
+  try {
+    const r = await (await fetch('/api/admin/community/geocode?q=' + encodeURIComponent(q))).json();
+    const hit = (r.results || [])[0];
+    if (!hit) { info.textContent = 'Not found — zoom in and click the spot instead.'; return; }
+    _ccMap.setView([hit.lat, hit.lng], 16);
+    _ccSetPin(hit.lat, hit.lng);
+    info.textContent = '📍 ' + hit.label + ' — adjust if needed, then "Use this spot".';
+  } catch (e) { info.textContent = 'Search failed: ' + e.message; }
+}
+function ccPickerUse() {
+  if (!_ccPin || !_ccTarget) { alert('Click the map to place the pin first.'); return; }
+  const p = _ccPin.getLatLng();
+  document.getElementById(_ccTarget.latId).value = p.lat.toFixed(5);
+  document.getElementById(_ccTarget.lngId).value = p.lng.toFixed(5);
+  document.getElementById('cc-picker').style.display = 'none';
+  if (typeof _ccTarget.onUse === 'function') _ccTarget.onUse(p.lat, p.lng);
+}
+
+// Imports run as background jobs (big ones take minutes — longer than
+// Cloudflare's 100 s limit). Start the job, then poll it for progress.
+async function ccRunJob(path, body, out) {
+  const start = await ccPost(path, body);
+  if (!start.jobId) return start;                       // older server: finished inline
+  const stop = document.createElement('button');
+  stop.className = 'btn btn-ghost btn-sm'; stop.textContent = '⏹ Stop'; stop.style.marginLeft = '0.5rem';
+  stop.onclick = async () => { stop.disabled = true; await fetch('/api/admin/community/job/' + start.jobId + '/cancel', { method: 'POST' }); };
+  out.insertAdjacentElement('afterend', stop);
+  try { return await ccPoll(start, out); } finally { stop.remove(); }
+}
+async function ccPoll(start, out) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2000));
+    let job;
+    try { job = await (await fetch('/api/admin/community/job/' + start.jobId)).json(); }
+    catch (e) { out.textContent = 'Still working… (checking progress)'; continue; }
+    if (job.error && !job.status) throw new Error(job.error);
+    if (job.status === 'running') { out.textContent = '⏳ ' + (job.progress || 'Working…') + ` · ${Math.round((Date.now() - job.started) / 1000)} s`; continue; }
+    if (job.status === 'error') throw new Error((job.result && job.result.error) || 'Import failed');
+    return job.result;
+  }
+}
+async function ccBulk() {
+  const out = document.getElementById('cc-bulk-result'), btn = document.getElementById('cc-bulk-btn');
+  btn.disabled = true; out.textContent = 'Starting import…';
+  try {
+    const j = await ccRunJob('import', { text: document.getElementById('cc-bulk').value }, out);
+    out.textContent = `Queued ${j.queued} · skipped ${j.skipped}` + (j.noPlace ? ` · ${j.noPlace} need a location set by hand` : '') + '\n\n' + j.report.join('\n');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccChannel() {
+  const out = document.getElementById('cc-chan-result'), btn = document.getElementById('cc-chan-btn');
+  btn.disabled = true; out.textContent = 'Starting channel import…';
+  try {
+    const j = await ccRunJob('import-channel', { channel: document.getElementById('cc-chan').value }, out);
+    out.textContent = `${j.channelTitle}: queued ${j.queued}, skipped ${j.skipped} (already listed) · used ${j.unitsUsed} quota units\n\n` + j.report.join('\n');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccDirectory() {
+  const out = document.getElementById('cc-dir-result'), btn = document.getElementById('cc-dir-btn');
+  btn.disabled = true; out.textContent = 'Starting directory import…';
+  try {
+    const j = await ccRunJob('import-directory', { url: v('cc-dir'), pages: v('cc-dir-pages'), contains: v('cc-dir-has') }, out);
+    out.textContent = (j.pagesRead ? `Read ${j.pagesRead} listing pages · ` : '') + `Found ${j.found} camera pages · queued ${j.queued} cameras · already listed ${j.skipped} · no usable player ${j.noPlayer}\n\n` + j.report.join('\n');
+    if (j.importId && j.queued) {
+      const undo = document.createElement('button');
+      undo.className = 'btn btn-ghost btn-sm'; undo.textContent = '↶ Undo this import (remove its ' + j.queued + ' queued cameras)';
+      undo.onclick = async () => { if (!confirm('Remove the ' + j.queued + ' cameras this import added to the review queue?')) return;
+        const r = await ccPost('queue-clear', { importId: j.importId }); undo.remove(); out.textContent += '\n\n↶ Removed ' + r.removed + ' queued cameras.'; loadCommunity(); };
+      out.insertAdjacentElement('afterend', undo);
+    }
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+// ── Check placements ─────────────────────────────────────────────────────────
+const CC_COUNTRY = { us: 'USA', gb: 'United Kingdom', ca: 'Canada', mx: 'Mexico', jp: 'Japan', es: 'Spain', it: 'Italy', fr: 'France', de: 'Germany',
+  nl: 'Netherlands', au: 'Australia', nz: 'New Zealand', th: 'Thailand', pr: 'Puerto Rico', ie: 'Ireland', jm: 'Jamaica' };
+const ccCountry = (cc) => CC_COUNTRY[cc] || (cc || '?').toUpperCase();
+function ccRenderPlacement(r) {
+  const list = document.getElementById('cc-pl-list');
+  if (!r) { list.innerHTML = ''; return; }
+  document.getElementById('cc-pl-status').textContent = `Last check ${fmtTs(new Date(r.at).toISOString())}: ${r.checked} checked · ${r.unknown} with no country to compare · ${r.issues.length} look misplaced`;
+  list.innerHTML = r.issues.map(i => `
+    <div style="padding:0.5rem 0.6rem;border:1px solid var(--border);border-radius:6px;font-size:0.78rem;">
+      <div><strong>${lvEsc(i.name)}</strong> — should be in <strong>${lvEsc(ccCountry(i.expected))}</strong>, but its pin is in <span style="color:var(--red)">${lvEsc(ccCountry(i.actual))}</span></div>
+      <div style="color:var(--muted)">${i.suggestion ? '📍 Suggested: ' + lvEsc(i.suggestion.label) : 'No suggestion found — pick it on the map'}</div>
+      <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.35rem;align-items:center;">
+        <input id="pl-lat-${i.id}" value="${i.suggestion ? i.suggestion.lat.toFixed(5) : ''}" placeholder="Latitude" size="9" style="font-size:0.76rem;margin:0">
+        <input id="pl-lng-${i.id}" value="${i.suggestion ? i.suggestion.lng.toFixed(5) : ''}" placeholder="Longitude" size="10" style="font-size:0.76rem;margin:0">
+        <button class="btn btn-ghost btn-sm" onclick="ccPickOnMap('pl-lat-${i.id}','pl-lng-${i.id}',null)">🗺 Pick on map</button>
+        <button class="btn btn-primary btn-sm" onclick="ccMove('${i.id}',false)">Move it</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccMove('${i.id}',true)">It's fine</button>
+      </div></div>`).join('');
+}
+async function ccCheckPlacements() {
+  const out = document.getElementById('cc-pl-status'), btn = document.getElementById('cc-pl-btn');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try { const j = await ccRunJob('check-placements', {}, out); ccRenderPlacement({ at: Date.now(), ...j }); }
+  catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccMove(id, ok) {
+  try {
+    await ccPost('move', ok ? { id, ok: true } : { id, lat: v('pl-lat-' + id), lng: v('pl-lng-' + id) });
+    ccRenderPlacement(await (await fetch('/api/admin/community/placement-report')).json());
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
+
+// ── Rejected cameras ─────────────────────────────────────────────────────────
+let _ccRejected = [];
+async function ccCheckRejected() {
+  const out = document.getElementById('cc-rj-status'), btn = document.getElementById('cc-rj-btn');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try {
+    const j = await ccRunJob('rejected-check', {}, out);
+    _ccRejected = j.items;
+    out.textContent = `${j.total} rejected YouTube cameras · ${j.live} are live right now (shown first)`;
+    ccRenderRejected();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+function ccRenderRejected() {
+  document.getElementById('cc-rj-list').innerHTML = _ccRejected.map((r, n) => `
+    <div style="display:flex;gap:0.6rem;align-items:center;font-size:0.78rem;padding:0.3rem 0;border-bottom:1px solid var(--border);">
+      <img src="https://i.ytimg.com/vi/${r.ref}/hqdefault_live.jpg" onerror="this.onerror=null;this.src='https://i.ytimg.com/vi/${r.ref}/hqdefault.jpg'" alt="" style="width:96px;height:54px;object-fit:cover;border-radius:3px;background:#000">
+      <div style="flex:1;min-width:0">
+        <div>${r.live ? '<span style="color:var(--green)">● Live</span>' : '<span style="color:var(--muted)">● Not live</span>'} ${lvEsc(r.title)}</div>
+        <div style="color:var(--muted)">${lvEsc(r.channelTitle)}${r.embeddable ? '' : ' · owner blocks embedding (would show as a snapshot)'}</div>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="https://www.youtube.com/watch?v=${r.ref}" target="_blank" rel="noopener">Open</a>
+      <button class="btn btn-primary btn-sm" onclick="ccUnreject(${n})">Restore to queue</button>
+    </div>`).join('');
+}
+async function ccUnreject(n) {
+  const r = _ccRejected[n];
+  try { await ccPost('unreject', { ref: r.ref, title: r.title, channelTitle: r.channelTitle }); _ccRejected.splice(n, 1); ccRenderRejected(); loadCommunity(); }
+  catch (e) { alert(e.message); }
+}
+
+async function ccFixQueue() {
+  const out = document.getElementById('cc-fix-result'), btn = document.getElementById('cc-fix-btn');
+  const all = confirm('Fix names & locations for EVERY queued camera?\n\nOK = all queued cameras\nCancel = only the ones not yet ✓ confirmed');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try {
+    const j = await ccRunJob('fix-queue', { scope: all ? 'all' : 'unconfirmed' }, out);
+    out.textContent = `Checked ${j.checked} · real YouTube titles applied to ${j.renamed} · owner map locations ${j.geotagged} · ✓ ${j.confirmed} confirmed · ⚠ ${j.guessed} to check · ${j.failed} still unknown`
+      + (j.placeList === false ? '\n⚠ The world place list (GeoNames) could not be downloaded, so most cameras could not be matched. Check the Railway log for a [Gazetteer] line, then run this again.' : '')
+      + (j.aiStopped ? '\n(The optional AI step stopped: ' + j.aiStopped + ' — everything else still ran.)' : '');
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccDropRecorded() {
+  if (!confirm('Check every YouTube camera in the queue and on the map, and remove the ones that are recorded videos (tours, walking videos, timelapses) rather than live streams?')) return;
+  const out = document.getElementById('cc-fix-result'), btn = document.getElementById('cc-rec-btn');
+  btn.disabled = true; out.textContent = 'Starting…';
+  try {
+    const j = await ccRunJob('drop-recorded', {}, out);
+    out.textContent = `Queue: removed ${j.queue.recorded} recorded videos, ${j.queue.ended} long-ended streams, ${j.queue.gone} deleted/private · Map: removed ${j.mapRemoved} recorded videos`
+      + (j.examples.length ? '\nRemoved from the map: ' + j.examples.join(' · ') : '') + '\n(Removed videos go to your rejected list, so imports won\'t bring them back.)';
+    loadCommunity();
+  } catch (e) { out.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccClearRecent() {
+  const h = prompt('Remove queued cameras added by imports in the last how many hours? (Cameras already on the map are not touched.)', '3');
+  if (!h) return;
+  try { const r = await ccPost('queue-clear', { hours: parseFloat(h) }); alert('Removed ' + r.removed + ' queued cameras. ' + r.left + ' left in the queue.'); loadCommunity(); }
+  catch (e) { alert(e.message); }
+}
+let _ccCams = [];
+// The "On the map" table, filtered by the search box (name, state/region, channel)
+function ccRenderCams() {
+  const f = (document.getElementById('cc-cam-filter') || {}).value || '';
+  const terms = f.toLowerCase().split(/\s+/).filter(Boolean);
+  const sortBy = (document.getElementById('cc-cam-sort') || {}).value || 'newest';
+  const list = _ccCams.filter(c => { const hay = [c.name, c.state, c.channelTitle, c.provider, c.placedBy].join(' ').toLowerCase(); return terms.every(t => hay.includes(t)); })
+    .sort(sortBy === 'name' ? (a, b) => String(a.name).localeCompare(String(b.name))
+        : sortBy === 'state' ? (a, b) => String(a.state).localeCompare(String(b.state)) || String(a.name).localeCompare(String(b.name))
+        : (a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  const note = document.getElementById('cc-cam-count');
+  if (note) note.textContent = terms.length ? `${list.length} match${list.length === 1 ? '' : 'es'}` + (list.length > 300 ? ' (showing the first 300)' : '') : (list.length > 300 ? 'showing the first 300 — search to find others' : '');
+  document.getElementById('cc-cams').innerHTML = list.length ? `<table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+    <thead><tr style="background:var(--surface2)"><th style="${LV_TD}text-align:left">Camera</th><th style="${LV_TD}text-align:left">Approved</th><th style="${LV_TD}text-align:left">Located at</th><th style="${LV_TD}text-align:left">Status</th><th style="${LV_TD}"></th></tr></thead><tbody>` +
+    list.slice(0, 300).map(c => {
+      const link = c.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + c.ref : c.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + c.ref + '/live' : c.ref;
+      const why = c.lastError ? ` title="${lvEsc(c.lastError)}"` : '';
+      const noEmbed = c.embeddable === false || /embedding/i.test(c.lastError || '');
+      const st = c.live && noEmbed ? `<span style="color:var(--green)"${why}>● Live</span> <span style="color:var(--gold);font-size:0.72rem">(snapshot — owner blocks embedding)</span>`
+        : c.live ? '<span style="color:var(--green)">● Live</span>'
+        : c.live === false ? (c.visible ? `<span style="color:var(--gold)"${why}>● Offline (recent)</span>` : `<span style="color:var(--red)"${why}>● Offline — hidden</span>`)
+        : `<span style="color:var(--muted)"${why}>● Unknown — shown</span>`;
+      const reason = !c.live && c.lastError ? `<div style="font-size:0.7rem;color:var(--muted);max-width:220px">${lvEsc(c.lastError)}</div>` : '';
+      const swapped = c.replacements ? ` <span title="The stream ended and was replaced by the channel's new live stream automatically" style="color:var(--accent);font-size:0.7rem">↻ ${c.replacements}</span>` : '';
+      const lat = (+c.lat).toFixed(4), lng = (+c.lng).toFixed(4);
+      const osm = `https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lng}#map=13/${c.lat}/${c.lng}`;
+      const placed = `<div><a href="${osm}" target="_blank" rel="noopener" title="See this spot on OpenStreetMap" style="color:var(--accent);text-decoration:none">📍 ${lat}, ${lng}</a> <span style="color:var(--muted)">· ${lvEsc(c.state)}</span></div>`
+        + `<div style="font-size:0.7rem;color:var(--muted);max-width:300px">${c.placedBy ? lvEsc(c.placedBy) : 'Approved before placement notes were kept'}</div>`;
+      return `<tr style="border-bottom:1px solid var(--border)"><td style="${LV_TD}min-width:190px">${lvEsc(c.name)}${swapped}</td>
+        <td style="${LV_TD}color:var(--muted);white-space:nowrap">${c.addedAt ? fmtTs(new Date(c.addedAt).toISOString()) : '—'}</td>
+        <td style="${LV_TD}min-width:260px">${placed}</td><td style="${LV_TD}">${st}${reason}</td>
+        <td style="${LV_TD}"><div style="display:flex;flex-wrap:wrap;gap:0.25rem;max-width:230px"><a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open</a>
+        <button class="btn btn-ghost btn-sm" onclick="ccAct('check','${c.id}')">Check</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccEditCam('${c.id}')" title="Fix this camera's location on the map">📍 Move</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccUnapprove('${c.id}')" title="Take it off the map and back into the review queue">↩ Back to queue</button>
+        <button class="btn btn-ghost btn-sm" onclick="ccAct('remove','${c.id}')">Remove</button></div></td></tr>`;
+    }).join('') + '</tbody></table>' : (_ccCams.length ? '<div style="font-size:0.8rem;color:var(--muted)">No cameras match that search.</div>' : '<div style="font-size:0.8rem;color:var(--muted)">No community cameras yet.</div>');
+}
+// 📍 Move: fix an approved camera's location on the map — saved right away
+function ccEditCam(id) {
+  const c = _ccCams.find(x => x.id === id); if (!c) return;
+  let la = document.getElementById('cc-edit-lat'), lo = document.getElementById('cc-edit-lng');
+  if (!la) { la = document.createElement('input'); la.type = 'hidden'; la.id = 'cc-edit-lat'; document.body.appendChild(la);
+             lo = document.createElement('input'); lo.type = 'hidden'; lo.id = 'cc-edit-lng'; document.body.appendChild(lo); }
+  la.value = c.lat; lo.value = c.lng;
+  ccPickOnMap('cc-edit-lat', 'cc-edit-lng', null).then(() => {
+    document.getElementById('cc-picker-q').value = c.name;
+    _ccTarget.onUse = async (lat, lng) => {
+      try { await ccPost('move', { id, lat, lng }); loadCommunity(); }
+      catch (e) { alert('Could not save: ' + e.message); }
+    };
+  });
+}
+async function ccUnapprove(id) {
+  const c = _ccCams.find(x => x.id === id);
+  if (!confirm('Take "' + (c ? c.name : 'this camera') + '" off the map and put it back in the review queue?')) return;
+  try { await ccPost('unapprove', { id }); loadCommunity(); } catch (e) { alert(e.message); }
+}
+
+async function ccChannelAct(action, channelId) {
+  if (action === 'remove' && !confirm('Stop watching this channel? Cameras already on the map stay.')) return;
+  try {
+    const j = await ccPost('channels/' + action, { channelId });
+    if (action === 'rescan') alert(j.queued ? `${j.queued} new live stream(s) added to the review queue.` : 'No new live streams on that channel.');
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
+async function ccApproveLocated(confirmedOnly) {
+  if (!confirm(confirmedOnly ? 'Approve every queued camera whose location was confirmed?' : 'Approve EVERY queued camera that has a location, including ⚠ unconfirmed ones?')) return;
+  try {
+    const j = await ccPost('approve-located', { confirmedOnly: !!confirmedOnly });
+    alert(`Approved ${j.approved}.` + (j.failed.length ? `\n\nNot approved:\n${j.failed.slice(0, 20).join('\n')}` : ''));
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
+function ccUseLocation(latId, lngId) {
+  if (!navigator.geolocation) return alert('Location not available in this browser');
+  navigator.geolocation.getCurrentPosition(p => {
+    document.getElementById(latId).value = p.coords.latitude.toFixed(5);
+    document.getElementById(lngId).value = p.coords.longitude.toFixed(5);
+  }, () => alert('Location permission denied'), { timeout: 10000 });
+}
+async function ccPost(path, body) {
+  const r = await fetch('/api/admin/community/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+async function ccAdd() {
+  const out = document.getElementById('cc-add-result');
+  out.textContent = 'Checking…';
+  try {
+    if ((!v('cc-lat') || !v('cc-lng')) && v('cc-where')) await ccLookup('cc-where', 'cc-lat', 'cc-lng', 'cc-where-hit');
+    const j = await ccPost('add', { url: v('cc-url'), name: v('cc-name') || v('cc-where'), lat: v('cc-lat'), lng: v('cc-lng') });
+    const more = j.more ? ' — this page has ' + j.more + ' more camera' + (j.more > 1 ? 's' : '') + ': paste it into "Import every camera from a directory site" to queue them all' : '';
+    out.innerHTML = '<span style="color:var(--green)">✓ Added in ' + lvEsc(j.cam.state) + (j.cam.live ? ' · live now' : j.cam.live === false
+      ? ' · not live right now (hidden until it is)' + (j.cam.lastError ? ' — ' + lvEsc(j.cam.lastError) : '')
+      : ' · live status not confirmed yet — shown on the map' + (j.cam.lastError ? ' (' + lvEsc(j.cam.lastError) + ')' : '')) + lvEsc(more) + '</span>';
+    ['cc-url', 'cc-name', 'cc-where', 'cc-lat', 'cc-lng'].forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('cc-where-hit').textContent = '';
+    loadCommunity();
+  } catch (e) { out.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
+}
+function v(id) { return (document.getElementById(id).value || '').trim(); }
+async function ccDiscover() {
+  const out = document.getElementById('cc-disc-result'), btn = document.getElementById('cc-disc-btn');
+  if (!v('cc-place') && !(v('cc-dlat') && v('cc-dlng'))) { out.textContent = 'Enter a place, or a latitude/longitude.'; return; }
+  btn.disabled = true; out.textContent = 'Searching YouTube…';
+  try {
+    const j = await ccPost('discover', { place: v('cc-place'), lat: v('cc-dlat'), lng: v('cc-dlng') });
+    out.innerHTML = '<span style="color:var(--green)">✓ ' + j.found + ' live results · ' + j.added + ' new candidates added to the queue</span>';
+    loadCommunity();
+  } catch (e) { out.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(e.message) + '</span>'; }
+  btn.disabled = false;
+}
+async function ccAct(action, id) {
+  try {
+    const body = { id };
+    if (action === 'approve') {
+      body.name = v('ccq-name-' + id); body.lat = v('ccq-lat-' + id); body.lng = v('ccq-lng-' + id);
+    }
+    if (action === 'remove' && !confirm('Remove this camera from the map?')) return;
+    const j = await ccPost(action, body);
+    if (action === 'check' && j.cam) {   // say what the check found
+      const c = j.cam;
+      alert(`${c.name}\n\n` + (c.live ? '● Live now — showing on the map.'
+        : c.live === false ? '● Not live: ' + (c.lastError || 'offline') + (c.lastLive ? '' : '\nHidden from the map until it is live.')
+        : '● Could not confirm (' + (c.lastError || 'unknown') + ') — still shown on the map.'));
+    }
+    loadCommunity();
+  } catch (e) { alert(e.message); }
+}
+async function loadCommunity() {
+  let d;
+  try { d = await (await fetch('/api/admin/community')).json(); }
+  catch (e) { document.getElementById('cc-status').innerHTML = '<span style="color:var(--red)">✗ Could not load — is the new server deployed?</span>'; return; }
+  const live = d.cams.filter(c => c.live).length;
+  document.getElementById('cc-status').innerHTML =
+    `${d.cams.length} on the map (${live} live now) · ${d.queue.length} waiting for review · streams checked every 20 min (no quota) · ` +
+    (d.discovery.nightly ? `nightly discovery ON: ${d.discovery.perNight} searches/night (~${d.discovery.perNight * 100} units)` +
+      (d.discovery.lastRun ? ', last run ' + fmtTs(new Date(d.discovery.lastRun).toISOString()) : '') :
+      'nightly discovery off (set COMMUNITY_DISCOVERY=true to turn on)');
+  document.getElementById('cc-qcount').textContent = d.queue.length ? '(' + d.queue.length + ')' : '';
+  const conf = d.queue.filter(q => q.confident && q.lat != null).length;
+  document.getElementById('cc-qconf').textContent = d.queue.length ? `${conf} confirmed · ${d.queue.length - conf} to check` : '';
+  const src = { suggestion: '💬 Viewer suggestion', discovery: '🔎 Found by search', admin: 'Added', import: '📋 Imported list', channel: '📺 Channel import' };
+  document.getElementById('cc-queue').innerHTML = d.queue.slice(0, 50).map(q => {
+    const link = q.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + q.ref : q.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + q.ref + '/live' : q.ref;
+    return `<div style="display:flex;gap:0.75rem;align-items:flex-start;padding:0.6rem;border:1px solid var(--border);border-radius:6px;">
+      ${q.thumb ? `<img src="${lvEsc(q.thumb)}" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex:0 0 auto;background:#000"
+          onerror="const v=(this.src.match(/\/vi\/([\w-]{11})\//)||[])[1];if(v&&!this.dataset.f){this.dataset.f=1;this.src='https://i.ytimg.com/vi/'+v+'/hqdefault_live.jpg'}else if(v&&this.dataset.f==='1'){this.dataset.f=2;this.src='https://i.ytimg.com/vi/'+v+'/hqdefault.jpg'}">` : ''}
+      <div style="flex:1;min-width:0;font-size:0.78rem;">
+        <div style="color:var(--muted);font-size:0.7rem">${src[q.source] || q.source}${q.channelTitle ? ' · ' + lvEsc(q.channelTitle) : ''}</div>
+        <input id="ccq-name-${q.id}" type="text" value="${lvEsc(q.name)}" style="width:100%;font-size:0.8rem;margin:0.2rem 0;">
+        ${q.note ? `<div style="color:var(--muted)">Note: ${lvEsc(q.note)}</div>` : ''}
+        ${q.locationGuess ? `<div style="color:${q.confident ? 'var(--green)' : 'var(--gold)'}">${q.confident ? '✓ confirmed' : (q.lat != null ? '⚠ check location' : '⚠ needs a location')} · 📍 ${lvEsc(q.locationGuess)}</div>` : ''}
+        <div style="display:flex;gap:0.35rem;margin-top:0.35rem;flex-wrap:wrap;align-items:center;">
+          <input id="ccq-lat-${q.id}" type="text" value="${q.lat ?? ''}" placeholder="Latitude" size="9" style="font-size:0.78rem;margin:0">
+          <input id="ccq-lng-${q.id}" type="text" value="${q.lng ?? ''}" placeholder="Longitude" size="10" style="font-size:0.78rem;margin:0">
+          <button class="btn btn-ghost btn-sm" title="Look up the name above" onclick="ccLookup('ccq-name-${q.id}','ccq-lat-${q.id}','ccq-lng-${q.id}',null)">🔎</button>
+          <button class="btn btn-ghost btn-sm" title="Pick on map" onclick="ccPickOnMap('ccq-lat-${q.id}','ccq-lng-${q.id}','ccq-name-${q.id}')">🗺</button>
+          <a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open ↗</a>
+          <button class="btn btn-primary btn-sm" onclick="ccAct('approve','${q.id}')">Approve</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccAct('reject','${q.id}')">Reject</button>
+        </div>
+      </div></div>`;
+  }).join('') || '<div style="font-size:0.8rem;color:var(--muted)">Nothing waiting. Search above, or wait for viewer suggestions / nightly discovery.</div>';
+  document.getElementById('cc-ccount').textContent = d.cams.length ? '(' + d.cams.length + ')' : '';
+  if (!document.getElementById('cc-pl-list').innerHTML) fetch('/api/admin/community/placement-report').then(r => r.json()).then(r => { if (r) ccRenderPlacement(r); }).catch(() => {});
+  const chans = d.channels || [];
+  document.getElementById('cc-channels').innerHTML = chans.length ? chans.map(c =>
+    `<div style="display:flex;gap:0.5rem;align-items:center;padding:0.3rem 0;border-bottom:1px solid var(--border);">
+       <span style="flex:1"><strong>${lvEsc(c.title || c.id)}</strong> <span style="color:var(--muted)">· ${c.liveCount ?? '?'} live at last check · ${c.lastScan ? fmtTs(new Date(c.lastScan).toISOString()) : 'not checked yet'}${c.lastError ? ' · ⚠ ' + lvEsc(c.lastError) : ''}</span></span>
+       <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('rescan','${c.id}')">Check now</button>
+       <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('remove','${c.id}')">Stop watching</button></div>`).join('')
+    : '<span style="color:var(--muted)">None yet — channels you import are watched automatically.</span>';
+  _ccCams = d.cams;
+  ccRenderCams();
+}
+
+
+loadCommunity();
+</script>
+</body>
+</html>
