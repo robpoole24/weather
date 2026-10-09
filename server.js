@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-02T12:00:00Z build.1791097200
+// WeatherTV Server — updated 2026-10-09T04:30:00Z build.1791760000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2496,6 +2496,14 @@ const community = require('./community-cams')(app, {
   rGet, rSet, fetchTextOverHttp, youtubeKey: process.env.YOUTUBE_API_KEY, stateFor: _stateForPoint, upstreamCount,
 });
 
+// WeatherStar "Airport Conditions" data (airports.js): weather at the 3 nearest
+// airports, from one FAA Aviation Weather Center download every 10 minutes.
+require('./airports')(app, { rGet, rSet });
+
+// WeatherStar "Tides" and "Marine Forecast" data (marine.js): NOAA tide
+// predictions and NWS marine zone forecasts, cached per station/zone.
+require('./marine')(app);
+
 // Replaces the old bbox-based endpoint — state-level loading is far more
 // performant than loading thousands of cameras across the whole country
 // and filtering by viewport on every pan/zoom. Users select the state they
@@ -4112,7 +4120,16 @@ async function websubSubscribe(channelId) {
 // detection. Admin page: /admin/live-verifier (behind adminAuth via app.use('/admin')).
 // Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 4).
 const liveVerifier = createLiveVerifier({
-  getChannels: async () => getLiveChannels().map(ch => ({ id: ch.id, name: ch.name })),
+  // lastLiveDate drives how often each channel is checked (see TIERS in live-verifier.js)
+  getChannels: async () => getLiveChannels().map(ch => ({ id: ch.id, name: ch.name, lastLiveDate: (cache.channelActivity[ch.id] || {}).lastLiveDate || null })),
+  // Severe weather → check every channel every sweep: any active Tornado or
+  // Extreme Wind Warning, or a named Atlantic storm (from the NHC proxy cache)
+  isSevereActive: async () => {
+    const warnings = (radar.getActiveStormWarnings() || {}).list || [];
+    if (warnings.some(w => w.event === 'Tornado Warning' || w.event === 'Extreme Wind Warning')) return true;
+    const nhc = _nhcCache.data && Date.now() - _nhcCache.ts < 6 * 3600 * 1000 ? _nhcCache.data.activeStorms || [] : [];
+    return nhc.some(st => /^al/i.test(st.id || '') && /^(HU|TS)$/i.test(st.classification || ''));
+  },
   // "Known" = WTV is already showing THIS stream (same videoId when both are known)
   isKnownLive: async (channelId, videoId) => {
     const s = cache.liveStatuses[channelId];

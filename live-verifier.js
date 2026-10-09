@@ -1,4 +1,4 @@
-// WeatherTV Live Verifier — build.1790467200
+// WeatherTV Live Verifier — build.1791730000
 // Zero-quota secondary live check: loads youtube.com/channel/{id}/live directly
 // and reads the page's own player data to confirm whether the channel is live NOW.
 // Tracks every run + every stream the primary (WebSub/Atom) system missed, and
@@ -150,8 +150,18 @@ function parseStored(v, fallback) {
 }
 
 // ---------- Verifier ----------
+// How often each channel is re-checked, by how recently it last went live.
+// Channels WTV currently shows as live, and every channel while severe weather
+// is active, are checked every sweep regardless.
+const TIERS = [
+  { maxDaysSinceLive: 7, everyMin: 0 },         // streamed this week → every sweep
+  { maxDaysSinceLive: 30, everyMin: 30 },       // this month → every 30 min
+  { maxDaysSinceLive: Infinity, everyMin: 120 },// longer ago / never → every 2 h
+];
+
 function createLiveVerifier({
-  getChannels,          // async () => [channelId] or [{ id, name }]
+  getChannels,          // async () => [channelId] or [{ id, name, lastLiveDate? }]
+  isSevereActive,       // async () => bool — while true, every channel is checked every sweep
   isKnownLive,          // async (channelId, videoId?) => bool — is WTV already showing THIS stream? REQUIRED for miss tracking.
   onLive,               // async ({ channelId, videoId, title, startedAt, wasKnown }) => {} — called every sweep a channel is live
   onOffline,            // async (channelId) => {} — only called for channels currently shown live
@@ -163,6 +173,7 @@ function createLiveVerifier({
   log = (...a) => console.log('[live-verifier]', ...a),
 }) {
   const offlineStreak = new Map();
+  const lastChecked = new Map();   // channelId -> ms of last check (in memory; a restart just checks everyone once)
   let runs = [];
   let streams = {};     // videoId -> { channelId, name, title, firstSeen, lastSeen, caughtByPrimary }
   let names = {};
@@ -196,14 +207,31 @@ function createLiveVerifier({
     const t0 = Date.now();
 
     const raw = await getChannels();
-    const list = raw.map((c) => (typeof c === 'string' ? { id: c, name: c } : { id: c.id || c.channelId, name: c.name || c.id || c.channelId }));
+    const all = raw.map((c) => (typeof c === 'string' ? { id: c, name: c } : { id: c.id || c.channelId, name: c.name || c.id || c.channelId, lastLiveDate: c.lastLiveDate || null }));
     names = {};
-    list.forEach((c) => { names[c.id] = c.name; });
+    all.forEach((c) => { names[c.id] = c.name; });
+    // Pick who is due this sweep
+    const severe = isSevereActive ? !!(await isSevereActive().catch(() => false)) : false;
+    const nowMs = Date.now();
+    const list = [];
+    for (const c of all) {
+      const shownLive = isKnownLive ? !!(await isKnownLive(c.id)) : false;
+      const days = c.lastLiveDate ? (nowMs - c.lastLiveDate) / 864e5 : Infinity;
+      const tier = TIERS.find((t) => days <= t.maxDaysSinceLive);
+      const last = lastChecked.get(c.id);
+      // First check after a restart: spread slow-tier channels across their window
+      if (last == null && tier.everyMin > 0 && !shownLive && !severe) {
+        lastChecked.set(c.id, nowMs - Math.random() * tier.everyMin * 60000);
+      }
+      const due = shownLive || severe || tier.everyMin === 0
+        || nowMs - (lastChecked.get(c.id) ?? 0) >= tier.everyMin * 60000 - 30000;
+      if (due) list.push(c);
+    }
     list.sort(() => Math.random() - 0.5);
-    if (!list.length) { running = false; return { skipped: 'no channels in window' }; } // quiet hours — don't log empty runs
+    if (!list.length) { running = false; return { skipped: all.length ? 'nobody due this sweep' : 'no channels in window' }; } // don't log empty runs
 
     const run = {
-      startedAt: lastStartedAt, trigger, checked: 0, live: 0, upcoming: 0, offline: 0, errors: 0,
+      startedAt: lastStartedAt, trigger, checked: 0, total: all.length, severe, live: 0, upcoming: 0, offline: 0, errors: 0,
       throttled: false, bytes: 0, missed: [], staleCleared: [], errorChannels: [],
     };
     let i = 0;
@@ -212,6 +240,7 @@ function createLiveVerifier({
       while (i < list.length && Date.now() >= pausedUntil) {
         const { id, name } = list[i++];
         const r = await checkChannelLive(id);
+        lastChecked.set(id, Date.now());
         run.checked++; run.bytes += r.bytes || 0;
         try {
           if (r.status === 'live') {
@@ -231,8 +260,11 @@ function createLiveVerifier({
             run[r.status]++;
             const n = (offlineStreak.get(id) || 0) + 1;
             offlineStreak.set(id, n);
-            if (n === offlineConfirmations) {
-              const known = isKnownLive ? !!(await isKnownLive(id)) : true;
+            // Clear on EVERY sweep past the threshold, not only the sweep that first
+            // reaches it: if WebSub/Atom marks a channel live after its streak has
+            // already passed the threshold, an exact-match check never cleared it again.
+            if (n >= offlineConfirmations) {
+              const known = isKnownLive ? !!(await isKnownLive(id)) : false;
               if (known) { run.staleCleared.push({ channelId: id, name }); await onOffline(id); }
             }
           } else if (r.status === 'throttled' || r.status === 'blocked') {
@@ -260,7 +292,7 @@ function createLiveVerifier({
       runs = runs.slice(0, MAX_RUNS);
       running = false;
       await persist();
-      log(`sweep: ${run.checked} checked, ${run.live} live, ${run.missed.length} missed, ${run.staleCleared.length} stale, ` +
+      log(`sweep: ${run.checked}/${run.total} checked${severe ? ' (severe weather: all)' : ''}, ${run.live} live, ${run.missed.length} missed, ${run.staleCleared.length} stale, ` +
           `${(run.bytes / 1048576).toFixed(1)} MB, ${run.durationSec}s`);
     }
     return run;
@@ -369,9 +401,9 @@ async function load(){
   const s=d.stats;
   document.getElementById('cards').innerHTML=['24h','7d','30d'].map(k=>'<div class="card">'+rate(s[k].missRate)+'<div class="l">'+k+' · '+s[k].missed+' of '+s[k].streams+' streams missed</div></div>').join('')+
     '<div class="card"><span class="n">'+s.stale24h+'</span><div class="l">stale lives cleared (24h)</div></div>'+
-    '<div class="card"><span class="n">'+s.mb24h+'</span><div class="l">MB downloaded (24h)</div></div>';
+    '<div class="card"><span class="n">'+s.mb24h+'</span><div class="l">MB read, uncompressed (24h) · ~1/10 over the wire</div></div>';
   document.getElementById('misses').innerHTML=d.recentMisses.map(m=>'<tr><td>'+t(m.firstSeen)+'</td><td>'+esc(m.name)+'</td><td class="t"><a target="_blank" href="https://youtube.com/watch?v='+m.videoId+'">'+esc(m.title||m.videoId)+'</a></td></tr>').join('')||'<tr><td colspan="3">None yet</td></tr>';
-  document.getElementById('runs').innerHTML=d.runs.map(r=>'<tr><td>'+t(r.startedAt)+(r.trigger!=='timer'?' ('+r.trigger+')':'')+'</td><td>'+r.durationSec+'s</td><td>'+r.checked+'</td><td>'+r.live+'</td><td class="'+(r.missed.length?'bad':'')+'">'+r.missed.length+'</td><td class="'+(r.staleCleared.length?'warn':'')+'">'+r.staleCleared.length+'</td><td'+(r.errors?' class="warn" title="'+esc(r.errorChannels.map(e=>e.name+': '+e.error).join('\\n'))+'"':'')+'>'+r.errors+(r.throttled?' ⚠ throttled':'')+'</td><td>'+(r.bytes/1048576).toFixed(1)+'</td></tr>').join('')||'<tr><td colspan="8">No runs yet</td></tr>';
+  document.getElementById('runs').innerHTML=d.runs.map(r=>'<tr><td>'+t(r.startedAt)+(r.trigger!=='timer'?' ('+r.trigger+')':'')+'</td><td>'+r.durationSec+'s</td><td>'+r.checked+(r.total?'/'+r.total:'')+(r.severe?' ⚡':'')+'</td><td>'+r.live+'</td><td class="'+(r.missed.length?'bad':'')+'">'+r.missed.length+'</td><td class="'+(r.staleCleared.length?'warn':'')+'">'+r.staleCleared.length+'</td><td'+(r.errors?' class="warn" title="'+esc(r.errorChannels.map(e=>e.name+': '+e.error).join('\\n'))+'"':'')+'>'+r.errors+(r.throttled?' ⚠ throttled':'')+'</td><td>'+(r.bytes/1048576).toFixed(1)+'</td></tr>').join('')||'<tr><td colspan="8">No runs yet</td></tr>';
 }
 document.getElementById('run').onclick=async()=>{await fetch(B+'/run',{method:'POST'});setTimeout(load,1500)};
 load();setInterval(load,60000);

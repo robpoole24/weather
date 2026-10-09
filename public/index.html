@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-09-27 build.1791050400 -->
+<!-- WeatherTV App — updated 2026-10-09 build.1791770000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1484,6 +1484,15 @@
       </p>
 
       <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Credits</div>
+        <div style="font-size:0.82rem;color:var(--muted);line-height:1.5">
+          <div>WeatherStar 4000+ by Matt Walsh (<a href="https://github.com/netbymatt/ws4kp" target="_blank" rel="noopener" style="color:var(--accent)">netbymatt</a>)</div>
+          <div>WeatherSTAR 4000 icon collection (1990–2014) by <a href="https://www.deviantart.com/malekmasoud" target="_blank" rel="noopener" style="color:var(--accent)">malekmasoud</a></div>
+          <div>Weather, marine, tide and airport data: NOAA, National Weather Service, FAA Aviation Weather Center</div>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem">
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Version History</div>
         <div style="font-size:0.82rem;color:var(--muted)">
           <div><span style="color:var(--accent)">v1.0</span> — Initial release</div>
@@ -2486,6 +2495,11 @@ const WS4000_DISPLAYS = [
   { key:'smoke-ws',            label:'🔥 Smoke & Wildfire',   def:false },
   { key:'hurricane-ws',        label:'🌀 Tropical Storms',    def:false },
   { key:'astronomy-ws',        label:'☀ UV & Outdoor',        def:false },
+  // Weather at the 3 nearest airports (any size, from FAA Aviation Weather Center)
+  { key:'airport-ws',          label:'✈ Airport Conditions',  def:true  },
+  // Coastal / Great Lakes only — inland locations skip these automatically
+  { key:'tides-ws',            label:'🌊 Tides, Sun & Moon',  def:true  },
+  { key:'marine-ws',           label:'⛵ Marine Forecast',     def:true  },
 ];
 
 // WS3000 displays — uses -checkbox suffix in URL
@@ -2521,7 +2535,9 @@ function loadWSSettings() {
     const raw = localStorage.getItem('weatherstar-v4');
     const s = raw ? JSON.parse(raw) : {};
     return {
-      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
+      // displays merges key by key, so screens added after someone saved their
+      // settings still get their defaults (a saved list used to replace them all)
+      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), displays: { ...wsDefaultSettings('4000').displays, ...((s['4000'] || {}).displays || {}) }, location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
       '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
     };
   } catch {
