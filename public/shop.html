@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Shop — updated 2026-09-27 build.1790611200 -->
+<!-- WeatherTV Shop — updated 2026-10-09 build.1791866000 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -18,8 +18,9 @@
   body { background: var(--bg); color: var(--text); font-family: 'Barlow', system-ui, sans-serif; min-height: 100vh; padding: 2rem 1rem 4rem; }
   .container { max-width: 1040px; margin: 0 auto; }
   .top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
-  .logo { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 1.6rem; letter-spacing: 0.08em; text-decoration: none; }
-  .logo .w { color: var(--accent); } .logo .t { color: var(--gold); }
+  .logo { display: block; line-height: 0; text-decoration: none; }
+  .logo img { height: 96px; width: auto; display: block; }
+  @media (max-width: 600px) { .logo img { height: 72px; } }
   .back { font-family: 'Barlow Condensed', sans-serif; font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); text-decoration: none; }
   .back:hover { color: var(--accent); }
   h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 2rem; letter-spacing: 0.04em; margin-bottom: 0.4rem; }
@@ -72,7 +73,7 @@
 <body>
 <div class="container">
   <div class="top">
-    <a class="logo" href="/"><span class="w">WEATHER</span><span class="t">TV</span></a>
+    <a class="logo" href="/"><img src="/images/weathertv-logo-header.png?v=1" alt="WeatherTV" width="240" height="187"></a>
     <a class="back" href="/">← Back to WeatherTV</a>
   </div>
 

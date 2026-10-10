@@ -1,0 +1,191 @@
+{%- comment -%}
+  Altruistic Apps Shop — home page (Fourthwall Custom Code section)
+  build.1791867000
+  Paste this whole file into ONE Custom Code section. It builds the full page:
+  hero, the app family, a product grid per app, and the "where the money goes"
+  note. Products and prices come live from your Fourthwall collections.
+
+  Images are hosted on watchweathertv.com/brand/ (served through Cloudflare).
+  To host them somewhere else, change asset_base below.
+
+  Each app shows its products when its collection (handle below) has any.
+  Until then its tile says "Merch coming soon". If NO app collection has
+  products yet, the page falls back to showing everything in "all".
+{%- endcomment -%}
+{%- assign asset_base = 'https://www.watchweathertv.com/brand/' -%}
+{%- assign app_handles = 'weathertv,party-of-you,aporia,just-help,pable,bonnies-pantry,mel' | split: ',' -%}
+{%- assign app_names = "WeatherTV|Party of You|Aporia|Just Help|Pable|Bonnie's Pantry|Mel" | split: '|' -%}
+{%- assign app_blurbs = 'Live storm chasers, radar and forecasts|Free tools for grassroots candidates|Quotes that make you think|Find community help near you|This day in history, full of goodies|Recipes and pantry planning|Track your reading and celebrate it' | split: '|' -%}
+{%- assign any_app_products = false -%}
+{%- for h in app_handles -%}
+  {%- if collections[h] and collections[h].products_count > 0 -%}{%- assign any_app_products = true -%}{%- endif -%}
+{%- endfor -%}
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  .aa-{{ section.id }} {
+    --aa-bg: #0b0b14; --aa-card: #161629; --aa-line: #26264a;
+    --aa-text: #f2f2f7; --aa-muted: #a3a3c2; --aa-pink: #ff3b84; --aa-blue: #5b5bff;
+    color: var(--aa-text); font-family: 'Lexend', system-ui, -apple-system, sans-serif;
+    max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px;
+  }
+  .aa-{{ section.id }} * { box-sizing: border-box; }
+  /* The theme styles headings in an all-caps condensed font — override inside this section */
+  .aa-{{ section.id }} h1, .aa-{{ section.id }} h2, .aa-{{ section.id }} h3, .aa-{{ section.id }} p, .aa-{{ section.id }} a, .aa-{{ section.id }} div, .aa-{{ section.id }} span {
+    font-family: 'Lexend', system-ui, -apple-system, sans-serif !important; text-transform: none !important;
+  }
+  .aa-{{ section.id }} .aa-hero {
+    position: relative; overflow: hidden; border-radius: 20px; padding: 56px 40px;
+    background:
+      radial-gradient(600px 400px at 0% 100%, rgba(45,45,200,0.35), transparent 70%),
+      radial-gradient(600px 400px at 100% 0%, rgba(255,59,132,0.28), transparent 70%),
+      var(--aa-bg);
+    border: 1px solid var(--aa-line);
+  }
+  .aa-{{ section.id }} .aa-logo { height: 56px; width: auto; max-width: 100%; display: block; margin-bottom: 28px; }
+  .aa-{{ section.id }} h1 {
+    font-size: clamp(2.2rem, 5.4vw, 4.2rem); line-height: 1.05; font-weight: 700; margin: 0 0 18px; letter-spacing: -0.02em; color: var(--aa-text);
+  }
+  .aa-{{ section.id }} .aa-ever {
+    background: linear-gradient(90deg, #4d4dff, var(--aa-pink)); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .aa-{{ section.id }} .aa-sub { color: var(--aa-muted); font-size: 1.05rem; line-height: 1.6; max-width: 640px; margin: 0 0 28px; font-weight: 300; }
+  .aa-{{ section.id }} .aa-btn {
+    display: inline-block; background: var(--aa-pink); color: #0b0b14; font-weight: 600; text-decoration: none;
+    padding: 14px 26px; border-radius: 999px; letter-spacing: 0.01em;
+  }
+  .aa-{{ section.id }} .aa-btn:hover { filter: brightness(1.08); }
+  .aa-{{ section.id }} h2 { font-size: 1.6rem; font-weight: 700; margin: 56px 0 6px; color: var(--aa-text); }
+  .aa-{{ section.id }} .aa-kicker { color: var(--aa-muted); margin: 0 0 20px; font-weight: 300; }
+  .aa-{{ section.id }} .aa-apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .aa-{{ section.id }} .aa-app {
+    display: block; text-decoration: none; color: inherit; background: var(--aa-card); border: 1px solid var(--aa-line);
+    border-radius: 16px; overflow: hidden; transition: transform .15s ease, border-color .15s ease;
+  }
+  .aa-{{ section.id }} a.aa-app:hover { transform: translateY(-3px); border-color: var(--aa-pink); }
+  .aa-{{ section.id }} .aa-app img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .aa-{{ section.id }} .aa-app-name { padding: 10px 12px 2px; font-weight: 600; font-size: .92rem; }
+  .aa-{{ section.id }} .aa-app-note { padding: 0 12px 12px; color: var(--aa-muted); font-size: .78rem; font-weight: 300; }
+  .aa-{{ section.id }} .aa-soon { color: var(--aa-pink); }
+  .aa-{{ section.id }} .aa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+  .aa-{{ section.id }} .aa-card {
+    display: flex; flex-direction: column; text-decoration: none; color: inherit; background: var(--aa-card);
+    border: 1px solid var(--aa-line); border-radius: 16px; overflow: hidden; transition: transform .15s ease, border-color .15s ease;
+  }
+  .aa-{{ section.id }} .aa-card:hover { transform: translateY(-3px); border-color: var(--aa-blue); }
+  .aa-{{ section.id }} .aa-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #fff; }
+  .aa-{{ section.id }} .aa-card-body { padding: 12px 14px 16px; }
+  .aa-{{ section.id }} .aa-card-title { font-weight: 600; margin: 0 0 4px; }
+  .aa-{{ section.id }} .aa-price { color: var(--aa-pink); font-weight: 600; }
+  .aa-{{ section.id }} .aa-was { color: var(--aa-muted); text-decoration: line-through; font-weight: 300; margin-left: 6px; }
+  .aa-{{ section.id }} .aa-soldout { color: var(--aa-muted); font-size: .8rem; }
+  .aa-{{ section.id }} .aa-why {
+    margin-top: 56px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+  .aa-{{ section.id }} .aa-why > div { background: var(--aa-card); border: 1px solid var(--aa-line); border-radius: 16px; padding: 20px 22px; }
+  .aa-{{ section.id }} .aa-why h3 { margin: 0 0 8px; font-size: 1.05rem; font-weight: 600; color: var(--aa-text); }
+  .aa-{{ section.id }} .aa-why p { margin: 0; color: var(--aa-muted); line-height: 1.6; font-weight: 300; font-size: .95rem; }
+  .aa-{{ section.id }} .aa-foot { text-align: center; color: var(--aa-muted); margin-top: 40px; font-size: .85rem; font-weight: 300; }
+  @media (max-width: 640px) {
+    .aa-{{ section.id }} .aa-hero { padding: 36px 22px; border-radius: 16px; }
+    .aa-{{ section.id }} .aa-logo { height: 40px; }
+  }
+</style>
+
+<section class="aa-{{ section.id }}">
+  <div class="aa-hero">
+    <img class="aa-logo" src="{{ asset_base }}aa-logo-light-text.webp" alt="Altruistic Apps" width="261" height="56">
+    <h1>Free apps. No ads.<br>No data. <span class="aa-ever">Ever.</span></h1>
+    <p class="aa-sub">Altruistic Apps makes free apps with no ads, no accounts and no data collection. All proceeds from this shop go toward keeping them running: servers, data services and new features. Nobody's getting rich here — it just keeps the lights on.</p>
+    <a class="aa-btn" href="#aa-shop-{{ section.id }}">Shop the merch</a>
+  </div>
+
+  <h2>Our apps</h2>
+  <p class="aa-kicker">Pick an app to see its merch.</p>
+  <div class="aa-apps">
+    {%- for h in app_handles -%}
+      {%- assign i = forloop.index0 -%}
+      {%- assign c = collections[h] -%}
+      {%- assign tile_link = '' -%}
+      {%- if c and c.products_count > 0 -%}{%- assign tile_link = '#aa-' | append: h | append: '-' | append: section.id -%}{%- endif -%}
+      {%- unless any_app_products -%}{%- if h == 'weathertv' -%}{%- assign tile_link = '#aa-shop-' | append: section.id -%}{%- endif -%}{%- endunless -%}
+      {%- if tile_link != '' -%}
+        <a class="aa-app" href="{{ tile_link }}">
+          <img src="{{ asset_base }}app-{{ h }}.webp?v=2" alt="{{ app_names[i] }}" loading="lazy" width="480" height="480">
+          <div class="aa-app-name">{{ app_names[i] }}</div>
+          <div class="aa-app-note">{{ app_blurbs[i] }}</div>
+        </a>
+      {%- else -%}
+        <div class="aa-app">
+          <img src="{{ asset_base }}app-{{ h }}.webp?v=2" alt="{{ app_names[i] }}" loading="lazy" width="480" height="480">
+          <div class="aa-app-name">{{ app_names[i] }}</div>
+          <div class="aa-app-note"><span class="aa-soon">Merch coming soon</span></div>
+        </div>
+      {%- endif -%}
+    {%- endfor -%}
+  </div>
+
+  <div id="aa-shop-{{ section.id }}"></div>
+  {%- if any_app_products -%}
+    {%- for h in app_handles -%}
+      {%- assign i = forloop.index0 -%}
+      {%- assign c = collections[h] -%}
+      {%- if c and c.products_count > 0 -%}
+        <h2 id="aa-{{ h }}-{{ section.id }}">{{ app_names[i] }}</h2>
+        <p class="aa-kicker">{{ app_blurbs[i] }}</p>
+        <div class="aa-grid">
+          {%- for product in c.products -%}
+            <a class="aa-card" href="{{ product.url | localized_url }}">
+              {%- if product.featured_image -%}
+                <img src="{{ product.featured_image | img_url: 'large' }}"
+                     srcset="{{ product.featured_image | img_url: 'medium' }} 320w, {{ product.featured_image | img_url: 'large' }} 480w, {{ product.featured_image | img_url: 'grande' }} 600w"
+                     sizes="(max-width: 640px) 50vw, 280px" alt="{{ product.title | escape }}" loading="lazy">
+              {%- endif -%}
+              <div class="aa-card-body">
+                <div class="aa-card-title">{{ product.title }}</div>
+                <span class="aa-price">{{ product.price | money }}</span>
+                {%- if product.compare_at_price and product.compare_at_price > product.price -%}<span class="aa-was">{{ product.compare_at_price | money }}</span>{%- endif -%}
+                {%- unless product.available -%}<div class="aa-soldout">Sold out</div>{%- endunless -%}
+              </div>
+            </a>
+          {%- endfor -%}
+        </div>
+      {%- endif -%}
+    {%- endfor -%}
+  {%- else -%}
+    <h2>Shop</h2>
+    <p class="aa-kicker">Everything in the store.</p>
+    <div class="aa-grid">
+      {%- for product in collections['all'].products -%}
+        <a class="aa-card" href="{{ product.url | localized_url }}">
+          {%- if product.featured_image -%}
+            <img src="{{ product.featured_image | img_url: 'large' }}" alt="{{ product.title | escape }}" loading="lazy">
+          {%- endif -%}
+          <div class="aa-card-body">
+            <div class="aa-card-title">{{ product.title }}</div>
+            <span class="aa-price">{{ product.price | money }}</span>
+            {%- unless product.available -%}<div class="aa-soldout">Sold out</div>{%- endunless -%}
+          </div>
+        </a>
+      {%- endfor -%}
+    </div>
+  {%- endif -%}
+
+  <div class="aa-why">
+    <div>
+      <h3>Where does the money go?</h3>
+      <p>All proceeds go toward the maintenance and running costs of our apps and websites: servers, data services and new features. It isn't a profit venture. It keeps the apps free for everyone.</p>
+    </div>
+    <div>
+      <h3>Do you get my personal information?</h3>
+      <p>No. Fourthwall handles checkout, payment and shipping. We never see your name, address or payment details, the same way our apps never collect your data.</p>
+    </div>
+    <div>
+      <h3>Who makes the shirts?</h3>
+      <p>Everything is printed on demand by Fourthwall and shipped straight to you, so nothing sits in a warehouse and nothing goes to waste.</p>
+    </div>
+  </div>
+
+  <p class="aa-foot">Altruistic Apps · Free apps. No ads. No data. Ever.</p>
+</section>
