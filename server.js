@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-09T22:40:00Z build.1791800000
+// WeatherTV Server — updated 2026-10-10T00:45:00Z build.1791867600
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -5403,6 +5403,27 @@ async function _fwShopDomain(token) {
     return d || null;
   } catch (_) { return null; }
 }
+// Fourthwall's Storefront API can keep listing a product's OLD photos after a
+// design is updated, while the store itself shows the new mockups. So the
+// photos come from the product's public store page (its gallery's zoom
+// images, server-rendered), falling back to the API's list if that fails.
+// Runs only on the server's 10-minute refresh — never per viewer.
+const _fwEncId = (u) => (String(u).match(/\/enc\/([^/]+)\//) || [])[1] || u;
+async function _fwStorePageImages(domain, slug) {
+  if (!domain || !slug) return [];
+  try {
+    const html = await Promise.race([
+      fetchTextOverHttp(`https://${domain}/products/${encodeURIComponent(slug)}`, { Accept: 'text/html' }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+    ]);
+    const urls = [...String(html).matchAll(/data-zoom-image="(https:\/\/imgproxy\.fourthwall\.dev\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
+    const seen = new Set();
+    return urls.filter(u => { const k = _fwEncId(u); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 16);
+  } catch (e) {
+    console.warn(`[Shop] store page photos for "${slug}":`, e.message);
+    return [];
+  }
+}
 app.get('/api/shop/products', async (req, res) => {
   const token = process.env.FOURTHWALL_STOREFRONT_TOKEN;
   if (!token) return res.json({ enabled: false, products: [] });
@@ -5419,7 +5440,17 @@ app.get('/api/shop/products', async (req, res) => {
       (j.results || []).forEach(p => products.push(_fwProduct(p)));
       if (!j.paging || !j.paging.hasNextPage) break;
     }
-    const data = { enabled: true, shopDomain: await _fwShopDomain(token), collection: process.env.FOURTHWALL_COLLECTION || 'all', products, fetchedAt: Date.now() };
+    const shopDomain = await _fwShopDomain(token);
+    // Use the photos the store page actually shows (see _fwStorePageImages)
+    await Promise.all(products.map(async (p) => {
+      const imgs = await _fwStorePageImages(shopDomain, p.slug);
+      if (!imgs.length) return;
+      const current = new Set(imgs.map(_fwEncId));
+      p.images = imgs;
+      // A variant photo the store no longer shows is an old design — drop it
+      p.variants.forEach(v => { if (v.image && !current.has(_fwEncId(v.image))) v.image = null; });
+    }));
+    const data = { enabled: true, shopDomain, collection: process.env.FOURTHWALL_COLLECTION || 'all', products, fetchedAt: Date.now() };
     // An empty result is usually a setup issue (collection missing / not public) —
     // cache it for 1 minute only, so fixing it in Fourthwall shows up quickly.
     const ttl = products.length ? SHOP_TTL : 60 * 1000;
