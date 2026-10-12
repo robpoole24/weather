@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-09 build.1791770000 -->
+<!-- WeatherTV App — updated 2026-10-12 build.1792060000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -87,7 +87,7 @@
 
   /* ── TOP: VIDEO AREA ── */
   #video-area {
-    flex: 4;
+    flex: 1 1 auto;
     min-height: 0;
     position: relative;
     background: #000;
@@ -143,60 +143,33 @@
     #playlist-panel .scroll-arrow { display: none !important; }
   }
 
-  /* Mobile structural layout — !important needed because base CSS rules come later
-     in the stylesheet and would otherwise win the cascade */
+  /* Phones (portrait): bigger, easier tap targets; layout itself is shared
+     with desktop — video fills everything above the button rows. */
   @media (max-width: 767px) {
     body { height: 100dvh !important; }
-    #video-area { flex: 0 0 55dvh !important; max-height: 55dvh !important; }
-    #control-bar { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; }
-    /* Compact nav — shrink buttons to give the channel panel more vertical room */
-    #main-nav { padding: 0.15rem 0.4rem !important; gap: 0.2rem !important; }
-    .nav-btn { padding: 0.15rem 0.4rem !important; font-size: 0.62rem !important; }
-    #search-btn { padding: 0.15rem 0.4rem !important; font-size: 0.85rem !important; }
-    /* When search is open on mobile, right-side nav utility buttons hide to give full width to input */
+    #main-nav { padding: 0.35rem 0.4rem !important; gap: 0.35rem !important; }
+    .nav-btn { padding: 0.45rem 0.65rem !important; font-size: 0.74rem !important; min-height: 36px; }
+    #search-btn { padding: 0.35rem 0.6rem !important; font-size: 1rem !important; min-height: 36px; }
     #main-nav.search-open #nav-right-btns { display: none !important; }
     #main-nav.search-open #search-expand { max-width: none !important; }
-    #status-bar { padding: 0.08rem 0.5rem !important; gap: 0.25rem !important; }
-    .status-item { font-size: 0.5rem !important; }
-
-    /* Radar expanded mode — takes almost full screen on mobile */
-    body.radar-expanded #video-area {
-      flex: 0 0 92dvh !important;
-      max-height: 92dvh !important;
-    }
-    body.radar-expanded #control-bar {
-      flex: 0 0 0 !important;
-      min-height: 0 !important;
-      overflow: hidden !important;
-      opacity: 0 !important;
-      pointer-events: none !important;
-    }
-    body.radar-expanded #status-bar {
-      display: none !important;
-    }
+    #status-bar { padding: 0.2rem 0.5rem !important; gap: 0.35rem !important; }
+    .status-item { font-size: 0.58rem !important; }
+    #status-bar .about-btn { padding: 0.3rem 0.55rem; font-size: 0.66rem; }
+    .video-thumb { width: 132px; }
   }
+  /* Phones (landscape): very little height — keep rows compact */
   @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
-
-    /* Video 50% height, control bar gets rest */
-    #video-area { flex: 0 0 50dvh; max-height: 50dvh; }
-    #control-bar { flex: 1; min-height: 0; overflow: hidden; }
-
-    /* Hide radar rings — too tall */
     .radar-ring { display: none; }
-
-    /* Compact everything */
-    #main-nav { padding: 0.2rem 0.5rem; gap: 0.25rem; }
-    .nav-btn { padding: 0.2rem 0.5rem; font-size: 0.65rem; }
-    #status-bar { padding: 0.1rem 0.5rem; gap: 0.3rem; }
-    .status-item { font-size: 0.52rem; }
-
-    /* Scroll arrows are mouse-only controls — hide on touch phones */
-    /* Playlist scroll arrows also mouse-only */
+    #main-nav { padding: 0.25rem 0.5rem; gap: 0.3rem; }
+    .nav-btn { padding: 0.3rem 0.6rem; font-size: 0.7rem; min-height: 32px; }
+    #status-bar { padding: 0.12rem 0.5rem; gap: 0.3rem; }
+    .status-item { font-size: 0.55rem; }
     #playlist-panel .scroll-arrow { display: none !important; }
-    /* Shrink logo so it fits in the 50dvh video area */
-    #video-placeholder img { max-height: 65% !important; width: auto !important; }
-
+    #panels { max-height: 62dvh; }
+    #panels .channel-card { padding: 0.35rem 0.55rem; gap: 0.25rem; }
+    .video-thumb { width: 124px; }
+    #video-placeholder img { max-height: 70% !important; width: auto !important; }
   }
 
   /* Tablet (768px+) — full experience, no restrictions */
@@ -280,7 +253,7 @@
 
   /* ── BOTTOM: CONTROL BAR (20%) ── */
   #control-bar {
-    flex: 1;
+    flex: 0 0 auto;
     min-height: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
@@ -331,11 +304,28 @@
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
 
   /* Panels */
+  /* Card row: hidden until a group is opened, then exactly as tall as its
+     cards / thumbnails (never stretched, never cut off). */
   #panels {
-    flex: 1;
-    overflow: hidden;
+    flex: 0 0 auto;
+    display: none;
+    overflow-x: hidden;
+    overflow-y: auto;
     position: relative;
     min-height: 0;
+    max-height: 55dvh;
+  }
+  body.panels-open #panels { display: block; }
+  #panels .panel { height: auto !important; align-items: center; }
+  #panels .channel-list, #live-now-list, #favorites-list, #highlights-list,
+  #search-results-list, #playlist-thumbs, #apps-panel-inner { height: auto !important; }
+  #panels .channel-card { align-self: stretch; }
+  /* Recent / collection lists replace the card strip in place (in the flow,
+     so the row grows to fit thumbnails instead of clipping them) */
+  #panels .panel.overlay-open > *:not(.recent-overlay-inner):not(.collection-overlay) { display: none !important; }
+  #panels .recent-overlay-inner, #panels .collection-overlay {
+    position: relative !important; top: auto !important; left: auto !important; height: auto !important;
+    min-height: 0; padding: 0.45rem 0.75rem !important;
   }
 
   .panel {
@@ -1208,8 +1198,7 @@
   }
   /* Panel hint — visible when no group panel is open, hides when one opens */
   /* channel-hint in video area hidden globally — panel-hint handles guidance on all screens */
-  #channel-hint { display: none !important; }
-  #panels:has(.panel.active) #panel-hint { display: none; }
+  #panel-hint { display: none !important; }
 
   .about-btn {
     font-family: 'Barlow Condensed', sans-serif;
@@ -1272,7 +1261,7 @@
       <div class="radar-ring" style="width:300px;height:300px;margin-left:-150px;margin-top:-150px;animation-delay:3s"></div>
     </div>
     <img src="images/weathertv-logo-stacked.png" alt="WeatherTV" style="width:min(420px,75%);object-fit:contain;position:relative;z-index:1;" />
-    <div id="channel-hint" style="position:absolute;bottom:0.6rem;left:0;right:0;text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted);letter-spacing:0.1em;text-transform:uppercase;z-index:3;transition:opacity 0.2s;padding:0 1rem;">Select a channel below to begin</div>
+    <div id="channel-hint" style="position:absolute;bottom:0.6rem;left:0;right:0;text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;color:var(--muted);letter-spacing:0.1em;text-transform:uppercase;z-index:3;transition:opacity 0.2s;padding:0 1rem;">Choose a group below to begin</div>
   </div>
 
   <!-- Video frame wrapper with optional live chat panel -->
@@ -1722,7 +1711,30 @@ function buildChannelPanels() {
 // ═══════════════════════════════════════════
 // PANEL NAVIGATION
 // ═══════════════════════════════════════════
+// Group lists open the card row; tapping the same group again closes it.
+const TOGGLE_PANELS = ['live-now','favorites','highlights','apps','playlist'];
+function collapsePanels() {
+  document.body.classList.remove('panels-open');
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
+  closeRecentOverlay();
+  document.querySelectorAll('.collection-overlay').forEach(o => o.style.display = 'none');
+  document.querySelectorAll('.panel.overlay-open').forEach(p => p.classList.remove('overlay-open'));
+  activePanel = null;
+}
+// Keeps a panel's "a list replaced the cards" flag in step with its overlays
+function syncOverlayState(panel) {
+  if (!panel) return;
+  const open = [...panel.querySelectorAll('.recent-overlay-inner, .collection-overlay')].some(o => o.style.display !== 'none');
+  panel.classList.toggle('overlay-open', open);
+}
+
 function showPanel(name, e) {
+  const isToggle = GROUPS.some(g => g.id === name) || TOGGLE_PANELS.includes(name);
+  if (isToggle && activePanel === name && document.body.classList.contains('panels-open')) {
+    collapsePanels();
+    return;
+  }
   // Update nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
@@ -1733,11 +1745,6 @@ function showPanel(name, e) {
     const sugs = document.getElementById('search-suggestions');
     if (sugs) { sugs.innerHTML = ''; sugs.classList.remove('visible'); }
     searchSugIndex = -1;
-  }
-
-  // Collapse radar expanded mode when switching away from radar
-  if (name !== 'radar') {
-    document.body.classList.remove('radar-expanded');
   }
 
 
@@ -1753,10 +1760,13 @@ function showPanel(name, e) {
     panel.style.display = 'flex';
     panel.classList.add('active');
   }
+  document.body.classList.toggle('panels-open', !!panel);
   activePanel = name;
 
-  // Close any recent overlay
+  // Close any recent / collection list left open
   closeRecentOverlay();
+  document.querySelectorAll('.collection-overlay').forEach(o => o.style.display = 'none');
+  document.querySelectorAll('.panel.overlay-open').forEach(p => p.classList.remove('overlay-open'));
 
   // TOP-LEVEL destinations — WeatherStar, Live Radar, Weather Playlist — always
   // take over the player and close whatever channel was playing. Group buttons
@@ -1797,10 +1807,7 @@ function showPanel(name, e) {
 }
 
 function closePanel(name) {
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  activePanel = null;
-  closeRecentOverlay();
+  collapsePanels();
 }
 
 // ═══════════════════════════════════════════
@@ -2217,6 +2224,7 @@ function showCollection(parentCh, collection) {
 
   overlay.innerHTML = '';
   overlay.style.display = 'flex';
+  syncOverlayState(activePanelEl);
 
   // Header
   const header = document.createElement('div');
@@ -2227,7 +2235,7 @@ function showCollection(parentCh, collection) {
   const backBtn = document.createElement('button');
   backBtn.className = 'return-btn';
   backBtn.textContent = '← Back';
-  backBtn.onclick = () => { overlay.style.display = 'none'; };
+  backBtn.onclick = () => { overlay.style.display = 'none'; syncOverlayState(activePanelEl); };
   header.appendChild(backBtn);
   overlay.appendChild(header);
 
@@ -3342,6 +3350,8 @@ function leaveChannelExtras() {
 }
 
 function clearVideo() {
+  const _hint = document.getElementById('channel-hint');
+  if (_hint) _hint.style.display = '';
   const placeholder = document.getElementById('video-placeholder');
   const areaInner = document.getElementById('video-area-inner');
   const wrapper = document.getElementById('video-wrapper');
@@ -3368,7 +3378,7 @@ function clearVideo() {
 }
 
 async function playLive(ch) {
-  closeRecentOverlay();
+  collapsePanels();
   closeLiveChat();
 
   // Use stored videoId if available (more reliable than live_stream?channel=)
@@ -3619,18 +3629,21 @@ async function maybeShowChaserMap(ch) {
   }, 5 * 60 * 1000);
 }
 
-window.addEventListener('resize', () => {
+function _layoutChaserMap() {
   if (!_chaserMap) return;
   const wrapper = document.getElementById('video-wrapper');
   const panel   = document.getElementById('chaser-map-panel');
   const frame   = document.getElementById('video-frame');
   if (!wrapper || !panel) return;
+  if (_chaserMapMinimized) { if (frame) frame.style.height = ''; return; }
   const wrapH = wrapper.offsetHeight || 400;
   const mapH  = Math.round(wrapH * CHASER_MAP_H_PCT / 100);
   panel.style.height = mapH + 'px';
   if (frame) frame.style.height = (wrapH - mapH) + 'px';
   _chaserMap.invalidateSize();
-});
+}
+window.addEventListener('resize', _layoutChaserMap);
+if (window.ResizeObserver) new ResizeObserver(() => _layoutChaserMap()).observe(document.getElementById('video-area'));
 
 function closeMobileChatOverlay() {
   const overlay = document.getElementById('mobile-chat-overlay');
@@ -3670,6 +3683,7 @@ function closeLiveChat() {
 }
 
 function playVideo(videoId, title) {
+  collapsePanels();
   const url = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
   loadIframe(url, title, false);
   closeRecentOverlay();
@@ -3714,9 +3728,7 @@ function closeSearch() {
   searchSugIndex = -1;
   // If we're currently showing search results, go back to panel hint
   if (activePanel === 'search') {
-    document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
-    activePanel = null;
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    collapsePanels();
   }
 }
 
@@ -3765,9 +3777,7 @@ function onSearchInput(value) {
     sugs.classList.remove('visible');
     // Clear search results panel if showing
     if (activePanel === 'search') {
-      document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
-      activePanel = null;
-      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      collapsePanels();
     }
     return;
   }
@@ -3882,7 +3892,7 @@ function runSearchPanelForChannels(matches, label) {
   panel.style.display = 'flex';
   panel.classList.add('active');
   activePanel = 'search';
-  document.getElementById('panel-hint') && (document.getElementById('panel-hint').style.display = 'none');
+  document.body.classList.add('panels-open');
 }
 
 // Close suggestions if user clicks outside the search area or the dropdown itself
@@ -3943,6 +3953,7 @@ function buildHighlightsPanel() {
     thumb.onclick = () => {
       const url = 'https://www.youtube.com/embed/' + h.videoId + '?autoplay=1&rel=0';
       loadIframe(url, h.title || h.videoId, false);
+      collapsePanels();
     };
 
     const imgSrc = h.thumbnail || ('https://i.ytimg.com/vi/' + h.videoId + '/mqdefault.jpg');
@@ -3971,16 +3982,14 @@ function updateHighlightsBtn(hasHighlights) {
 // Listen for minimize message from radar iframe
 window.addEventListener('message', (e) => {
   if (e.data && e.data.action === 'minimizeRadar') {
-    showPanel('storm-chasers');
+    const f = document.getElementById('video-frame');
+    if (f && /\/radar\.html/.test(f.getAttribute('src') || '')) clearVideo();
+    collapsePanels();
   }
 });
 
 let radarLoaded = false;
 function loadRadarPanel() {
-  // Expand to full screen on mobile
-  if (window.innerWidth <= 767) {
-    document.body.classList.add('radar-expanded');
-  }
   loadIframe('/radar.html', '', false);
 }
 
@@ -4134,6 +4143,7 @@ async function openPlaylistThumbs(playlist) {
       thumb.onclick = () => {
         const url = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
         loadIframe(url, snippet.title, false);
+        collapsePanels();
       };
 
       const imgSrc = snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || '';
@@ -4158,7 +4168,11 @@ async function openPlaylistThumbs(playlist) {
 // ═══════════════════════════════════════════
 async function showRecent(ch, group) {
   // Find or create overlay inside this panel
-  const panel = document.getElementById(group + '-panel');
+  const panel = document.getElementById(group + '-panel') || document.getElementById(activePanel + '-panel');
+  if (!panel) return;
+  // Opened from inside a collection list: hide that list, Back returns to it
+  const fromCollection = [...panel.querySelectorAll('.collection-overlay')].find(o => o.style.display !== 'none');
+  if (fromCollection) fromCollection.style.display = 'none';
   let overlay = panel.querySelector('.recent-overlay-inner');
 
   if (!overlay) {
@@ -4172,6 +4186,7 @@ async function showRecent(ch, group) {
     `;
     panel.appendChild(overlay);
   }
+  overlay.dataset.backToCollection = fromCollection ? '1' : '';
 
   overlay.innerHTML = `
     <div style="flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:120px">
@@ -4198,6 +4213,7 @@ async function showRecent(ch, group) {
   overlay.appendChild(videoStrip);
   overlay.appendChild(rightBtn);
   overlay.style.display = 'flex';
+  syncOverlayState(panel);
 
   // Fetch videos
   try {
@@ -4233,9 +4249,21 @@ async function showRecent(ch, group) {
 function closeRecentOverlay(btn) {
   if (btn) {
     const overlay = btn.closest('.recent-overlay-inner');
-    if (overlay) { overlay.style.display = 'none'; return; }
+    if (overlay) {
+      overlay.style.display = 'none';
+      const panel = overlay.closest('.panel');
+      if (overlay.dataset.backToCollection === '1' && panel) {
+        const col = panel.querySelector('.collection-overlay');
+        if (col) col.style.display = 'flex';
+      }
+      syncOverlayState(panel);
+      return;
+    }
   }
-  document.querySelectorAll('.recent-overlay-inner').forEach(o => o.style.display = 'none');
+  document.querySelectorAll('.recent-overlay-inner').forEach(o => {
+    o.style.display = 'none';
+    syncOverlayState(o.closest('.panel'));
+  });
 }
 
 // ═══════════════════════════════════════════
@@ -4853,6 +4881,7 @@ init();
       <iframe id="mobile-chat-chat-frame" style="width:100%;height:100%;border:none;"></iframe>
     </div>
   </div>
+  <button type="button" onclick="hideChatPanel()" aria-label="Close live chat" style="flex-shrink:0;width:100%;min-height:52px;background:var(--red);color:#fff;border:none;border-top:1px solid rgba(255,255,255,0.15);font-family:'Barlow Condensed',sans-serif;font-size:1rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer;touch-action:manipulation;padding-bottom:env(safe-area-inset-bottom);">✕ Close Chat</button>
 </div>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->

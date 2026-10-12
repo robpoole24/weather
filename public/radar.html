@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-10-09 build.1791800000 -->
+<!-- WeatherTV Radar — updated 2026-10-12 build.1792060100 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -61,30 +61,39 @@
     padding:0.35rem 0.65rem; flex-wrap:wrap; min-height:44px;
   }
 
-  @media (max-width: 767px) {
+  /* Phones, portrait AND landscape: one swipeable row of finger-sized buttons.
+     The map, Layers and Forecast buttons are placed under the toolbar's real
+     height by layoutRadarChrome() at the bottom of the page. */
+  @media (max-width: 767px), (max-height: 500px) {
     #radar-toolbar {
       flex-wrap:nowrap;
       overflow-x:auto;
       overflow-y:hidden;
       -webkit-overflow-scrolling:touch;
       scrollbar-width:none;
-      padding:0.25rem 0.4rem;
-      gap:0.3rem;
-      min-height:38px;
+      padding:0.35rem 0.5rem;
+      gap:0.4rem;
+      min-height:50px;
+      /* no blur here: it would trap the floated dropdown menus inside the toolbar */
+      backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(10,14,20,0.97);
+      z-index:1250; /* its dropdowns float above the legend; Layers/Forecast panels (1300) still cover it */
     }
     #radar-toolbar::-webkit-scrollbar { display:none; }
-    .radar-label { font-size:0.75rem; }
-    #radar-minimize-hint { display:inline !important; }
-    .tb-btn { font-size:0.65rem; padding:0.22rem 0.45rem; white-space:nowrap; flex-shrink:0; }
-    #zip-input { width:110px; font-size:0.75rem; }
-    #anim-progress { font-size:0.85rem; min-width:60px; flex-shrink:0; }
+    .radar-label { font-size:0.85rem; flex-shrink:0; }
+    #radar-minimize-hint { display:inline !important; font-size:0.9rem !important; padding:0.2rem 0.35rem; }
+    #radar-toolbar .tb-btn { font-size:0.8rem; padding:0.5rem 0.75rem; min-height:38px; white-space:nowrap; flex-shrink:0; }
+    #zip-form, #anim-bar, #mode-bar, #spc-day-bar { flex-shrink:0; }
+    #radar-toolbar #zip-input { width:135px; font-size:16px; padding:0.45rem 0.55rem; }
+    #radar-toolbar #anim-progress { font-size:0.95rem; min-width:70px; flex-shrink:0; }
+    #preload-status { flex-shrink:0; white-space:nowrap; }
     #alerts-status { display:none; }
-    #map { top:38px; }
+    body #layers-fab, body #forecast-fab { height:42px; font-size:0.8rem; padding:0 0.85rem; }
     #radar-legend { font-size:0.62rem; padding:0.3rem 0.5rem; }
     .leg-sw { width:12px; height:7px; }
     #warning-banner-inner { padding:0.3rem 0.5rem; min-height:32px; }
     #warning-scroll-text { font-size:0.78rem; }
-    #map.banner-visible { bottom:32px; }
+    body #map.banner-visible { bottom:32px; }
+    .leaflet-control-zoom a { width:38px !important; height:38px !important; line-height:38px !important; font-size:20px !important; }
   }
   .radar-label {
     font-family:'Barlow Condensed',sans-serif; font-weight:700;
@@ -493,7 +502,7 @@
   }
   #forecast-fab:hover { background:var(--surface2); border-color:var(--accent); }
   #forecast-fab.active { background:var(--surface2); border-color:var(--accent); }
-  @media(max-width:600px){ #forecast-fab { top:90px; height:34px; font-size:0.68rem; } }
+
 
   /* ══ FORECAST PANEL ══ */
   #forecast-backdrop { display:none; position:absolute; inset:0; z-index:1299; background:rgba(0,0,0,0.35); }
@@ -644,7 +653,7 @@
   }
 
   @media (max-width: 767px) {
-    #layers-fab { top:46px; height:34px; font-size:0.68rem; }
+    /* top/height for phones are set in the phone block above + layoutRadarChrome() */
     #layer-panel { width:290px; }
 
   }
@@ -7402,17 +7411,11 @@ function updateViewButtons(active) {
 
 // ── MINIMIZE RADAR (mobile back button) ──────────────────────────────────────
 function minimizeRadar() {
-  // Only act as a minimize button on mobile
-  if (window.innerWidth > 767) return;
-  try {
-    // Call showPanel in the parent WeatherTV app to switch away from radar
-    // This also removes the radar-expanded class via the showPanel cleanup
-    if (window.parent && window.parent !== window) {
-      window.parent.showPanel('chasers');
-    }
-  } catch(e) {
-    // Fallback: post a message to the parent
-    window.parent.postMessage({ action: 'minimizeRadar' }, '*');
+  // The ✕ next to "Live Radar" (phones only) closes the radar and returns to
+  // the WeatherTV logo screen; the app's button rows stay visible either way.
+  if (!_touchLayout()) return;
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ action: 'minimizeRadar' }, location.origin);
   }
 }
 
@@ -7660,6 +7663,57 @@ if (navigator.geolocation) {
     { timeout:6000 }
   );
 }
+
+// ── Phone layout: keep the map and floating buttons below the toolbar ───────
+function _touchLayout() { return window.matchMedia('(max-width: 767px), (max-height: 500px)').matches; }
+function layoutRadarChrome() {
+  const tb = document.getElementById('radar-toolbar');
+  if (!tb) return;
+  const h = tb.offsetHeight;
+  const mapEl = document.getElementById('map');
+  if (mapEl.style.top !== h + 'px') { mapEl.style.top = h + 'px'; map.invalidateSize(); }
+  const ld = document.getElementById('radar-loading'); if (ld) ld.style.top = h + 'px';
+  const lf = document.getElementById('layers-fab'), ff = document.getElementById('forecast-fab');
+  if (lf) lf.style.top = (h + 10) + 'px';
+  if (ff && lf) ff.style.top = (h + 10 + lf.offsetHeight + 8) + 'px';
+  // Legend sits 150px up from the bottom; on short screens let it scroll
+  const leg = document.getElementById('radar-legend');
+  if (leg) { leg.style.maxHeight = Math.max(80, window.innerHeight - h - 170) + 'px'; leg.style.overflowY = 'auto'; }
+}
+layoutRadarChrome();
+window.addEventListener('resize', layoutRadarChrome);
+window.addEventListener('orientationchange', () => setTimeout(layoutRadarChrome, 250));
+if (window.ResizeObserver) new ResizeObserver(layoutRadarChrome).observe(document.getElementById('radar-toolbar'));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutRadarChrome);
+
+// The toolbar scrolls sideways on phones, which would clip its dropdown menus;
+// float them on top of the map, lined up under their button, instead.
+function _floatDropdown(panelId, btnId) {
+  const panel = document.getElementById(panelId), btn = document.getElementById(btnId);
+  if (!panel || !btn || panel.style.display === 'none') return;
+  if (!_touchLayout()) { panel.style.position = 'absolute'; panel.style.top = ''; panel.style.left = ''; return; }
+  const r = btn.getBoundingClientRect();
+  panel.style.position = 'fixed';
+  panel.style.zIndex = '1500';
+  panel.style.top = (r.bottom + 4) + 'px';
+  panel.style.maxHeight = (window.innerHeight - r.bottom - 16) + 'px';
+  panel.style.overflowY = 'auto';
+  panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+  _dropScrollAt = document.getElementById('radar-toolbar').scrollLeft;
+}
+let _dropScrollAt = 0;
+const _origAlertTypesPanel = toggleAlertTypesPanel;
+toggleAlertTypesPanel = function () { _origAlertTypesPanel(); _floatDropdown('alert-types-panel', 'btn-alert-types'); };
+const _origMesoMenu = toggleMesoMenu;
+toggleMesoMenu = function () { _origMesoMenu(); _floatDropdown('meso-menu', 'btn-meso'); };
+// Close floated menus when the toolbar is swiped, so they don't drift off their buttons
+document.getElementById('radar-toolbar').addEventListener('scroll', () => {
+  if (!_touchLayout()) return;
+  if (Math.abs(document.getElementById('radar-toolbar').scrollLeft - _dropScrollAt) < 20) return;
+  const at = document.getElementById('alert-types-panel'); if (at) at.style.display = 'none';
+  const mm = document.getElementById('meso-menu');
+  if (mm && mm.style.display !== 'none') toggleMesoMenu();
+}, { passive: true });
 </script>
 <!-- 🎃 Easter egg: Haddonfield, Illinois (fictional) -->
 <script>
