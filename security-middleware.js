@@ -1,5 +1,7 @@
 // src/security-middleware.js — Altruistic Apps unified security layer
 // Updated: 2026-09-28T20:00:00Z build.1790654400
+// Patched 2026-10-12T09:50:00Z — same-origin always allowed (fixes 403 on admin POSTs),
+//   Altruistic Apps subdomains allowed, separate counter per rate limiter, trust proxy for real client IPs
 //
 // USAGE (drop into any Altruistic Apps server.js):
 //
@@ -36,6 +38,9 @@ const DEFAULT_ORIGINS = [
   'https://www.trustyoureyes.app',
 ];
 
+// Any subdomain of these is allowed too (e.g. aporia.altruisticapps.com)
+const ALLOWED_DOMAIN_SUFFIXES = ['altruisticapps.com', 'watchweathertv.com', 'trustyoureyes.app'];
+
 function getAllowedOrigins() {
   const extra = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
   return [...DEFAULT_ORIGINS, ...extra];
@@ -44,16 +49,22 @@ function getAllowedOrigins() {
 // ─── Rate limiter (no extra package — pure in-memory) ────────────────────────
 // Tracks request counts per IP in a sliding window.
 // Automatically cleans up stale entries every 5 minutes.
-const rateLimitStore = new Map();
+// Each limiter gets its OWN store — previously all limiters shared one Map keyed
+// only by IP, so general page traffic counted against the admin limit.
+const allStores = [];
 
 setInterval(() => {
   const now = Date.now();
-  for (const [key, data] of rateLimitStore.entries()) {
-    if (now - data.windowStart > 60 * 1000 * 5) rateLimitStore.delete(key);
+  for (const store of allStores) {
+    for (const [key, data] of store.entries()) {
+      if (now - data.windowStart > 60 * 1000 * 5) store.delete(key);
+    }
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref?.();
 
 function makeRateLimiter({ windowMs = 60000, max = 100, message = 'Too many requests' } = {}) {
+  const rateLimitStore = new Map();
+  allStores.push(rateLimitStore);
   return (req, res, next) => {
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     const now = Date.now();
@@ -168,7 +179,7 @@ function corsMiddleware(req, res, next) {
   const allowed = getAllowedOrigins();
 
   // Allow same-origin, no-origin (mobile apps, curl, Postman), and whitelisted origins
-  if (!origin || allowed.includes(origin) || !IS_PROD) {
+  if (!origin || allowed.includes(origin) || isSameOrigin(req, origin) || isAllowedDomain(origin) || !IS_PROD) {
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-key, Authorization');
@@ -181,6 +192,25 @@ function corsMiddleware(req, res, next) {
 
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
+}
+
+// Browsers send an Origin header on same-site POST/DELETE, so the app's own
+// domain must always pass — whatever domain it's served from.
+function originHost(origin) {
+  try { return new URL(origin).host.toLowerCase(); } catch { return ''; }
+}
+function isSameOrigin(req, origin) {
+  const host = originHost(origin);
+  if (!host) return false;
+  const fwd = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase();
+  const own = String(req.headers.host || '').toLowerCase();
+  return host === own || (fwd && host === fwd);
+}
+function isAllowedDomain(origin) {
+  let u; try { u = new URL(origin); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  const h = u.hostname.toLowerCase();
+  return ALLOWED_DOMAIN_SUFFIXES.some(d => h === d || h.endsWith('.' + d));
 }
 
 // ─── Error sanitizer ────────────────────────────────────────────────────────
@@ -284,6 +314,10 @@ function applySecurityMiddleware(app, options = {}) {
     adminRateLimit = { windowMs: 60000, max: 20 },  // 20 req/min on admin routes
     maxBodyKB = 512,
   } = options;
+
+  // Behind Railway / Cloudflare: use the real client IP (X-Forwarded-For) for rate
+  // limiting, otherwise every visitor shares the proxy's IP and one counter.
+  if (IS_PROD && typeof app.set === 'function') app.set('trust proxy', true);
 
   // Try to use helmet if installed, fall back to manual headers
   try {
