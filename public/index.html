@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-12 build.1792060000 -->
+<!-- WeatherTV App — updated 2026-10-12 build.1792080000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2484,25 +2484,25 @@ const WS_BASES = {
 // Listed in WeatherStar's own play order (its navIds 0–16), so the chips read
 // left-to-right the way the screens actually rotate.
 const WS4000_DISPLAYS = [
-  { key:'hazards',             label:'🚨 Hazards (only when alerts are active)', def:false },
+  { key:'hazards',             label:'🚨 Hazards (only when alerts are active)', def:true  },
   { key:'current-weather',     label:'🌡 Current Conditions', def:true  },
   { key:'latest-observations', label:'📊 Latest Observations',def:true  },
   { key:'local-forecast',      label:'📅 Local Forecast',     def:true  },
   { key:'extended-forecast',   label:'📆 Extended Forecast',  def:true  },
   { key:'radar',               label:'🌀 Local Radar',        def:true  },
-  { key:'hourly',              label:'⏱ Hourly Forecast',     def:false },
-  { key:'hourly-graph',        label:'📈 Hourly Graph',       def:false },
-  { key:'regional-forecast',   label:'🗺 Regional Forecast',  def:false },
-  { key:'travel-domestic',     label:'🧳 Domestic Travel',     def:false },
-  { key:'travel-international',label:'🌍 International Travel',def:false },
-  { key:'almanac',             label:'📚 Almanac',            def:false },
-  { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:false },
+  { key:'hourly',              label:'⏱ Hourly Forecast',     def:true  },
+  { key:'hourly-graph',        label:'📈 Hourly Graph',       def:true  },
+  { key:'regional-forecast',   label:'🗺 Regional Forecast',  def:true  },
+  { key:'travel-domestic',     label:'🧳 Domestic Travel',     def:true  },
+  { key:'travel-international',label:'🌍 International Travel',def:true  },
+  { key:'almanac',             label:'📚 Almanac',            def:true  },
+  { key:'spc-outlook',         label:'⚠ SPC Outlook',        def:true  },
   // WeatherTV custom screens (weatherstar/scripts/wtv-screens.js). Screens with
   // nothing to show — no smoke nearby, no tropical storms — skip themselves.
-  { key:'aqi-ws',              label:'😷 Air Quality',        def:false },
-  { key:'smoke-ws',            label:'🔥 Smoke & Wildfire',   def:false },
-  { key:'hurricane-ws',        label:'🌀 Tropical Storms',    def:false },
-  { key:'astronomy-ws',        label:'☀ UV & Outdoor',        def:false },
+  { key:'aqi-ws',              label:'😷 Air Quality',        def:true  },
+  { key:'smoke-ws',            label:'🔥 Smoke & Wildfire',   def:true  },
+  { key:'hurricane-ws',        label:'🌀 Tropical Storms',    def:true  },
+  { key:'astronomy-ws',        label:'☀ UV & Outdoor',        def:true  },
   // Weather at the 3 nearest airports (any size, from FAA Aviation Weather Center)
   { key:'airport-ws',          label:'✈ Airport Conditions',  def:true  },
   // Coastal / Great Lakes only — inland locations skip these automatically
@@ -2538,6 +2538,14 @@ function wsDefaultSettings(ver) {
   };
 }
 
+function wsMergeDisplays(ver, saved) {
+  const out = { ...wsDefaultSettings(ver).displays };
+  const toggled = (saved && saved.toggled) || {};
+  const savedDisp = (saved && saved.displays) || {};
+  Object.keys(toggled).forEach(k => { if (k in out && typeof savedDisp[k] === 'boolean') out[k] = savedDisp[k]; });
+  return out;
+}
+
 function loadWSSettings() {
   try {
     const raw = localStorage.getItem('weatherstar-v4');
@@ -2545,8 +2553,10 @@ function loadWSSettings() {
     return {
       // displays merges key by key, so screens added after someone saved their
       // settings still get their defaults (a saved list used to replace them all)
-      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), displays: { ...wsDefaultSettings('4000').displays, ...((s['4000'] || {}).displays || {}) }, location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
-      '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
+      // Every screen starts ON. Only screens the viewer has switched themselves
+      // (recorded in `toggled`) keep their saved setting.
+      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), displays: wsMergeDisplays('4000', s['4000']), location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
+      '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), displays: wsMergeDisplays('3000', s['3000']), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
     };
   } catch {
     return { '4000': wsDefaultSettings('4000'), '3000': wsDefaultSettings('3000') };
@@ -2736,6 +2746,7 @@ function buildWSPanel() {
 function wsToggleDisplay(key) {
   const s = wsAllSettings[wsActiveVersion];
   s.displays[key] = !s.displays[key];
+  s.toggled = { ...(s.toggled || {}), [key]: true };
   saveWSSettings();
   const btn = document.getElementById('ws-btn-' + key);
   if (!btn) return;

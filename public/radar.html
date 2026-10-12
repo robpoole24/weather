@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-10-12 build.1792060100 -->
+<!-- WeatherTV Radar — updated 2026-10-12 build.1792080000 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -1649,6 +1649,7 @@ async function fetchUserZone(lat, lng) {
       { headers: { 'Accept': 'application/geo+json' } }
     )).json();
     const p = data.properties || {};
+    if (typeof setDefaultUnitsForLocation === 'function') setDefaultUnitsForLocation(!!(p.forecastZone || p.gridId));
     if (p.forecastZone) userZone   = p.forecastZone.split('/').pop();
     if (p.county)       userCounty = p.county.split('/').pop();
     console.log(`[Alerts] Zone=${userZone} County=${userCounty}`);
@@ -5482,17 +5483,39 @@ const NHC_BASIN_SLOTS = {
 // Category color scale (Saffir-Simpson + sub-hurricane types)
 // ── Wind speed unit system ─────────────────────────────────────────────────────
 // Units cycle: mph → km/h → kt → mph
-// Persisted to localStorage so preference survives page reloads.
+// Default follows where the viewer is: mph in the US (and its territories),
+// the UK, Liberia and Myanmar; km/h everywhere else. Once someone taps the
+// units button, their choice is remembered and the automatic default stops.
+// (New storage key, so an old saved value doesn't override the location default.)
 const WIND_UNITS = ['mph', 'km/h', 'kt'];
+const MPH_REGIONS = new Set(['US','PR','GU','VI','AS','MP','UM','GB','LR','MM']);
+function _unitChosen() { try { return WIND_UNITS.includes(localStorage.getItem('wtv-wind-unit-v2')); } catch (_) { return false; } }
 let _windUnitIdx = (() => {
-  const saved = localStorage.getItem('wtv-wind-unit');
-  const idx = WIND_UNITS.indexOf(saved);
-  return idx >= 0 ? idx : 0; // default mph
+  try {
+    const idx = WIND_UNITS.indexOf(localStorage.getItem('wtv-wind-unit-v2'));
+    if (idx >= 0) return idx;
+  } catch (_) {}
+  // Before we know the location, guess from the browser's own region setting
+  const region = ((navigator.languages && navigator.languages[0]) || navigator.language || '').split('-')[1];
+  if (region) return MPH_REGIONS.has(region.toUpperCase()) ? 0 : 1;
+  return /^America\/(?!Toronto|Vancouver|Edmonton|Winnipeg|Halifax|St_Johns|Regina|Mexico|Sao_Paulo|Buenos|Bogota|Lima|Santiago|Caracas)/.test(Intl.DateTimeFormat().resolvedOptions().timeZone || '') ? 0 : 1;
 })();
+// Called once the viewer's location is known (inside the US = NWS covers it)
+function setDefaultUnitsForLocation(inUS) {
+  if (_unitChosen()) return;
+  let idx = inUS ? 0 : 1;
+  if (!inUS) {
+    const region = ((navigator.language || '').split('-')[1] || '').toUpperCase();
+    if (region === 'GB' || region === 'LR' || region === 'MM') idx = 0;
+  }
+  _windUnitIdx = idx;
+  const btn = document.getElementById('btn-units');
+  if (btn) btn.textContent = WIND_UNITS[_windUnitIdx];
+}
 
 function cycleUnits() {
   _windUnitIdx = (_windUnitIdx + 1) % WIND_UNITS.length;
-  localStorage.setItem('wtv-wind-unit', WIND_UNITS[_windUnitIdx]);
+  try { localStorage.setItem('wtv-wind-unit-v2', WIND_UNITS[_windUnitIdx]); } catch (_) {}
   const btn = document.getElementById('btn-units');
   if (btn) btn.textContent = WIND_UNITS[_windUnitIdx];
 }
