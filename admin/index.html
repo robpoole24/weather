@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-09 build.1791860000 -->
+<!-- WeatherTV Admin — updated 2026-10-12 build.1792103400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1331,6 +1331,14 @@ function toggleAddChannelForm(groupId) {
       if (nameInput) nameInput.focus();
     }, 100);
   }
+}
+
+function showAddGroup() {
+  const form = document.getElementById('add-group-form');
+  if (!form) return;
+  form.classList.add('open');
+  const label = document.getElementById('new-group-label');
+  if (label) setTimeout(() => label.focus(), 50);
 }
 
 async function addGroup() {

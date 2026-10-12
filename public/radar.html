@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-10-12 build.1792080000 -->
+<!-- WeatherTV Radar — updated 2026-10-12 build.1792103400 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -2121,6 +2121,8 @@ async function startMesoAnalysis() {
     const r = await fetch(`${WXTILES_BASE}/meta/meso`);
     mesoMeta = await r.json();
   } catch (_) { mesoMeta = null; }
+  // Switched off again while the info was loading → don't draw a layer nobody can remove
+  if (!overlayState['mesoanalysis']) return;
   const valid = document.getElementById('meso-valid');
   if (!mesoMeta || !mesoMeta.available) {
     if (valid) valid.textContent = 'Mesoscale Analysis is temporarily unavailable. Try again in a few minutes.';
@@ -7313,21 +7315,13 @@ function goToMyLocation() {
     document.getElementById('location-btn').textContent = '📍 My Location';
   };
 
-  // IP geolocation fallback — city-level accuracy, no permission needed
+  // No location from the device → ask the viewer to type a place. (The old
+  // fallback sent the viewer's IP address to ipapi.co; the site's security
+  // policy blocks that call anyway, so it always failed, and WeatherTV doesn't
+  // hand visitor data to lookup companies.)
   const tryIPGeo = async () => {
-    try {
-      setStatus('GPS unavailable — locating by IP…');
-      const r = await fetch('https://ipapi.co/json/');
-      const d = await r.json();
-      if (d.latitude && d.longitude) {
-        const place = [d.city, d.region_code].filter(Boolean).join(', ');
-        onSuccess(d.latitude, d.longitude, place || 'IP address');
-      } else {
-        onFail('Could not determine location');
-      }
-    } catch(e) {
-      onFail('Location unavailable');
-    }
+    onFail('Location is off — type a city or ZIP in the search box');
+    const zi = document.getElementById('zip-input'); if (zi) zi.placeholder = 'Type a city or ZIP…';
   };
 
   if (!navigator.geolocation) {
@@ -7338,8 +7332,7 @@ function goToMyLocation() {
   navigator.geolocation.getCurrentPosition(
     pos => onSuccess(pos.coords.latitude, pos.coords.longitude, 'gps'),
     err => {
-      // PERMISSION_DENIED (1) = blocked; fall back to IP silently
-      // POSITION_UNAVAILABLE (2) or TIMEOUT (3) = also fall back
+      // PERMISSION_DENIED (1), POSITION_UNAVAILABLE (2) or TIMEOUT (3)
       tryIPGeo();
     },
     { timeout: 6000, maximumAge: 300000 }

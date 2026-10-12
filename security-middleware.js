@@ -1,5 +1,6 @@
 // src/security-middleware.js — Altruistic Apps unified security layer
 // Updated: 2026-09-28T20:00:00Z build.1790654400
+// Patched 2026-10-12T22:30:00Z — rate limit counts API calls only (not page files); admin limit 120/min; PUT allowed in CORS
 // Patched 2026-10-12T09:50:00Z — same-origin always allowed (fixes 403 on admin POSTs),
 //   Altruistic Apps subdomains allowed, separate counter per rate limiter, trust proxy for real client IPs
 //
@@ -181,7 +182,7 @@ function corsMiddleware(req, res, next) {
   // Allow same-origin, no-origin (mobile apps, curl, Postman), and whitelisted origins
   if (!origin || allowed.includes(origin) || isSameOrigin(req, origin) || isAllowedDomain(origin) || !IS_PROD) {
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-admin-key, Authorization');
     res.setHeader('Access-Control-Max-Age', '86400');
     res.setHeader('Vary', 'Origin');
@@ -311,7 +312,7 @@ function apiKeyLeakDetector(req, res, next) {
 function applySecurityMiddleware(app, options = {}) {
   const {
     rateLimit = { windowMs: 60000, max: 200 },     // 200 req/min general
-    adminRateLimit = { windowMs: 60000, max: 20 },  // 20 req/min on admin routes
+    adminRateLimit = { windowMs: 60000, max: 120 }, // 120 req/min on admin routes (the panel makes ~13 calls just to open; it's behind a password anyway)
     maxBodyKB = 512,
   } = options;
 
@@ -338,8 +339,16 @@ function applySecurityMiddleware(app, options = {}) {
   // Request size guard
   app.use(requestSizeGuard(maxBodyKB));
 
-  // General rate limit
-  app.use(makeRateLimiter(rateLimit));
+  // General rate limit — dynamic routes only. Page files, images, fonts and
+  // scripts are skipped: one WeatherStar load alone is ~50 file requests, and
+  // phones on the same mobile carrier often share one public IP, so counting
+  // files would start handing real viewers 429 errors (missing images/icons).
+  const generalLimiter = makeRateLimiter(rateLimit);
+  app.use((req, res, next) => {
+    const p = req.path || '';
+    const dynamic = p.startsWith('/api/') || p.startsWith('/websub/') || req.method !== 'GET';
+    return dynamic ? generalLimiter(req, res, next) : next();
+  });
 
   // Tighter rate limit on admin routes
   app.use('/api/admin', makeRateLimiter({

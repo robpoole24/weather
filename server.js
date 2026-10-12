@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-10T00:45:00Z build.1791867600
+// WeatherTV Server — updated 2026-10-12T23:20:00Z build.1792106400
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -198,18 +198,18 @@ function getDefaultData() {
         label: 'Weather Forecasters',
         icon: '⛅',
         channels: [
-              { id: 'max-chasers', label: 'Exclusive Chasers', enabled: false }
-            ]
-          },
-              { id: 'ryan-chasers', label: 'Exclusive Chasers', enabled: false }
-            ]
-          },
           { id: 'UCuYqi3hOfz6-3Hdp6tEJjAg', name: 'AccuWeather',         hasLive: true,  enabled: true },
           { id: 'UCp2G_jHO53yj2NVjv8zbDmQ', name: 'Evan Fryberger',    hasLive: true,  enabled: true },
           { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true,
             collections: [
+              { id: 'max-chasers', label: 'Exclusive Chasers', enabled: false }
+            ]
+          },
           { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true,
             collections: [
+              { id: 'ryan-chasers', label: 'Exclusive Chasers', enabled: false }
+            ]
+          },
           { id: 'UCBtR7ynKM9odz-PW_7uyzDw', name: 'Severe Studios',    hasLive: true,  enabled: true },
         ]
       },
@@ -509,6 +509,22 @@ app.delete('/api/admin/playlists/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Reorder groups — must be registered BEFORE /groups/:id, or Express
+// treats "reorder" as a group id and the up/down arrows silently 404
+app.put('/api/admin/groups/reorder', (req, res) => {
+  const data = loadData();
+  const { groupId, direction } = req.body;
+  const idx = data.groups.findIndex(g => g.id === groupId);
+  if (idx === -1) return res.status(404).json({ error: 'Group not found' });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= data.groups.length) return res.json({ ok: true });
+  const tmp = data.groups[idx];
+  data.groups[idx] = data.groups[newIdx];
+  data.groups[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
 // Update a group
 app.put('/api/admin/groups/:id', (req, res) => {
   const data = loadData();
@@ -606,21 +622,6 @@ app.post('/api/admin/groups', (req, res) => {
 app.delete('/api/admin/groups/:groupId', (req, res) => {
   const data = loadData();
   data.groups = data.groups.filter(g => g.id !== req.params.groupId);
-  saveData(data);
-  res.json({ ok: true });
-});
-
-// Reorder groups
-app.put('/api/admin/groups/reorder', (req, res) => {
-  const data = loadData();
-  const { groupId, direction } = req.body;
-  const idx = data.groups.findIndex(g => g.id === groupId);
-  if (idx === -1) return res.status(404).json({ error: 'Group not found' });
-  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-  if (newIdx < 0 || newIdx >= data.groups.length) return res.json({ ok: true });
-  const tmp = data.groups[idx];
-  data.groups[idx] = data.groups[newIdx];
-  data.groups[newIdx] = tmp;
   saveData(data);
   res.json({ ok: true });
 });
@@ -801,7 +802,7 @@ function markQuotaExceeded(isPrimary = true) {
 }
 
 function getApiKey() {
-  return process.env.YOUTUBE_API_KEY || loadData().config.apiKey;
+  return process.env.YOUTUBE_API_KEY || ((loadData() || {}).config || {}).apiKey || '';
 }
 
 // Archive key (YOUTUBE_API_KEY_2) — used for recent video fetches and playlist access
@@ -1275,11 +1276,11 @@ const _gaugeCache = new Map();
 const GAUGE_TTL = 5 * 60 * 1000;
 
 app.get('/api/river-gauges', async (req, res) => {
-  const { xmin, ymin, xmax, ymax } = req.query;
-  if (!xmin || !ymin || !xmax || !ymax) {
+  const [xmin, ymin, xmax, ymax] = ['xmin', 'ymin', 'xmax', 'ymax'].map(k => parseFloat(req.query[k]));
+  if (![xmin, ymin, xmax, ymax].every(Number.isFinite)) {
     return res.status(400).json({ error: 'Missing bbox params: xmin, ymin, xmax, ymax' });
   }
-  const key = [xmin, ymin, xmax, ymax].map(v => parseFloat(v).toFixed(2)).join(',');
+  const key = [xmin, ymin, xmax, ymax].map(v => v.toFixed(2)).join(',');
   const cached = _gaugeCache.get(key);
   if (cached && Date.now() - cached.ts < GAUGE_TTL) {
     res.set('Cache-Control', 'public, max-age=300');
@@ -4273,11 +4274,30 @@ app.get('/websub/callback/:channelId', (req, res) => {
 const websubLastCheck = {}; // channelId -> timestamp
 const WEBSUB_RATE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
 
+// Is this push really from the hub? The hub signs every notification with the
+// hub.secret we subscribed with (X-Hub-Signature: sha1=<hmac of the body>).
+function websubSignatureValid(req) {
+  const sig = String(req.headers['x-hub-signature'] || '');
+  const m = sig.match(/^(sha1|sha256)=([0-9a-f]+)$/i);
+  if (!m || !Buffer.isBuffer(req.body)) return false;
+  const want = crypto.createHmac(m[1].toLowerCase(), process.env.WEBSUB_SECRET || 'weathertv-secret').update(req.body).digest('hex');
+  const a = Buffer.from(want), b = Buffer.from(m[2].toLowerCase());
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   res.status(200).send('OK'); // Always respond quickly
 
   const channelId = req.params.channelId;
+  // Only channels WeatherTV actually carries — anything else is ignored, so a
+  // forged request can't add junk entries or spend quota on random channels
+  if (!getAllChannels().some(ch => ch.id === channelId)) return;
   const body = req.body ? req.body.toString() : '';
+  // Unsigned/forged pushes are never trusted on their own: they skip the instant
+  // "LIVE from the feed" path below and only trigger the normal rate-limited
+  // YouTube check, so nobody can put an arbitrary video on WeatherTV.
+  const signed = websubSignatureValid(req);
+  if (!signed) console.warn('[WebSub] Unsigned or mis-signed push for ' + channelId + ' — verifying with YouTube instead of trusting it');
 
   // Track that YouTube pushed a notification to us (free, 0 units)
   cache.lastNotificationReceived = Date.now();
@@ -4286,12 +4306,13 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   // Step 1: Parse Atom feed — free, no quota cost
   // Extract video ID and live status directly from the feed XML
   const videoIdMatch = body.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-  const feedVideoId = videoIdMatch ? videoIdMatch[1].trim() : null;
+  const feedVideoIdRaw = videoIdMatch ? videoIdMatch[1].trim() : null;
+  const feedVideoId = feedVideoIdRaw && /^[A-Za-z0-9_-]{11}$/.test(feedVideoIdRaw) ? feedVideoIdRaw : null;
   const feedIsLive     = body.includes('<yt:liveBroadcastContent>live</yt:liveBroadcastContent>');
   const feedIsUpcoming = body.includes('<yt:liveBroadcastContent>upcoming</yt:liveBroadcastContent>');
 
   // Step 2: If feed explicitly says LIVE — trust it, mark immediately, no API call (0 units)
-  if (feedIsLive && feedVideoId) {
+  if (signed && feedIsLive && feedVideoId) {
     const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
     const wsEntry = { isLive: true, videoId: feedVideoId, checkedAt: Date.now(), source: 'websub_feed' };
     cache.liveStatuses[channelId] = wsEntry;
@@ -4307,7 +4328,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   }
 
   // Step 3: If feed says UPCOMING — note it, no API call needed
-  if (feedIsUpcoming) {
+  if (signed && feedIsUpcoming) {
     console.log('[WebSub] ' + channelId + ' has upcoming stream (0 units)');
     delete cache.recentVideos[channelId];
     rDel('wt:recent:' + channelId);
@@ -4706,6 +4727,9 @@ app.get('/api/yt/live-all', (req, res) => {
 // Recent videos — serve from cache whenever possible; only fetch when cache is empty and quota is available
 app.get('/api/yt/recent/:channelId', async (req, res) => {
   const channelId = req.params.channelId;
+  // Only channels WeatherTV carries — otherwise anyone could spend our quota
+  // (and fill the cache) by requesting random channel IDs
+  if (!getAllChannels().some(ch => ch.id === channelId)) return res.status(404).json({ error: 'Unknown channel' });
   const cached = cache.recentVideos[channelId];
 
   // Rule: old data is always better than no data.
@@ -4729,12 +4753,34 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
 
   const key = getArchiveApiKey();
   if (!key) return res.status(500).json({ error: 'No API key configured' });
+  // Which pool this call draws from: the archive key when it's set, otherwise
+  // the primary. A quota hit must pause only THAT pool — it used to always mark
+  // the primary as exhausted, which also paused WebSub live confirmations.
+  const usingPrimary = key === getApiKey();
+  const playlistId = getUploadsPlaylistId(channelId);
+  if (!playlistId) return res.json({ items: (cached && cached.items) || [] });
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?key=${key}&channelId=${channelId}&part=snippet&order=date&type=video&maxResults=10`;
-    const data = await ytFetch(url);
+    // playlistItems.list on the uploads playlist: 1 unit (search.list was 100),
+    // the same call the scheduled fetch uses
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=10`;
+    const raw = await ytFetch(url);
+    if (!checkQuotaError(raw)) trackBurn(usingPrimary, 1);
+    // Same shape search.list returned, so the app's Recent panel is unchanged
+    const data = checkQuotaError(raw) ? raw : { items: (raw.items || []).map(item => ({
+      id: { videoId: item.snippet?.resourceId?.videoId || '' },
+      snippet: {
+        title: item.snippet?.title || '',
+        description: item.snippet?.description || '',
+        publishedAt: item.snippet?.publishedAt || '',
+        channelTitle: item.snippet?.channelTitle || '',
+        channelId: item.snippet?.channelId || channelId,
+        liveBroadcastContent: item.snippet?.liveBroadcastContent || 'none',
+        thumbnails: item.snippet?.thumbnails || {},
+      },
+    })).filter(it => it.id.videoId) };
     if (checkQuotaError(data)) {
-      markQuotaExceeded();
+      markQuotaExceeded(usingPrimary);
       // Serve stale cache if available rather than returning an error
       if (cached && cached.items && cached.items.length > 0) {
         return res.json({ items: cached.items, _cached: true, _stale: true });
@@ -5557,6 +5603,21 @@ wss.on('connection', (clientWs) => {
     }
   });
   clientWs.on('error', () => blitzClients.delete(clientWs));
+});
+
+// Errors thrown inside routes get a clean JSON reply instead of an HTML stack page
+applyErrorHandler(app);
+
+// One failed background job (a feed timing out, Redis blinking) must not take
+// the whole site down. Node exits on an unhandled promise rejection by default,
+// which restarts the server on Railway and drops every viewer.
+process.on('unhandledRejection', (reason) => {
+  console.error('[WeatherTV] Unhandled promise rejection (server kept running):', reason && reason.stack || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[WeatherTV] Uncaught exception:', err && err.stack || err);
+  // Can't open the port at all → exit so Railway restarts us cleanly
+  if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) process.exit(1);
 });
 
 // Listen on 0.0.0.0 so Railway can reach the server

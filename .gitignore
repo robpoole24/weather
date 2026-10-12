@@ -1,3 +1,7 @@
+# Secrets — never commit
+.env
+.env.*
+
 weatherstar files.zip
 weatherstar-screens-preview.png
 weathertv-hurricane-live-near.zip
