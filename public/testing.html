@@ -1,0 +1,355 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>WeatherTV Test Run</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap">
+<style>
+/* Layout: one narrow column like a phone checklist; sticky progress bar; steps grouped by app area */
+:root {
+  --bg: #0a0e14;
+  --panel: #121a26;
+  --line: #24324a;
+  --fg: #e8eef6;
+  --muted: #93a3b8;
+  --accent: #00b4d8;
+  --ok: #2fbf71;
+  --bad: #e5484d;
+  --skip: #8a94a6;
+  --display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --body: 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 17px; line-height: 1.55; }
+.wrap { max-width: 720px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 64px; display: grid; gap: 28px; }
+h1, h2 { font-family: var(--display); letter-spacing: 0.04em; text-transform: uppercase; text-wrap: balance; margin: 0; line-height: 1.1; }
+h1 { font-size: 2.3rem; }
+h1 .tv { color: var(--accent); }
+h2 { font-size: 1.45rem; color: var(--accent); }
+p { margin: 0; }
+.lede { color: var(--muted); max-width: 60ch; }
+.intro { display: grid; gap: 12px; }
+.tips { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.tips strong { font-family: var(--display); letter-spacing: 0.06em; text-transform: uppercase; font-size: 1.05rem; }
+.tips ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
+
+.progress { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+.progress-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.9rem; color: var(--muted); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+.bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; display: flex; }
+.bar span { height: 100%; transition: width .25s; }
+.bar .b-ok { background: var(--ok); } .bar .b-bad { background: var(--bad); } .bar .b-skip { background: var(--skip); }
+
+.about { display: grid; gap: 12px; }
+.fields { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+label.f { display: grid; gap: 4px; font-size: 0.95rem; color: var(--muted); }
+input, select, textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; width: 100%; }
+textarea { min-height: 80px; resize: vertical; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+section.area { display: grid; gap: 14px; }
+.area-head { display: grid; gap: 4px; }
+.area-head p { color: var(--muted); font-size: 0.95rem; }
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; counter-reset: step; }
+li.step { border: 1px solid var(--line); border-left-width: 5px; border-radius: 10px; background: var(--panel); padding: 14px 16px; display: grid; gap: 10px; min-width: 0; }
+li.step[data-state="ok"] { border-left-color: var(--ok); }
+li.step[data-state="bad"] { border-left-color: var(--bad); }
+li.step[data-state="skip"] { border-left-color: var(--skip); }
+.step-title { font-weight: 700; font-size: 1.05rem; display: flex; gap: 10px; align-items: baseline; }
+.step-title .n { font-family: var(--display); color: var(--accent); font-size: 1.1rem; min-width: 2.2em; font-variant-numeric: tabular-nums; }
+.do, .look { display: grid; grid-template-columns: 6.2em 1fr; gap: 8px; font-size: 0.98rem; }
+.do b, .look b { font-family: var(--display); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.9rem; color: var(--muted); padding-top: 2px; }
+.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.choices button { font: inherit; font-size: 0.95rem; font-weight: 700; padding: 10px 14px; min-height: 44px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; flex: 1 1 auto; }
+.choices button[aria-pressed="true"][data-v="ok"] { background: var(--ok); border-color: var(--ok); color: #04130a; }
+.choices button[aria-pressed="true"][data-v="bad"] { background: var(--bad); border-color: var(--bad); color: #fff; }
+.choices button[aria-pressed="true"][data-v="skip"] { background: var(--skip); border-color: var(--skip); color: #0a0e14; }
+.note label { font-size: 0.9rem; color: var(--muted); display: grid; gap: 4px; }
+
+.finish { display: grid; gap: 12px; padding: 18px 16px; border: 1px solid var(--accent); border-radius: 12px; background: var(--panel); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { font: inherit; font-weight: 700; padding: 12px 18px; min-height: 48px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #031018; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+#copy-status { color: var(--ok); font-weight: 700; min-height: 1.5em; }
+#results-text { min-height: 200px; font-size: 0.9rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.confirm { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: var(--muted); }
+.foot { color: var(--muted); font-size: 0.9rem; }
+@media (max-width: 420px) { .do, .look { grid-template-columns: 1fr; gap: 2px; } h1 { font-size: 2rem; } }
+@media (prefers-reduced-motion: reduce) { .bar span { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Weather<span class="tv">TV</span> Test Run</h1>
+    <p class="lede">Thanks for helping test WeatherTV before it goes live. There are no wrong answers. If something confuses you or doesn't work the way you expect, that's exactly what we need to know.</p>
+    <div class="tips">
+      <strong>Before you start</strong>
+      <ul>
+        <li>Keep this page open in one tab and open <b>watchweathertv.com</b> in another.</li>
+        <li>Use your phone if you can. A computer is a bonus.</li>
+        <li>For each step, tap <b>Works</b>, <b>Problem</b>, or <b>Couldn't try</b>. If there's a problem, write a sentence about what happened.</li>
+        <li>If you see a problem, a screenshot helps a lot. Send it along with your results.</li>
+        <li>Your answers save on this device as you go, so you can stop and come back.</li>
+      </ul>
+    </div>
+  </header>
+
+  <div class="progress" aria-live="polite">
+    <div class="progress-row"><span id="p-count">0 of 0 steps answered</span><span id="p-split"></span></div>
+    <div class="bar" aria-hidden="true"><span class="b-ok" id="b-ok"></span><span class="b-bad" id="b-bad"></span><span class="b-skip" id="b-skip"></span></div>
+  </div>
+
+  <section class="about">
+    <h2>About you</h2>
+    <div class="fields">
+      <label class="f" for="t-name">Your first name
+        <input id="t-name" autocomplete="given-name" placeholder="e.g. Pat">
+      </label>
+      <label class="f" for="t-device">What are you testing on?
+        <select id="t-device">
+          <option value="">Choose one</option>
+          <option>Android phone</option>
+          <option>iPhone</option>
+          <option>Tablet / iPad</option>
+          <option>Computer (Windows)</option>
+          <option>Computer (Mac)</option>
+          <option>Something else</option>
+        </select>
+      </label>
+      <label class="f" for="t-browser">Which app do you browse with?
+        <select id="t-browser">
+          <option value="">Choose one</option>
+          <option>Chrome</option>
+          <option>Safari</option>
+          <option>Samsung Internet</option>
+          <option>Firefox</option>
+          <option>Edge</option>
+          <option>Not sure</option>
+        </select>
+      </label>
+    </div>
+  </section>
+
+  <div id="areas"></div>
+
+  <section class="finish" aria-labelledby="finish-h">
+    <h2 id="finish-h">All done? Send your results</h2>
+    <p>Anything else you noticed? Slow spots, text too small, buttons hard to tap, something you expected to find but couldn't?</p>
+    <label class="f" for="t-overall">Anything else
+      <textarea id="t-overall" placeholder="Write anything here, big or small"></textarea>
+    </label>
+    <p>Tap <b>Copy my results</b>, then paste them into a text or email to Rob. Add any screenshots to the same message.</p>
+    <div class="actions">
+      <button class="btn" id="copy-btn" type="button">Copy my results</button>
+      <button class="btn ghost" id="show-btn" type="button">Show my results as text</button>
+    </div>
+    <div id="copy-status" role="status"></div>
+    <textarea id="results-text" readonly hidden aria-label="Your results as text"></textarea>
+    <div class="actions">
+      <button class="btn ghost" id="reset-btn" type="button">Start over</button>
+    </div>
+    <div class="confirm" id="reset-confirm" hidden>
+      <span>Clear every answer on this device?</span>
+      <button class="btn danger" id="reset-yes" type="button">Yes, clear it</button>
+      <button class="btn ghost" id="reset-no" type="button">Keep my answers</button>
+    </div>
+  </section>
+
+  <p class="foot">WeatherTV is free, has no ads and collects no personal data. This checklist stays on your device until you choose to send it.</p>
+</div>
+
+<script>
+const AREAS = [
+  { id: 'start', title: 'First look', blurb: 'Open watchweathertv.com. Don\'t tap anything yet.', steps: [
+    { do: 'Open watchweathertv.com on your phone, held upright.', look: 'The big WeatherTV tornado logo, a row of buttons under it (Weather Forecasters, Storm Chasers and more), and a thin info line along the very bottom.' },
+    { do: 'Turn your phone sideways, then back upright.', look: 'Everything resizes to fit. Nothing is cut off or squished, and the button row and bottom line stay on screen both ways.' },
+    { do: 'Swipe the button row left and right.', look: 'It scrolls smoothly and shows more buttons (Live Now, Highlights, Live Radar, WeatherStar, Weather Playlist and more). The buttons are big enough to tap without hitting the wrong one.' },
+  ]},
+  { id: 'channels', title: 'Watching channels', blurb: 'Weather Forecasters, Storm Chasers and Other Weather Creators.', steps: [
+    { do: 'Tap Weather Forecasters.', look: 'A row of channel cards opens under the buttons. Each card shows the full channel name and its buttons, with no big empty space and nothing cut off.' },
+    { do: 'Swipe the cards sideways.', look: 'More channels slide into view.' },
+    { do: 'On any card, tap Recent.', look: 'A row of that channel\'s latest videos appears, with pictures (thumbnails) and titles you can read.' },
+    { do: 'Tap one of those videos.', look: 'It starts playing at the top. The card row closes so the video gets bigger, and the group buttons stay on screen.' },
+    { do: 'Tap Weather Forecasters again, then tap it once more.', look: 'The first tap opens the cards. The second tap closes them.' },
+    { do: 'Try Storm Chasers and Other Weather Creators the same way.', look: 'Same behavior: cards open, Recent shows videos, and picking a video plays it.' },
+    { do: 'Tap Subscribe on any card.', look: 'It takes you to that channel on YouTube. Use your back button to return to WeatherTV.' },
+    { do: 'Turn your phone sideways with the cards open.', look: 'The cards and thumbnails still fit completely. Nothing is chopped off at the bottom.' },
+  ]},
+  { id: 'live', title: 'Live streams and chat', blurb: 'Live streams depend on who is broadcasting right now. If nobody is live, mark these "Couldn\'t try".', steps: [
+    { do: 'Tap Live Now.', look: 'Cards appear for channels that are live right now, each with a red LIVE button. Or a clear message if nobody is live.' },
+    { do: 'Tap LIVE on one of them.', look: 'The live stream plays at the top, labeled with the channel name.' },
+    { do: 'Tap Live Chat at the bottom of the screen.', look: 'The stream and its chat open together. You can read the chat as it scrolls.' },
+    { do: 'Tap the red Close Chat bar at the very bottom.', look: 'The chat closes and you\'re back on WeatherTV. The bar is easy to see and tap.' },
+    { do: 'Tap Fullscreen at the bottom while something is playing.', look: 'The video fills the screen. Your phone\'s back gesture or button brings you back.' },
+  ]},
+  { id: 'more', title: 'Highlights, search and playlist', blurb: '', steps: [
+    { do: 'Tap Highlights.', look: 'A row of featured weather videos. Tapping one plays it.' },
+    { do: 'Tap the magnifying glass and type part of a channel name (for example "Max").', look: 'Matching channels show up as you type. Tapping one shows its card.' },
+    { do: 'Tap the heart on a channel card.', look: 'The heart fills in and a gold ★ Favorites button appears in the button row. Tapping it shows the channels you saved.' },
+    { do: 'Tap Weather Playlist.', look: 'A list of weather videos loads and plays.' },
+  ]},
+  { id: 'radar', title: 'Live Radar', blurb: 'The radar map with storms, warnings and forecasts.', steps: [
+    { do: 'Tap Live Radar.', look: 'A map with rain and storm colors appears in the video area. The WeatherTV button row is still there so you can leave the radar.' },
+    { do: 'Look at the row of radar buttons along the top of the map. Swipe it sideways.', look: 'The buttons are large enough to read and tap, and the row scrolls to show more.' },
+    { do: 'Tap My Location. When your phone asks, choose Allow.', look: 'The map moves to where you are.' },
+    { do: 'Type your city or ZIP code in the search box and tap GO.', look: 'The map jumps to that place.' },
+    { do: 'Pinch to zoom in and out, and drag the map around.', look: 'The map moves smoothly and the storm colors stay lined up with the roads and towns.' },
+    { do: 'Tap Layers and turn a few things on and off.', look: 'Each item adds or removes something on the map.' },
+    { do: 'Tap Forecast.', look: 'A forecast for the area appears.' },
+    { do: 'Tap Alerts.', look: 'Any active weather warnings show as colored areas, or there\'s a clear note that nothing is active.' },
+    { do: 'Find the speed units button (it says MPH, KM/H or KT).', look: 'In the US it starts on MPH. Tapping it switches units.' },
+    { do: 'Press play on the radar animation.', look: 'The storm colors loop through the last little while and keep moving.' },
+    { do: 'Turn your phone sideways while on the radar.', look: 'The map and buttons rearrange to fit, and nothing is hidden behind anything else.' },
+    { do: 'Tap Storm Chasers (or any other group) while the radar is showing.', look: 'You can leave the radar and pick something else. You never get stuck on the map.' },
+  ]},
+  { id: 'weatherstar', title: 'WeatherStar', blurb: 'The retro, cable-TV style local forecast.', steps: [
+    { do: 'Tap WeatherStar.', look: 'Old-school blue weather screens start cycling, like the classic Weather Channel local forecast.' },
+    { do: 'Let it run for a few minutes.', look: 'It shows your area\'s weather, cycles through many different screens, and plays background music (turn your sound up).' },
+    { do: 'Check that the town shown is yours, or close to it.', look: 'Your town or a nearby one. If it\'s wrong, note which town it showed.' },
+    { do: 'Turn your phone sideways.', look: 'The WeatherStar screen fits, without black bars cutting off words.' },
+  ]},
+  { id: 'other', title: 'Everything else', blurb: '', steps: [
+    { do: 'Tap About at the bottom.', look: 'Information about WeatherTV that you can read and close.' },
+    { do: 'Tap Support at the bottom.', look: 'The WeatherTV shop opens.' },
+    { do: 'Leave WeatherTV open for 10 minutes or so, then come back to it.', look: 'It\'s still working and up to date, with no frozen video or blank screen.' },
+    { do: 'If you have a computer, open watchweathertv.com there and click around.', look: 'The same features work with a mouse. Mark "Couldn\'t try" if you don\'t have one handy.' },
+  ]},
+];
+
+const KEY = 'wtv-test-run-v1';
+let state = { answers: {}, notes: {}, name: '', device: '', browser: '', overall: '' };
+try { const s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s && typeof s === 'object') state = Object.assign(state, s); } catch (_) {}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {} }
+
+const allSteps = [];
+let n = 0;
+const areasEl = document.getElementById('areas');
+areasEl.style.display = 'grid'; areasEl.style.gap = '28px';
+AREAS.forEach(a => {
+  const sec = document.createElement('section'); sec.className = 'area';
+  const head = document.createElement('div'); head.className = 'area-head';
+  const h = document.createElement('h2'); h.textContent = a.title; head.appendChild(h);
+  if (a.blurb) { const p = document.createElement('p'); p.textContent = a.blurb; head.appendChild(p); }
+  sec.appendChild(head);
+  const ol = document.createElement('ol'); ol.className = 'steps';
+  a.steps.forEach((s, i) => {
+    n++;
+    const id = a.id + '-' + (i + 1);
+    allSteps.push({ id, n, area: a.title, ...s });
+    const li = document.createElement('li'); li.className = 'step'; li.dataset.id = id;
+    li.innerHTML = `
+      <div class="step-title"><span class="n">${n}</span><span></span></div>
+      <div class="do"><b>Try this</b><span></span></div>
+      <div class="look"><b>Look for</b><span></span></div>
+      <div class="choices" role="group" aria-label="Result for step ${n}">
+        <button type="button" data-v="ok" aria-pressed="false">Works</button>
+        <button type="button" data-v="bad" aria-pressed="false">Problem</button>
+        <button type="button" data-v="skip" aria-pressed="false">Couldn't try</button>
+      </div>
+      <div class="note" hidden><label for="note-${id}">What happened?
+        <textarea id="note-${id}" placeholder="What did you tap, and what did you see instead?"></textarea></label></div>`;
+    li.querySelector('.do span').textContent = s.do;
+    li.querySelector('.look span').textContent = s.look;
+    li.querySelector('.step-title span:last-child').textContent = s.title || shortTitle(s.do);
+    ol.appendChild(li);
+  });
+  sec.appendChild(ol);
+  areasEl.appendChild(sec);
+});
+
+function shortTitle(t) {
+  const first = t.split(/[.,(]/)[0].trim();
+  return first.length > 60 ? first.slice(0, 57) + '…' : first;
+}
+
+function paint() {
+  document.querySelectorAll('li.step').forEach(li => {
+    const id = li.dataset.id, v = state.answers[id] || '';
+    li.dataset.state = v;
+    li.querySelectorAll('.choices button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+    const note = li.querySelector('.note');
+    note.hidden = !(v === 'bad' || (state.notes[id] || '').trim());
+    const ta = note.querySelector('textarea');
+    if (document.activeElement !== ta) ta.value = state.notes[id] || '';
+  });
+  const total = allSteps.length;
+  const c = { ok: 0, bad: 0, skip: 0 };
+  allSteps.forEach(s => { const v = state.answers[s.id]; if (c[v] !== undefined) c[v]++; });
+  const done = c.ok + c.bad + c.skip;
+  document.getElementById('p-count').textContent = `${done} of ${total} steps answered`;
+  document.getElementById('p-split').textContent = done ? `${c.ok} working · ${c.bad} problems · ${c.skip} skipped` : '';
+  document.getElementById('b-ok').style.width = (c.ok / total * 100) + '%';
+  document.getElementById('b-bad').style.width = (c.bad / total * 100) + '%';
+  document.getElementById('b-skip').style.width = (c.skip / total * 100) + '%';
+}
+
+areasEl.addEventListener('click', e => {
+  const b = e.target.closest('.choices button'); if (!b) return;
+  const id = b.closest('li.step').dataset.id;
+  state.answers[id] = state.answers[id] === b.dataset.v ? '' : b.dataset.v;
+  save(); paint();
+  if (state.answers[id] === 'bad') { const ta = b.closest('li.step').querySelector('.note textarea'); setTimeout(() => ta.focus(), 30); }
+});
+areasEl.addEventListener('input', e => {
+  if (e.target.matches('.note textarea')) { state.notes[e.target.closest('li.step').dataset.id] = e.target.value; save(); }
+});
+
+[['t-name','name'],['t-device','device'],['t-browser','browser'],['t-overall','overall']].forEach(([elId, k]) => {
+  const el = document.getElementById(elId); el.value = state[k] || '';
+  el.addEventListener('input', () => { state[k] = el.value; save(); });
+  el.addEventListener('change', () => { state[k] = el.value; save(); });
+});
+
+function resultsText() {
+  const L = { ok: 'WORKS', bad: 'PROBLEM', skip: "COULDN'T TRY" };
+  const lines = [];
+  lines.push('WeatherTV test results');
+  lines.push(`Tester: ${state.name || '(no name)'} | Device: ${state.device || '(not given)'} | Browser: ${state.browser || '(not given)'}`);
+  lines.push(`Date: ${new Date().toLocaleString()}`);
+  const c = { ok: 0, bad: 0, skip: 0, none: 0 };
+  allSteps.forEach(s => { const v = state.answers[s.id]; c[v] !== undefined ? c[v]++ : c.none++; });
+  lines.push(`Summary: ${c.ok} working, ${c.bad} problems, ${c.skip} skipped, ${c.none} not answered`);
+  const probs = allSteps.filter(s => state.answers[s.id] === 'bad');
+  if (probs.length) {
+    lines.push('', 'PROBLEMS');
+    probs.forEach(s => lines.push(`- Step ${s.n} (${s.area}): ${s.do}`, `  What happened: ${(state.notes[s.id] || '').trim() || '(no description)'}`));
+  }
+  let area = '';
+  lines.push('', 'ALL STEPS');
+  allSteps.forEach(s => {
+    if (s.area !== area) { area = s.area; lines.push('', area.toUpperCase()); }
+    const v = state.answers[s.id];
+    lines.push(`${s.n}. ${v ? L[v] : '(not answered)'}: ${shortTitle(s.do)}` + (state.notes[s.id] && v !== 'bad' ? ` (note: ${state.notes[s.id].trim()})` : ''));
+  });
+  if ((state.overall || '').trim()) lines.push('', 'ANYTHING ELSE', state.overall.trim());
+  return lines.join('\n');
+}
+
+const status = document.getElementById('copy-status');
+const out = document.getElementById('results-text');
+function showText() { out.value = resultsText(); out.hidden = false; }
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const text = resultsText();
+  status.textContent = '';
+  const fallback = () => { showText(); out.focus(); out.select(); status.textContent = 'Your results are in the box below. Press and hold inside it, choose Select All, then Copy.'; };
+  try {
+    navigator.clipboard.writeText(text).then(() => { status.textContent = 'Copied. Now paste it into a text or email to Rob.'; out.hidden = true; }, fallback);
+  } catch (_) { fallback(); }
+});
+document.getElementById('show-btn').addEventListener('click', () => { showText(); status.textContent = ''; });
+
+const conf = document.getElementById('reset-confirm');
+document.getElementById('reset-btn').addEventListener('click', () => { conf.hidden = false; });
+document.getElementById('reset-no').addEventListener('click', () => { conf.hidden = true; });
+document.getElementById('reset-yes').addEventListener('click', () => {
+  state = { answers: {}, notes: {}, name: '', device: '', browser: '', overall: '' };
+  save(); conf.hidden = true; out.hidden = true; status.textContent = 'Cleared.';
+  ['t-name','t-device','t-browser','t-overall'].forEach(i => document.getElementById(i).value = '');
+  document.querySelectorAll('.note textarea').forEach(t => t.value = '');
+  paint();
+});
+
+paint();
+</script>
+
+</body></html>
