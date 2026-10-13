@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792139000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792143000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -31,6 +31,51 @@
   // Xbox: have the controller send key presses (D-pad, A, B…) instead of
   // driving a mouse cursor, so the same highlight navigation works.
   if (/Xbox/i.test(ua)) { try { navigator.gamepadInputEmulation = 'keyboard'; } catch (_) {} }
+  // Xbox app: the web page's text boxes can't take typing from the Xbox
+  // keyboard, so A on a text box asks the app for its own text box (where the
+  // Xbox keyboard works) and the app hands the text back here.
+  const XBOX_APP = /WeatherTVXbox/.test(ua);
+  const isTextField = (el) => !!el && !el.disabled && !el.readOnly && (el.tagName === 'TEXTAREA'
+    || (el.tagName === 'INPUT' && /^(text|search|url|email|tel|number|)$/i.test(el.getAttribute('type') || '')));
+  let lastTextAsk = 0;
+  function askText(el) {
+    if (Date.now() - lastTextAsk < 700) return true;
+    let top; try { top = window.top; void top.document.body; } catch (_) { return false; }
+    const wv = top.chrome && top.chrome.webview;
+    if (!wv || !wv.postMessage) return false;
+    lastTextAsk = Date.now();
+    top.__wtvTextTarget = el;
+    try { el.blur(); } catch (_) {}
+    wv.postMessage('wtv-text ' + JSON.stringify({
+      value: el.value || '',
+      hint: el.getAttribute('aria-label') || el.placeholder || 'Type here',
+      max: el.maxLength > 0 ? el.maxLength : 0
+    }));
+    return true;
+  }
+  if (XBOX_APP) {
+    // Keep the web view's own keyboard from popping up on top of ours
+    document.addEventListener('focusin', (e) => { if (isTextField(e.target)) e.target.setAttribute('inputmode', 'none'); }, true);
+    // Cursor mode: clicking a text box opens the app's text box too
+    document.addEventListener('click', (e) => { if (isTextField(e.target)) askText(e.target); }, true);
+    if (window === window.top) {
+      // Called by the Xbox app with what was typed: fill the box and search
+      window.__wtvTextCommit = function (v) {
+        const el = window.__wtvTextTarget; window.__wtvTextTarget = null;
+        if (!el || !el.isConnected) return;
+        el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (!String(v).trim()) return;
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true, cancelable: true }));
+        if (el.form) {
+          if (el.form.requestSubmit) el.form.requestSubmit();
+          else el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      };
+    }
+  }
   // "In a frame" means OUR page framing us (the radar inside the main page).
   // An app shell from another origin (the Samsung TV wrapper) doesn't count:
   // we act as the top page and ask the shell to exit at the home screen.
@@ -296,6 +341,10 @@
       e.preventDefault();
       move(DIRS[k]);
       return;
+    }
+    if (XBOX_APP && (k === PAD_A || key === 'GamepadA')) {             // Xbox A on a text box: type in the app's box
+      const tf = isTextField(current) ? current : (typing ? document.activeElement : null);
+      if (tf && askText(tf)) { e.preventDefault(); return; }
     }
     if ((k === PAD_A || key === 'GamepadA') && current && !typing) {     // Xbox A = OK
       e.preventDefault();
