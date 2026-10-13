@@ -1549,6 +1549,25 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // but all are opacity:0 except the active one. This keeps tiles loaded
 // in the browser cache so switching is instant with no flash.
 
+// Retry tiles that fail to load. NOAA's MRMS server answers roughly 1 in 10
+// tile requests with an "Invalid time" error (one of its back-end servers is
+// behind) instead of an image, which left blank squares in the radar. A
+// second request almost always lands on a server that has the frame, so try
+// again (up to 3 times, with a cache-buster so the browser doesn't reuse the
+// error).
+function retryTiles(layer, maxTries = 3) {
+  layer.on('tileerror', (e) => {
+    const tile = e.tile;
+    if (!tile || !tile.src) return;
+    const n = (tile._wtvTries || 0) + 1;
+    if (n > maxTries) return;
+    tile._wtvTries = n;
+    const base = tile.src.replace(/[?&]_wtvr=\d+$/, '');
+    setTimeout(() => { tile.src = base + (base.includes('?') ? '&' : '?') + '_wtvr=' + n; }, 600 * n + Math.random() * 400);
+  });
+  return layer;
+}
+
 function makeRawFrameLayer(f, idx) {
   const layer = L.tileLayer(
     `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-${f.ts}/{z}/{x}/{y}.png`,
@@ -1580,7 +1599,7 @@ function makeRawFrameLayer(f, idx) {
       maxNativeZoom: 9,
     }
   );
-  return layer;
+  return retryTiles(layer);
 }
 const frameLayers = FRAMES.map((f, idx) => makeRawFrameLayer(f, idx));
 // (Past-mode frames start as raw NEXRAD and are swapped to the filtered
@@ -1647,7 +1666,7 @@ async function setRadarSource(raw) {
       const target = now - (FRAMES.length - 1 - idx) * 5 * 60000;
       const t = [...info.times].reverse().find(x => x <= target) || info.times[0];
       f.label = new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      return L.tileLayer.wms(MRMS_WMS, {
+      return retryTiles(L.tileLayer.wms(MRMS_WMS, {
         layers: info.name, TIME: new Date(t).toISOString().split('.')[0] + 'Z', format: 'image/png', transparent: true,
         version: '1.3.0', opacity: 0, zIndex: 200 + idx, maxNativeZoom: 9, keepBuffer: 1, updateWhenIdle: true,
         // No crossOrigin: that makes the browser send an Origin header, and
@@ -1655,7 +1674,7 @@ async function setRadarSource(raw) {
         // image tiles don't need CORS to display.
         updateWhenZooming: false,
         attribution: idx === 0 ? 'Radar: NOAA MRMS (quality-controlled)' : '',
-      });
+      }));
     });
     _swapFrameLayers(layers);
   }
@@ -5122,6 +5141,7 @@ async function buildRVFrames() {
         updateWhenIdle:true, updateWhenZooming:false,
         attribution: idx===0 ? 'Global Radar: <a href="https://librewxr.net">LibreWXR</a>' : '' }
     );
+    retryTiles(layer);
     rvFrameLayers.push({ time: frame.time, label, layer });
   });
   rvFrameIdx = rvFrameLayers.length - 1;
