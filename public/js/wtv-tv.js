@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792143000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792147000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -38,6 +38,7 @@
   const isTextField = (el) => !!el && !el.disabled && !el.readOnly && (el.tagName === 'TEXTAREA'
     || (el.tagName === 'INPUT' && /^(text|search|url|email|tel|number|)$/i.test(el.getAttribute('type') || '')));
   let lastTextAsk = 0;
+  let tvFocusing = false;              // true while the D-pad highlight moves focus
   function askText(el) {
     if (Date.now() - lastTextAsk < 700) return true;
     let top; try { top = window.top; void top.document.body; } catch (_) { return false; }
@@ -55,13 +56,23 @@
   }
   if (XBOX_APP) {
     // Keep the web view's own keyboard from popping up on top of ours
-    document.addEventListener('focusin', (e) => { if (isTextField(e.target)) e.target.setAttribute('inputmode', 'none'); }, true);
+    // and when the site itself puts the cursor in a box (e.g. opening channel
+    // search), open the app's text box right away. Moving the highlight onto a
+    // box with the D-pad doesn't count: that only opens on A.
+    document.addEventListener('focusin', (e) => {
+      const el = e.target;
+      if (!isTextField(el)) return;
+      el.setAttribute('inputmode', 'none');
+      let committedAt = 0; try { committedAt = window.top.__wtvCommitAt || 0; } catch (_) {}
+      if (!tvFocusing && Date.now() - committedAt > 1500) askText(el);
+    }, true);
     // Cursor mode: clicking a text box opens the app's text box too
     document.addEventListener('click', (e) => { if (isTextField(e.target)) askText(e.target); }, true);
     if (window === window.top) {
       // Called by the Xbox app with what was typed: fill the box and search
       window.__wtvTextCommit = function (v) {
         const el = window.__wtvTextTarget; window.__wtvTextTarget = null;
+        window.__wtvCommitAt = Date.now();
         if (!el || !el.isConnected) return;
         el.value = v;
         el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -168,7 +179,9 @@
     if (current) current.classList.remove('tv-focus');
     current = el;
     el.classList.add('tv-focus');
+    tvFocusing = true;
     try { el.focus({ preventScroll: true }); } catch (_) {}
+    tvFocusing = false;
     try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
     if (el.classList.contains('leaflet-container')) showMapHint(); else hideMapHint();
     if (el.tagName === 'IFRAME' && !(opts && opts.noEnter)) enterFrame(el, (opts && opts.dir) || 'down');
