@@ -93,8 +93,12 @@ function makeRateLimiter({ windowMs = 60000, max = 100, message = 'Too many requ
 // Applied to every response. Covers the OWASP Top 10 header recommendations.
 // If helmet is installed it will be used instead for broader coverage.
 function securityHeaders(req, res, next) {
+  // The Samsung TV app is a small wrapper that shows the site in a frame, so
+  // Samsung TVs (Tizen) may frame it. Everyone else — and /admin always —
+  // keeps the anti-clickjacking protection.
+  const tvShell = /Tizen|SMART-TV/i.test(req.headers['user-agent'] || '') && !req.path.startsWith('/admin');
   // Prevent clickjacking
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  if (!tvShell) res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   // Prevent MIME sniffing
   res.setHeader('X-Content-Type-Options', 'nosniff');
   // XSS protection (legacy browsers)
@@ -167,7 +171,7 @@ function securityHeaders(req, res, next) {
     "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com" +
       // Community Cams: camera hosts' own embed players (Nest, Brownrice, IPCamLive, RTSP.me, Angelcam)
       " https://video.nest.com https://player.brownrice.com https://*.brownrice.com https://ipcamlive.com https://rtsp.me https://v.angelcam.com",
-    "frame-ancestors 'self'",
+    tvShell ? "frame-ancestors *" : "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header
   res.removeHeader('X-Powered-By');

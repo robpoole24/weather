@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792135000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792138000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -31,7 +31,13 @@
   // Xbox: have the controller send key presses (D-pad, A, B…) instead of
   // driving a mouse cursor, so the same highlight navigation works.
   if (/Xbox/i.test(ua)) { try { navigator.gamepadInputEmulation = 'keyboard'; } catch (_) {} }
-  const inFrame = window.parent !== window;
+  // "In a frame" means OUR page framing us (the radar inside the main page).
+  // An app shell from another origin (the Samsung TV wrapper) doesn't count:
+  // we act as the top page and ask the shell to exit at the home screen.
+  let sameOriginParent = false;
+  try { sameOriginParent = window.parent !== window && !!window.parent.location.href; } catch (_) { sameOriginParent = false; }
+  const inFrame = sameOriginParent;
+  const inShell = window.parent !== window && !sameOriginParent;
 
   // Samsung: media / channel / color keys must be registered to be delivered
   try {
@@ -221,6 +227,10 @@
     }
     if (!fromChild && history.length > 1 && location.pathname !== '/' && location.pathname !== '/index.html') { history.back(); return; }
     try { if (window.tizen && tizen.application) { tizen.application.getCurrentApplication().exit(); return; } } catch (_) {}
+    // Samsung TV app shell: ask the wrapper to close the app
+    if (inShell) { try { window.parent.postMessage({ wtvTv: 'shell-exit' }, '*'); return; } catch (_) {} }
+    // Xbox app (WebView2 host): ask the app to close, back to the Xbox home
+    try { if (window.chrome && chrome.webview && chrome.webview.postMessage) { chrome.webview.postMessage('wtv-exit'); return; } } catch (_) {}
     try { window.close(); } catch (_) {}
   }
   function refocusSoon() { setTimeout(() => { if (!current || !document.contains(current) || !visible(current)) focusFirst(); }, 120); }
@@ -243,6 +253,7 @@
   // Arrows, plus the Xbox controller's D-pad (203–206) and left stick (211–214)
   const DIRS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down', 203: 'up', 204: 'down', 205: 'left', 206: 'right', 211: 'up', 212: 'down', 213: 'right', 214: 'left' };
   const PAD_A = 195, PAD_B = 196, PAD_LB = 200, PAD_RB = 199, PAD_MENU = 207;
+  let lastBackAt = 0;
   const MEDIA = { 10252: 'playpause', 415: 'play', 19: 'pause', 413: 'stop', 417: 'next', 412: 'prev', 179: 'playpause' };
   document.addEventListener('keydown', (e) => {
     const k = e.keyCode, key = e.key;
@@ -251,7 +262,9 @@
 
     // Back: Samsung 10009, other TVs XF86Back/GoBack/BrowserBack; Escape for testing
     if (k === 10009 || k === PAD_B || key === 'GamepadB' || key === 'XF86Back' || key === 'GoBack' || key === 'BrowserBack' || (key === 'Escape' && !typing) || (key === 'Backspace' && !typing)) {
-      e.preventDefault(); e.stopPropagation(); handleBack(false); return;
+      e.preventDefault(); e.stopPropagation();
+      if (Date.now() - lastBackAt < 350) return;          // one press can arrive twice on Xbox (key + system Back)
+      lastBackAt = Date.now(); handleBack(false); return;
     }
     if (MEDIA[k] || /^Media/.test(key)) {
       e.preventDefault();
