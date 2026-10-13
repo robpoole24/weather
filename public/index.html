@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-12 build.1792118600 -->
+<!-- WeatherTV App — updated 2026-10-12 build.1792118900 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2919,12 +2919,29 @@ function wsNav(id) {
 
 // WS3000 has no scanlines feature of its own (WS4000 does), so for 3000 the
 // effect is drawn by WeatherTV as a see-through overlay on top of the player.
+function wsSync4000ScanLines(frame) {
+  const want = !!(wsAllSettings['4000'] && wsAllSettings['4000'].scanLines);
+  let doc = null;
+  try { doc = frame && frame.contentDocument; } catch (_) { return; }
+  const box = doc && doc.getElementById('container');
+  if (!box) return;                                   // not loaded yet — the load hook retries
+  if (box.classList.contains('scanlines') === want) return;
+  const cb = doc.getElementById('settings-scanLines-checkbox');
+  if (cb) { cb.checked = want; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+  if (box.classList.contains('scanlines') !== want) {
+    const t = doc.getElementById('ToggleScanlines'); if (t) t.click();
+  }
+}
+
 function wsApplyScanlineOverlay() {
   const wrapper = document.getElementById('video-wrapper');
   const frame = document.getElementById('video-frame');
   if (!wrapper || !frame) return;
   let ov = document.getElementById('ws-scanlines-overlay');
   const src = frame.getAttribute('src') || '';
+  // WeatherStar 4000 draws its own scan lines; switch them live inside its
+  // page (same site) instead of waiting for a restart
+  if (/\/weatherstar\//.test(src) && !src.includes('weatherstar3000')) wsSync4000ScanLines(frame);
   const on = src.includes('weatherstar3000') && wsAllSettings['3000'] && wsAllSettings['3000'].scanLines;
   if (!on) { if (ov) ov.style.display = 'none'; return; }
   if (!ov) {
@@ -2942,7 +2959,7 @@ function wsToggleScanLines() {
   const s = wsAllSettings[wsActiveVersion];
   s.scanLines = !s.scanLines;
   saveWSSettings();
-  wsApplyScanlineOverlay();   // WS3000: takes effect immediately (WS4000 applies on Restart)
+  wsApplyScanlineOverlay();   // takes effect immediately on both versions
   const btn = document.getElementById('ws-scanlines-btn');
   if (!btn) return;
   btn.style.background   = s.scanLines ? 'rgba(0,180,216,0.18)' : 'transparent';
@@ -3333,6 +3350,8 @@ function loadIframe(src, label, isLive) {
   // highlight; YouTube/Twitch/WeatherStar players can't (they'd trap the remote)
   if (/^\/radar\.html/.test(src)) newFrame.setAttribute('data-tv-frame', ''); else newFrame.removeAttribute('data-tv-frame');
   if (isWeatherStar && /[?&]wtvTown=haddonfield/.test(src)) newFrame.addEventListener('load', () => haddonfieldTakeover(newFrame));
+  // WeatherStar 4000 keeps its own remembered scan-line setting; make it match WeatherTV's once it has started
+  if (isWeatherStar && !isWS3000) newFrame.addEventListener('load', () => { setTimeout(() => wsSync4000ScanLines(newFrame), 1500); setTimeout(() => wsSync4000ScanLines(newFrame), 4000); });
   frame.parentNode.replaceChild(newFrame, frame);
   newFrame.src = src;
   // Anything that isn't WeatherStar replaces it, so WeatherStar must relaunch
