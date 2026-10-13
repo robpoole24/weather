@@ -156,4 +156,45 @@ function locate(text, countryHint) {
            why: `"${best.phrase}" → ${best.name}${best.region ? ', ' + best.region.replace(/\b\w/g, c => c.toUpperCase()) : ''} (${best.cc.toUpperCase()})` };
 }
 
-module.exports = { load, locate, _build: build, _norm: norm };
+// ── US ZIP codes → place + coordinates (GeoNames postal codes, CC BY 4.0) ──
+// ~41k ZIPs, downloaded once (~600 KB), cached in /tmp, held in memory, so
+// typing a ZIP never depends on an outside lookup service.
+const ZIP_SRC = 'https://download.geonames.org/export/zip/US.zip';
+let zipIndex = null, zipLoading = null;
+function buildZips(txt) {
+  zipIndex = new Map();
+  for (const line of String(txt).split('\n')) {
+    const f = line.split('\t');
+    if (f.length < 11 || !/^\d{5}$/.test(f[1])) continue;
+    const lat = +f[9], lon = +f[10];
+    if (!isFinite(lat) || !isFinite(lon)) continue;
+    zipIndex.set(f[1], { lat, lon, name: [f[2], f[3]].filter(Boolean).join(', ') });
+  }
+}
+async function loadZips(opts = {}) {
+  if (zipIndex) return true;
+  if (zipLoading) return zipLoading;
+  zipLoading = (async () => {
+    try {
+      if (opts.zipTxt) { buildZips(opts.zipTxt); return true; }
+      fs.mkdirSync(CACHE, { recursive: true });
+      const zf = path.join(CACHE, 'US-zips.zip');
+      if (!fs.existsSync(zf)) fs.writeFileSync(zf, await get(ZIP_SRC));
+      buildZips(unzipFirstTxt(fs.readFileSync(zf)).toString('utf8'));
+      console.log(`[Gazetteer] ${zipIndex.size.toLocaleString()} US ZIP codes loaded (GeoNames, CC BY 4.0)`);
+      return true;
+    } catch (e) {
+      console.warn('[Gazetteer] could not load US ZIP codes:', e.message);
+      return false;
+    } finally { zipLoading = null; }
+  })();
+  return zipLoading;
+}
+async function lookupUsZip(zip) {
+  const z = String(zip || '').trim().slice(0, 5);
+  if (!/^\d{5}$/.test(z)) return null;
+  if (!(await loadZips())) return null;
+  return zipIndex.get(z) || null;
+}
+
+module.exports = { load, locate, loadZips, lookupUsZip, _build: build, _buildZips: buildZips, _norm: norm };

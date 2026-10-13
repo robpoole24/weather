@@ -553,6 +553,7 @@
   .fp-hilo-hi { color:#fb923c; font-weight:700; }
   .fp-hilo-lo { color:#60a5fa; }
   .fp-summary { font-size:0.72rem; color:#94a3b8; line-height:1.5; flex:1; }
+  .fp-observed { font-size:0.62rem; color:#7a9bb5; margin-top:0.5rem; display:flex; align-items:center; flex-wrap:wrap; gap:2px; }
 
   /* ── Condition detail row (dew, pressure, visibility, humidity) ── */
   .fp-cond-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:0.4rem; margin-top:0.4rem; }
@@ -980,6 +981,7 @@
           <div class="fp-hilo"><span class="fp-hilo-hi" id="fp-today-hi">—</span><span class="fp-hilo-lo" id="fp-today-lo"> / —</span></div>
           <div class="fp-summary" id="fp-summary"></div>
         </div>
+        <div id="fp-observed" class="fp-observed" style="display:none;"></div>
       </div>
 
       <!-- Rain outlook: the next 24 hours, split into plain answers -->
@@ -6881,7 +6883,7 @@ function rainShortLabel(s) {
 // what is this, and how do I read it.
 const WTV_INFO = {
   // ── Forecast panel ──
-  'fc-now':        { t:'Right now', w:'Current conditions for this spot, updated about every 15 minutes from weather models and nearby stations.', r:'The big number is the air temperature. "Feels like" is what your body notices once wind and humidity are factored in.' },
+  'fc-now':        { t:'Right now', w:'In the US, "right now" is a live reading from the nearest National Weather Service weather station — usually an airport — which reports about once an hour. If that station hasn\'t reported recently, we show the NWS forecast for this hour instead, and the line under the card says which one you\'re seeing.', r:'The big number is the air temperature. "Feels like" adds the effect of wind (wind chill) or humidity (heat index). Your own backyard can be a few degrees different from the station.' },
   'fc-feels':      { t:'Feels like', w:'Temperature adjusted for wind (wind chill) and humidity (heat index).', r:'Dress for this number, not the thermometer. A big gap means wind or humidity is doing a lot of work today.' },
   'fc-humidity':   { t:'Humidity', w:'How much moisture is in the air compared with the most it could hold at this temperature.', r:'High humidity on a cool night is normal and means little. For "how muggy will it feel," check the dew point instead.' },
   'fc-dewpoint':   { t:'Dew point', w:'The temperature the air would have to cool to before dew or fog forms. It is the best measure of how humid it actually feels.', r:'Under 55°F feels dry and comfortable · 55–65°F a little sticky · over 65°F muggy · over 70°F oppressive and storm fuel.' },
@@ -7107,7 +7109,19 @@ function renderForecast(data) {
   const precip = c.precipitation;
 
   document.getElementById('fp-hero-icon').innerHTML = wmoSVG(code, isDay, 72);
-  document.getElementById('fp-condition').textContent = wmoLabel(code);
+  document.getElementById('fp-condition').textContent = c.description || wmoLabel(code);
+  // Where "right now" comes from: a live NWS station reading, or the forecast for this hour
+  const obsEl = document.getElementById('fp-observed');
+  if (obsEl) {
+    if (c.observed && c.observed.station) {
+      const t = new Date(c.observed.time);
+      const when = isNaN(t) ? '' : ' · ' + t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      obsEl.innerHTML = `Live reading: ${c.observed.station}${when}` + infoBtn('fc-now');
+    } else {
+      obsEl.innerHTML = (data.source === 'nws' ? 'NWS forecast for this hour' : 'Model estimate for this hour') + infoBtn('fc-now');
+    }
+    obsEl.style.display = 'block';
+  }
   document.getElementById('fp-temp').textContent = temp != null ? Math.round(temp) : '—';
   document.getElementById('fp-feels').textContent = feels != null ? Math.round(feels) + '°F' : '—';
 

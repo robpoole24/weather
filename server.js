@@ -2653,6 +2653,8 @@ function restoreGeographicNames(text) {
 //   - Zip→coords cached 30 days; NWS /points lookup cached 24h (the forecast
 //     office/grid for a location never changes), halving NWS calls per miss.
 //   - Daily upstream call counters at GET /api/admin/upstream-usage.
+const gazetteer = require('./gazetteer');
+setTimeout(() => gazetteer.loadZips(), 15 * 1000).unref?.();   // warm the US ZIP list after startup
 const _forecastCache = new Map();          // cellKey -> { data, ts }   (insertion order = LRU)
 const _forecastInflight = new Map();       // cellKey -> Promise
 const FORECAST_TTL = 15 * 60 * 1000;
@@ -2699,7 +2701,8 @@ function _isoDurHours(d) {
   if (!m) return 1;
   return Math.max(1, (+m[1] || 0) * 24 + (+m[2] || 0) + Math.round((+m[3] || 0) / 60));
 }
-function _gridHourly(g, hours = 168) {
+function _gridHourly(g, opts = {}) {
+  const hours = 168;
   if (!g || !g.probabilityOfPrecipitation) return null;
   const start = Math.floor(Date.now() / 3600000) * 3600000;
   const blank = () => new Array(hours).fill(null);
@@ -2723,6 +2726,16 @@ function _gridHourly(g, hours = 168) {
   each(g.quantitativePrecipitation,  (i, v, n) => { out.qpf[i]  = v == null ? null : round(toIn(v, g.quantitativePrecipitation.uom) / n, 1000); });
   each(g.snowfallAmount,             (i, v, n) => { out.snow[i] = v == null ? null : round(toIn(v, g.snowfallAmount.uom) / n, 100); });
   each(g.iceAccumulation,            (i, v, n) => { out.ice[i]  = v == null ? null : round(toIn(v, g.iceAccumulation.uom) / n, 1000); });
+  if (opts.full) {
+    const F = (v, uom) => v == null ? null : /degF/.test(uom || '') ? v : Math.round((v * 9 / 5 + 32) * 10) / 10;
+    const MPH = (v, uom) => v == null ? null : /m_s-1/.test(uom || '') ? Math.round(v * 2.23694 * 10) / 10 : /mi_h|mph/.test(uom || '') ? v : Math.round(v / 1.609344 * 10) / 10;
+    for (const [k, src, fn] of [['temp', 'temperature', F], ['app', 'apparentTemperature', F], ['dew', 'dewpoint', F],
+        ['rh', 'relativeHumidity', v => v], ['wind', 'windSpeed', MPH], ['gust', 'windGust', MPH],
+        ['wdir', 'windDirection', v => v], ['vis', 'visibility', v => v]]) {
+      out[k] = blank();
+      each(g[src], (i, v) => { out[k][i] = v == null ? null : fn(v, g[src].uom); });
+    }
+  }
   each(g.weather, (i, v) => {
     const list = (Array.isArray(v) ? v : []).filter(x => x && x.weather)
       .slice(0, 3).map(x => [x.coverage || null, x.weather, x.intensity || null]);
@@ -2731,7 +2744,300 @@ function _gridHourly(g, hours = 168) {
   return out;
 }
 
+function _gridClient(G) {
+  if (!G) return null;
+  const { start, hours, pop, qpf, snow, ice, thunder, sky, wx } = G;
+  return { start, hours, pop, qpf, snow, ice, thunder, sky, wx };
+}
+
+// ── Open-Meteo quota guard ──
+// Open-Meteo's free tier limits calls per IP address, and Railway shares its
+// outgoing IPs between many customers, so "our" quota can run out early.
+// When Open-Meteo says the limit is hit, stop calling it until the limit
+// resets (UTC midnight for the daily limit, one hour for the hourly one).
+let _omBlockedUntil = 0;
+function _omBlocked() { return Date.now() < _omBlockedUntil; }
+function _omNoteError(reason) {
+  const r = String(reason || '');
+  if (!/limit/i.test(r)) return;
+  const d = new Date();
+  _omBlockedUntil = /hour/i.test(r) && !/daily/i.test(r)
+    ? Date.now() + 60 * 60 * 1000
+    : Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 60 * 1000;
+  upstreamCount('openMeteoQuotaHit');
+  console.warn(`[Forecast] Open-Meteo limit reached — pausing Open-Meteo until ${new Date(_omBlockedUntil).toISOString()}: ${r}`);
+}
+async function _omGet(url, label) {
+  if (_omBlocked()) throw new Error('Open-Meteo paused (limit reached)');
+  upstreamCount(label);
+  const j = JSON.parse(await _withTimeout(fetchTextOverHttp(url), 15000, 'Open-Meteo'));
+  if (j.error) { _omNoteError(j.reason || j.error); throw new Error(`Open-Meteo: ${j.reason || j.error}`); }
+  return j;
+}
+
+// ── Sunrise / sunset (NOAA sunrise equation) — no API needed ──
+function _sunTimes(lat, lon, y, m, d) {
+  const rad = Math.PI / 180;
+  const jd = Date.UTC(y, m - 1, d, 0) / 86400000 + 2440587.5;   // 00:00 UTC of the date
+  const n = Math.ceil(jd - 2451545.0 + 0.0008);
+  const Js = n - lon / 360;
+  const M = (357.5291 + 0.98560028 * Js) % 360;
+  const C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+  const L = (M + C + 180 + 102.9372) % 360;
+  const Jt = 2451545.0 + Js + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * L * rad);
+  const dec = Math.asin(Math.sin(L * rad) * Math.sin(23.4397 * rad));
+  const cosW = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(dec)) / (Math.cos(lat * rad) * Math.cos(dec));
+  if (cosW > 1 || cosW < -1) return null;               // polar day/night
+  const w = Math.acos(cosW) / rad;
+  const toMs = j => (j - 2440587.5) * 86400000;
+  return { rise: toMs(Jt - w / 360), set: toMs(Jt + w / 360) };
+}
+// UTC offset (seconds) of an IANA zone at a moment — handles DST.
+function _tzOffsetSec(tz, ms) {
+  try {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms));
+    const g = t => +p.find(x => x.type === t).value;
+    return Math.round((Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second')) - Math.floor(ms / 1000) * 1000) / 1000);
+  } catch (_) { return 0; }
+}
+function _tzAbbr(tz, ms) {
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date(ms)).find(x => x.type === 'timeZoneName').value; }
+  catch (_) { return ''; }
+}
+
+// Weather code (WMO, same as Open-Meteo) from an NWS hour, so the page's
+// existing code paths keep working unchanged.
+const _WX_RANK = { hail: 10, thunderstorms: 9, freezing_rain: 8, freezing_drizzle: 7, sleet: 7, ice_pellets: 7,
+  snow: 6, snow_showers: 6, blowing_snow: 5, rain: 4, rain_showers: 3, drizzle: 2 };
+function _wmoFromNws(pop, wx, sky) {
+  let top = null;
+  (wx || []).forEach(x => { if (x && x[1] in _WX_RANK && (!top || _WX_RANK[x[1]] > _WX_RANK[top[1]])) top = x; });
+  if (top && (pop || 0) >= 30) {
+    const i = top[2];
+    const lvl = (a, b, c) => i === 'heavy' ? c : i === 'moderate' ? b : a;
+    switch (top[1]) {
+      case 'thunderstorms': case 'hail': return 95;
+      case 'rain_showers': return lvl(80, 81, 82);
+      case 'rain': return lvl(61, 63, 65);
+      case 'drizzle': return lvl(51, 53, 55);
+      case 'snow_showers': return i === 'heavy' ? 86 : 85;
+      case 'snow': case 'blowing_snow': return lvl(71, 73, 75);
+      case 'freezing_rain': case 'sleet': case 'ice_pellets': return i === 'heavy' ? 67 : 66;
+      case 'freezing_drizzle': return 56;
+    }
+  }
+  if ((wx || []).some(x => x && (x[1] === 'fog' || x[1] === 'freezing_fog'))) return 45;
+  const s = sky == null ? 50 : sky;
+  return s < 15 ? 0 : s < 40 ? 1 : s < 70 ? 2 : 3;
+}
+
+// Build a full forecast (same shape as Open-Meteo's) from the NWS grid.
+// `G` = _gridHourly(props, { full: true }), `props` = raw grid properties.
+function _forecastFromNws(G, props, tz, lat, lon) {
+  const H = G.hours, now = Date.now();
+  const offs = Array.from({ length: H }, (_, i) => _tzOffsetSec(tz, G.start + i * 3600000));
+  const key = i => new Date(G.start + i * 3600000 + offs[i] * 1000).toISOString().slice(0, 16);
+  const time = Array.from({ length: H }, (_, i) => key(i));
+  const localIso = ms => new Date(ms + _tzOffsetSec(tz, ms) * 1000).toISOString().slice(0, 16);
+  // Daylight by date
+  const sunCache = {};
+  const sunFor = date => sunCache[date] || (sunCache[date] = _sunTimes(lat, lon, +date.slice(0, 4), +date.slice(5, 7), +date.slice(8, 10)));
+  const isDay = Array.from({ length: H }, (_, i) => {
+    const ms = G.start + i * 3600000 + 1800000, s = sunFor(time[i].slice(0, 10));
+    return s ? (ms >= s.rise && ms < s.set ? 1 : 0) : 1;
+  });
+  const wcode = Array.from({ length: H }, (_, i) => _wmoFromNws(G.pop[i], G.wx[i], G.sky[i]));
+  const hourly = {
+    time, temperature_2m: G.temp, apparent_temperature: G.app, precipitation_probability: G.pop,
+    precipitation: G.qpf.map(v => v || 0), weather_code: wcode, cloud_cover: G.sky,
+    wind_speed_10m: G.wind, wind_direction_10m: G.wdir, wind_gusts_10m: G.gust, visibility: G.vis,
+    snowfall: G.snow.map(v => v || 0), is_day: isDay, relative_humidity_2m: G.rh, dew_point_2m: G.dew,
+  };
+  // Day highs/lows from the forecasters' own max/min periods
+  const maxBy = {}, minBy = {};
+  const C2F = v => v == null ? null : Math.round((v * 9 / 5 + 32) * 10) / 10;
+  const toF = (v, uom) => /degF/.test(uom || '') ? v : C2F(v);
+  for (const r of (props.maxTemperature?.values || [])) {
+    const [t0] = String(r.validTime).split('/'); const ms = Date.parse(t0);
+    if (!isNaN(ms) && r.value != null) maxBy[localIso(ms).slice(0, 10)] = toF(r.value, props.maxTemperature.uom);
+  }
+  for (const r of (props.minTemperature?.values || [])) {
+    const [t0, dur] = String(r.validTime).split('/'); const ms = Date.parse(t0);
+    if (!isNaN(ms) && r.value != null) minBy[localIso(ms + _isoDurHours(dur) * 3600000).slice(0, 10)] = toF(r.value, props.minTemperature.uom);
+  }
+  const dates = [...new Set(time.map(t => t.slice(0, 10)))].slice(0, 7);
+  const D = { time: dates, weather_code: [], temperature_2m_max: [], temperature_2m_min: [], apparent_temperature_max: [],
+    apparent_temperature_min: [], sunrise: [], sunset: [], daylight_duration: [], uv_index_max: [], precipitation_sum: [],
+    snowfall_sum: [], precipitation_hours: [], precipitation_probability_max: [], wind_speed_10m_max: [],
+    wind_gusts_10m_max: [], wind_direction_10m_dominant: [] };
+  const mx = a => { const v = a.filter(x => x != null); return v.length ? Math.max(...v) : null; };
+  const mn = a => { const v = a.filter(x => x != null); return v.length ? Math.min(...v) : null; };
+  for (const date of dates) {
+    const idx = time.map((t, i) => t.startsWith(date) ? i : -1).filter(i => i >= 0);
+    const pick = arr => idx.map(i => arr[i]);
+    const pops = pick(G.pop), peak = mx(pops) || 0;
+    const iPeak = idx[pops.indexOf(peak)];
+    const dayIdx = idx.filter(i => isDay[i]);
+    const skyAvg = (dayIdx.length ? dayIdx : idx).reduce((a, i) => a + (G.sky[i] || 0), 0) / Math.max(1, (dayIdx.length ? dayIdx : idx).length);
+    D.weather_code.push(peak >= 30 ? _wmoFromNws(peak, G.wx[iPeak], G.sky[iPeak]) : _wmoFromNws(0, [], skyAvg));
+    D.temperature_2m_max.push(maxBy[date] ?? mx(pick(G.temp)));
+    D.temperature_2m_min.push(minBy[date] ?? mn(pick(G.temp)));
+    D.apparent_temperature_max.push(mx(pick(G.app)));
+    D.apparent_temperature_min.push(mn(pick(G.app)));
+    const s = sunFor(date);
+    D.sunrise.push(s ? localIso(s.rise) : null); D.sunset.push(s ? localIso(s.set) : null);
+    D.daylight_duration.push(s ? Math.round((s.set - s.rise) / 1000) : null);
+    D.uv_index_max.push(null);
+    D.precipitation_sum.push(Math.round(pick(G.qpf).reduce((a, v) => a + (v || 0), 0) * 100) / 100);
+    D.snowfall_sum.push(Math.round(pick(G.snow).reduce((a, v) => a + (v || 0), 0) * 10) / 10);
+    D.precipitation_hours.push(pick(G.qpf).filter(v => v > 0).length);
+    D.precipitation_probability_max.push(peak);
+    const winds = pick(G.wind), wMax = mx(winds);
+    D.wind_speed_10m_max.push(wMax); D.wind_gusts_10m_max.push(mx(pick(G.gust)));
+    D.wind_direction_10m_dominant.push(wMax != null ? G.wdir[idx[winds.indexOf(wMax)]] : null);
+  }
+  const c = 0;
+  const current = {
+    time: time[c], temperature_2m: G.temp[c], apparent_temperature: G.app[c], relative_humidity_2m: G.rh[c],
+    dew_point_2m: G.dew[c], precipitation: G.qpf[c] || 0, weather_code: wcode[c], cloud_cover: G.sky[c],
+    wind_speed_10m: G.wind[c], wind_direction_10m: G.wdir[c], wind_gusts_10m: G.gust[c],
+    surface_pressure: null, visibility: G.vis[c], is_day: isDay[c],
+  };
+  return {
+    timezone: tz, timezone_abbreviation: _tzAbbr(tz, now), utc_offset_seconds: _tzOffsetSec(tz, now),
+    current, current_units: {}, hourly, hourly_units: { snowfall: 'inch', precipitation: 'inch' },
+    daily: D, daily_units: { snowfall_sum: 'inch', precipitation_sum: 'inch' },
+  };
+}
+
+// Small Open-Meteo request for the few things NWS doesn't forecast (UV,
+// pressure, storm energy). Six values ≈ one call, vs ~five for the full one.
+// Optional: if it fails or the quota is out, the forecast still works.
+async function _omExtras(gLat, gLon) {
+  return _omGet('https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}&timezone=auto&forecast_days=7`
+    + '&current=surface_pressure&hourly=cape,lifted_index,freezing_level_height,uv_index&daily=uv_index_max', 'openMeteoExtras');
+}
+function _mergeExtras(fc, ex) {
+  if (!ex) return fc;
+  const pos = new Map((ex.hourly?.time || []).map((t, i) => [t, i]));
+  for (const k of ['cape', 'lifted_index', 'freezing_level_height', 'uv_index']) {
+    const src = ex.hourly?.[k]; if (!src) continue;
+    fc.hourly[k] = fc.hourly.time.map(t => pos.has(t) ? src[pos.get(t)] : null);
+  }
+  const dpos = new Map((ex.daily?.time || []).map((t, i) => [t, i]));
+  if (ex.daily?.uv_index_max) fc.daily.uv_index_max = fc.daily.time.map(t => dpos.has(t) ? ex.daily.uv_index_max[dpos.get(t)] : null);
+  if (ex.current?.surface_pressure != null) fc.current.surface_pressure = ex.current.surface_pressure;
+  return fc;
+}
+
+// ── Live "right now" reading from the nearest NWS weather station ──
+// The station list for a spot never changes, so it is kept 24h; the latest
+// reading rides along with the 15-minute forecast cache.
+const _nwsStationCache = new Map();   // cellKey -> { stations:[{id,name}], ts }
+const _obsWords = [
+  [/thunder|t-storm|tstm/i, 95], [/freezing (rain|drizzle)|sleet|ice pellets/i, 66],
+  [/heavy snow/i, 75], [/light snow|flurr/i, 71], [/snow/i, 73],
+  [/heavy (rain|showers)/i, 65], [/light (rain|showers)/i, 61], [/drizzle/i, 51], [/rain|showers/i, 63],
+  [/fog|mist|haze|smoke/i, 45], [/overcast|^cloudy|mostly cloudy/i, 3], [/partly (cloudy|sunny)/i, 2],
+  [/mostly (clear|sunny)|fair/i, 1], [/clear|sunny/i, 0],
+];
+function _obsCode(text) { for (const [re, c] of _obsWords) if (re.test(text || '')) return c; return null; }
+async function _fetchObservation(cellKey, stationsUrl, headers) {
+  if (!stationsUrl) return null;
+  let sc = _nwsStationCache.get(cellKey);
+  if (!sc || Date.now() - sc.ts > NWS_POINTS_TTL) {
+    upstreamCount('nwsStations');
+    const j = JSON.parse(await _withTimeout(fetchTextOverHttp(stationsUrl, headers), 8000, 'NWS stations'));
+    sc = { stations: (j.features || []).slice(0, 3).map(f => ({ id: f.properties?.stationIdentifier, name: f.properties?.name })).filter(x => x.id), ts: Date.now() };
+    _lruSet(_nwsStationCache, cellKey, sc, 5000);
+  }
+  const num = (q) => (q && q.value != null && isFinite(q.value)) ? q.value : null;
+  const F = (q) => { const v = num(q); return v == null ? null : /degF/.test(q.unitCode || '') ? v : Math.round((v * 9 / 5 + 32) * 10) / 10; };
+  const MPH = (q) => { const v = num(q); return v == null ? null : /m_s-1/.test(q.unitCode || '') ? Math.round(v * 22.3694) / 10 : Math.round(v / 1.609344 * 10) / 10; };
+  for (const st of sc.stations.slice(0, 2)) {
+    try {
+      upstreamCount('nwsObservation');
+      const p = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/stations/${st.id}/observations/latest`, headers), 8000, 'NWS observation'))?.properties;
+      const t = F(p?.temperature);
+      if (!p || t == null || Date.now() - Date.parse(p.timestamp) > 2 * 3600 * 1000) continue;   // stale or empty → next station
+      const pa = num(p.barometricPressure) ?? num(p.seaLevelPressure);
+      return {
+        station: st.name || st.id, stationId: st.id, time: p.timestamp, text: p.textDescription || '',
+        temp: t, dew: F(p.dewpoint), rh: num(p.relativeHumidity) != null ? Math.round(num(p.relativeHumidity)) : null,
+        wind: MPH(p.windSpeed), wdir: num(p.windDirection), gust: MPH(p.windGust),
+        pressure: pa != null ? Math.round(pa / 10) / 10 : null, vis: num(p.visibility),
+        feels: F(p.heatIndex) ?? F(p.windChill) ?? t,
+      };
+    } catch (e) { /* try the next station */ }
+  }
+  return null;
+}
+function _mergeObservation(fc, ob) {
+  if (!ob) return fc;
+  const c = fc.current, set = (k, v) => { if (v != null) c[k] = v; };
+  set('temperature_2m', ob.temp); set('apparent_temperature', ob.feels); set('dew_point_2m', ob.dew);
+  set('relative_humidity_2m', ob.rh); set('wind_speed_10m', ob.wind); set('wind_direction_10m', ob.wdir);
+  set('surface_pressure', ob.pressure); set('visibility', ob.vis);
+  if (ob.wind != null) c.wind_gusts_10m = ob.gust;          // no gust reported = no gusts right now
+  const code = _obsCode(ob.text); if (code != null) c.weather_code = code;
+  if (ob.text) c.description = ob.text;
+  c.observed = { station: ob.station, id: ob.stationId, time: ob.time };
+  return fc;
+}
+
+// US: the whole forecast comes from the National Weather Service grid (free,
+// no daily cap, edited by local forecasters), plus one small optional
+// Open-Meteo request for UV/pressure/storm energy. Outside the US, or if the
+// NWS is down, the full Open-Meteo forecast is used.
 async function _fetchForecastCell(gLat, gLon, cellKey) {
+  const NWS_HEADERS = { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' };
+  let forecastUrl = null, gridUrl = null, tz = null, stationsUrl = null;
+  try {
+    const pc = _nwsPointsCache.get(cellKey);
+    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL && pc.stationsUrl !== undefined) {
+      ({ forecastUrl, gridUrl, tz, stationsUrl } = pc);
+    } else {
+      upstreamCount('nwsPoints');
+      const pts = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS), 8000, 'NWS points'));
+      forecastUrl = pts?.properties?.forecast || null;
+      gridUrl = pts?.properties?.forecastGridData || null;
+      tz = pts?.properties?.timeZone || null;
+      stationsUrl = pts?.properties?.observationStations || null;
+      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, tz, stationsUrl, ts: Date.now() }, 5000);
+    }
+  } catch (e) { /* outside the US — Open-Meteo below */ }
+
+  const narrativeP = forecastUrl
+    ? (upstreamCount('nwsForecast'), _withTimeout(fetchTextOverHttp(forecastUrl, NWS_HEADERS), 8000, 'NWS forecast')
+        .then(t => (JSON.parse(t)?.properties?.periods || []).slice(0, 14).map(p => ({
+          name:      restoreGeographicNames(p.name),
+          short:     restoreGeographicNames(p.shortForecast),
+          detail:    restoreGeographicNames(p.detailedForecast),
+          isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
+        })))
+        .catch(() => null))
+    : Promise.resolve(null);
+
+  if (gridUrl) {
+    const extrasP = _omExtras(gLat, gLon).catch(e => { console.warn('[Forecast] Open-Meteo extras skipped:', e.message); return null; });
+    const obsP = _fetchObservation(cellKey, stationsUrl, NWS_HEADERS).catch(e => { console.warn('[Forecast] Station reading skipped:', e.message); return null; });
+    try {
+      upstreamCount('nwsGrid');
+      const props = JSON.parse(await _withTimeout(fetchTextOverHttp(gridUrl, NWS_HEADERS), 12000, 'NWS grid'))?.properties;
+      const G = _gridHourly(props, { full: true });
+      if (G && G.temp && G.temp.some(v => v != null)) {
+        const fc = _mergeObservation(_mergeExtras(_forecastFromNws(G, props, tz || 'America/Chicago', gLat, gLon), await extrasP), await obsP);
+        upstreamCount('forecastFromNws');
+        return { ...fc, nws: await narrativeP, grid: _gridClient(G), source: 'nws', generated_at: Date.now() };
+      }
+      throw new Error('NWS grid had no temperatures');
+    } catch (e) {
+      console.warn('[Forecast] NWS grid unavailable, using Open-Meteo:', e.message);
+    }
+  }
+
   const omUrl = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}`
     + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
@@ -2751,55 +3057,15 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
     + '&forecast_days=7';
 
 
-  upstreamCount('openMeteoForecast');
-  const omText = await _withTimeout(fetchTextOverHttp(omUrl), 15000, 'Open-Meteo');
-  const om = JSON.parse(omText);
-  if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
-
-  let nwsNarrative = null, nwsGrid = null;
-  try {
-    const NWS_HEADERS = { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' };
-    let forecastUrl, gridUrl;
-    const pc = _nwsPointsCache.get(cellKey);
-    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL && pc.gridUrl !== undefined) {
-      forecastUrl = pc.forecastUrl; gridUrl = pc.gridUrl;
-    } else {
-      upstreamCount('nwsPoints');
-      const pts = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS), 8000, 'NWS points'));
-      forecastUrl = pts?.properties?.forecast || null;
-      gridUrl = pts?.properties?.forecastGridData || null;
-      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, ts: Date.now() }, 5000);
-    }
-    // Hour-by-hour precipitation detail from the forecaster-edited NWS grid:
-    // chance, timing, intensity, type, coverage, amounts, thunder.
-    // Runs alongside the narrative; a failure here never blocks the forecast.
-    const gridP = gridUrl
-      ? (upstreamCount('nwsGrid'), _withTimeout(fetchTextOverHttp(gridUrl, NWS_HEADERS), 9000, 'NWS grid')
-          .then(t => _gridHourly(JSON.parse(t)?.properties))
-          .catch(e => { console.warn('[Forecast] NWS grid unavailable:', e.message); return null; }))
-      : Promise.resolve(null);
-    if (forecastUrl) {
-      upstreamCount('nwsForecast');
-      const f = JSON.parse(await _withTimeout(fetchTextOverHttp(forecastUrl, NWS_HEADERS), 8000, 'NWS forecast'));
-      nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
-        name:      restoreGeographicNames(p.name),
-        short:     restoreGeographicNames(p.shortForecast),
-        detail:    restoreGeographicNames(p.detailedForecast),
-        isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
-      }));
-    }
-    nwsGrid = await gridP;
-  } catch(e) { /* NWS unavailable outside CONUS — silent fail */ }
-
-  // Location is attached per-request (below), so a shared cell never
-  // shows one user's place name to another user.
+  const om = await _omGet(omUrl, 'openMeteoForecast');
+  const nwsNarrative = await narrativeP;
   return {
     timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
     utc_offset_seconds: om.utc_offset_seconds,
     current: om.current, current_units: om.current_units,
     hourly: om.hourly, hourly_units: om.hourly_units,
     daily: om.daily, daily_units: om.daily_units,
-    nws: nwsNarrative, grid: nwsGrid, generated_at: Date.now(),
+    nws: nwsNarrative, grid: null, source: 'open-meteo', generated_at: Date.now(),
   };
 }
 
@@ -2815,19 +3081,40 @@ app.get('/api/forecast', async (req, res) => {
       upstreamCount('geocodeHit');
       lat = g.lat; lon = g.lon; locationName = locationName || g.name;
     } else {
-      try {
-        upstreamCount('openMeteoGeocode');
-        const geoText = await fetchTextOverHttp(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(req.query.zip.trim())}&count=1&language=en&format=json`
-        );
-        const geo = JSON.parse(geoText);
-        const r = geo.results?.[0];
-        if (!r) return res.status(404).json({ error: `No location found for "${req.query.zip}"` });
-        lat = r.latitude; lon = r.longitude;
-        const name = restoreGeographicNames([r.name, r.admin1].filter(Boolean).join(', '));
-        _lruSet(_geoCache, q, { lat, lon, name, ts: Date.now() }, 5000);
-        locationName = locationName ? restoreGeographicNames(locationName) : name;
-      } catch(e) { return res.status(502).json({ error: 'Geocoding unavailable', detail: e.message }); }
+      const raw = req.query.zip.trim();
+      let found = null;
+      // 1. US ZIP codes: answered on our own server (GeoNames list, no outside call)
+      if (/^\d{5}(-\d{4})?$/.test(raw)) {
+        try { const z = await gazetteer.lookupUsZip(raw); if (z) { found = { lat: z.lat, lon: z.lon, name: z.name }; upstreamCount('zipLocal'); } }
+        catch (_) {}
+      }
+      // 2. Anything else (city names, world places): Open-Meteo's lookup service
+      if (!found) {
+        try {
+          if (_omBlocked()) throw new Error('Open-Meteo paused (limit reached)');
+          upstreamCount('openMeteoGeocode');
+          const geo = JSON.parse(await _withTimeout(fetchTextOverHttp(
+            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(raw)}&count=1&language=en&format=json`
+          ), 8000, 'Open-Meteo geocoding'));
+          if (geo.error) { _omNoteError(geo.reason || geo.error); throw new Error(geo.reason || geo.error); }
+          const r = geo.results?.[0];
+          if (r) found = { lat: r.latitude, lon: r.longitude, name: [r.name, r.admin1].filter(Boolean).join(', ') };
+        } catch (e) { console.warn('[Forecast] Place lookup via Open-Meteo failed:', e.message); }
+      }
+      // 3. Backup: the offline world place list
+      if (!found) {
+        try {
+          if (await gazetteer.load()) {
+            const g = gazetteer.locate(raw, null);
+            if (g) found = { lat: g.lat, lon: g.lng, name: [g.name, g.region && g.region.replace(/\b\w/g, c => c.toUpperCase())].filter(Boolean).join(', ') };
+          }
+        } catch (_) {}
+      }
+      if (!found) return res.status(404).json({ error: `No location found for "${raw}"` });
+      lat = found.lat; lon = found.lon;
+      const name = restoreGeographicNames(found.name);
+      _lruSet(_geoCache, q, { lat, lon, name, ts: Date.now() }, 5000);
+      locationName = locationName ? restoreGeographicNames(locationName) : name;
     }
   }
 
@@ -2892,9 +3179,11 @@ async function _fetchModelCompare(gLat, gLon, ids) {
     + '&timezone=auto&temperature_unit=fahrenheit&precipitation_unit=inch&forecast_days=7'
     + '&hourly=temperature_2m,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum'
     + `&models=${ids.join(',')}`;
+  if (_omBlocked()) throw new Error('Model comparison is resting until the Open-Meteo daily limit resets');
   upstreamCount('openMeteoModels');
-  const j = JSON.parse(await fetchTextOverHttp(url));
+  const j = JSON.parse(await _withTimeout(fetchTextOverHttp(url), 15000, 'Open-Meteo models'));
   if (j.error) {
+    _omNoteError(j.reason || j.error);
     // If Open-Meteo rejects a model id (renamed/retired), drop it and retry once
     const bad = ids.filter(id => String(j.reason || '').includes(id));
     if (bad.length && bad.length < ids.length) return _fetchModelCompare(gLat, gLon, ids.filter(id => !bad.includes(id)));
