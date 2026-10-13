@@ -956,6 +956,10 @@
     position: relative;
   }
   #live-chat-panel.visible { display: flex; }
+  #live-chat-panel iframe, #mobile-chat-chat-frame { background: #0f0f0f; color-scheme: dark; }
+  #chat-tv-note { display: none; padding: 0.5rem 0.75rem; font-size: 0.85rem; line-height: 1.35; color: #ffd166;
+    background: rgba(255,209,102,0.08); border-bottom: 1px solid var(--border); }
+  .tv-mode #chat-tv-note { display: block; }
   #live-chat-panel iframe {
     flex: 1;
     border: none;
@@ -1339,6 +1343,7 @@
     </div>
     <div id="live-chat-panel">
       <button type="button" id="chat-close-btn" onclick="hideChatPanel()">✕ Hide Chat</button>
+      <div id="chat-tv-note">Chat is view-only on TV. To join in, open Weather TV on your phone or computer.</div>
       <iframe id="chat-frame" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media"></iframe>
     </div>
   </div>
@@ -3580,7 +3585,7 @@ function openLiveChat(videoId, channelName) {
   // Desktop: sidebar chat panel
   const chatFrame = document.getElementById('chat-frame');
   const domain = window.location.hostname;
-  chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain;
+  chatFrame.src = 'https://www.youtube.com/live_chat?v=' + videoId + '&embed_domain=' + domain + '&dark_theme=1';
   document.getElementById('live-chat-panel').classList.add('visible');
   const btn = document.getElementById('chat-toggle-btn');
   if (btn) btn.classList.add('chat-open');
@@ -3595,7 +3600,7 @@ function openMobileChatOverlay(videoId, channelName) {
 
   videoFrame.src = 'https://www.youtube.com/embed/' + videoId + '?autoplay=1&rel=0';
   chatFrame.src  = 'https://www.youtube.com/live_chat?v=' + videoId +
-                   '&embed_domain=' + window.location.hostname;
+                   '&embed_domain=' + window.location.hostname + '&dark_theme=1';
   if (titleEl) titleEl.textContent = channelName || 'Live Chat';
 
   setMobileChatLayout();
