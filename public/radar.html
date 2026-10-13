@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-10-12 build.1792103400 -->
+<!-- WeatherTV Radar — updated 2026-10-12 build.1792119700 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -522,7 +522,7 @@
   .fp-zip { flex:1; background:var(--surface2); border:1px solid var(--border); color:var(--text); font-family:'Barlow',sans-serif; font-size:0.82rem; padding:0.38rem 0.5rem; border-radius:4px; outline:none; }
   .fp-zip:focus { border-color:var(--accent); }
   .fp-go { background:var(--accent); color:#000; font-family:'Barlow Condensed',sans-serif; font-size:0.8rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; border:none; border-radius:4px; padding:0.38rem 0.75rem; cursor:pointer; }
-  .fp-loc-name { padding:0.05rem 0.75rem 0.3rem; font-size:0.68rem; color:var(--accent); font-family:'Barlow Condensed',sans-serif; letter-spacing:0.04em; min-height:1em; }
+  .fp-loc-name { padding:0.1rem 0.75rem 0.4rem; font-size:0.95rem; font-weight:700; color:var(--accent); font-family:'Barlow Condensed',sans-serif; letter-spacing:0.04em; min-height:1em; }
 
   #fp-content { flex:1; overflow-y:auto; padding:0 0.65rem 1.5rem; scrollbar-width:thin; }
   .fp-msg { font-size:0.78rem; color:var(--muted); padding:2rem 0.5rem; text-align:center; line-height:1.7; }
@@ -1652,6 +1652,12 @@ async function fetchUserZone(lat, lng) {
     if (typeof setDefaultUnitsForLocation === 'function') setDefaultUnitsForLocation(!!(p.forecastZone || p.gridId));
     if (p.forecastZone) userZone   = p.forecastZone.split('/').pop();
     if (p.county)       userCounty = p.county.split('/').pop();
+    // Name the town for the search box and the forecast ("Greendale, WI")
+    const rl = p.relativeLocation && p.relativeLocation.properties;
+    if (rl && rl.city && (!_place || _place.source === 'gps')) {
+      setPlace({ lat, lon: lng, label: rl.city + (rl.state ? ', ' + rl.state : ''), query: '', source: 'gps' }, { reloadForecast: !_forecastData });
+      if (_forecastData && _forecastPanelOpen) _showPlace();
+    }
     console.log(`[Alerts] Zone=${userZone} County=${userCounty}`);
     if (lastAlertsData) renderAlertLayers(); // re-check banner with zone info
   } catch(e) { console.warn('[Alerts] Zone lookup failed:', e.message); }
@@ -6128,6 +6134,49 @@ async function updateFeelsLike(lat, lng) {
   } catch(e) {}
 }
 
+// ── One place for the radar search box AND the forecast panel ───────────────
+// Typing a city or ZIP in either box moves the radar there, fills the other box
+// and names the forecast. It's remembered on this device (never sent anywhere)
+// until another place is searched or My Location is pressed.
+let _place = null;   // { lat, lon, label, query, source: 'search' | 'gps' }
+const PLACE_KEY = 'wtv-radar-place';
+function _savePlace() { try { localStorage.setItem(PLACE_KEY, JSON.stringify(_place)); } catch (_) {} }
+function _placeText() { return _place ? (_place.query || _place.label || '') : ''; }
+function _showPlace() {
+  const t = _placeText();
+  const zi = document.getElementById('zip-input'); if (zi && document.activeElement !== zi) zi.value = t;
+  const fi = document.getElementById('fp-zip-input'); if (fi && document.activeElement !== fi) fi.value = t;
+  const nm = document.getElementById('fp-location-name');
+  if (nm) nm.textContent = _place && _place.label ? 'Forecast for ' + _place.label : (_place ? 'Forecast for your location' : '');
+}
+// Puts the orange pin on the map for a searched place
+function _placePin(lat, lon, label) {
+  if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+  searchMarker = L.marker([lat, lon], {
+    icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7],
+      html: '<div style="width:14px;height:14px;border-radius:50%;background:#f4a261;border:2px solid #fff;box-shadow:0 0 8px rgba(244,162,97,0.8);margin-top:-7px;margin-left:-7px;"></div>' })
+  }).addTo(map);
+  if (label) searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${String(label).replace(/[<>&]/g, '')}</div>`);
+}
+// opts.reloadForecast: false when the forecast panel already loaded this place
+function setPlace(p, opts = {}) {
+  _place = { lat: p.lat, lon: p.lon, label: p.label || '', query: p.query || '', source: p.source || 'search' };
+  userLat = p.lat; userLng = p.lon;
+  _savePlace();
+  _showPlace();
+  if (opts.reloadForecast !== false) {
+    _forecastData = null;
+    if (_forecastPanelOpen) loadForecast({ lat: p.lat, lon: p.lon, name: _place.label });
+  }
+}
+// "City, ST" from an OpenStreetMap search result
+function _osmLabel(r) {
+  const a = r.address || {};
+  const town = a.city || a.town || a.village || a.hamlet || a.suburb || a.municipality || a.county || (r.name || '');
+  const st = (a['ISO3166-2-lvl4'] || '').replace(/^US-/, '') || a.state || '';
+  return [town, st].filter(Boolean).join(', ') || r.display_name.split(',').slice(0, 2).join(',').trim();
+}
+
 // ── Forecast Panel state ──────────────────────────────────────────────────────
 let _forecastPanelOpen = false;
 let _forecastAutoLoaded = false;
@@ -6245,9 +6294,10 @@ function toggleForecastPanel(force) {
   document.getElementById('forecast-panel').classList.toggle('open', open);
   document.getElementById('forecast-backdrop').classList.toggle('open', open);
   document.getElementById('forecast-fab').classList.toggle('active', open);
-  if (open && !_forecastData && typeof userLat === 'number') {
+  if (open) _showPlace();
+  if (open && !_forecastData && (_place || typeof userLat === 'number')) {
     _forecastAutoLoaded = true;
-    loadForecast({ lat: userLat, lon: userLng });
+    loadForecast(_place ? { lat: _place.lat, lon: _place.lon, name: _place.label } : { lat: userLat, lon: userLng });
   }
 }
 
@@ -6271,12 +6321,14 @@ function setMapTempOverlay(mode) {
 async function loadForecast(coords) {
   const zipInput = document.getElementById('fp-zip-input');
   let params;
+  let typed = null;
   if (coords) {
-    params = `lat=${coords.lat.toFixed(4)}&lon=${coords.lon.toFixed(4)}`;
+    params = `lat=${coords.lat.toFixed(4)}&lon=${coords.lon.toFixed(4)}` + (coords.name ? `&name=${encodeURIComponent(coords.name)}` : '');
   } else {
     const val = zipInput?.value?.trim();
     if (!val) { console.log('[Forecast] no zip value, returning early'); return; }
     _forecastAutoLoaded = false;
+    typed = val;
     params = `zip=${encodeURIComponent(val)}`;
   }
   console.log('[Forecast] loadForecast firing, params:', params);
@@ -6294,6 +6346,15 @@ async function loadForecast(coords) {
     console.log('[Forecast] current.temperature_2m:', data.current?.temperature_2m);
     _forecastData = data;
     if (loadingEl) loadingEl.style.display = 'none';
+    // Searched from the forecast box → the radar follows (map, pin, top box)
+    if (typed && data.location && isFinite(data.location.lat) && isFinite(data.location.lon)) {
+      const L0 = data.location;
+      setPlace({ lat: L0.lat, lon: L0.lon, label: L0.name || typed, query: typed, source: 'search' }, { reloadForecast: false });
+      _placePin(L0.lat, L0.lon, L0.name || typed);
+      map.setView([L0.lat, L0.lon], 10);
+      updateViewButtons('local');
+      if (lastAlertsData) renderAlertLayers();
+    }
     try {
       renderForecast(data);
     } catch(renderErr) {
@@ -6523,7 +6584,8 @@ function renderForecast(data) {
   const nws = data.nws           || [];
   const now = new Date();
 
-  document.getElementById('fp-location-name').textContent = data.location?.name || '';
+  if (data.location?.name) document.getElementById('fp-location-name').textContent = 'Forecast for ' + data.location.name;
+  else _showPlace();
 
   // ── Current conditions ──────────────────────────────────────────────────
   const code   = c.weather_code  ?? 0;
@@ -7296,6 +7358,8 @@ function goToMyLocation() {
   const onSuccess = (lat, lng, source) => {
     userLat = lat; userLng = lng;
     currentSite = null;
+    if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+    setPlace({ lat, lon: lng, label: '', query: '', source: 'gps' });   // town name filled in by fetchUserZone
     fetchUserZone(lat, lng); // get zone codes for reliable banner triggering
     map.flyTo([lat, lng], 8);
     startStormEta(); updateStormEta();
@@ -7363,7 +7427,7 @@ async function searchLocation(e) {
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=jsonv2&limit=8`,
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=jsonv2&addressdetails=1&limit=8`,
       { headers:{'Accept-Language':'en'} }
     );
     const all = await res.json();
@@ -7374,7 +7438,7 @@ async function searchLocation(e) {
     const data = Array.isArray(all) ? all.slice().sort((a, b) => rank(a) - rank(b) || (b.importance || 0) - (a.importance || 0)) : [];
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
-      const placeName = data[0].display_name.split(',').slice(0,2).join(',').trim();
+      const placeName = _osmLabel(data[0]);
       // Re-evaluate banner for new search location
       if (lastAlertsData) renderAlertLayers();
 
@@ -7400,7 +7464,7 @@ async function searchLocation(e) {
       // Zoom to zoom level 10 for city/zip — tight enough to see local area
       map.setView([userLat, userLng], 10);
       document.getElementById('alerts-status').textContent = placeName;
-      document.getElementById('zip-input').value = '';
+      setPlace({ lat: userLat, lon: userLng, label: placeName, query: q, source: 'search' });   // text stays; forecast follows
       updateViewButtons('local');
     } else {
       document.getElementById('alerts-status').textContent = 'Not found';
@@ -7661,12 +7725,27 @@ function startStormEta() {
   _stormEtaTimer = setInterval(() => { if (!document.hidden) updateStormEta(); }, 2 * 60 * 1000);
 }
 
+// ── Restore the last searched place (this device only) ───────────────────────
+try {
+  const saved = JSON.parse(localStorage.getItem(PLACE_KEY) || 'null');
+  if (saved && saved.source === 'search' && isFinite(saved.lat) && isFinite(saved.lon)) {
+    _place = saved; userLat = saved.lat; userLng = saved.lon;
+    _showPlace();
+    _placePin(saved.lat, saved.lon, saved.label);
+    if (!_sharedView) { map.setView([saved.lat, saved.lon], 10); updateViewButtons('local'); }
+  }
+} catch (_) {}
+
 // ── AUTO GEOLOCATE ON LOAD ───────────────────────────────────────────────────
 if (navigator.geolocation) {
   navigator.geolocation.getCurrentPosition(
     pos => {
-      userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-      if (!_sharedView) { map.setView([userLat, userLng], 8); updateViewButtons('local'); } // a shared link keeps its own view
+      const keepSearch = _place && _place.source === 'search';   // a searched place stays until changed
+      if (!keepSearch) {
+        userLat = pos.coords.latitude; userLng = pos.coords.longitude;
+        _place = { lat: userLat, lon: userLng, label: '', query: '', source: 'gps' };
+        if (!_sharedView) { map.setView([userLat, userLng], 8); updateViewButtons('local'); } // a shared link keeps its own view
+      }
       startStormEta();
       fetchUserZone(userLat, userLng);
       loadAlerts();
