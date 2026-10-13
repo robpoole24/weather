@@ -2687,6 +2687,13 @@ function _snap(v) { return Math.round(v / FORECAST_GRID) * FORECAST_GRID; }
 // to inches. Weather entries keep NWS's own words: coverage (slight_chance,
 // chance, likely, definite — or isolated, scattered, numerous, widespread),
 // type (rain_showers, thunderstorms, snow…) and intensity (light…heavy).
+// Every upstream call in the forecast path gets a hard time limit, so one slow
+// provider (the NWS grid endpoint is often slow) can never hang the request.
+function _withTimeout(p, ms, label) {
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${label || 'upstream'} timed out after ${ms}ms`)), ms); })])
+    .finally(() => clearTimeout(t));
+}
 function _isoDurHours(d) {
   const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(d || '');
   if (!m) return 1;
@@ -2745,7 +2752,7 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
 
 
   upstreamCount('openMeteoForecast');
-  const omText = await fetchTextOverHttp(omUrl);
+  const omText = await _withTimeout(fetchTextOverHttp(omUrl), 15000, 'Open-Meteo');
   const om = JSON.parse(omText);
   if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
 
@@ -2758,7 +2765,7 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
       forecastUrl = pc.forecastUrl; gridUrl = pc.gridUrl;
     } else {
       upstreamCount('nwsPoints');
-      const pts = JSON.parse(await fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS));
+      const pts = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS), 8000, 'NWS points'));
       forecastUrl = pts?.properties?.forecast || null;
       gridUrl = pts?.properties?.forecastGridData || null;
       _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, ts: Date.now() }, 5000);
@@ -2767,13 +2774,13 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
     // chance, timing, intensity, type, coverage, amounts, thunder.
     // Runs alongside the narrative; a failure here never blocks the forecast.
     const gridP = gridUrl
-      ? (upstreamCount('nwsGrid'), fetchTextOverHttp(gridUrl, NWS_HEADERS)
+      ? (upstreamCount('nwsGrid'), _withTimeout(fetchTextOverHttp(gridUrl, NWS_HEADERS), 9000, 'NWS grid')
           .then(t => _gridHourly(JSON.parse(t)?.properties))
           .catch(e => { console.warn('[Forecast] NWS grid unavailable:', e.message); return null; }))
       : Promise.resolve(null);
     if (forecastUrl) {
       upstreamCount('nwsForecast');
-      const f = JSON.parse(await fetchTextOverHttp(forecastUrl, NWS_HEADERS));
+      const f = JSON.parse(await _withTimeout(fetchTextOverHttp(forecastUrl, NWS_HEADERS), 8000, 'NWS forecast'));
       nwsNarrative = (f?.properties?.periods || []).slice(0, 14).map(p => ({
         name:      restoreGeographicNames(p.name),
         short:     restoreGeographicNames(p.shortForecast),

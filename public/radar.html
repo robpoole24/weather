@@ -6368,9 +6368,18 @@ async function loadForecast(coords) {
   if (loadingEl) loadingEl.style.display = 'block';
   try {
     console.log('[Forecast] fetching /api/forecast?'+params);
-    const resp = await fetch(`/api/forecast?${params}`);
+    let resp = await fetch(`/api/forecast?${params}`);
+    // A brief 502/503/504 usually means the server is restarting after a
+    // deploy or an upstream was slow — wait a moment and try once more.
+    if ([502, 503, 504].includes(resp.status)) {
+      await new Promise(r => setTimeout(r, 3000));
+      resp = await fetch(`/api/forecast?${params}`);
+    }
     console.log('[Forecast] response status:', resp.status);
-    if (!resp.ok) { const e = await resp.json().catch(()=>{}); throw new Error(e?.error || `HTTP ${resp.status}`); }
+    if (!resp.ok) {
+      const e = await resp.json().catch(()=>{});
+      throw new Error(e?.error || (resp.status >= 500 ? 'the forecast service is busy — please try again in a minute' : `HTTP ${resp.status}`));
+    }
     const data = await resp.json();
     console.log('[Forecast] data received, keys:', Object.keys(data).join(', '));
     console.log('[Forecast] current.temperature_2m:', data.current?.temperature_2m);
