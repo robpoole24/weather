@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1790906400
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792135000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -21,13 +21,16 @@
   const params = new URLSearchParams(location.search);
   const ua = navigator.userAgent || '';
   const isTV = params.get('tv') === '1'
-    || /Tizen|SMART-TV|SmartTV|SMARTTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey/i.test(ua)
+    || /Tizen|SMART-TV|SmartTV|SMARTTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey|Xbox/i.test(ua)
     || (window.parent !== window && (() => { try { return !!window.parent.WTV_TV && window.parent.WTV_TV.active; } catch (_) { return false; } })());
   const api = { active: isTV, onBack, onMedia, focusFirst };
   window.WTV_TV = api;
   if (!isTV) return;
 
   document.documentElement.classList.add('tv-mode');
+  // Xbox: have the controller send key presses (D-pad, A, B…) instead of
+  // driving a mouse cursor, so the same highlight navigation works.
+  if (/Xbox/i.test(ua)) { try { navigator.gamepadInputEmulation = 'keyboard'; } catch (_) {} }
   const inFrame = window.parent !== window;
 
   // Samsung: media / channel / color keys must be registered to be delivered
@@ -227,7 +230,9 @@
   function showMapHint() {
     let h = document.getElementById('tv-map-hint');
     if (!h) { h = document.createElement('div'); h.id = 'tv-map-hint'; document.body.appendChild(h); }
-    h.textContent = 'Arrows move the map · CH ▲/▼ zoom · BACK returns to the buttons';
+    h.textContent = /Xbox/i.test(ua)
+      ? 'D-pad or stick moves the map · RB/LB zoom · B returns to the buttons'
+      : 'Arrows move the map · CH ▲/▼ zoom · BACK returns to the buttons';
     h.style.display = 'block';
     clearTimeout(hintTimer); hintTimer = setTimeout(() => { h.style.display = 'none'; }, 5000);
   }
@@ -235,7 +240,9 @@
   function mapOf(el) { const m = window.WTV_TV_MAP; return el && el.classList.contains('leaflet-container') && m && m.getContainer && m.getContainer() === el ? m : null; }
 
   // ── Keys ──────────────────────────────────────────────────────────────────
-  const DIRS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
+  // Arrows, plus the Xbox controller's D-pad (203–206) and left stick (211–214)
+  const DIRS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down', 203: 'up', 204: 'down', 205: 'left', 206: 'right', 211: 'up', 212: 'down', 213: 'right', 214: 'left' };
+  const PAD_A = 195, PAD_B = 196, PAD_LB = 200, PAD_RB = 199, PAD_MENU = 207;
   const MEDIA = { 10252: 'playpause', 415: 'play', 19: 'pause', 413: 'stop', 417: 'next', 412: 'prev', 179: 'playpause' };
   document.addEventListener('keydown', (e) => {
     const k = e.keyCode, key = e.key;
@@ -243,7 +250,7 @@
     const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && !/^(button|checkbox|radio|range|submit|reset)$/i.test(document.activeElement.type));
 
     // Back: Samsung 10009, other TVs XF86Back/GoBack/BrowserBack; Escape for testing
-    if (k === 10009 || key === 'XF86Back' || key === 'GoBack' || key === 'BrowserBack' || (key === 'Escape' && !typing) || (key === 'Backspace' && !typing)) {
+    if (k === 10009 || k === PAD_B || key === 'GamepadB' || key === 'XF86Back' || key === 'GoBack' || key === 'BrowserBack' || (key === 'Escape' && !typing) || (key === 'Backspace' && !typing)) {
       e.preventDefault(); e.stopPropagation(); handleBack(false); return;
     }
     if (MEDIA[k] || /^Media/.test(key)) {
@@ -254,8 +261,8 @@
       return;
     }
     const m = mapOf(current);
-    if (m && (k === 427 || k === 428 || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-')) {
-      e.preventDefault(); (k === 427 || key === 'ChannelUp' || key === '+') ? m.zoomIn() : m.zoomOut(); return;
+    if (m && (k === 427 || k === 428 || k === PAD_RB || k === PAD_LB || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-')) {
+      e.preventDefault(); (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+') ? m.zoomIn() : m.zoomOut(); return;
     }
     if (DIRS[k]) {
       if (m) {                                                            // the map is highlighted: pan it
@@ -273,6 +280,12 @@
       if (tag === 'SELECT' && (k === 38 || k === 40) && document.activeElement.size > 1) return;
       e.preventDefault();
       move(DIRS[k]);
+      return;
+    }
+    if ((k === PAD_A || key === 'GamepadA') && current && !typing) {     // Xbox A = OK
+      e.preventDefault();
+      if (current.classList.contains('leaflet-container')) return;
+      current.click(); if (/^(INPUT|SELECT)$/.test(current.tagName)) current.focus();
       return;
     }
     if (k === 13 && current && !typing) {

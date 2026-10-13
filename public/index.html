@@ -4594,7 +4594,37 @@ if ('serviceWorker' in navigator) {
 // Called after the user has set a location (we need lat/lng to register the
 // token with the right NWS zone on the server). Also called on first page load
 // if the user has already granted permission previously.
+// ── Android app push ─────────────────────────────────────────────────────────
+// The Android app gets its own push token from Firebase and hands it to this
+// page by calling window.onFcmToken(token). We subscribe that token to the
+// same alert topics the website uses (area × alert type). Location stays on
+// the device; only topic names go to the server.
+window._nativeFcmToken = null;
+window.onFcmToken = function (token) {
+  if (!token || typeof token !== 'string') return;
+  window._nativeFcmToken = token;
+  _syncNativePush().catch(() => {});
+  // The radar runs in a frame — hand it the token too
+  document.querySelectorAll('iframe').forEach(f => {
+    try { if (f.contentWindow && typeof f.contentWindow.onFcmToken === 'function') f.contentWindow.onFcmToken(token); } catch (_) {}
+  });
+};
+async function _syncNativePush(lat, lng) {
+  const token = window._nativeFcmToken;
+  if (!token || !window.WTVAlerts) return;
+  lat = lat ?? wsAllSettings?.['4000']?.lat ?? wsAllSettings?.['3000']?.lat;
+  lng = lng ?? wsAllSettings?.['4000']?.lon ?? wsAllSettings?.['3000']?.lon;
+  if (lat && lng) await WTVAlerts.setLocation(Number(lat), Number(lng));
+  const r = await WTVAlerts.sync(token);       // saves the token; later location changes re-sync on their own
+  const loc = WTVAlerts.getLocation();
+  if (loc && !r.error) {
+    const notifEl = document.getElementById('notification-status');
+    if (notifEl) notifEl.textContent = `Notifications: ${loc.label}`;
+  }
+}
+
 async function initPushNotifications(lat, lng) {
+  if (window._nativeFcmToken) { await _syncNativePush(lat, lng); return; }   // inside the Android app
   if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
   // Load config from server if not already fetched
   if (!FIREBASE_CONFIG) {
@@ -5049,7 +5079,7 @@ init();
 </div>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1790913600"></script>
+<script src="/js/wtv-tv.js?v=1792135000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing

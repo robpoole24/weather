@@ -8053,6 +8053,9 @@ window.onFcmToken = function(token) {
   fcmToken = token;
   if (userLat && userLng) registerFcmToken();
 };
+// In the Android app the token arrives at the home page, which frames this
+// page — pick it up from there if it came first.
+try { if (window.parent !== window && window.parent._nativeFcmToken) window.onFcmToken(window.parent._nativeFcmToken); } catch (_) {}
 
 async function registerFcmToken() {
   if (!fcmToken || typeof userLat !== 'number' || typeof userLng !== 'number') return;
@@ -8614,7 +8617,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1790913600"></script>
+<script src="/js/wtv-tv.js?v=1792135000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
