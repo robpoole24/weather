@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-12 build.1792113600 -->
+<!-- WeatherTV App — updated 2026-10-12 build.1792116300 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -172,6 +172,39 @@
     #video-placeholder img { max-height: 70% !important; width: auto !important; }
   }
 
+  /* Phones and tablets (touch): the whole WeatherStar control panel slides
+     sideways as one strip with finger-sized controls. Before, only the screen
+     chips scrolled and everything else was squeezed to fit, so on a phone the
+     toggles were tiny and the music, scan-line and Save buttons were cut off. */
+  @media (pointer: coarse), (max-width: 1024px) {
+    #weatherstar-panel.active {
+      overflow-x: auto !important; overflow-y: hidden !important;
+      -webkit-overflow-scrolling: touch; touch-action: pan-x;
+      scrollbar-width: none; align-items: center !important;
+      padding-block: 0.4rem; gap: 0.15rem;
+    }
+    #weatherstar-panel::-webkit-scrollbar { display: none; }
+    #weatherstar-panel > * { flex-shrink: 0 !important; }
+    #weatherstar-panel #ws-displays { flex: 0 0 auto !important; overflow: visible !important; }
+    #weatherstar-panel .ws-chip-arrow { display: none !important; }
+    #weatherstar-panel button, #weatherstar-panel select { min-height: 38px; font-size: 0.8rem !important; padding-inline: 0.65rem !important; }
+    #weatherstar-panel #ws-displays button { border-radius: 19px !important; }
+    #weatherstar-panel input[type="text"] { min-height: 38px; font-size: 16px !important; width: 170px !important; }
+    #weatherstar-panel input[type="range"] { width: 90px !important; height: 24px !important; }
+    #weatherstar-panel .ws-hide-btn {
+      display: inline-flex; align-items: center; margin-left: 0.4rem;
+      font-family: 'Barlow Condensed', sans-serif; font-weight: 700; letter-spacing: 0.06em;
+      background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer;
+    }
+  }
+  /* Short screens (phone sideways): one compact row so the WeatherStar
+     picture gets the height */
+  @media (orientation: landscape) and (max-height: 500px) {
+    #weatherstar-panel .ws-hint { display: none; }
+    #weatherstar-panel .ws-ver, #weatherstar-panel .ws-loc { flex-direction: row !important; align-items: center; gap: 0.35rem !important; }
+    #weatherstar-panel button, #weatherstar-panel select, #weatherstar-panel input[type="text"] { min-height: 34px; }
+  }
+
   /* Tablet (768px+) — full experience, no restrictions */
   @media (min-width: 768px) {
     /* Cards always vertical on tablet/desktop */
@@ -304,6 +337,9 @@
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
 
   /* Panels */
+  /* WeatherStar controls: the Hide button only shows on phones */
+  .ws-hide-btn { display: none; }
+
   /* Card row: hidden until a group is opened, then exactly as tall as its
      cards / thumbnails (never stretched, never cut off). */
   #panels {
@@ -1730,7 +1766,9 @@ function syncOverlayState(panel) {
 }
 
 function showPanel(name, e) {
-  const isToggle = GROUPS.some(g => g.id === name) || TOGGLE_PANELS.includes(name);
+  const _wf = document.getElementById('video-frame');
+  const wsShowing = name === 'weatherstar' && /\/weatherstar/.test((_wf && _wf.getAttribute('src')) || '');
+  const isToggle = GROUPS.some(g => g.id === name) || TOGGLE_PANELS.includes(name) || wsShowing;
   if (isToggle && activePanel === name && document.body.classList.contains('panels-open')) {
     collapsePanels();
     return;
@@ -2532,7 +2570,8 @@ function wsDefaultSettings(ver) {
   return {
     version:   ver,
     displays,
-    viewMode:  ver === '3000' ? 'wide' : 'standard',
+    // 4000: 'auto' follows the screen's shape (16:9 sideways, 4:3 upright)
+    viewMode:  ver === '3000' ? 'wide' : 'auto',
     speed:     1.0,
     scanLines: false,
     location:  '',
@@ -2549,6 +2588,29 @@ function wsMergeDisplays(ver, saved) {
   return out;
 }
 
+// 'auto' = match the screen: wide (16:9) when the window is wider than tall —
+// phones held sideways, computers, TVs — and classic 4:3 when held upright.
+function wsEffectiveViewMode(s) {
+  if (s.viewMode === 'standard' || s.viewMode === 'wide') return s.viewMode;
+  return window.innerWidth > window.innerHeight * 1.1 ? 'wide' : 'standard';
+}
+// Turning the phone: if WeatherStar 4000 is on screen in Auto, restart it in
+// the shape that now fits (WeatherStar only takes its layout at start-up)
+let _wsLaunchedMode = null, _wsRotateTimer = null;
+function wsFollowScreenShape() {
+  clearTimeout(_wsRotateTimer);
+  _wsRotateTimer = setTimeout(() => {
+    if (wsActiveVersion !== '4000') return;
+    const s = wsAllSettings['4000'];
+    if (!s || (s.viewMode !== 'auto' && s.viewMode)) return;
+    const f = document.getElementById('video-frame');
+    if (!f || !/\/weatherstar\//.test(f.getAttribute('src') || '')) return;
+    if (wsEffectiveViewMode(s) !== _wsLaunchedMode) ws4kpLaunch();
+  }, 700);
+}
+window.addEventListener('resize', wsFollowScreenShape);
+window.addEventListener('orientationchange', wsFollowScreenShape);
+
 function loadWSSettings() {
   try {
     const raw = localStorage.getItem('weatherstar-v4');
@@ -2558,7 +2620,7 @@ function loadWSSettings() {
       // settings still get their defaults (a saved list used to replace them all)
       // Every screen starts ON. Only screens the viewer has switched themselves
       // (recorded in `toggled`) keep their saved setting.
-      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), displays: wsMergeDisplays('4000', s['4000']), location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
+      '4000': { ...wsDefaultSettings('4000'), ...(s['4000'] || {}), displays: wsMergeDisplays('4000', s['4000']), viewMode: (s['4000'] && s['4000'].viewModeChosen && s['4000'].viewMode) || 'auto', location: (s['4000']||{}).location||s.location||'', lat:(s['4000']||{}).lat||s.lat||null, lon:(s['4000']||{}).lon||s.lon||null },
       '3000': { ...wsDefaultSettings('3000'), ...(s['3000'] || {}), displays: wsMergeDisplays('3000', s['3000']), location: (s['3000']||{}).location||(s['4000']||{}).location||s.location||'', lat:(s['3000']||{}).lat||(s['4000']||{}).lat||s.lat||null, lon:(s['3000']||{}).lon||(s['4000']||{}).lon||s.lon||null },
     };
   } catch {
@@ -2589,8 +2651,9 @@ function buildWSUrl(ver) {
     p.set('customTextEnable', 'true');
     p.set('customText', "You're Watching WeatherTV");
     p.set('scanLines',        s.scanLines ? 'true' : 'false');
-    p.set('viewMode',         s.viewMode);
-    p.set('wide',             s.viewMode === 'wide' ? 'true' : 'false');
+    const vm = wsEffectiveViewMode(s);
+    p.set('viewMode',         vm);
+    p.set('wide',             vm === 'wide' ? 'true' : 'false');
     p.set('enhanced',         'false');
     p.set('portrait',         'false');
     p.set('mediaVolume',      '0.75');
@@ -2633,12 +2696,15 @@ function buildWSPanel() {
   panel.innerHTML = `
     <div class="divider"></div>
 
+    <!-- Hide the controls (phones) — WeatherStar keeps playing -->
+    <button type="button" class="ws-hide-btn" onclick="collapsePanels()" aria-label="Hide WeatherStar controls">▾ Hide</button>
+
     <!-- Version label + toggle -->
-    <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;padding:0 0.5rem;">
+    <div class="ws-ver" style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.2rem;padding:0 0.5rem;">
       <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.06em;color:${ver==='4000'?'var(--accent)':'var(--gold)'};">
         ${ver==='4000' ? '📺 WeatherStar 4000+' : '📺 WeatherStar 3000+'}
       </div>
-      <div style="font-size:0.62rem;color:var(--muted);line-height:1.3;">Set options,<br>then Save ▶</div>
+      <div class="ws-hint" style="font-size:0.62rem;color:var(--muted);line-height:1.3;">Set options,<br>then Save ▶</div>
       <button onclick="wsSwitchVersion()"
         style="${smBtn}background:transparent;border-color:var(--border);color:var(--muted);font-size:0.62rem;padding:0.15rem 0.35rem;">
         ⇄ ${ver==='4000' ? 'Use WS3000' : 'Use WS4000+'}
@@ -2648,7 +2714,7 @@ function buildWSPanel() {
     <div class="divider"></div>
 
     <!-- Location -->
-    <div style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.22rem;padding:0 0.4rem;">
+    <div class="ws-loc" style="flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:0.22rem;padding:0 0.4rem;">
       <input id="ws-location" type="text" placeholder="Zip Code or City Name"
         value="${s.location || ''}"
         style="font-size:0.72rem;padding:0.26rem 0.4rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);width:148px;outline:none;"
@@ -2687,8 +2753,9 @@ function buildWSPanel() {
       </select>
 
       <!-- View mode -->
-      <select id="ws-viewmode" title="Display size"
+      <select id="ws-viewmode" title="Display size" onchange="wsAllSettings[wsActiveVersion].viewModeChosen = this.value !== 'auto'"
         style="font-size:0.7rem;font-family:'Barlow Condensed',sans-serif;padding:0.22rem 0.3rem;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">
+        ${ver==='4000' ? `<option value="auto" ${(s.viewMode||'auto')==='auto'?'selected':''}>📐 Auto</option>` : ''}
         <option value="standard" ${s.viewMode==='standard'?'selected':''}>📐 4:3</option>
         <option value="wide"     ${s.viewMode==='wide'    ?'selected':''}>📐 16:9</option>
       </select>
@@ -3106,6 +3173,7 @@ function ws4kpLaunch() {
   }
 
   const url = buildWSUrl(wsActiveVersion);
+  _wsLaunchedMode = wsEffectiveViewMode(s);
   loadIframe(url, '', false);
   wsIsLaunched = true;
   const btn = document.getElementById('ws-launch-btn');
