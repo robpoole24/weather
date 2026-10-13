@@ -6646,10 +6646,11 @@ const WX_WET   = new Set(['rain','rain_showers','drizzle','thunderstorms']);
 const INT_RANK = { very_light:1, light:2, moderate:3, heavy:4 };
 const INT_WORD = { very_light:'very light', light:'light', moderate:'moderate', heavy:'heavy' };
 const AREAL_RANK = { isolated:1, few:1, patchy:1, scattered:2, areas:2, numerous:3, widespread:3, frequent:3 };
+// How much of the area the rain is expected to cover — stated as information.
 const AREAL_SAYS = {
-  isolated:'only a few spots get wet', few:'only a few spots get wet', patchy:'only patches of the area get wet',
-  scattered:'some spots get wet, others stay dry', areas:'parts of the area get wet',
-  numerous:'most of the area gets wet', widespread:'nearly everyone gets wet', frequent:'most of the area gets wet',
+  isolated:'a few spots in the area', few:'a few spots in the area', patchy:'patches of the area',
+  scattered:'part of the area', areas:'parts of the area',
+  numerous:'most of the area', widespread:'nearly all of the area', frequent:'most of the area',
 };
 
 function _cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
@@ -6771,7 +6772,7 @@ function rainSentence(s) {
   else out += ` ${howHard ? howHard + ', ' : 'Total '}${rainAmountText(s.qpf)}${howHard ? ' total' : ''}.`;
   if (s.ice >= 0.01) out += ` Ice up to ${s.ice.toFixed(2)}″ — slick roads possible.`;
   const sp = spreadOf(s);
-  if (sp) out += ` How widespread: ${sp.w} — ${AREAL_SAYS[sp.w]}.`;
+  if (sp) out += ` Coverage: ${sp.w}, expected over ${AREAL_SAYS[sp.w]}.`;
   if (s.thunder >= 15 && s.type !== 'thunderstorms') out += ` Thunder possible (${s.thunder}%).`;
   return out;
 }
@@ -6789,7 +6790,7 @@ function rainChipsHTML(s) {
     h += chip('rain-howhard', 'How hard', s.intensity ? _cap(INT_WORD[s.intensity]) : (s.type === 'thunderstorms' ? 'Storms' : '—'), rainTypeWord(s));
     h += chip('rain-howmuch', 'How much', s.snow >= 0.1 ? s.snow.toFixed(1) + '″ snow' : rainAmountText(s.qpf).replace('about ', '≈'), s.ice >= 0.01 ? s.ice.toFixed(2) + '″ ice' : '');
     const sp = spreadOf(s);
-    if (sp) h += chip('rain-spread', 'Spread', _cap(sp.w), AREAL_SAYS[sp.w] || '');
+    if (sp) h += chip('rain-spread', 'Coverage', _cap(sp.w), AREAL_SAYS[sp.w] || '');
   }
   if (s.thunder >= 10) h += chip('rain-thunder', 'Thunder', s.thunder + '%', s.thunder >= 50 ? 'storms likely' : s.thunder >= 25 ? 'possible' : 'low');
   return `<div class="rx-chips">${h}</div>`;
@@ -6894,12 +6895,12 @@ const WTV_INFO = {
   'fc-wind':       { t:'Wind', w:'Average wind speed and the direction it is blowing FROM. Gusts are brief stronger bursts.', r:'Under 10 mph light · 10–20 breezy · 20–30 windy · 40+ gusts can bring down branches. The compass needle points to where the wind comes from.' },
   'fc-sun':        { t:'Sunrise & sunset', w:'When the sun comes up and goes down at this spot today.', r:'Twilight light lasts roughly 30 minutes before sunrise and after sunset.' },
   'rain-outlook':  { t:'Rain outlook', w:'The next 24 hours of rain chances from your local National Weather Service office, written out in plain English.', r:'Read the sentence first. The boxes below break it apart: how likely, when, how long, how hard and how much. Tap any box to learn more.' },
-  'rain-chance':   { t:'Chance of rain', w:'The chance that any given spot in the area — including yours — gets at least 0.01″ of rain during that time.', r:'30% does NOT mean it rains 30% of the day, or that 30% of the town gets wet. It means: out of 10 days like this, about 3 bring rain to your spot. It says nothing about how hard or how long — that is what the other boxes are for. Under 30% · usually dry. 30–50% · plan a backup. 60%+ · expect it.' },
+  'rain-chance':   { t:'Chance of rain', w:'The chance that any given spot in the area, including yours, gets at least 0.01″ of rain during that time.', r:'A 30% chance means that on 10 days like this one, about 3 would bring rain to your spot. It doesn\'t describe how long or how hard it rains. The other boxes cover that. Under 30% · usually dry. 30–50% · worth a backup plan. 60%+ · rain is expected.' },
   'rain-when':     { t:'When', w:'The hours with the best chance of rain.', r:'Outside this window the chance drops off. "All day" means the chance stays up from morning to night. It does not have to rain the whole time.' },
   'rain-howlong':  { t:'How long', w:'About how many hours the rain chance stays near its peak.', r:'A shorter number means a quick passing shower or storm. "Not nonstop" means rain comes and goes in waves with dry breaks between.' },
   'rain-howhard':  { t:'How hard', w:'How heavy the rain or snow will be when it is falling — set by NWS forecasters.', r:'Light · a drizzle or sprinkle, an umbrella is optional. Moderate · steady rain, you will get wet. Heavy · downpours, puddles and poor visibility on roads. This is separate from the chance: a 90% chance can still mean light rain.' },
   'rain-howmuch':  { t:'How much', w:'The total amount of rain (or melted snow) expected to fall at your spot.', r:'Under 0.1″ · barely wets the ground. 0.25″ · a soaking for the lawn. 0.5–1″ · a lot of rain. Over 1″ · watch for flooding. Snow amounts are shown as inches of snow on the ground.' },
-  'rain-spread':   { t:'Spread (how widespread)', w:'How much of the area around you gets rain. When NWS forecasters write a coverage word, we show theirs. Otherwise we use the National Weather Service\'s own scale that matches each chance to a coverage word.', r:'Isolated (10–20%) · only a few spots get wet. Scattered (30–50%) · some places get rain, others stay dry. Numerous (60–70%) · most places get wet. Widespread (80%+) · nearly everyone gets wet.' },
+  'rain-spread':   { t:'Coverage', w:'How much of the surrounding area the rain is expected to cover. When NWS forecasters use a coverage word, we show theirs. Otherwise we use the National Weather Service\'s own scale that pairs each chance with a coverage word.', r:'Isolated (10–20%) · a few spots in the area. Scattered (30–50%) · part of the area. Numerous (60–70%) · most of the area. Widespread (80%+) · nearly all of the area.' },
   'rain-thunder':  { t:'Thunder', w:'The chance of thunder and lightning at your spot.', r:'Any thunder means lightning is close enough to strike you. "When thunder roars, go indoors" and wait 30 minutes after the last rumble.' },
   'rain-strip':    { t:'Hour-by-hour rain bar', w:'Each thin bar is one hour of the day.', r:'Taller bar · heavier rain. Brighter bar · higher chance. Blue · rain. White · snow. Purple · thunderstorms. Pink · freezing rain or sleet. Tap or hover a bar to see that hour.' },
   'rain-icons':    { t:'How to read our icons', w:'Our weather icons carry three clues at once.', r:'Cloud color: white · rain unlikely, gray · possible, dark gray · likely. Number of drops: 1 light, 2 moderate, 3 heavy. A lightning bolt means thunderstorms, snowflakes mean snow, pink drops mean freezing rain or sleet. The words under each icon spell it all out — how widespread, how heavy and what kind, like "Scattered light showers."' },
@@ -6935,7 +6936,7 @@ const WTV_INFO = {
   'canada':        { t:'Add Canada', w:'Environment Canada\'s radar, shown alongside US radar.', r:'Use it near the border to follow storms crossing in either direction.' },
   'ca-alerts':     { t:'Canadian Weather Alerts', w:'Warnings and watches from Environment Canada.', r:'Same idea as US alerts: a warning means act now.' },
   'alerts':        { t:'NWS Alerts', w:'Colored shapes for every active warning, watch and advisory.', r:'Red · tornado warning. Orange · severe thunderstorm warning. Green · flash flood warning. Yellow · tornado watch. Tap a shape to read it.' },
-  'banner':        { t:'Warning Banner', w:'A scrolling banner when your location is inside a warning.', r:'If you see it, read it. It means the warning covers where you are.' },
+  'banner':        { t:'Warning Banner', w:'A scrolling banner that appears when your location is inside an active warning.', r:'It shows only when a warning covers where you are, along with what the warning is for.' },
   'spc':           { t:'SPC Outlooks', w:'The Storm Prediction Center\'s severe weather risk for the next 3 days.', r:'From low to high: Thunderstorm, Marginal (1), Slight (2), Enhanced (3), Moderate (4), High (5). Enhanced and above — have a plan.' },
   'live-near':     { t:'Live Near Warnings', w:'Storm chasers who are streaming live inside or near an active warning.', r:'Tap a red marker to watch their live view of the storm.' },
   'lsr':           { t:'Storm Reports', w:'Confirmed reports of tornadoes, hail, wind damage and flooding from the last 3 hours.', r:'These are things that actually happened, reported by spotters and officials.' },
