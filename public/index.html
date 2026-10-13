@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-12 build.1792117200 -->
+<!-- WeatherTV App — updated 2026-10-12 build.1792118600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -338,6 +338,24 @@
   .nav-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 700; }
 
   /* Panels */
+  /* Player fullscreen */
+  body.player-max #control-bar { display: none !important; }
+  body.player-max #video-area { flex: 1 1 auto !important; max-height: none !important; }
+  #exit-max-btn {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px)); z-index: 9000;
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 1rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #fff;
+    background: rgba(10,14,20,0.82); border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 999px; padding: 0.7rem 1.6rem; min-height: 48px; cursor: pointer;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+  }
+  #exit-max-btn:hover, #exit-max-btn:focus-visible { border-color: var(--accent); color: var(--accent); }
+  #exit-max-btn { transition: opacity 0.5s ease; }
+  #exit-max-btn.faded { opacity: 0; pointer-events: none; }
+  #max-tap-catcher { position: fixed; inset: 0; z-index: 8999; background: transparent; }
+  @media (prefers-reduced-motion: reduce) { #exit-max-btn { transition: none; } }
+
   /* WeatherStar controls: the Hide button only shows on phones */
   .ws-hide-btn { display: none; }
 
@@ -1450,6 +1468,11 @@
   </div>
 
 </div>
+
+<button type="button" id="exit-max-btn" onclick="setPlayerFullscreen(false)" hidden>✕ Exit Fullscreen</button>
+<!-- Fullscreen: while the Exit pill is faded out, the first tap anywhere just
+     brings it back (taps inside a video frame never reach the page otherwise) -->
+<div id="max-tap-catcher" hidden onclick="showExitPill()" ontouchstart="showExitPill()"></div>
 
 <!-- ═══════════════════════════════════════════
      ABOUT MODAL
@@ -2766,7 +2789,6 @@ function buildWSPanel() {
       <button onclick="wsNav('NavigatePrevious')" title="Previous screen" aria-label="Previous screen" style="${smBtn}${accentOff}">⏮</button>
       <button id="ws-play-btn" onclick="wsNav('NavigatePlay')" title="Pause / play the screen rotation" aria-label="Pause or play" style="${smBtn}${accentOff}">⏯</button>
       <button onclick="wsNav('NavigateNext')" title="Next screen" aria-label="Next screen" style="${smBtn}${accentOff}">⏭</button>
-      <button onclick="wsDiagnose()" title="Which screens are ready, and why others are being skipped" aria-label="Screen status" style="${smBtn}${accentOff}">🩺</button>
 
       <!-- Scan lines -->
       <button id="ws-scanlines-btn" onclick="wsToggleScanLines()" title="Scan lines"
@@ -4915,17 +4937,56 @@ function createScrollArrows(scrollEl) {
 
 // ═══════════════════════════════════════════
 // FULLSCREEN
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(() => {});
-  } else {
-    document.exitFullscreen().catch(() => {});
-  }
-}
-document.addEventListener('fullscreenchange', () => {
+// Fullscreen = the player (video, radar or WeatherStar) takes the whole screen
+// and the button rows step aside, with a big Exit Fullscreen bar at the bottom.
+// This works everywhere, including phones and the Android app where the
+// browser's own fullscreen isn't available; where it is, it's used as well so
+// the browser's address bar hides too.
+function setPlayerFullscreen(on) {
+  document.body.classList.toggle('player-max', on);
   const btn = document.getElementById('fullscreen-btn');
-  if (!btn) return;
-  btn.textContent = document.fullscreenElement ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
+  if (btn) btn.textContent = on ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
+  const ex = document.getElementById('exit-max-btn');
+  if (ex) ex.hidden = !on;
+  if (on) showExitPill();
+  else {
+    clearTimeout(_exitPillTimer);
+    if (ex) ex.classList.remove('faded');
+    const tc = document.getElementById('max-tap-catcher'); if (tc) tc.hidden = true;
+  }
+  try {
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else if (!on && document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  } catch (_) {}
+  // let the player (chaser map, WeatherStar shape) re-measure
+  setTimeout(() => window.dispatchEvent(new Event('resize')), 60);
+}
+function toggleFullscreen() { setPlayerFullscreen(!document.body.classList.contains('player-max')); }
+// The Exit pill shows for a few seconds, then fades so it doesn't cover the
+// picture; a tap anywhere brings it back.
+let _exitPillTimer = null;
+function showExitPill() {
+  const ex = document.getElementById('exit-max-btn'), tc = document.getElementById('max-tap-catcher');
+  if (!ex || !document.body.classList.contains('player-max')) return;
+  ex.classList.remove('faded');
+  if (tc) tc.hidden = true;
+  clearTimeout(_exitPillTimer);
+  _exitPillTimer = setTimeout(() => {
+    if (!document.body.classList.contains('player-max')) return;
+    ex.classList.add('faded');
+    if (tc) tc.hidden = false;
+  }, 3500);
+}
+document.addEventListener('pointerdown', () => { if (document.body.classList.contains('player-max')) showExitPill(); }, true);
+// Leaving the browser's fullscreen (Esc key, back gesture) also restores the buttons
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && document.body.classList.contains('player-max')) setPlayerFullscreen(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('player-max')) setPlayerFullscreen(false);
 });
 
 // ABOUT MODAL
