@@ -622,7 +622,12 @@
   /* ── Rain, explained ── */
   .rx-outlook { margin-top:0.2rem; }
   .rx-now-row { display:flex; gap:0.6rem; align-items:center; }
+  .rx-now-iconcol { display:flex; flex-direction:column; align-items:center; width:74px; flex-shrink:0; gap:2px; }
   .rx-now-svg { width:46px; height:46px; flex-shrink:0; }
+  .rx-now-cap { font-size:0.6rem; color:#94a3b8; text-align:center; line-height:1.15; }
+  .fp-h-cap { font-size:0.54rem; color:#94a3b8; line-height:1.1; text-align:center; width:56px; min-height:2.2em;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .fp-day-desc { white-space:normal !important; line-height:1.25; }
   .rx-sentence { font-size:0.8rem; color:#e2e8f0; line-height:1.45; }
   .rx-chips { display:grid; grid-template-columns:repeat(3,1fr); gap:0.3rem; margin-top:0.5rem; }
   .rx-chip { all:unset; box-sizing:border-box; cursor:help; display:flex; flex-direction:column; gap:1px; min-width:0;
@@ -813,6 +818,9 @@
   #lnw-player .bar button { background:none; border:none; color:#e6edf3; font-size:1.1rem; cursor:pointer; }
   #lnw-player iframe { width:100%; aspect-ratio:16/9; border:0; display:block; }
 </style>
+<link rel="icon" href="/favicon.ico?v=2" sizes="any">
+<link rel="icon" href="/images/icon-192.png?v=2" type="image/png">
+<link rel="apple-touch-icon" href="/images/apple-touch-icon.png?v=2">
 </head>
 <body>
 
@@ -6420,10 +6428,12 @@ function wmoSVG(code, isDay, size) {
   }
 
   function moonShape(x, y, r) {
-    // Crescent: large disc minus offset disc
-    const ox = r * 0.45;
-    return `<circle cx="${x}" cy="${y}" r="${r}" fill="#94a3b8"/>` +
-           `<circle cx="${x+ox}" cy="${y-ox*0.3}" r="${r*0.75}" fill="#0f172a"/>`;
+    // Crescent: a disc with an offset bite cut out by a mask, so it looks
+    // right on any background (the old version painted a dark circle).
+    const ox = r * 0.5, id = 'wm' + (wmoSVG._n = (wmoSVG._n || 0) + 1);
+    return `<mask id="${id}"><rect x="0" y="0" width="40" height="40" fill="#fff"/>`
+         + `<circle cx="${(x+ox).toFixed(1)}" cy="${(y-ox*0.45).toFixed(1)}" r="${(r*0.8).toFixed(1)}" fill="#000"/></mask>`
+         + `<circle cx="${x}" cy="${y}" r="${r}" fill="#cbd5e1" mask="url(#${id})"/>`;
   }
 
   function cloudShape(x, y, w, col) {
@@ -6467,6 +6477,15 @@ function wmoSVG(code, isDay, size) {
   }
 
   if (code === '__shapes') return { sunShape, moonShape, cloudShape, rainDrops, snowDots, boltShape, fogLines };
+  // One icon style across the app: translate the weather code into the same
+  // summary the NWS icons use and draw it with rainIconSVG.
+  if (typeof rainIconSVG === 'function') {
+    const wx = _omWx(code)[0] || [];
+    const sky = code === 0 ? 5 : code === 1 ? 30 : code === 2 ? 55 : code === 3 ? 95 : 90;
+    const precip = code >= 51 && code !== 45 && code !== 48;
+    return rainIconSVG({ peak: precip ? 75 : 0, type: precip ? wx[1] : null, intensity: wx[2] || null,
+      fog: code === 45 || code === 48, mixed: false, areal: null, skyAvg: sky, thunder: code >= 95 ? 75 : 0 }, isDay, size);
+  }
 
   // ── Composition — WMO 4677 codes Open-Meteo actually returns ─────────────
   let body = '';
@@ -6679,6 +6698,28 @@ function rainSummary(hours) {
     thunder: Math.max(0, ...hs.map(h => h.thunder || 0)) };
 }
 
+// NWS pairs chance with coverage (NWSI 10-503): 10–20% isolated · 30–50% scattered
+// · 60–70% numerous · 80%+ widespread. When forecasters wrote a coverage word we
+// use theirs; otherwise we use this scale and say so.
+function spreadOf(s) {
+  if (!s || s.peak < 10) return null;
+  if (s.areal && AREAL_RANK[s.areal]) return { w: s.areal, derived: false };
+  const p = s.peak;
+  return { w: p < 30 ? 'isolated' : p < 60 ? 'scattered' : p < 80 ? 'numerous' : 'widespread', derived: true };
+}
+// Short caption shown under every icon.
+function iconCaption(s) {
+  if (!s) return '';
+  if (s.peak >= 30 && s.type) {
+    const sp = spreadOf(s);
+    let t = rainTypeWord(s); if (t === 'thunderstorms') t = 'storms';
+    const int = s.intensity && s.type !== 'thunderstorms' && s.type !== 'drizzle' ? INT_WORD[s.intensity] + ' ' : '';
+    return _cap(`${sp ? sp.w + ' ' : ''}${int}${t}`);
+  }
+  const sky = s.skyAvg != null ? s.skyAvg : 50;
+  const base = s.fog && sky >= 40 ? 'Fog' : sky < 15 ? (s.night ? 'Clear' : 'Sunny') : sky < 40 ? (s.night ? 'Mostly clear' : 'Mostly sunny') : sky < 70 ? 'Partly cloudy' : sky < 88 ? 'Mostly cloudy' : 'Cloudy';
+  return s.peak >= 15 ? base + ' · stray shower' : base;
+}
 function chanceWord(p) {
   if (p == null) return '';
   if (p < 10) return 'Very unlikely';
@@ -6718,7 +6759,8 @@ function rainSentence(s) {
   if (s.snow >= 0.1) out += ` ${howHard ? howHard + ' — ' : ''}snow about ${s.snow.toFixed(1)}″.`;
   else out += ` ${howHard ? howHard + ', ' : 'Total '}${rainAmountText(s.qpf)}${howHard ? ' total' : ''}.`;
   if (s.ice >= 0.01) out += ` Ice up to ${s.ice.toFixed(2)}″ — slick roads possible.`;
-  if (s.areal && AREAL_SAYS[s.areal]) out += ` ${_cap(s.areal)}: ${AREAL_SAYS[s.areal]}.`;
+  const sp = spreadOf(s);
+  if (sp) out += ` How widespread: ${sp.w} — ${AREAL_SAYS[sp.w]}.`;
   if (s.thunder >= 15 && s.type !== 'thunderstorms') out += ` Thunder possible (${s.thunder}%).`;
   return out;
 }
@@ -6735,7 +6777,8 @@ function rainChipsHTML(s) {
     h += chip('rain-howlong', 'How long', s.dur ? `~${s.dur} hr${s.dur === 1 ? '' : 's'}` : '—', s.onoff ? 'not nonstop' : '');
     h += chip('rain-howhard', 'How hard', s.intensity ? _cap(INT_WORD[s.intensity]) : (s.type === 'thunderstorms' ? 'Storms' : '—'), rainTypeWord(s));
     h += chip('rain-howmuch', 'How much', s.snow >= 0.1 ? s.snow.toFixed(1) + '″ snow' : rainAmountText(s.qpf).replace('about ', '≈'), s.ice >= 0.01 ? s.ice.toFixed(2) + '″ ice' : '');
-    if (s.areal) h += chip('rain-spread', 'Spread', _cap(s.areal), AREAL_SAYS[s.areal] || '');
+    const sp = spreadOf(s);
+    if (sp) h += chip('rain-spread', 'Spread', _cap(sp.w), AREAL_SAYS[sp.w] || '');
   }
   if (s.thunder >= 10) h += chip('rain-thunder', 'Thunder', s.thunder + '%', s.thunder >= 50 ? 'storms likely' : s.thunder >= 25 ? 'possible' : 'low');
   return `<div class="rx-chips">${h}</div>`;
@@ -6767,7 +6810,7 @@ function rainStripHTML(hours, label) {
 // Weather icon built from the same NWS hours as the % beside it.
 //   Cloud shade = how likely (white → dark gray)
 //   Number of drops = how hard (1 light · 2 moderate · 3 heavy)
-//   Dots in the corner = spread (1 isolated · 2 scattered · 3 widespread)
+//   Spread (isolated/scattered/widespread) is said in words, not drawn
 let _WXS = null;
 function rainIconSVG(s, isDay, size) {
   if (!s) return '';
@@ -6782,9 +6825,9 @@ function rainIconSVG(s, isDay, size) {
     const orb = (x, y, r) => isDay ? sunShape(x, y, r) : moonShape(x, y, r);
     if (s.fog && sky >= 40) body = _WXS.fogLines(13);
     else if (sky < 15) body = orb(20, 20, 9);
-    else if (sky < 40) body = orb(16, 16, 8) + cloudShape(27, 28, 18, 'rgba(226,232,240,0.85)');
-    else if (sky < 70) body = orb(13, 13, 7) + cloudShape(23, 24, 26, '#e2e8f0');
-    else if (sky < 88) body = orb(11, 11, 6) + cloudShape(22, 21, 32, '#aab6c6');
+    else if (sky < 40) body = orb(17, 17, 8.5) + cloudShape(26, 25, 18, 'rgba(226,232,240,0.92)');
+    else if (sky < 70) body = orb(15, 15, 8) + cloudShape(23, 22, 26, '#e2e8f0');
+    else if (sky < 88) body = orb(14, 13, 7) + cloudShape(22, 20, 32, '#aab6c6');
     else               body = cloudShape(20, 19, 36, '#8a96a8');
     if (p >= 15) body += `<g opacity="0.75">${rainDrops(32, 33, 1)}</g>`;
   } else {
@@ -6793,7 +6836,7 @@ function rainIconSVG(s, isDay, size) {
     const peek = isDay && sky < 75 && p < 60 && !storm;
     const col = storm ? '#3f4856' : shade;
     let cx = 20, dy = 26;
-    if (peek) { body = sunShape(11, 11, 6) + cloudShape(24, 20, 26, col); cx = 23; dy = 30; }
+    if (peek) { body = sunShape(14, 13, 7) + cloudShape(23, 19, 26, col); cx = 23; dy = 29; }
     else body = cloudShape(20, 12, 34, col);
     // Compact bolt that stays clear of the corner dots
     const bolt = (x, y) => `<polygon points="${x-2},${y-8} ${x+4},${y-8} ${x+1},${y-2} ${x+5},${y-2} ${x-3},${y+9} ${x},${y+1} ${x-4},${y+1}" fill="#facc15" stroke="#a16207" stroke-width="0.6" stroke-linejoin="round"/>`;
@@ -6804,10 +6847,6 @@ function rainIconSVG(s, isDay, size) {
     else if (s.type === 'drizzle')   body += Array.from({ length: n + 2 }, (_, i) => `<circle cx="${(cx - (n + 1) * 2.5 + i * 5).toFixed(1)}" cy="${dy + 2 + (i % 2) * 3}" r="1.7" fill="#7dd3fc"/>`).join('');
     else                             body += rainDrops(cx, dy, n);
   }
-  const ar = AREAL_RANK[s.areal] || 0;
-  if (ar && p >= 20) {
-    body += [0, 1, 2].map(i => `<circle cx="${(31 + i * 3.8).toFixed(1)}" cy="38.5" r="1.6" fill="${i < ar ? '#f1f5f9' : 'rgba(241,245,249,0.22)'}"/>`).join('');
-  }
   const sz = size || 40;
   return `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" style="overflow:visible;display:block">${body}</svg>`;
 }
@@ -6815,6 +6854,11 @@ function rainShortLabel(s) {
   if (!s) return '';
   if (s.peak >= 30 && s.type) {
     const t = rainTypeWord(s);
+    // Coverage in plain words: "Scattered storms likely", "Isolated showers possible"
+    if (s.areal && AREAL_RANK[s.areal]) {
+      const tt = t === 'thunderstorms' ? 'storms' : t;
+      return _cap(s.areal) + ' ' + tt + (s.peak < 60 ? ' possible' : s.peak < 80 ? ' likely' : '');
+    }
     if (s.peak < 60) return 'Chance of ' + t;
     return _cap(t) + (s.peak < 80 ? ' likely' : '');
   }
@@ -6844,10 +6888,10 @@ const WTV_INFO = {
   'rain-howlong':  { t:'How long', w:'About how many hours the rain chance stays near its peak.', r:'A shorter number means a quick passing shower or storm. "Not nonstop" means rain comes and goes in waves with dry breaks between.' },
   'rain-howhard':  { t:'How hard', w:'How heavy the rain or snow will be when it is falling — set by NWS forecasters.', r:'Light · a drizzle or sprinkle, an umbrella is optional. Moderate · steady rain, you will get wet. Heavy · downpours, puddles and poor visibility on roads. This is separate from the chance: a 90% chance can still mean light rain.' },
   'rain-howmuch':  { t:'How much', w:'The total amount of rain (or melted snow) expected to fall at your spot.', r:'Under 0.1″ · barely wets the ground. 0.25″ · a soaking for the lawn. 0.5–1″ · a lot of rain. Over 1″ · watch for flooding. Snow amounts are shown as inches of snow on the ground.' },
-  'rain-spread':   { t:'Spread (coverage)', w:'How much of the area gets rain, when forecasters describe it that way.', r:'Isolated · only a few spots get wet. Scattered · some places get rain, others stay dry. Numerous or widespread · most people get wet. This is common with summer pop-up storms.' },
+  'rain-spread':   { t:'Spread (how widespread)', w:'How much of the area around you gets rain. When NWS forecasters write a coverage word, we show theirs. Otherwise we use the National Weather Service\'s own scale that matches each chance to a coverage word.', r:'Isolated (10–20%) · only a few spots get wet. Scattered (30–50%) · some places get rain, others stay dry. Numerous (60–70%) · most places get wet. Widespread (80%+) · nearly everyone gets wet.' },
   'rain-thunder':  { t:'Thunder', w:'The chance of thunder and lightning at your spot.', r:'Any thunder means lightning is close enough to strike you. "When thunder roars, go indoors" and wait 30 minutes after the last rumble.' },
   'rain-strip':    { t:'Hour-by-hour rain bar', w:'Each thin bar is one hour of the day.', r:'Taller bar · heavier rain. Brighter bar · higher chance. Blue · rain. White · snow. Purple · thunderstorms. Pink · freezing rain or sleet. Tap or hover a bar to see that hour.' },
-  'rain-icons':    { t:'How to read our icons', w:'Our weather icons carry three clues at once.', r:'Cloud color: white · rain unlikely, gray · possible, dark gray · likely. Number of drops: 1 light, 2 moderate, 3 heavy. Small dots in the corner: how spread out — 1 isolated, 2 scattered, 3 widespread. A lightning bolt means thunderstorms.' },
+  'rain-icons':    { t:'How to read our icons', w:'Our weather icons carry three clues at once.', r:'Cloud color: white · rain unlikely, gray · possible, dark gray · likely. Number of drops: 1 light, 2 moderate, 3 heavy. A lightning bolt means thunderstorms, snowflakes mean snow, pink drops mean freezing rain or sleet. The words under each icon spell it all out — how widespread, how heavy and what kind, like "Scattered light showers."' },
   'fc-hourly':     { t:'Hourly forecast', w:'The next 24 hours, hour by hour.', r:'Each card shows the time, the sky, the temperature, "FL" (feels like), the chance of rain and the wind. Swipe sideways for more hours. The line chart below shows how the temperature rises and falls.' },
   'fc-daily':      { t:'7-day forecast', w:'The next week, one row per day. Tap a day for the full breakdown.', r:'Big number · the high. Smaller number · the overnight low. The colored bar shows that day\'s range against the whole week, so a long bar means a big swing. Blue % is the chance of rain.' },
   'fc-models':     { t:'Model comparison', w:'Weather forecasts start as computer models run by different countries. This shows what 8 of them predict for your spot.', r:'Lines bunched together · the models agree, so the forecast is more trustworthy. Lines spread apart · they disagree, so expect changes. Agreement usually drops after 3–4 days.' },
@@ -7138,7 +7182,9 @@ function renderForecast(data) {
 
     card.innerHTML =
       `<div class="fp-h-time">${timeLabel}</div>`
-    + `<div class="fp-h-svg">${gH ? rainIconSVG(rainSummary([gH]), hDay, 30) : wmoSVG(hCode, hDay, 30)}</div>`
+    + (() => { const hs = gH ? Object.assign(rainSummary([gH]), { night: !hDay }) : null;
+        return `<div class="fp-h-svg">${hs ? rainIconSVG(hs, hDay, 30) : wmoSVG(hCode, hDay, 30)}</div>`
+             + `<div class="fp-h-cap">${hs ? iconCaption(hs) : wmoLabel(hCode)}</div>`; })()
     + `<div class="fp-h-temp" style="color:${tempColor(hTemp)}">${hTemp != null ? Math.round(hTemp) + '°' : '—'}</div>`
     + (hFeels != null && hFeels !== hTemp ? `<div class="fp-h-feels">FL ${Math.round(hFeels)}°</div>` : '<div></div>')
     + precipHtml
@@ -7242,7 +7288,7 @@ function renderForecast(data) {
   const s24 = rainSummary(next24);
   if (s24) {
     document.getElementById('rx-now-icon').innerHTML =
-      `<div class="rx-now-svg">${rainIconSVG(s24, isDay, 46)}</div><div class="rx-sentence">${rainSentence(s24)}</div>`;
+      `<div class="rx-now-iconcol"><div class="rx-now-svg">${rainIconSVG(s24, isDay, 46)}</div><div class="rx-now-cap">${iconCaption(Object.assign({}, s24, { night: !isDay }))}</div></div><div class="rx-sentence">${rainSentence(s24)}</div>`;
     document.getElementById('rx-now-chips').innerHTML = rainChipsHTML(s24);
     document.getElementById('rx-now-strip').innerHTML = rainStripHTML(next24, 'Now');
     document.getElementById('rx-now-src').innerHTML = (GN
@@ -7285,7 +7331,7 @@ function renderForecast(data) {
     const nwsDay = nws.find(p => p.isDaytime && p.name.toLowerCase().includes(dayKey));
     const dayHours = G ? Array.from({ length: 24 }, (_, k) => G.get(`${dateStr}T${String(k).padStart(2, '0')}:00`) || null) : [];
     const rs = rainSummary(dayHours);
-    const useNws = !!(GN && rs);
+    const useNws = !!rs;   // icon, words and % from the same hours (NWS in the US, Open-Meteo elsewhere)
     const dayPrecip = rs ? rs.peak : precip;
 
     // Bar geometry
@@ -7300,7 +7346,7 @@ function renderForecast(data) {
       `<div class="fp-day-main">`
     + `  <div class="fp-day-name">${isToday ? 'Today' : dayNames[dt.getDay()]}</div>`
     + `  <div class="fp-day-svg">${useNws ? rainIconSVG(rs, true, 28) : wmoSVG(dCode, true, 28)}</div>`
-    + `  <div class="fp-day-desc">${useNws ? rainShortLabel(rs) : wmoLabel(dCode)}</div>`
+    + `  <div class="fp-day-desc">${useNws ? iconCaption(rs) : wmoLabel(dCode)}</div>`
     + `  <div class="fp-day-temps"><span class="fp-day-hi" style="color:${tempColor(hi)}">${hi!=null?Math.round(hi)+'°':'—'}</span><span class="fp-day-lo">/${lo!=null?Math.round(lo)+'°':'—'}</span></div>`
     + `</div>`
     + `<div class="fp-day-bar-row">`
