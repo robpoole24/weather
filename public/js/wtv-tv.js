@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792138000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792139000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -256,7 +256,9 @@
   let lastBackAt = 0;
   const MEDIA = { 10252: 'playpause', 415: 'play', 19: 'pause', 413: 'stop', 417: 'next', 412: 'prev', 179: 'playpause' };
   document.addEventListener('keydown', (e) => {
-    const k = e.keyCode, key = e.key;
+    // Apps that pass the remote/controller in as key names (Xbox) have no keyCode
+    const KEYNAME = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, GamepadA: PAD_A, GamepadB: PAD_B };
+    const key = e.key, k = e.keyCode || KEYNAME[key] || 0;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && !/^(button|checkbox|radio|range|submit|reset)$/i.test(document.activeElement.type));
 
