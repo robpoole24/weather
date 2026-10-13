@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-12 build.1792080000 -->
+<!-- WeatherTV App — updated 2026-10-12 build.1792113600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2472,7 +2472,10 @@ function makeStoreBtn(link, comingSoon, label, tooltip) {
 // ─── WeatherStar hosted instance URL ────────────────────────────────────────
 // Self-hosted at /weatherstar/ — same origin as WeatherTV, enables full music control.
 // Set to null to fall back to the live weatherstar.netbymatt.com (no music control).
-const WTV_WS4KP_URL = '/weatherstar';
+// Trailing slash matters: inside the Android app the redirect from /weatherstar
+// to /weatherstar/ is followed invisibly, so WeatherStar's relative file paths
+// (styles, scripts, images) resolved to the site root and all failed to load.
+const WTV_WS4KP_URL = '/weatherstar/';
 
 const WS_BASES = {
   '4000': WTV_WS4KP_URL || 'https://weatherstar.netbymatt.com/',
