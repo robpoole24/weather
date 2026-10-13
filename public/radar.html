@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-10-12 build.1792120300 -->
+<!-- WeatherTV Radar — updated 2026-10-12 build.1792130000 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -618,6 +618,34 @@
   .fp-day-detail > div { font-size:0.69rem; color:#64748b; line-height:1.7; }
   .fp-day-detail strong { color:#cbd5e1; }
 
+
+  /* ── Rain, explained ── */
+  .rx-outlook { margin-top:0.2rem; }
+  .rx-now-row { display:flex; gap:0.6rem; align-items:center; }
+  .rx-now-svg { width:46px; height:46px; flex-shrink:0; }
+  .rx-sentence { font-size:0.8rem; color:#e2e8f0; line-height:1.45; }
+  .rx-chips { display:grid; grid-template-columns:repeat(3,1fr); gap:0.3rem; margin-top:0.5rem; }
+  .rx-chip { all:unset; box-sizing:border-box; cursor:help; display:flex; flex-direction:column; gap:1px; min-width:0;
+    background:rgba(56,189,248,0.07); border:1px solid rgba(56,189,248,0.22); border-radius:8px; padding:0.35rem 0.45rem; }
+  .rx-chip:hover, .rx-chip:focus-visible { border-color:#38bdf8; background:rgba(56,189,248,0.14); }
+  .rx-chip-lbl { font:700 0.58rem 'Barlow Condensed',sans-serif; letter-spacing:0.08em; text-transform:uppercase; color:#7a9bb5; display:flex; align-items:center; gap:3px; }
+  .rx-i { display:inline-flex; align-items:center; justify-content:center; width:11px; height:11px; border-radius:50%;
+    border:1px solid rgba(56,189,248,0.6); color:#38bdf8; font:italic 700 8px/1 Georgia,serif; }
+  .rx-chip-val { font:700 0.92rem/1.15 'Barlow Condensed',sans-serif; color:#f1f5f9; overflow-wrap:anywhere; }
+  .rx-chip-sub { font-size:0.6rem; color:#94a3b8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rx-strip-wrap { margin-top:0.5rem; cursor:help; }
+  .rx-strip { display:flex; align-items:flex-end; gap:2px; height:26px; padding:2px; border-radius:6px; background:rgba(255,255,255,0.03); }
+  .rx-cell { flex:1; border-radius:2px 2px 0 0; background:#38bdf8; min-height:2px; }
+  .rx-cell.rx-snow { background:#e0f2fe; } .rx-cell.rx-storm { background:#c084fc; } .rx-cell.rx-ice { background:#f472b6; }
+  .rx-strip-ticks { display:flex; justify-content:space-between; font:600 0.56rem 'Barlow Condensed',sans-serif; color:#64748b; margin-top:2px; padding:0 2px; }
+  .rx-strip-ticks span { flex:1; } .rx-strip-ticks span:last-child { flex:0 0 auto; }
+  .rx-src { font-size:0.62rem; color:#64748b; margin-top:0.4rem; display:flex; flex-wrap:wrap; align-items:center; gap:0 4px; }
+  .rx-src-link { all:unset; cursor:pointer; color:#38bdf8; text-decoration:underline; text-underline-offset:2px; }
+  .rx-day-block { grid-column:1/-1; padding-bottom:0.45rem; margin-bottom:0.25rem; border-bottom:1px solid rgba(255,255,255,0.06); }
+  .rx-day-block .rx-sentence { font-size:0.74rem; }
+  .rx-nws-says { font-size:0.64rem; color:#7a9bb5; margin-top:0.35rem; font-style:italic; }
+  @media (max-width:380px) { .rx-chips { grid-template-columns:repeat(2,1fr); } }
+
   /* ── Storm indicators ── */
   .fp-storm-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.4rem; }
   .fp-storm-card { background:rgba(249,115,22,0.08); border:1px solid rgba(249,115,22,0.3); border-radius:10px; padding:0.6rem 0.65rem; }
@@ -944,6 +972,15 @@
           <div class="fp-hilo"><span class="fp-hilo-hi" id="fp-today-hi">—</span><span class="fp-hilo-lo" id="fp-today-lo"> / —</span></div>
           <div class="fp-summary" id="fp-summary"></div>
         </div>
+      </div>
+
+      <!-- Rain outlook: the next 24 hours, split into plain answers -->
+      <div id="fp-rain-outlook" class="rx-outlook" style="display:none;">
+        <div class="fp-section-label">Rain Outlook · Next 24 Hrs</div>
+        <div id="rx-now-icon" class="rx-now-row"></div>
+        <div id="rx-now-chips"></div>
+        <div id="rx-now-strip"></div>
+        <div id="rx-now-src" class="rx-src"></div>
       </div>
 
       <!-- Detail cards: 2-col grid -->
@@ -6429,6 +6466,8 @@ function wmoSVG(code, isDay, size) {
     ).join('');
   }
 
+  if (code === '__shapes') return { sunShape, moonShape, cloudShape, rainDrops, snowDots, boltShape, fogLines };
+
   // ── Composition — WMO 4677 codes Open-Meteo actually returns ─────────────
   let body = '';
 
@@ -6559,6 +6598,429 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+// ══ RAIN, EXPLAINED ════════════════════════════════════════════════════════
+// A single "30%" mixes several questions into one number. In the US we split
+// it back out using the NWS forecast grid (edited by local NWS forecasters):
+//   Chance · When · How long · How hard · How much · Spread · Thunder
+// The icon, the % and the words for a day all come from the same NWS hours,
+// so they can never contradict each other. Outside the US (no grid) the
+// panel falls back to Open-Meteo exactly as before.
+const WX_RANK = { hail:10, thunderstorms:9, freezing_rain:8, freezing_drizzle:7, sleet:7, ice_pellets:7,
+  snow:6, snow_showers:6, blowing_snow:5, rain:4, rain_showers:3, drizzle:2 };
+const WX_WORD = { thunderstorms:'thunderstorms', rain_showers:'showers', rain:'rain', drizzle:'drizzle',
+  snow:'snow', snow_showers:'snow showers', freezing_rain:'freezing rain', freezing_drizzle:'freezing drizzle',
+  sleet:'sleet', ice_pellets:'sleet', hail:'hail', blowing_snow:'blowing snow' };
+const WX_SNOWY = new Set(['snow','snow_showers','blowing_snow']);
+const WX_ICY   = new Set(['freezing_rain','freezing_drizzle','sleet','ice_pellets']);
+const WX_WET   = new Set(['rain','rain_showers','drizzle','thunderstorms']);
+const INT_RANK = { very_light:1, light:2, moderate:3, heavy:4 };
+const INT_WORD = { very_light:'very light', light:'light', moderate:'moderate', heavy:'heavy' };
+const AREAL_RANK = { isolated:1, few:1, patchy:1, scattered:2, areas:2, numerous:3, widespread:3, frequent:3 };
+const AREAL_SAYS = {
+  isolated:'only a few spots get wet', few:'only a few spots get wet', patchy:'only patches of the area get wet',
+  scattered:'some spots get wet, others stay dry', areas:'parts of the area get wet',
+  numerous:'most of the area gets wet', widespread:'nearly everyone gets wet', frequent:'most of the area gets wet',
+};
+
+function _cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+function _hr12(h) { h = ((h % 24) + 24) % 24; return (h % 12 || 12) + (h < 12 ? ' AM' : ' PM'); }
+function _hrShort(h) { h = ((h % 24) + 24) % 24; return (h % 12 || 12) + (h < 12 ? 'a' : 'p'); }
+
+// Index the NWS grid by the same local "YYYY-MM-DDTHH:00" strings Open-Meteo uses.
+function gridIndex(data) {
+  const g = data && data.grid;
+  if (!g || !Array.isArray(g.pop)) return null;
+  const off = (data.utc_offset_seconds || 0) * 1000;
+  const map = new Map();
+  for (let i = 0; i < g.hours; i++) {
+    if (g.pop[i] == null) continue;
+    const ms = g.start + i * 3600000;
+    const key = new Date(ms + off).toISOString().slice(0, 16);
+    map.set(key, { key, ms, hr: +key.slice(11, 13), day: key.slice(0, 10),
+      pop: g.pop[i], qpf: g.qpf[i], snow: g.snow[i], ice: g.ice[i],
+      thunder: g.thunder[i], sky: g.sky[i], wx: g.wx[i] || [] });
+  }
+  return map.size ? map : null;
+}
+
+// Boil a run of hours down to the answers people actually want.
+function rainSummary(hours) {
+  const hs = (hours || []).filter(h => h && h.pop != null);
+  if (!hs.length) return null;
+  const peak = Math.max(...hs.map(h => h.pop));
+  const thr = Math.max(20, Math.round(peak * 0.6));
+  const wet = hs.filter(h => h.pop >= thr);
+  const src = wet.length ? wet : hs;
+  let type = null, typeRank = -1, intensity = null, intRank = 0, areal = null, arealRank = 0;
+  const types = new Set();
+  src.forEach(h => (h.wx || []).forEach(([cov, w, int]) => {
+    if (!(w in WX_RANK)) return;
+    types.add(w);
+    if (WX_RANK[w] > typeRank) { typeRank = WX_RANK[w]; type = w; }
+    const ir = INT_RANK[int] || 0; if (ir > intRank) { intRank = ir; intensity = int; }
+    const ar = AREAL_RANK[cov] || 0; if (ar > arealRank) { arealRank = ar; areal = cov; }
+  }));
+  const sum = k => hs.reduce((a, h) => a + (h[k] || 0), 0);
+  const day = hs.filter(h => h.hr >= 7 && h.hr <= 19);
+  const skyHs = (day.length ? day : hs).filter(h => h.sky != null);
+  const skyAvg = skyHs.length ? skyHs.reduce((a, h) => a + h.sky, 0) / skyHs.length : null;
+  let win = null, dur = 0, onoff = false;
+  if (wet.length && peak >= 20) {
+    const first = wet[0], last = wet[wet.length - 1];
+    dur = wet.length;
+    const span = Math.round((last.ms - first.ms) / 3600000) + 1;
+    onoff = dur < span * 0.7;
+    win = { from: first.hr, to: last.hr + 1, all: dur >= hs.length - 1 };
+  }
+  const mixed = [...types].some(t => WX_SNOWY.has(t)) && [...types].some(t => WX_WET.has(t));
+  const fog = hs.some(h => (h.wx || []).some(x => x[1] === 'fog' || x[1] === 'freezing_fog'));
+  return { peak, type, mixed, fog, intensity, areal, skyAvg, win, dur, onoff, n: hs.length,
+    qpf: sum('qpf'), snow: sum('snow'), ice: sum('ice'),
+    thunder: Math.max(0, ...hs.map(h => h.thunder || 0)) };
+}
+
+function chanceWord(p) {
+  if (p == null) return '';
+  if (p < 10) return 'Very unlikely';
+  if (p < 30) return 'Unlikely';
+  if (p < 60) return 'Possible';
+  if (p < 80) return 'Likely';
+  return 'Near certain';
+}
+function rainTypeWord(s) {
+  if (!s) return 'rain';
+  if (s.mixed) return 'rain & snow';
+  return WX_WORD[s.type] || 'rain';
+}
+function rainAmountText(q) {
+  if (q == null || q < 0.005) return 'a trace or less';
+  if (q < 0.1) return 'under 0.1″';
+  return 'about ' + q.toFixed(2) + '″';
+}
+function rainWindowText(s) {
+  if (!s || !s.win) return '—';
+  if (s.win.all) return 'all day';
+  return _hr12(s.win.from) + '–' + _hr12(s.win.to);
+}
+// One plain-English sentence. `scope` is e.g. "today" or "tonight".
+function rainSentence(s) {
+  if (!s) return '';
+  const t = rainTypeWord(s);
+  if (s.peak < 10) return 'Dry. No rain expected.';
+  if (s.peak < 30) {
+    return `Mostly dry. A stray ${s.type === 'rain_showers' || !s.type ? 'pop-up shower' : t} can't be ruled out (${s.peak}% chance).`;
+  }
+  const verb = s.peak < 60 ? 'possible' : s.peak < 80 ? 'likely' : 'expected';
+  let out = `${_cap(t)} ${verb} (${s.peak}% chance)`;
+  if (s.win) out += s.win.all ? ', on and off all day' : `, mainly ${rainWindowText(s)}`;
+  out += '.';
+  const howHard = s.intensity ? _cap(INT_WORD[s.intensity]) : null;
+  if (s.snow >= 0.1) out += ` ${howHard ? howHard + ' — ' : ''}snow about ${s.snow.toFixed(1)}″.`;
+  else out += ` ${howHard ? howHard + ', ' : 'Total '}${rainAmountText(s.qpf)}${howHard ? ' total' : ''}.`;
+  if (s.ice >= 0.01) out += ` Ice up to ${s.ice.toFixed(2)}″ — slick roads possible.`;
+  if (s.areal && AREAL_SAYS[s.areal]) out += ` ${_cap(s.areal)}: ${AREAL_SAYS[s.areal]}.`;
+  if (s.thunder >= 15 && s.type !== 'thunderstorms') out += ` Thunder possible (${s.thunder}%).`;
+  return out;
+}
+
+// The labeled answers, each tappable for an explanation.
+function rainChipsHTML(s) {
+  if (!s) return '';
+  const chip = (key, label, val, sub) =>
+    `<button type="button" class="rx-chip" data-info="${key}"><span class="rx-chip-lbl">${label} <i class="rx-i">i</i></span>`
+    + `<span class="rx-chip-val">${val}</span>${sub ? `<span class="rx-chip-sub">${sub}</span>` : ''}</button>`;
+  let h = chip('rain-chance', 'Chance', s.peak + '%', chanceWord(s.peak));
+  if (s.peak >= 20) {
+    h += chip('rain-when', 'When', rainWindowText(s), s.onoff ? 'on and off' : '');
+    h += chip('rain-howlong', 'How long', s.dur ? `~${s.dur} hr${s.dur === 1 ? '' : 's'}` : '—', s.onoff ? 'not nonstop' : '');
+    h += chip('rain-howhard', 'How hard', s.intensity ? _cap(INT_WORD[s.intensity]) : (s.type === 'thunderstorms' ? 'Storms' : '—'), rainTypeWord(s));
+    h += chip('rain-howmuch', 'How much', s.snow >= 0.1 ? s.snow.toFixed(1) + '″ snow' : rainAmountText(s.qpf).replace('about ', '≈'), s.ice >= 0.01 ? s.ice.toFixed(2) + '″ ice' : '');
+    if (s.areal) h += chip('rain-spread', 'Spread', _cap(s.areal), AREAL_SAYS[s.areal] || '');
+  }
+  if (s.thunder >= 10) h += chip('rain-thunder', 'Thunder', s.thunder + '%', s.thunder >= 50 ? 'storms likely' : s.thunder >= 25 ? 'possible' : 'low');
+  return `<div class="rx-chips">${h}</div>`;
+}
+
+// 24 thin bars: height = how hard, color = what kind, brightness = chance.
+function rainStripHTML(hours, label) {
+  if (!hours || !hours.length) return '';
+  const cells = hours.map(h => {
+    if (!h || h.pop == null) return `<span class="rx-cell" style="height:20%;opacity:.15"></span>`;
+    let kind = 'rain', ir = 0;
+    (h.wx || []).forEach(([, w, int]) => {
+      if (w === 'thunderstorms' || w === 'hail') kind = 'storm';
+      else if (WX_ICY.has(w) && kind !== 'storm') kind = 'ice';
+      else if (WX_SNOWY.has(w) && kind === 'rain') kind = 'snow';
+      ir = Math.max(ir, INT_RANK[int] || 0);
+    });
+    const hgt = h.pop < 10 ? 18 : ir >= 4 ? 100 : ir === 3 ? 80 : 58;
+    const op = (0.18 + 0.82 * h.pop / 100).toFixed(2);
+    const wxTxt = (h.wx || []).map(([c, w, i]) => [INT_WORD[i], WX_WORD[w] || (w || '').replace(/_/g, ' ')].filter(Boolean).join(' ')).filter(Boolean).join(', ');
+    return `<span class="rx-cell rx-${kind}" style="height:${hgt}%;opacity:${op}" title="${_hr12(h.hr)}: ${h.pop}% chance${wxTxt ? ' · ' + wxTxt : ''}"></span>`;
+  }).join('');
+  const first = hours.find(Boolean);
+  const startHr = first ? first.hr : 0;
+  const ticks = [0, 6, 12, 18].map(k => `<span>${k === 0 && label ? label : _hrShort(startHr + k)}</span>`).join('');
+  return `<div class="rx-strip-wrap" data-info="rain-strip"><div class="rx-strip">${cells}</div><div class="rx-strip-ticks">${ticks}</div></div>`;
+}
+
+// Weather icon built from the same NWS hours as the % beside it.
+//   Cloud shade = how likely (white → dark gray)
+//   Number of drops = how hard (1 light · 2 moderate · 3 heavy)
+//   Dots in the corner = spread (1 isolated · 2 scattered · 3 widespread)
+let _WXS = null;
+function rainIconSVG(s, isDay, size) {
+  if (!s) return '';
+  _WXS = _WXS || wmoSVG('__shapes');
+  const { sunShape, moonShape, cloudShape, rainDrops, snowDots, boltShape } = _WXS;
+  const sky = s.skyAvg != null ? s.skyAvg : 60;
+  const p = s.peak;
+  // Four clearly different shades, light → dark as rain gets more likely
+  const shade = p < 30 ? '#e2e8f0' : p < 60 ? '#aab6c6' : p < 80 ? '#6f7f95' : '#4a5568';
+  let body = '';
+  if (p < 30 || !s.type) {
+    const orb = (x, y, r) => isDay ? sunShape(x, y, r) : moonShape(x, y, r);
+    if (s.fog && sky >= 40) body = _WXS.fogLines(13);
+    else if (sky < 15) body = orb(20, 20, 9);
+    else if (sky < 40) body = orb(16, 16, 8) + cloudShape(27, 28, 18, 'rgba(226,232,240,0.85)');
+    else if (sky < 70) body = orb(13, 13, 7) + cloudShape(23, 24, 26, '#e2e8f0');
+    else if (sky < 88) body = orb(11, 11, 6) + cloudShape(22, 21, 32, '#aab6c6');
+    else               body = cloudShape(20, 19, 36, '#8a96a8');
+    if (p >= 15) body += `<g opacity="0.75">${rainDrops(32, 33, 1)}</g>`;
+  } else {
+    const n = s.intensity === 'heavy' ? 3 : s.intensity === 'moderate' ? 2 : s.intensity ? 1 : 2;
+    const storm = s.type === 'thunderstorms' || s.type === 'hail';
+    const peek = isDay && sky < 75 && p < 60 && !storm;
+    const col = storm ? '#3f4856' : shade;
+    let cx = 20, dy = 26;
+    if (peek) { body = sunShape(11, 11, 6) + cloudShape(24, 20, 26, col); cx = 23; dy = 30; }
+    else body = cloudShape(20, 12, 34, col);
+    // Compact bolt that stays clear of the corner dots
+    const bolt = (x, y) => `<polygon points="${x-2},${y-8} ${x+4},${y-8} ${x+1},${y-2} ${x+5},${y-2} ${x-3},${y+9} ${x},${y+1} ${x-4},${y+1}" fill="#facc15" stroke="#a16207" stroke-width="0.6" stroke-linejoin="round"/>`;
+    if (storm)                       body += rainDrops(cx - 7, dy, Math.max(1, n - 1)) + bolt(cx + 3, dy + 3);
+    else if (s.mixed)                body += rainDrops(cx - 4, dy, 1) + snowDots(cx + 4, dy + 1, 1);
+    else if (WX_SNOWY.has(s.type))   body += snowDots(cx, dy + 1, n);
+    else if (WX_ICY.has(s.type))     body += rainDrops(cx, dy, n, '#f9a8d4');
+    else if (s.type === 'drizzle')   body += Array.from({ length: n + 2 }, (_, i) => `<circle cx="${(cx - (n + 1) * 2.5 + i * 5).toFixed(1)}" cy="${dy + 2 + (i % 2) * 3}" r="1.7" fill="#7dd3fc"/>`).join('');
+    else                             body += rainDrops(cx, dy, n);
+  }
+  const ar = AREAL_RANK[s.areal] || 0;
+  if (ar && p >= 20) {
+    body += [0, 1, 2].map(i => `<circle cx="${(31 + i * 3.8).toFixed(1)}" cy="38.5" r="1.6" fill="${i < ar ? '#f1f5f9' : 'rgba(241,245,249,0.22)'}"/>`).join('');
+  }
+  const sz = size || 40;
+  return `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" style="overflow:visible;display:block">${body}</svg>`;
+}
+function rainShortLabel(s) {
+  if (!s) return '';
+  if (s.peak >= 30 && s.type) {
+    const t = rainTypeWord(s);
+    if (s.peak < 60) return 'Chance of ' + t;
+    return _cap(t) + (s.peak < 80 ? ' likely' : '');
+  }
+  const sky = s.skyAvg != null ? s.skyAvg : 50;
+  const base = sky < 15 ? 'Sunny' : sky < 40 ? 'Mostly sunny' : sky < 70 ? 'Partly cloudy' : sky < 88 ? 'Mostly cloudy' : 'Cloudy';
+  return s.peak >= 15 ? base + ', stray shower' : base;
+}
+
+// ══ HELP POPUPS ("i" buttons) ═══════════════════════════════════════════════
+// Hover on a computer, tap on a phone. Every entry answers two questions:
+// what is this, and how do I read it.
+const WTV_INFO = {
+  // ── Forecast panel ──
+  'fc-now':        { t:'Right now', w:'Current conditions for this spot, updated about every 15 minutes from weather models and nearby stations.', r:'The big number is the air temperature. "Feels like" is what your body notices once wind and humidity are factored in.' },
+  'fc-feels':      { t:'Feels like', w:'Temperature adjusted for wind (wind chill) and humidity (heat index).', r:'Dress for this number, not the thermometer. A big gap means wind or humidity is doing a lot of work today.' },
+  'fc-humidity':   { t:'Humidity', w:'How much moisture is in the air compared with the most it could hold at this temperature.', r:'High humidity on a cool night is normal and means little. For "how muggy will it feel," check the dew point instead.' },
+  'fc-dewpoint':   { t:'Dew point', w:'The temperature the air would have to cool to before dew or fog forms. It is the best measure of how humid it actually feels.', r:'Under 55°F feels dry and comfortable · 55–65°F a little sticky · over 65°F muggy · over 70°F oppressive and storm fuel.' },
+  'fc-visibility': { t:'Visibility', w:'How far you can see clearly through fog, haze, rain or snow.', r:'10 mi is perfectly clear. Under 3 mi, slow down. Under 1/4 mi is dense fog — dangerous driving.' },
+  'fc-pressure':   { t:'Air pressure', w:'The weight of the air above you, in hectopascals (hPa). Around 1013 is average.', r:'Falling pressure usually means clouds and rain are coming. Rising pressure usually means clearing and calmer weather.' },
+  'fc-uv':         { t:'UV index', w:'Strength of the sun\'s sunburn-causing rays at midday.', r:'0–2 low · 3–5 moderate (sunscreen) · 6–7 high · 8–10 very high (burns in under 20 min) · 11+ extreme.' },
+  'fc-clouds':     { t:'Cloud cover', w:'How much of the sky is covered by clouds.', r:'0–10% clear/sunny · 10–40% mostly sunny · 40–70% partly cloudy · 70–90% mostly cloudy · 90%+ overcast. Clouds alone do not mean rain.' },
+  'fc-wind':       { t:'Wind', w:'Average wind speed and the direction it is blowing FROM. Gusts are brief stronger bursts.', r:'Under 10 mph light · 10–20 breezy · 20–30 windy · 40+ gusts can bring down branches. The compass needle points to where the wind comes from.' },
+  'fc-sun':        { t:'Sunrise & sunset', w:'When the sun comes up and goes down at this spot today.', r:'Twilight light lasts roughly 30 minutes before sunrise and after sunset.' },
+  'rain-outlook':  { t:'Rain outlook', w:'The next 24 hours of rain chances from your local National Weather Service office, written out in plain English.', r:'Read the sentence first. The boxes below break it apart: how likely, when, how long, how hard and how much. Tap any box to learn more.' },
+  'rain-chance':   { t:'Chance of rain', w:'The chance that any given spot in the area — including yours — gets at least 0.01″ of rain during that time.', r:'30% does NOT mean it rains 30% of the day, or that 30% of the town gets wet. It means: out of 10 days like this, about 3 bring rain to your spot. It says nothing about how hard or how long — that is what the other boxes are for. Under 30% · usually dry. 30–50% · plan a backup. 60%+ · expect it.' },
+  'rain-when':     { t:'When', w:'The hours with the best chance of rain.', r:'Outside this window the chance drops off. "All day" means the chance stays up from morning to night. It does not have to rain the whole time.' },
+  'rain-howlong':  { t:'How long', w:'About how many hours the rain chance stays near its peak.', r:'A shorter number means a quick passing shower or storm. "Not nonstop" means rain comes and goes in waves with dry breaks between.' },
+  'rain-howhard':  { t:'How hard', w:'How heavy the rain or snow will be when it is falling — set by NWS forecasters.', r:'Light · a drizzle or sprinkle, an umbrella is optional. Moderate · steady rain, you will get wet. Heavy · downpours, puddles and poor visibility on roads. This is separate from the chance: a 90% chance can still mean light rain.' },
+  'rain-howmuch':  { t:'How much', w:'The total amount of rain (or melted snow) expected to fall at your spot.', r:'Under 0.1″ · barely wets the ground. 0.25″ · a soaking for the lawn. 0.5–1″ · a lot of rain. Over 1″ · watch for flooding. Snow amounts are shown as inches of snow on the ground.' },
+  'rain-spread':   { t:'Spread (coverage)', w:'How much of the area gets rain, when forecasters describe it that way.', r:'Isolated · only a few spots get wet. Scattered · some places get rain, others stay dry. Numerous or widespread · most people get wet. This is common with summer pop-up storms.' },
+  'rain-thunder':  { t:'Thunder', w:'The chance of thunder and lightning at your spot.', r:'Any thunder means lightning is close enough to strike you. "When thunder roars, go indoors" and wait 30 minutes after the last rumble.' },
+  'rain-strip':    { t:'Hour-by-hour rain bar', w:'Each thin bar is one hour of the day.', r:'Taller bar · heavier rain. Brighter bar · higher chance. Blue · rain. White · snow. Purple · thunderstorms. Pink · freezing rain or sleet. Tap or hover a bar to see that hour.' },
+  'rain-icons':    { t:'How to read our icons', w:'Our weather icons carry three clues at once.', r:'Cloud color: white · rain unlikely, gray · possible, dark gray · likely. Number of drops: 1 light, 2 moderate, 3 heavy. Small dots in the corner: how spread out — 1 isolated, 2 scattered, 3 widespread. A lightning bolt means thunderstorms.' },
+  'fc-hourly':     { t:'Hourly forecast', w:'The next 24 hours, hour by hour.', r:'Each card shows the time, the sky, the temperature, "FL" (feels like), the chance of rain and the wind. Swipe sideways for more hours. The line chart below shows how the temperature rises and falls.' },
+  'fc-daily':      { t:'7-day forecast', w:'The next week, one row per day. Tap a day for the full breakdown.', r:'Big number · the high. Smaller number · the overnight low. The colored bar shows that day\'s range against the whole week, so a long bar means a big swing. Blue % is the chance of rain.' },
+  'fc-models':     { t:'Model comparison', w:'Weather forecasts start as computer models run by different countries. This shows what 8 of them predict for your spot.', r:'Lines bunched together · the models agree, so the forecast is more trustworthy. Lines spread apart · they disagree, so expect changes. Agreement usually drops after 3–4 days.' },
+  'fc-storm':      { t:'Storm indicators', w:'Ingredients meteorologists check before thunderstorms. Shown only when there is notable storm energy nearby.', r:'CAPE is fuel: over 1,000 means storms can grow tall, over 2,500 strong storms are possible. Lifted Index below 0 means unstable air; below −6 is very unstable. These are ingredients, not a guarantee — storms still need a trigger.' },
+  'fc-nws':        { t:'NWS detailed forecast', w:'The written forecast from your local National Weather Service office, made by human meteorologists.', r:'Tap a period to read the full text. This is the same forecast your local TV meteorologists start from.' },
+  'fc-tempmap':    { t:'Temperature map', w:'Colors the whole map by temperature so you can see warm and cold areas at a glance.', r:'Feels Like · wind chill and heat index right now. Hi/Lo · today\'s forecast high and low. Turn it Off to see the radar clearly.' },
+  // ── Layers panel: sections ──
+  'ly-radar':      { t:'Radar', w:'Radar sends out a beam and measures what bounces back from rain, snow and hail.', r:'Green · light rain. Yellow · moderate. Orange/red · heavy rain and storms. Purple/white · very heavy rain or hail. Use US Radar in the US, Worldwide elsewhere.' },
+  'ly-radartools': { t:'Radar tools', w:'Advanced views from a single radar station, used by storm spotters to look inside storms.', r:'Turning one on picks the radar site nearest you. These are expert tools — the basic radar is all most people need.' },
+  'ly-satellite':  { t:'Satellite & temperature', w:'Views from space and temperature maps instead of radar.', r:'Satellite shows clouds (even where there is no rain). Only one of these background views can be on at a time.' },
+  'ly-alerts':     { t:'Alerts & warnings', w:'Official watches, warnings and advisories from the National Weather Service.', r:'WATCH · conditions are right, be ready. WARNING · it is happening or about to, act now. ADVISORY · a nuisance, use caution. Tap any colored shape on the map to read the alert.' },
+  'ly-meso':       { t:'Mesoscale', w:'Short-term severe weather tools from the Storm Prediction Center.', r:'Used in the hours before a watch is issued. If a mesoscale discussion covers you, keep an eye on the sky and your alerts.' },
+  'ly-chaser':     { t:'Storm chaser overlays', w:'The tools storm chasers watch: severe outlooks, storm reports, lightning and live chaser positions.', r:'Turn on one or two at a time — stacking everything gets busy fast.' },
+  'ly-webcams':    { t:'Webcams', w:'Live and recently updated public cameras.', r:'Turn on Location Cams, then pick a state. Each color is a different camera source. Tap a camera on the map to see it.' },
+  'ly-surface':    { t:'Surface analysis', w:'The big-picture weather map drawn by forecasters: fronts, highs and lows.', r:'Blue line with triangles · cold front (cooler, often storms). Red line with half-circles · warm front. H · high pressure (usually fair). L · low pressure (usually stormy).' },
+  'ly-precip':     { t:'Precipitation', w:'How much rain has already fallen, and river levels.', r:'These show what HAS fallen, not what will. Useful for flood risk after heavy rain.' },
+  'ly-tropical':   { t:'Tropical', w:'Hurricanes, tropical storms and areas being watched, from the National Hurricane Center.', r:'The cone shows where the storm\'s center may go — impacts reach well outside the cone.' },
+  'ly-fire':       { t:'Fire & air quality', w:'Wildfire boundaries, smoke from satellites and air quality readings.', r:'Smoke can make air unhealthy hundreds of miles from a fire. Check the Air Quality Index before outdoor exercise.' },
+  'ly-models':     { t:'Models (forecast mode)', w:'Shows a computer model\'s future radar instead of the real radar.', r:'Future radar is a simulation, not a promise. Storm timing and placement can be off by hours and many miles. Use it for the big picture.' },
+  // ── Layers panel: individual layers ──
+  'reflectivity':  { t:'US Radar', w:'NOAA\'s national radar mosaic — the most detailed view in the United States.', r:'Green light, yellow moderate, red heavy, purple/white very heavy or hail. Press play to see which way storms are moving.' },
+  'global-radar':  { t:'Worldwide Radar', w:'Radar from 150+ countries.', r:'Use this outside the US. Less detailed than US Radar, and some countries have gaps.' },
+  'goes':          { t:'GOES Satellite', w:'Infrared satellite imagery of clouds.', r:'Brighter and colder colors mean taller clouds — often strong storms. Clouds on satellite are not always making rain; check radar for that.' },
+  'apptemp':       { t:'Feels Like Temperatures', w:'Colors the map by feels-like temperature.', r:'Blues and purples · dangerous cold. Oranges and reds · dangerous heat.' },
+  'echotops':      { t:'Echo Tops', w:'How high storm clouds reach, from one radar site.', r:'Higher tops mean stronger updrafts. Tops above 40,000 ft often go with severe storms and hail.' },
+  'velocity':      { t:'Base Velocity', w:'Wind moving toward or away from the radar.', r:'Green · toward the radar. Red · away. Bright green right next to bright red can mean rotation — a possible tornado.' },
+  'srv':           { t:'Storm-Relative Velocity', w:'Velocity with the storm\'s own movement removed, so spin is easier to see.', r:'Look for a tight pair of bright green and bright red side by side. That is the rotation chasers watch for.' },
+  'cc':            { t:'Correlation Coefficient', w:'Measures whether everything in the beam is the same shape (like raindrops) or a jumble.', r:'Inside a tornado warning, a small blue/low spot at the hook of a storm can mean debris in the air — a tornado on the ground.' },
+  'raw-radar':     { t:'Birds & Bugs (Raw Radar)', w:'Unfiltered radar that keeps the echoes normal radar removes.', r:'Expanding rings at sunset are birds or bats taking flight. Fuzzy blobs on calm nights are often insects or migrating birds.' },
+  'canada':        { t:'Add Canada', w:'Environment Canada\'s radar, shown alongside US radar.', r:'Use it near the border to follow storms crossing in either direction.' },
+  'ca-alerts':     { t:'Canadian Weather Alerts', w:'Warnings and watches from Environment Canada.', r:'Same idea as US alerts: a warning means act now.' },
+  'alerts':        { t:'NWS Alerts', w:'Colored shapes for every active warning, watch and advisory.', r:'Red · tornado warning. Orange · severe thunderstorm warning. Green · flash flood warning. Yellow · tornado watch. Tap a shape to read it.' },
+  'banner':        { t:'Warning Banner', w:'A scrolling banner when your location is inside a warning.', r:'If you see it, read it. It means the warning covers where you are.' },
+  'spc':           { t:'SPC Outlooks', w:'The Storm Prediction Center\'s severe weather risk for the next 3 days.', r:'From low to high: Thunderstorm, Marginal (1), Slight (2), Enhanced (3), Moderate (4), High (5). Enhanced and above — have a plan.' },
+  'live-near':     { t:'Live Near Warnings', w:'Storm chasers who are streaming live inside or near an active warning.', r:'Tap a red marker to watch their live view of the storm.' },
+  'lsr':           { t:'Storm Reports', w:'Confirmed reports of tornadoes, hail, wind damage and flooding from the last 3 hours.', r:'These are things that actually happened, reported by spotters and officials.' },
+  'chasers':       { t:'Live Storm Chasers', w:'Positions of storm chasers and spotters sharing their location.', r:'Clusters of chasers usually mean that is where the strongest storm is.' },
+  'lightning':     { t:'Lightning Strikes', w:'Lightning detected in the last 10 minutes.', r:'Newer strikes are brighter. If strikes are within about 10 miles of you, you are close enough to be struck.' },
+  'storm-cells':   { t:'Storm Cell Vectors', w:'Arrows showing where each storm is heading and how fast.', r:'Follow the arrow to see if a storm is coming your way and roughly when.' },
+  'fronts':        { t:'WPC Surface Analysis', w:'Fronts and pressure centers drawn by Weather Prediction Center forecasters.', r:'Weather changes along fronts. Storms often fire along cold fronts.' },
+  'ero':           { t:'Excessive Rainfall Outlook', w:'Today\'s flash flood risk from heavy rain.', r:'Marginal → Slight → Moderate → High. Moderate or High means dangerous flooding is possible.' },
+  'qpe-1h':        { t:'1-Hour Rainfall', w:'How much rain fell in the last hour, estimated by radar.', r:'Over 1 inch in an hour can cause street flooding.' },
+  'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
+  'river-gauges':  { t:'River & Flood Gauges', w:'Live river levels from NWS gauges.', r:'Green · normal. Yellow · near flood stage. Orange/red/purple · minor, moderate, major flooding.' },
+  'nhc-tropical':  { t:'Tropical Weather', w:'Active hurricanes and tropical storms, their forecast tracks, and areas being watched.', r:'The cone is where the center may go. Wind, surge and flooding reach far outside it.' },
+  'hms-smoke':     { t:'Smoke Plumes', w:'Wildfire smoke seen by satellites.', r:'Light, medium and heavy show how thick the smoke is overhead. It may or may not reach the ground — check air quality.' },
+  'fire-perimeters':{ t:'Active Fire Perimeters', w:'Mapped boundaries of active wildfires.', r:'Follow local evacuation orders. Fires can grow fast in wind.' },
+  'aqi':           { t:'Air Quality Index', w:'Air quality readings from monitoring stations.', r:'0–50 good · 51–100 moderate · 101–150 unhealthy for sensitive groups · 151+ unhealthy for everyone.' },
+  'cameras':       { t:'Location Cams', w:'Traffic, park, beach, volcano and scenic cameras.', r:'Turn this on, pick a state, then tap a camera to see what it looks like there right now.' },
+  'mcd':           { t:'Mesoscale Discussions', w:'Short notes from Storm Prediction Center forecasters about storms in the next few hours.', r:'They often come out before a watch. If one covers you, a watch may follow.' },
+  'mesoanalysis':  { t:'Mesoscale Analysis', w:'Maps of storm ingredients: instability, wind shear and spin.', r:'Expert tool. Higher values of CAPE, shear and the tornado parameter mean a better setup for severe storms.' },
+};
+
+function infoBtn(key) {
+  return `<button type="button" class="rx-ibtn" data-info="${key}" aria-label="What is this?">i</button>`;
+}
+
+(function initInfoPopups() {
+  const css = document.createElement('style');
+  css.textContent = `
+  .rx-ibtn { all:unset; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+    width:16px; height:16px; margin-left:5px; border-radius:50%; border:1px solid rgba(0,180,216,0.55);
+    color:#00b4d8; font:italic 700 10px/1 Georgia,serif; cursor:help; vertical-align:middle; flex-shrink:0;
+    text-transform:none; letter-spacing:0; position:relative; }
+  .rx-ibtn::after { content:''; position:absolute; inset:-10px; }
+  .rx-ibtn:hover, .rx-ibtn:focus-visible { background:rgba(0,180,216,0.2); }
+  .lp-row .rx-ibtn { margin-left:2px; margin-right:2px; }
+  #rx-pop { position:fixed; z-index:3000; max-width:320px; background:#0f1b2b; color:#e8f4fd;
+    border:1px solid rgba(0,180,216,0.45); border-radius:12px; padding:0.8rem 0.9rem 0.85rem;
+    box-shadow:0 12px 32px rgba(0,0,0,0.55); font-size:0.8rem; line-height:1.5; display:none; }
+  #rx-pop.show { display:block; }
+  #rx-pop h4 { margin:0 0 0.35rem; font:700 0.95rem 'Barlow Condensed',sans-serif; letter-spacing:0.04em; text-transform:uppercase; color:#00b4d8; }
+  #rx-pop .rx-k { font:700 0.64rem 'Barlow Condensed',sans-serif; letter-spacing:0.1em; text-transform:uppercase; color:#7a9bb5; margin-top:0.45rem; }
+  #rx-pop p { margin:0.1rem 0 0; }
+  #rx-pop .rx-close { display:none; }
+  #rx-shade { position:fixed; inset:0; z-index:2999; background:rgba(0,0,0,0.5); display:none; }
+  @media (max-width:700px), (pointer:coarse) {
+    #rx-pop { left:12px !important; right:12px; top:auto !important; bottom:calc(16px + env(safe-area-inset-bottom));
+      max-width:none; font-size:0.92rem; padding:1rem 1.1rem; max-height:70vh; overflow:auto; }
+    #rx-pop h4 { font-size:1.15rem; }
+    #rx-pop .rx-close { display:block; width:100%; margin-top:0.9rem; padding:0.75rem; border-radius:10px; border:none;
+      background:#00b4d8; color:#04121c; font:700 1rem 'Barlow Condensed',sans-serif; letter-spacing:0.08em; text-transform:uppercase; }
+    #rx-shade.show { display:block; }
+  }`;
+  document.head.appendChild(css);
+  const pop = document.createElement('div'); pop.id = 'rx-pop'; pop.setAttribute('role', 'dialog');
+  const shade = document.createElement('div'); shade.id = 'rx-shade';
+  document.body.appendChild(shade); document.body.appendChild(pop);
+  const touchy = () => window.matchMedia('(max-width:700px), (pointer:coarse)').matches;
+  let pinned = false, hideT = null, cur = null;
+  function show(el, pin) {
+    const d = WTV_INFO[el.dataset.info]; if (!d) return;
+    clearTimeout(hideT); cur = el; pinned = !!pin;
+    pop.innerHTML = `<h4>${d.t}</h4><div class="rx-k">What it is</div><p>${d.w}</p>`
+      + `<div class="rx-k">How to read it</div><p>${d.r}</p><button type="button" class="rx-close">Got it</button>`;
+    pop.classList.add('show');
+    if (touchy()) { shade.classList.add('show'); return; }
+    const r = el.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
+    let left = Math.min(Math.max(8, r.left + r.width / 2 - pw / 2), innerWidth - pw - 8);
+    let top = r.bottom + 8; if (top + ph > innerHeight - 8) top = Math.max(8, r.top - ph - 8);
+    pop.style.left = left + 'px'; pop.style.top = top + 'px';
+  }
+  function hide() { pop.classList.remove('show'); shade.classList.remove('show'); pinned = false; cur = null; }
+  window.wtvHideInfo = hide;
+  // Capture phase: an "i" inside a clickable row/card explains instead of toggling it.
+  document.addEventListener('click', e => {
+    if (e.target.closest('.rx-close') || e.target === shade) { e.stopPropagation(); hide(); return; }
+    const el = e.target.closest('[data-info]');
+    if (el && WTV_INFO[el.dataset.info]) {
+      e.stopPropagation(); e.preventDefault();
+      if (cur === el && pinned) hide(); else show(el, true);
+      return;
+    }
+    if (pinned && !e.target.closest('#rx-pop')) hide();
+  }, true);
+  document.addEventListener('mouseover', e => {
+    if (touchy() || pinned) return;
+    const el = e.target.closest('.rx-ibtn, .rx-chip');
+    if (el) { show(el, false); return; }
+    if (cur && !e.target.closest('#rx-pop')) { clearTimeout(hideT); hideT = setTimeout(() => { if (!pinned) hide(); }, 250); }
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && pop.classList.contains('show')) hide(); });
+})();
+
+// Put an "i" next to every header in the Forecast and Layers panels.
+function addStaticInfoButtons() {
+  const add = (el, key) => { if (el && !el.querySelector('.rx-ibtn')) el.insertAdjacentHTML('beforeend', infoBtn(key)); };
+  const fcMap = { 'Hourly Forecast':'fc-hourly', '7-Day Forecast':'fc-daily', 'Model Comparison':'fc-models',
+    'Storm Indicators':'fc-storm', 'NWS Detailed Forecast':'fc-nws', 'Temperature Map Overlay':'fc-tempmap', 'Rain Outlook':'rain-outlook' };
+  document.querySelectorAll('#forecast-panel .fp-section-label').forEach(l => {
+    const k = Object.keys(fcMap).find(t => l.textContent.includes(t)); if (k) add(l, fcMap[k]);
+  });
+  const lyMap = { 'Radar Tools':'ly-radartools', 'Radar':'ly-radar', 'Satellite':'ly-satellite', 'Alerts':'ly-alerts',
+    'Mesoscale':'ly-meso', 'Storm Chaser':'ly-chaser', 'Webcams':'ly-webcams', 'Surface':'ly-surface',
+    'Precipitation':'ly-precip', 'Tropical':'ly-tropical', 'Fire':'ly-fire', 'Models':'ly-models' };
+  document.querySelectorAll('#layer-panel .lp-section-label').forEach(l => {
+    const k = Object.keys(lyMap).find(t => l.textContent.trim().startsWith(t)); if (k) add(l, lyMap[k]);
+  });
+  const cards = { 'fp-humidity':'fc-humidity', 'fp-dewpoint':'fc-dewpoint', 'fp-visibility':'fc-visibility',
+    'fp-pressure':'fc-pressure', 'fp-uv':'fc-uv', 'fp-clouds':'fc-clouds', 'fp-sunrise':'fc-sun', 'fp-sunset':'fc-sun' };
+  Object.entries(cards).forEach(([id, k]) => add(document.getElementById(id)?.parentElement?.querySelector('.fp-cond-lbl'), k));
+  add(document.querySelector('#forecast-panel .fp-wind-card .fp-wind-vals'), 'fc-wind');
+  add(document.querySelector('#forecast-panel .fp-feels-row'), 'fc-feels');
+  const legTitle = [...document.querySelectorAll('#radar-legend #legend-body > div')].find(d => d.textContent.trim() === 'NWS Alerts');
+  add(legTitle, 'ly-alerts');
+}
+
+// Open-Meteo fallback (outside the US): same hour shape as the NWS grid so the
+// rain outlook works everywhere. Weather codes → type + intensity.
+function _omWx(code) {
+  const m = {51:['drizzle','light'],53:['drizzle','moderate'],55:['drizzle','heavy'],56:['freezing_drizzle','light'],57:['freezing_drizzle','heavy'],
+    61:['rain','light'],63:['rain','moderate'],65:['rain','heavy'],66:['freezing_rain','light'],67:['freezing_rain','heavy'],
+    71:['snow','light'],73:['snow','moderate'],75:['snow','heavy'],77:['snow','light'],80:['rain_showers','light'],81:['rain_showers','moderate'],
+    82:['rain_showers','heavy'],85:['snow_showers','light'],86:['snow_showers','heavy'],95:['thunderstorms',null],96:['thunderstorms',null],99:['thunderstorms',null],
+    45:['fog',null],48:['fog',null]}[code];
+  return m ? [[null, m[0], m[1]]] : [];
+}
+function omIndex(data) {
+  const h = data && data.hourly; if (!h || !h.time) return null;
+  const snowIn = /cm/.test(data.hourly_units?.snowfall || 'cm') ? 1 / 2.54 : 1;
+  const off = (data.utc_offset_seconds || 0) * 1000;
+  const map = new Map();
+  h.time.forEach((key, i) => {
+    const pop = h.precipitation_probability?.[i];
+    if (pop == null) return;
+    const code = h.weather_code?.[i];
+    map.set(key, { key, ms: Date.parse(key + ':00Z') - off, hr: +key.slice(11, 13), day: key.slice(0, 10), pop,
+      qpf: h.precipitation?.[i] || 0, snow: (h.snowfall?.[i] || 0) * snowIn, ice: 0,
+      thunder: code >= 95 ? pop : 0, sky: h.cloud_cover?.[i], wx: _omWx(code) });
+  });
+  return map.size ? map : null;
+}
+
 // ── renderForecast ────────────────────────────────────────────────────────────
 function renderForecast(data) {
   if (!data) return;
@@ -6568,6 +7030,10 @@ function renderForecast(data) {
   const d  = data.daily          || {};
   const nws = data.nws           || [];
   const now = new Date();
+  // Rain detail by hour: NWS grid in the US (icon + % + words from one source),
+  // Open-Meteo elsewhere.
+  const GN = gridIndex(data);
+  const G  = GN || omIndex(data);
 
   if (data.location?.name) document.getElementById('fp-location-name').textContent = 'Forecast for ' + data.location.name;
   else _showPlace();
@@ -6655,7 +7121,8 @@ function renderForecast(data) {
     const hDay   = h.is_day?.[i] !== 0;
     const hTemp  = h.temperature_2m?.[i];
     const hFeels = h.apparent_temperature?.[i];
-    const hPrecip= h.precipitation_probability?.[i];
+    const gH     = GN ? GN.get(times[i]) : null;
+    const hPrecip= gH ? gH.pop : h.precipitation_probability?.[i];
     const hWind  = h.wind_speed_10m?.[i];
 
     chartT.push(hTemp  ?? 0);
@@ -6671,7 +7138,7 @@ function renderForecast(data) {
 
     card.innerHTML =
       `<div class="fp-h-time">${timeLabel}</div>`
-    + `<div class="fp-h-svg">${wmoSVG(hCode, hDay, 30)}</div>`
+    + `<div class="fp-h-svg">${gH ? rainIconSVG(rainSummary([gH]), hDay, 30) : wmoSVG(hCode, hDay, 30)}</div>`
     + `<div class="fp-h-temp" style="color:${tempColor(hTemp)}">${hTemp != null ? Math.round(hTemp) + '°' : '—'}</div>`
     + (hFeels != null && hFeels !== hTemp ? `<div class="fp-h-feels">FL ${Math.round(hFeels)}°</div>` : '<div></div>')
     + precipHtml
@@ -6769,6 +7236,23 @@ function renderForecast(data) {
   }
   document.getElementById('fp-hourly-wrap').style.display = 'block';
 
+  // ── Rain outlook (next 24 hours) ──────────────────────────────────────────
+  const outEl = document.getElementById('fp-rain-outlook');
+  const next24 = G ? times.slice(startIdx, startIdx + 24).map(k => G.get(k) || null) : [];
+  const s24 = rainSummary(next24);
+  if (s24) {
+    document.getElementById('rx-now-icon').innerHTML =
+      `<div class="rx-now-svg">${rainIconSVG(s24, isDay, 46)}</div><div class="rx-sentence">${rainSentence(s24)}</div>`;
+    document.getElementById('rx-now-chips').innerHTML = rainChipsHTML(s24);
+    document.getElementById('rx-now-strip').innerHTML = rainStripHTML(next24, 'Now');
+    document.getElementById('rx-now-src').innerHTML = (GN
+      ? 'From your local National Weather Service office'
+      : 'From Open-Meteo weather models') + ' · <button type="button" class="rx-src-link" data-info="rain-icons">How to read our icons</button>';
+    outEl.style.display = 'block';
+  } else {
+    outEl.style.display = 'none';
+  }
+
   // ── 7-Day ─────────────────────────────────────────────────────────────────
   const dailyEl = document.getElementById('fp-daily');
   dailyEl.innerHTML = '';
@@ -6799,6 +7283,10 @@ function renderForecast(data) {
     // NWS short for this day
     const dayKey = dayNames[dt.getDay()].toLowerCase();
     const nwsDay = nws.find(p => p.isDaytime && p.name.toLowerCase().includes(dayKey));
+    const dayHours = G ? Array.from({ length: 24 }, (_, k) => G.get(`${dateStr}T${String(k).padStart(2, '0')}:00`) || null) : [];
+    const rs = rainSummary(dayHours);
+    const useNws = !!(GN && rs);
+    const dayPrecip = rs ? rs.peak : precip;
 
     // Bar geometry
     const rng = rangeMax - rangeMin || 1;
@@ -6811,21 +7299,21 @@ function renderForecast(data) {
     row.innerHTML =
       `<div class="fp-day-main">`
     + `  <div class="fp-day-name">${isToday ? 'Today' : dayNames[dt.getDay()]}</div>`
-    + `  <div class="fp-day-svg">${nwsDay?.icon
-        ? `<img src="${nwsDay.icon.replace(/\?size=\w+/,'?size=small')}" width="28" height="28" style="object-fit:contain" alt="">`
-        : wmoSVG(dCode, true, 28)}</div>`
-    + `  <div class="fp-day-desc">${nwsDay?.short || wmoLabel(dCode)}</div>`
+    + `  <div class="fp-day-svg">${useNws ? rainIconSVG(rs, true, 28) : wmoSVG(dCode, true, 28)}</div>`
+    + `  <div class="fp-day-desc">${useNws ? rainShortLabel(rs) : wmoLabel(dCode)}</div>`
     + `  <div class="fp-day-temps"><span class="fp-day-hi" style="color:${tempColor(hi)}">${hi!=null?Math.round(hi)+'°':'—'}</span><span class="fp-day-lo">/${lo!=null?Math.round(lo)+'°':'—'}</span></div>`
     + `</div>`
     + `<div class="fp-day-bar-row">`
     + `  <div class="fp-day-bar-skip"></div><div class="fp-day-bar-skip"></div>`
     + `  <div class="fp-day-bar-outer"><div class="fp-day-bar-inner" style="left:${barL}%;width:${barW}%"></div></div>`
-    + `  <div class="fp-day-precip">${precip > 10 ? '💧' + precip + '%' : ''}</div>`
+    + `  <div class="fp-day-precip">${dayPrecip >= 10 ? '💧' + dayPrecip + '%' : ''}</div>`
     + `</div>`
     + `<div class="fp-day-detail">`
+    + (rs ? `<div class="rx-day-block"><div class="rx-sentence">${rainSentence(rs)}</div>${rainChipsHTML(rs)}${rainStripHTML(dayHours, '12a')}`
+        + (nwsDay?.short ? `<div class="rx-nws-says">NWS daytime forecast: ${nwsDay.short}</div>` : '') + `</div>` : '')
     + (hiFL != null ? `<div>🌡 Feels Like <strong>${Math.round(hiFL)}° / ${Math.round(loFL??lo??0)}°</strong></div>` : '')
-    + `<div>💧 Precip <strong>${precip!=null?precip+'%':'—'}${precipSum?' / '+precipSum.toFixed(2)+'"':''}</strong></div>`
-    + (snowSum > 0.1 ? `<div>❄ Snow <strong>${snowSum.toFixed(1)} cm</strong></div>` : '')
+    + (rs ? '' : `<div>💧 Precip <strong>${precip!=null?precip+'%':'—'}${precipSum?' / '+precipSum.toFixed(2)+'"':''}</strong></div>`)
+    + (!rs && snowSum > 0.1 ? `<div>❄ Snow <strong>${snowSum.toFixed(1)} ${/cm/.test(data.daily_units?.snowfall_sum || 'cm') ? 'cm' : 'in'}</strong></div>` : '')
     + (windMx != null ? `<div>💨 Wind <strong>${Math.round(windMx)} mph ${wDom}${gustMx?' g'+Math.round(gustMx):''}</strong></div>` : '')
     + (uvi   != null ? `<div>☀ UV <strong>${uvLabel(uvi)}</strong></div>` : '')
     + `<div>🌅 Sunrise <strong>${sunRise}</strong></div>`
@@ -7251,11 +7739,11 @@ function exclusiveToggleRowHTML(item){
   // turns it off, unlike a true radio button where one option is always
   // forced selected.
   const active=activePaint===item.id;
-  return `<div class="lp-row${active?' active':''}" data-kind="paint" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-toggle"></span></div>`;
+  return `<div class="lp-row${active?' active':''}" data-kind="paint" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div>${WTV_INFO[item.id] ? infoBtn(item.id) : ''}<span class="lp-toggle"></span></div>`;
 }
 function toggleRowHTML(item){
   const active=!!overlayState[item.id];
-  return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div><span class="lp-toggle"></span></div>`;
+  return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div>${WTV_INFO[item.id] ? infoBtn(item.id) : ''}<span class="lp-toggle"></span></div>`;
 }
 function renderPanel(){
   const _radarIds = ['reflectivity', 'global-radar'];
@@ -7328,6 +7816,7 @@ function dismissBeta() {
 })();
 
 renderPanel();
+addStaticInfoButtons();
 resolveRadarSites(userLat, userLng);
 OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
 

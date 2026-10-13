@@ -2680,6 +2680,50 @@ function _lruSet(map, key, value, max) {
 
 function _snap(v) { return Math.round(v / FORECAST_GRID) * FORECAST_GRID; }
 
+// ── NWS gridpoint → compact hourly precipitation detail ──
+// The raw grid stores each element as runs: "2026-10-13T00:00:00+00:00/PT6H".
+// We expand the next 7 days to one value per hour (UTC hours from `start`).
+// Amounts (mm over the run) are spread evenly across its hours and converted
+// to inches. Weather entries keep NWS's own words: coverage (slight_chance,
+// chance, likely, definite — or isolated, scattered, numerous, widespread),
+// type (rain_showers, thunderstorms, snow…) and intensity (light…heavy).
+function _isoDurHours(d) {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(d || '');
+  if (!m) return 1;
+  return Math.max(1, (+m[1] || 0) * 24 + (+m[2] || 0) + Math.round((+m[3] || 0) / 60));
+}
+function _gridHourly(g, hours = 168) {
+  if (!g || !g.probabilityOfPrecipitation) return null;
+  const start = Math.floor(Date.now() / 3600000) * 3600000;
+  const blank = () => new Array(hours).fill(null);
+  const out = { start, hours, pop: blank(), qpf: blank(), snow: blank(), ice: blank(), thunder: blank(), sky: blank(), wx: blank() };
+  const toIn = (v, uom) => (uom && /mm$/.test(uom)) ? v / 25.4 : (uom && /cm$/.test(uom)) ? v / 2.54 : v;
+  function each(el, fn) {
+    for (const r of (el?.values || [])) {
+      const [t0, dur] = String(r.validTime || '').split('/');
+      const t = Date.parse(t0); if (isNaN(t)) continue;
+      const n = _isoDurHours(dur);
+      for (let k = 0; k < n; k++) {
+        const i = Math.round((t + k * 3600000 - start) / 3600000);
+        if (i >= 0 && i < hours) fn(i, r.value, n);
+      }
+    }
+  }
+  const round = (v, d) => v == null ? null : Math.round(v * d) / d;
+  each(g.probabilityOfPrecipitation, (i, v) => { out.pop[i] = v == null ? null : Math.round(v); });
+  each(g.probabilityOfThunder,       (i, v) => { out.thunder[i] = v == null ? null : Math.round(v); });
+  each(g.skyCover,                   (i, v) => { out.sky[i] = v == null ? null : Math.round(v); });
+  each(g.quantitativePrecipitation,  (i, v, n) => { out.qpf[i]  = v == null ? null : round(toIn(v, g.quantitativePrecipitation.uom) / n, 1000); });
+  each(g.snowfallAmount,             (i, v, n) => { out.snow[i] = v == null ? null : round(toIn(v, g.snowfallAmount.uom) / n, 100); });
+  each(g.iceAccumulation,            (i, v, n) => { out.ice[i]  = v == null ? null : round(toIn(v, g.iceAccumulation.uom) / n, 1000); });
+  each(g.weather, (i, v) => {
+    const list = (Array.isArray(v) ? v : []).filter(x => x && x.weather)
+      .slice(0, 3).map(x => [x.coverage || null, x.weather, x.intensity || null]);
+    out.wx[i] = list.length ? list : null;
+  });
+  return out;
+}
+
 async function _fetchForecastCell(gLat, gLon, cellKey) {
   const omUrl = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}`
@@ -2705,19 +2749,28 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
   const om = JSON.parse(omText);
   if (om.error) throw new Error(`Open-Meteo: ${om.reason || om.error}`);
 
-  let nwsNarrative = null;
+  let nwsNarrative = null, nwsGrid = null;
   try {
     const NWS_HEADERS = { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' };
-    let forecastUrl;
+    let forecastUrl, gridUrl;
     const pc = _nwsPointsCache.get(cellKey);
-    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL) {
-      forecastUrl = pc.forecastUrl;
+    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL && pc.gridUrl !== undefined) {
+      forecastUrl = pc.forecastUrl; gridUrl = pc.gridUrl;
     } else {
       upstreamCount('nwsPoints');
       const pts = JSON.parse(await fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS));
       forecastUrl = pts?.properties?.forecast || null;
-      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, ts: Date.now() }, 5000);
+      gridUrl = pts?.properties?.forecastGridData || null;
+      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, ts: Date.now() }, 5000);
     }
+    // Hour-by-hour precipitation detail from the forecaster-edited NWS grid:
+    // chance, timing, intensity, type, coverage, amounts, thunder.
+    // Runs alongside the narrative; a failure here never blocks the forecast.
+    const gridP = gridUrl
+      ? (upstreamCount('nwsGrid'), fetchTextOverHttp(gridUrl, NWS_HEADERS)
+          .then(t => _gridHourly(JSON.parse(t)?.properties))
+          .catch(e => { console.warn('[Forecast] NWS grid unavailable:', e.message); return null; }))
+      : Promise.resolve(null);
     if (forecastUrl) {
       upstreamCount('nwsForecast');
       const f = JSON.parse(await fetchTextOverHttp(forecastUrl, NWS_HEADERS));
@@ -2728,6 +2781,7 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
         isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
       }));
     }
+    nwsGrid = await gridP;
   } catch(e) { /* NWS unavailable outside CONUS — silent fail */ }
 
   // Location is attached per-request (below), so a shared cell never
@@ -2738,7 +2792,7 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
     current: om.current, current_units: om.current_units,
     hourly: om.hourly, hourly_units: om.hourly_units,
     daily: om.daily, daily_units: om.daily_units,
-    nws: nwsNarrative, generated_at: Date.now(),
+    nws: nwsNarrative, grid: nwsGrid, generated_at: Date.now(),
   };
 }
 
