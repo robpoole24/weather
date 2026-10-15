@@ -968,6 +968,15 @@
   .tv-mode a[href*="youtube.com"],
   .tv-mode #playlist-yt-link { display: none !important; }
   .tv-mode .wtv-store-link { pointer-events: none; }
+  /* WeatherStar with no location yet */
+  #ws-zip-prompt { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 15;
+    width: min(620px, 88%); text-align: center; pointer-events: none;
+    background: rgba(10,14,20,0.94); border: 2px solid var(--accent); border-radius: 10px; padding: 1.4rem 1.6rem;
+    box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  #ws-zip-prompt .ws-zip-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 1.6rem; letter-spacing: .03em; color: var(--accent); margin-bottom: .45rem; }
+  #ws-zip-prompt .ws-zip-sub { color: var(--text); font-size: 1rem; line-height: 1.45; }
+  #weatherstar-panel input.ws-need-zip { border-color: var(--accent) !important; box-shadow: 0 0 0 2px rgba(0,180,216,.35); animation: wsZipPulse 1.6s ease-in-out infinite; }
+  @keyframes wsZipPulse { 50% { box-shadow: 0 0 0 5px rgba(0,180,216,.15); } }
   #live-chat-panel iframe {
     flex: 1;
     border: none;
@@ -3290,6 +3299,33 @@ async function launchWeatherStar() {
   const f = document.getElementById('video-frame');
   const showingWS = !!(f && /\/weatherstar/.test(f.getAttribute('src') || ''));
   if (!wsIsLaunched || !showingWS) ws4kpLaunch();
+  if (!wsAllSettings[wsActiveVersion].lat) wsAskForZip();
+}
+
+// No location yet (e.g. TVs, where location can't be shared): WeatherStar
+// can't start, so say so on the screen and point to the ZIP box.
+function wsAskForZip() {
+  const wrap = document.getElementById('video-wrapper');
+  if (wrap && !document.getElementById('ws-zip-prompt')) {
+    const tv = document.documentElement.classList.contains('tv-mode');
+    const d = document.createElement('div');
+    d.id = 'ws-zip-prompt';
+    d.innerHTML = '<div class="ws-zip-title">📺 Enter your ZIP code to start WeatherStar</div>'
+      + '<div class="ws-zip-sub">' + (tv ? 'Select the ZIP code box below and type in your ZIP code.'
+                                          : 'Type it in the ZIP code box below, then press Enter or 📍 Locate.') + '</div>';
+    wrap.appendChild(d);
+  }
+  const input = document.getElementById('ws-location');
+  if (input) {
+    input.placeholder = 'Enter your ZIP code';
+    input.classList.add('ws-need-zip');
+    // On a TV, put the highlight right on the box: one press of OK/A to type
+    if (window.WTV_TV && WTV_TV.active && WTV_TV.focusEl) setTimeout(() => { const i = document.getElementById('ws-location'); if (i) WTV_TV.focusEl(i); }, 600);
+  }
+}
+function wsClearZipPrompt() {
+  const d = document.getElementById('ws-zip-prompt');
+  if (d) d.remove();
 }
 
 function showWSPanel() { launchWeatherStar(); }
@@ -3313,6 +3349,7 @@ function ws4kpToggle(key) { wsToggleDisplay(key); }
 function ws4kpToggleScanLines() { wsToggleScanLines(); }
 
 function loadIframe(src, label, isLive) {
+  wsClearZipPrompt();
   const hint = document.getElementById('channel-hint');
   if (hint) hint.style.display = 'none';
   const placeholder = document.getElementById('video-placeholder');
@@ -5121,7 +5158,7 @@ init();
 </div>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792147000"></script>
+<script src="/js/wtv-tv.js?v=1792207000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing

@@ -23,7 +23,7 @@
   const isTV = params.get('tv') === '1'
     || /Tizen|SMART-TV|SmartTV|SMARTTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey|Xbox/i.test(ua)
     || (window.parent !== window && (() => { try { return !!window.parent.WTV_TV && window.parent.WTV_TV.active; } catch (_) { return false; } })());
-  const api = { active: isTV, onBack, onMedia, focusFirst };
+  const api = { active: isTV, onBack, onMedia, focusFirst, focusEl: (el) => setFocus(el) };   // focusEl: move the highlight only
   window.WTV_TV = api;
   if (!isTV) return;
 
@@ -47,6 +47,9 @@
     lastTextAsk = Date.now();
     top.__wtvTextTarget = el;
     try { el.blur(); } catch (_) {}
+    // The site may put the cursor back right away (e.g. search calls select()
+    // after focus), which would bring up the web view's own keyboard over ours
+    [60, 200, 450].forEach(t => setTimeout(() => { if (document.activeElement === el) { try { el.blur(); } catch (_) {} } }, t));
     wv.postMessage('wtv-text ' + JSON.stringify({
       value: el.value || '',
       hint: el.getAttribute('aria-label') || el.placeholder || 'Type here',
@@ -63,6 +66,8 @@
       const el = e.target;
       if (!isTextField(el)) return;
       el.setAttribute('inputmode', 'none');
+      // Just asked the app for this box: keep the cursor out of the web page
+      if (Date.now() - lastTextAsk < 1500) { try { el.blur(); } catch (_) {} return; }
       let committedAt = 0; try { committedAt = window.top.__wtvCommitAt || 0; } catch (_) {}
       if (!tvFocusing && Date.now() - committedAt > 1500) askText(el);
     }, true);
@@ -361,6 +366,8 @@
     }
     if ((k === PAD_A || key === 'GamepadA') && current && !typing) {     // Xbox A = OK
       e.preventDefault();
+      // A button that opens a text box (like 🔍): no web keyboard, only the app's box
+      if (XBOX_APP) document.querySelectorAll('input, textarea').forEach(i => { if (isTextField(i)) i.setAttribute('inputmode', 'none'); });
       if (current.classList.contains('leaflet-container')) return;
       current.click(); if (/^(INPUT|SELECT)$/.test(current.tagName)) current.focus();
       return;
