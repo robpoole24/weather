@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-15T19:16:16Z build.1792200000
+// WeatherTV Server — updated 2026-10-15T20:45:00Z build.1792205100
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -5863,6 +5863,65 @@ app.get('/api/shop/products', async (req, res) => {
     console.warn('[Shop] Fourthwall fetch failed:', e.message);
     if (_shopCache.data) return res.json({ ..._shopCache.data, stale: true });
     res.status(502).json({ enabled: true, error: 'Shop temporarily unavailable', products: [] });
+  }
+});
+
+// GET /api/shop/collections — every public Fourthwall collection with its
+// products, for the Altruistic Apps shop page (one section per app). The
+// catch-all "all" collection is skipped, and so is any collection with no
+// products yet, so a new collection shows up on its own once it has merch.
+let _shopCollCache = { data: null, ts: 0 };
+app.get('/api/shop/collections', async (req, res) => {
+  const origin = req.get('Origin') || '';
+  if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  const token = process.env.FOURTHWALL_STOREFRONT_TOKEN;
+  if (!token) return res.json({ enabled: false, collections: [] });
+  if (_shopCollCache.data && Date.now() - _shopCollCache.ts < SHOP_TTL) {
+    res.set('Cache-Control', 'public, max-age=600');
+    return res.json(_shopCollCache.data);
+  }
+  const tk = encodeURIComponent(token);
+  try {
+    const list = [];
+    for (let page = 0; page < 5; page++) {
+      const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections?storefront_token=${tk}&page=${page}&size=50`));
+      const rows = Array.isArray(j) ? j : (j.results || []);
+      rows.forEach(c => { if (c && c.slug && c.slug.toLowerCase() !== 'all') list.push(c); });
+      if (Array.isArray(j) || !j.paging || !j.paging.hasNextPage) break;
+    }
+    const shopDomain = await _fwShopDomain(token);
+    const photoCache = new Map();   // a product in two collections is only fetched once
+    const collections = [];
+    for (const c of list) {
+      const products = [];
+      for (let page = 0; page < 10; page++) {
+        const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections/${encodeURIComponent(c.slug)}/products?storefront_token=${tk}&page=${page}&size=50`));
+        (j.results || []).forEach(p => products.push(_fwProduct(p)));
+        if (!j.paging || !j.paging.hasNextPage) break;
+      }
+      if (!products.length) continue;
+      await Promise.all(products.map(async (p) => {
+        if (!photoCache.has(p.slug)) photoCache.set(p.slug, _fwStorePageImages(shopDomain, p.slug));
+        const imgs = await photoCache.get(p.slug);
+        if (!imgs.length) return;
+        const current = new Set(imgs.map(_fwEncId));
+        p.images = imgs;
+        p.variants.forEach(v => { if (v.image && !current.has(_fwEncId(v.image))) v.image = null; });
+      }));
+      collections.push({ slug: c.slug, name: c.name || c.slug, description: _fwText(c.description, 240), products });
+    }
+    const data = { enabled: true, shopDomain, collections, fetchedAt: Date.now() };
+    const ttl = collections.length ? SHOP_TTL : 60 * 1000;
+    _shopCollCache = { data, ts: Date.now() - (SHOP_TTL - ttl) };
+    res.set('Cache-Control', `public, max-age=${Math.round(ttl / 1000)}`);
+    res.json(data);
+  } catch (e) {
+    console.warn('[Shop] Fourthwall collections fetch failed:', e.message);
+    if (_shopCollCache.data) return res.json({ ..._shopCollCache.data, stale: true });
+    res.status(502).json({ enabled: true, error: 'Shop temporarily unavailable', collections: [] });
   }
 });
 

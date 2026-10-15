@@ -967,6 +967,7 @@
   .tv-mode a[href="/shop.html"],
   .tv-mode a[href*="youtube.com"],
   .tv-mode #playlist-yt-link { display: none !important; }
+  .tv-mode .wtv-store-link { pointer-events: none; }
   #live-chat-panel iframe {
     flex: 1;
     border: none;
@@ -1572,7 +1573,7 @@
       </div>
 
       <div style="border-top:1px solid var(--border);padding-top:1rem;margin-bottom:1rem">
-        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">App Versions Coming Soon</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.75rem">Weather TV Apps</div>
         <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
           <!-- iOS -->
           <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
@@ -1580,7 +1581,7 @@
               <path d="M21.5 2C21.5 2 21.9 6.2 19.5 8.8C17.1 11.4 14.2 11 14.2 11C14.2 11 13.6 7.2 16 4.6C18.4 2 21.5 2 21.5 2Z" fill="#7a9bb5"/>
               <path d="M26.5 21.5C25.4 23.9 24.9 25 23.5 27.1C21.6 29.9 18.9 30 17.5 30C16.1 30 14.8 29.1 13.3 29.1C11.7 29.1 10 30 8.5 30C7 30 4.5 28 2.8 25C0.8 21.5 0.5 17.3 2 13.9C3 11.5 5.3 10 7.5 10C9.2 10 10.8 11 12 11C13.1 11 15 9.8 17.1 10C18.5 10.1 21.5 10.8 23.4 13.5C23.4 13.5 19.8 15.5 20 19.8C20.2 24.1 23.5 25.5 23.5 25.5C23.5 25.5 25 23.7 26.5 21.5Z" fill="#7a9bb5"/>
             </svg>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">iOS</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">iOS · Soon</div>
           </div>
           <!-- Android -->
           <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
@@ -1591,7 +1592,7 @@
               <path d="M10 8L8 4M22 8L24 4" stroke="#7a9bb5" stroke-width="1.5" stroke-linecap="round"/>
               <path d="M4 14H6M26 14H28" stroke="#7a9bb5" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Android</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Android · Soon</div>
           </div>
           <!-- Samsung TV -->
           <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
@@ -1601,27 +1602,27 @@
               <rect x="12" y="23" width="8" height="2" fill="#7a9bb5"/>
               <rect x="10" y="25" width="12" height="2" rx="1" fill="#7a9bb5"/>
             </svg>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Samsung TV</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Samsung TV · Soon</div>
           </div>
           <!-- Windows PC -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+          <a class="wtv-store-link" href="https://apps.microsoft.com/detail/9N8Q8NJCNHJG" target="_blank" rel="noopener" title="Get Weather TV for Windows from the Microsoft Store" style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;text-decoration:none;">
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect x="5" y="6" width="22" height="15" rx="1.5" fill="#7a9bb5"/>
+              <rect x="5" y="6" width="22" height="15" rx="1.5" fill="#00b4d8"/>
               <rect x="7" y="8" width="18" height="11" rx="0.5" fill="#111820"/>
-              <path d="M2 24H30L28 27H4Z" fill="#7a9bb5"/>
+              <path d="M2 24H30L28 27H4Z" fill="#00b4d8"/>
             </svg>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Windows</div>
-          </div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;color:var(--accent);">Windows · Available</div>
+          </a>
           <!-- Xbox -->
-          <div style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;">
+          <a class="wtv-store-link" href="https://apps.microsoft.com/detail/9N8Q8NJCNHJG" target="_blank" rel="noopener" title="Get Weather TV for Xbox from the Microsoft Store" style="display:flex;flex-direction:column;align-items:center;gap:0.3rem;text-decoration:none;">
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M9 9H23C26.5 9 28.5 12 29.5 17L30.5 22C31 25 28 27 26 25L22.5 21.5H9.5L6 25C4 27 1 25 1.5 22L2.5 17C3.5 12 5.5 9 9 9Z" fill="#7a9bb5"/>
+              <path d="M9 9H23C26.5 9 28.5 12 29.5 17L30.5 22C31 25 28 27 26 25L22.5 21.5H9.5L6 25C4 27 1 25 1.5 22L2.5 17C3.5 12 5.5 9 9 9Z" fill="#00b4d8"/>
               <path d="M8 13V18M5.5 15.5H10.5" stroke="#111820" stroke-width="1.6" stroke-linecap="round"/>
               <circle cx="22" cy="13.5" r="1.3" fill="#111820"/>
               <circle cx="25" cy="16.5" r="1.3" fill="#111820"/>
             </svg>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;">Xbox</div>
-          </div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;color:var(--muted);letter-spacing:0.05em;color:var(--accent);">Xbox · Available</div>
+          </a>
         </div>
       </div>
 
@@ -1647,7 +1648,7 @@
       <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem">
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">📺 Viewing on Xbox or a Smart TV?</div>
         <div style="font-size:0.82rem;color:var(--muted);line-height:1.6;">
-          Weather TV works in Xbox Edge and most smart TV browsers. For the best experience, zoom your browser out to around <strong style="color:var(--text)">67%</strong> — press <strong style="color:var(--text)">Ctrl + −</strong> a few times until the channel bar and cards look right.
+          On Xbox, get the free <a class="wtv-store-link" href="https://apps.microsoft.com/detail/9N8Q8NJCNHJG" target="_blank" rel="noopener" style="color:var(--accent)">Weather TV app</a> from the Microsoft Store for full controller support. Weather TV also works in Xbox Edge and most smart TV browsers. For the best experience, zoom your browser out to around <strong style="color:var(--text)">67%</strong> — press <strong style="color:var(--text)">Ctrl + −</strong> a few times until the channel bar and cards look right.
         </div>
       </div>
 
