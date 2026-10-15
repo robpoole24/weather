@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-12T23:20:00Z build.1792106400
+// WeatherTV Server — updated 2026-10-15T19:16:16Z build.1792200000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -5821,6 +5821,12 @@ async function _fwStorePageImages(domain, slug) {
   }
 }
 app.get('/api/shop/products', async (req, res) => {
+  // The Altruistic Apps site (altruisticapps.com/shop.html) shows the same shirts
+  const origin = req.get('Origin') || '';
+  if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
   const token = process.env.FOURTHWALL_STOREFRONT_TOKEN;
   if (!token) return res.json({ enabled: false, products: [] });
   if (_shopCache.data && Date.now() - _shopCache.ts < SHOP_TTL) {
