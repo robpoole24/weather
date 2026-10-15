@@ -1,4 +1,4 @@
-// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1791770000
+// WeatherTV custom WeatherStar 4000+ screens (wtv-screens.js) — build.1792030000
 // Air Quality · Smoke & Wildfire · Tropical Storms · UV & Outdoor · You're Watching WeatherTV
 // Airport Conditions · Tides · Marine Forecast
 //
@@ -124,11 +124,16 @@ if (new URLSearchParams(location.search).get('wtvTown') === 'haddonfield' && win
         div.innerHTML = `<div class="header"><div class="logo"><img src="images/logos/logo-corner.png"></div>
           <div class="title dual"><div class="top">${s.top}</div><div class="bottom">${s.bottom}</div></div>
           <div class="date-time date"></div><div class="date-time time"></div></div>
-          <div class="main has-box wtv-custom"><div class="wtv-content"></div></div>`;
+          <div class="main has-box can-enhance wtv-custom"><div class="wtv-content"></div></div>`;
       });
       const style = document.createElement('style');
       style.id = 'wtv-screens-style';
       style.textContent = `
+        /* Widescreen (16:9, used on TVs): WS4KP shifts every screen 107px right, but a
+           box that's "100% - 128px" wide then runs 107px off the right edge. Keep our
+           box the classic 4:3 width there; in "enhanced" widescreen WS4KP's own
+           can-enhance rule widens it to the full 16:9 box instead. */
+        .wide .weather-display .main.has-box.wtv-custom { width:512px; }
         .wtv-custom .wtv-content { font-family:${FONT}; color:#fff; font-size:20px; line-height:1.25; padding:8px 18px;
           height:100%; box-sizing:border-box; overflow:hidden; text-shadow:3px 3px 0 #000; }
         .wtv-custom .wtv-big { font-size:48px; text-align:center; margin:2px 0 0; }
