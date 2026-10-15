@@ -960,6 +960,13 @@
   #chat-tv-note { display: none; padding: 0.5rem 0.75rem; font-size: 0.85rem; line-height: 1.35; color: #ffd166;
     background: rgba(255,209,102,0.08); border-bottom: 1px solid var(--border); }
   .tv-mode #chat-tv-note { display: block; }
+  /* TV apps (Samsung, Xbox): hide links that try to open YouTube or the shop in a new
+     window. Inside a TV app there is no browser to open, so these buttons would do
+     nothing, which fails store testing. Phones and computers still show them. */
+  .tv-mode .ch-btn.subscribe,
+  .tv-mode a[href="/shop.html"],
+  .tv-mode a[href*="youtube.com"],
+  .tv-mode #playlist-yt-link { display: none !important; }
   #live-chat-panel iframe {
     flex: 1;
     border: none;
