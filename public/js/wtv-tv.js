@@ -71,6 +71,10 @@
       let committedAt = 0; try { committedAt = window.top.__wtvCommitAt || 0; } catch (_) {}
       if (!tvFocusing && Date.now() - committedAt > 1500) askText(el);
     }, true);
+    // No web keyboard for any text box, including ones added later
+    const noWebKeyboard = (root) => { try { root.querySelectorAll('input, textarea').forEach(i => { if (isTextField(i)) i.setAttribute('inputmode', 'none'); }); } catch (_) {} };
+    const watchBoxes = () => { noWebKeyboard(document); try { new MutationObserver(() => { if (watchBoxes.t) return; watchBoxes.t = setTimeout(() => { watchBoxes.t = 0; noWebKeyboard(document); }, 500); }).observe(document.body, { childList: true, subtree: true }); } catch (_) {} };
+    if (document.body) watchBoxes(); else document.addEventListener('DOMContentLoaded', watchBoxes);
     // Cursor mode: clicking a text box opens the app's text box too
     document.addEventListener('click', (e) => { if (isTextField(e.target)) askText(e.target); }, true);
     if (window === window.top) {
@@ -185,7 +189,15 @@
     current = el;
     el.classList.add('tv-focus');
     tvFocusing = true;
-    try { el.focus({ preventScroll: true }); } catch (_) {}
+    if (XBOX_APP && isTextField(el)) {
+      // Xbox app: only highlight a text box, never put the cursor in it. A
+      // focused web box brings up the web view's keyboard, which can't type
+      // here and swallows the controller; A opens the app's box instead.
+      const a = document.activeElement;
+      if (a && a !== document.body && a.blur) { try { a.blur(); } catch (_) {} }
+    } else {
+      try { el.focus({ preventScroll: true }); } catch (_) {}
+    }
     tvFocusing = false;
     try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
     if (el.classList.contains('leaflet-container')) showMapHint(); else hideMapHint();
