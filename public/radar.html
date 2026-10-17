@@ -7410,7 +7410,10 @@ function renderForecast(data) {
     + `<div>🌇 Sunset <strong>${sunSet}</strong></div>`
     + `</div>`;
 
-    row.onclick = () => row.querySelector('.fp-day-detail').classList.toggle('open');
+    // A button for the TV remote / controller and keyboards too, not just taps
+    row.tabIndex = 0; row.setAttribute('role', 'button'); row.setAttribute('aria-expanded', 'false');
+    row.onclick = () => { const open = row.querySelector('.fp-day-detail').classList.toggle('open'); row.setAttribute('aria-expanded', String(open)); };
+    row.onkeydown = (e) => { if (e.defaultPrevented || e.target !== row) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); row.click(); } };
     dailyEl.appendChild(row);
   });
   document.getElementById('fp-daily-wrap').style.display = 'block';
@@ -7452,7 +7455,9 @@ function renderForecast(data) {
       + `  <div class="fp-nws-chev">▼</div>`
       + `</div>`
       + `<div class="fp-nws-detail">${period.detail}</div>`;
-      row.onclick = () => row.classList.toggle('open');
+      row.tabIndex = 0; row.setAttribute('role', 'button'); row.setAttribute('aria-expanded', 'false');
+      row.onclick = () => row.setAttribute('aria-expanded', String(row.classList.toggle('open')));
+      row.onkeydown = (e) => { if (e.defaultPrevented || e.target !== row) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); row.click(); } };
       nwsEl.appendChild(row);
     });
     document.getElementById('fp-nws-wrap').style.display = 'block';
@@ -7829,11 +7834,11 @@ function exclusiveToggleRowHTML(item){
   // turns it off, unlike a true radio button where one option is always
   // forced selected.
   const active=activePaint===item.id;
-  return `<div class="lp-row${active?' active':''}" data-kind="paint" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div>${WTV_INFO[item.id] ? infoBtn(item.id) : ''}<span class="lp-toggle"></span></div>`;
+  return `<div class="lp-row${active?' active':''}" data-kind="paint" data-id="${item.id}" tabindex="0" role="switch" aria-checked="${active?'true':'false'}" aria-label="${item.name}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div>${WTV_INFO[item.id] ? infoBtn(item.id) : ''}<span class="lp-toggle"></span></div>`;
 }
 function toggleRowHTML(item){
   const active=!!overlayState[item.id];
-  return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div>${WTV_INFO[item.id] ? infoBtn(item.id) : ''}<span class="lp-toggle"></span></div>`;
+  return `<div class="lp-row${active?' active':''}" data-kind="toggle" data-id="${item.id}" tabindex="0" role="switch" aria-checked="${active?'true':'false'}" aria-label="${item.name}"><span class="lp-row-ico">${item.ico}</span><div class="lp-row-body"><div class="lp-row-name">${item.name}</div><div class="lp-row-sub">${item.sub}</div></div>${WTV_INFO[item.id] ? infoBtn(item.id) : ''}<span class="lp-toggle"></span></div>`;
 }
 function renderPanel(){
   const _radarIds = ['reflectivity', 'global-radar'];
@@ -7874,9 +7879,24 @@ function renderPanel(){
 document.getElementById('layer-panel').addEventListener('click',(e)=>{
   const row=e.target.closest('.lp-row'); if(!row) return;
   const id=row.dataset.id, kind=row.dataset.kind;
+  const hadHighlight = row.classList.contains('tv-focus') || document.activeElement === row;
   if (kind==='paint'){ togglePaint(id); }
   else { overlayState[id]=!overlayState[id]; applyOverlay(id,overlayState[id]); }
   renderPanel();
+  // The panel is redrawn: keep the TV highlight / keyboard focus on the same row
+  if (hadHighlight) {
+    const again = document.querySelector('#layer-panel .lp-row[data-id="' + id + '"]');
+    if (again) {
+      if (window.WTV_TV && WTV_TV.active && WTV_TV.focusEl) WTV_TV.focusEl(again);
+      else { try { again.focus({ preventScroll: true }); } catch (_) {} }
+    }
+  }
+});
+// Keyboards: Enter or Space flips the highlighted row
+document.getElementById('layer-panel').addEventListener('keydown',(e)=>{
+  const row = e.target.closest && e.target.closest('.lp-row');
+  if (!row || e.target !== row || e.defaultPrevented) return;
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); row.click(); }
 });
 function resetLayers(){
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,false); });
