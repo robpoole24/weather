@@ -3379,11 +3379,23 @@ async function onCamStateChange(code) {
     const showDot   = document.getElementById('cam-dot-toggle')?.checked !== false;
     const showWindy = document.getElementById('cam-windy-toggle')?.checked !== false;
 
+    // TVs and the Xbox: draw every dot on one canvas instead of one page
+    // element per camera. Big states (Florida has thousands of cameras) ran
+    // the Xbox app out of memory. Same colours, names and clicks.
+    const lite = document.documentElement.classList.contains('tv-mode');
+    if (lite && !window._camCanvas) window._camCanvas = L.canvas({ padding: 0.3, tolerance: 8 });
+    const CAM_COLORS = { windy: '#00b4d8', nps: '#22c55e', usgs: '#ef4444', community: '#a855f7', caloes: '#eab308' };
     for (const cam of data.cameras) {
-      const el = document.createElement('div');
-      el.className = 'cam-dot' + ({ windy: ' cam-dot-windy', nps: ' cam-dot-nps', usgs: ' cam-dot-usgs', community: ' cam-dot-community', caloes: ' cam-dot-mountain' }[cam.source] || '');
-      const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
-      const mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
+      let mk;
+      if (lite) {
+        mk = L.circleMarker([cam.lat, cam.lng], { renderer: window._camCanvas, radius: 5, weight: 2, color: 'rgba(255,255,255,0.8)',
+          fillColor: CAM_COLORS[cam.source] || '#f97316', fillOpacity: 1 });
+      } else {
+        const el = document.createElement('div');
+        el.className = 'cam-dot' + ({ windy: ' cam-dot-windy', nps: ' cam-dot-nps', usgs: ' cam-dot-usgs', community: ' cam-dot-community', caloes: ' cam-dot-mountain' }[cam.source] || '');
+        const icon = L.divIcon({ className:'', html:el.outerHTML, iconSize:[10,10], iconAnchor:[5,5] });
+        mk = L.marker([cam.lat, cam.lng], { icon, zIndexOffset:500 });
+      }
       mk.bindTooltip(cam.name, { permanent:false, direction:'top', offset:[0,-8], className:'cam-tooltip' });
       const handler = () => openCameraOverlay(cam);
       mk._wtCam = cam;
@@ -3393,7 +3405,10 @@ async function onCamStateChange(code) {
       const visible = (isDot && showDot) || (isWindy && showWindy) || (!isDot && !isWindy);
       if (visible) mk.on('click', handler);
       mk.addTo(camLayer);
-      if (!visible) { const mkEl = mk.getElement?.(); if (mkEl) mkEl.style.display = 'none'; }
+      if (!visible) {
+        if (lite) mk.setStyle({ opacity: 0, fillOpacity: 0 });
+        else { const mkEl = mk.getElement?.(); if (mkEl) mkEl.style.display = 'none'; }
+      }
       mk._camData = cam;
       camMarkers[cam.id] = mk;
     }
@@ -7496,8 +7511,8 @@ function onCamSourceToggle() {
     const isDot   = cam.source === 'dot' || cam.source === 'otc';
     const isWindy = cam.source === 'windy';
     const visible = (isDot && showDot) || (isWindy && showWindy) || (!isDot && !isWindy);
-    const el = marker.getElement?.();
-    if (el) el.style.display = visible ? '' : 'none';
+    if (marker instanceof L.CircleMarker) marker.setStyle({ opacity: visible ? 1 : 0, fillOpacity: visible ? 1 : 0 });   // TV canvas dots
+    else { const el = marker.getElement?.(); if (el) el.style.display = visible ? '' : 'none'; }
     if (visible) marker.on('click', marker._wtClickHandler);
     else         marker.off('click', marker._wtClickHandler);
   });
