@@ -828,7 +828,7 @@
 <body>
 
 <div id="radar-toolbar">
-  <div class="radar-label" id="radar-minimize-btn" onclick="minimizeRadar()" title="Back to Weather TV" style="cursor:pointer;">
+  <div class="radar-label" id="radar-minimize-btn" data-tv-notop onclick="minimizeRadar()" title="Back to Weather TV" style="cursor:pointer;">
     <span class="sweep-icon"></span>Live Radar
     <span id="radar-minimize-hint" style="display:none;font-size:0.65rem;color:var(--muted);margin-left:0.3rem;font-weight:400;letter-spacing:0.04em;">✕</span>
   </div>
@@ -8676,7 +8676,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792330000"></script>
+<script src="/js/wtv-tv.js?v=1792345000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map

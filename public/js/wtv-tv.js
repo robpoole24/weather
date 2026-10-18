@@ -126,7 +126,6 @@
     html.tv-mode #tv-pointer {
       position: fixed; z-index: 2147482000; pointer-events: none; display: none;
       width: 38px; height: 38px; margin: -2px 0 0 -2px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
-      transition: left .06s linear, top .06s linear;
     }
     html.tv-mode #tv-pointer::after {
       content: ''; position: absolute; left: -9px; top: -9px; width: 22px; height: 22px; border-radius: 50%;
@@ -359,6 +358,42 @@
     return false;
   }
 
+  // ── Shortcuts: X / blue key = the radar map pointer, Y / yellow key = the
+  // radar's top buttons (or the top of the page when there's no radar) ─────────
+  // The Xbox app sends X and Y from version 1.1 (it says so in its user agent).
+  const XY_OK = !XBOX_APP || /WeatherTVXbox\/(1\.[1-9]|[2-9])/.test(ua);
+  function topControl() {
+    const list = candidates().filter(el => !el.classList.contains('leaflet-container') && !el.hasAttribute('data-tv-notop'));
+    list.sort((a, b) => { const ra = rectOf(a), rb = rectOf(b); return (Math.round(ra.top / 24) - Math.round(rb.top / 24)) || (ra.left - rb.left); });
+    return list[0] || null;
+  }
+  function jumpTo(where) {
+    closePicker(false);
+    const m = window.WTV_TV_MAP;
+    if (m && m.getContainer && document.contains(m.getContainer())) {       // this page is the radar
+      if (where === 'map') return setFocus(m.getContainer());
+      const t = topControl(); return t ? setFocus(t) : false;
+    }
+    const frame = [...document.querySelectorAll('iframe[data-tv-frame]')].find(visible);
+    if (frame) {                                                            // the radar is showing in a frame
+      setFocus(frame, { noEnter: true });
+      try { frame.contentWindow.postMessage({ wtvTv: 'jump', where }, location.origin); } catch (_) {}
+      return true;
+    }
+    return where === 'top' ? focusFirst() : false;
+  }
+  let tipTimer = null;
+  function showTip(text, ms) {
+    let h = document.getElementById('tv-map-hint');
+    if (!h) { h = document.createElement('div'); h.id = 'tv-map-hint'; document.body.appendChild(h); }
+    h.textContent = text; h.style.display = 'block';
+    clearTimeout(hintTimer); clearTimeout(tipTimer); tipTimer = setTimeout(() => { h.style.display = 'none'; }, ms || 6000);
+  }
+  function radarTip() {
+    if (/Xbox/i.test(ua)) { if (XY_OK) showTip('Tip: press X to use the map pointer · Y for the top buttons'); }
+    else showTip('Tip: BLUE key for the map pointer · YELLOW key for the top buttons');
+  }
+
   // ── Same-origin frames (the radar inside the main page) ───────────────────
   function enterFrame(frame, dir) {
     try { frame.contentWindow.postMessage({ wtvTv: 'enter', dir }, location.origin); } catch (_) {}
@@ -384,6 +419,8 @@
         const list = candidates().filter(el => el !== frame);
         setFocus(best(frame, 'down', list) || best(frame, 'up', list) || list[0], { noEnter: true });
       }
+    } else if (m.wtvTv === 'jump') {
+      jumpTo(m.where);
     } else if (m.wtvTv === 'media') {
       mediaHandlers.forEach(fn => { try { fn(m.action); } catch (_) {} });
     }
@@ -444,8 +481,8 @@
     let h = document.getElementById('tv-map-hint');
     if (!h) { h = document.createElement('div'); h.id = 'tv-map-hint'; document.body.appendChild(h); }
     h.textContent = /Xbox/i.test(ua)
-      ? 'Stick moves the pointer (push past the edge to move the map) · A clicks · RB/LB zoom · B back to the buttons'
-      : 'Arrows move the pointer (push past the edge to move the map) · OK clicks · CH ▲/▼ zoom · BACK to the buttons';
+      ? 'Stick moves the pointer · A clicks · RB/LB zoom · ' + (XY_OK ? 'Y top buttons' : 'B back to the buttons')
+      : 'Arrows move the pointer · OK clicks · CH ▲/▼ zoom · YELLOW key: top buttons';
     h.style.display = 'block';
     clearTimeout(hintTimer); hintTimer = setTimeout(() => { h.style.display = 'none'; }, 5000);
   }
@@ -472,6 +509,7 @@
       ptr.x = Math.round(r.left + r.width / 2); ptr.y = Math.round(r.top + r.height / 2); ptr.set = true;
     }
     ptr.on = true; ptr.el.style.display = 'block';
+    if (!padRaf) { padLast = 0; padRaf = requestAnimationFrame(padPoll); }
     ptrPlace(); ptrHover();
   }
   function ptrHide() {
@@ -513,18 +551,74 @@
     const hot = el && el.closest && el.closest(HOT);
     if (ptr.el) ptr.el.classList.toggle('hot', !!(hot && !hot.classList.contains('leaflet-container')));
   }
-  function ptrMove(m, dir) {
-    const now = Date.now();
-    ptr.streak = now - ptr.lastAt < 180 ? ptr.streak + 1 : 0; ptr.lastAt = now;
-    const step = Math.min(10 + ptr.streak * 5, 60);
-    const dx = { left: -step, right: step }[dir] || 0, dy = { up: -step, down: step }[dir] || 0;
+  // Moving the pointer. A tap nudges it; holding glides it smoothly and
+  // speeds up the longer you hold (the controller only reports "still held"
+  // by repeating the press, so the glide keeps going between repeats).
+  const glide = { dirs: {}, raf: 0, start: 0, last: 0, hoverAt: 0, map: null };
+  function ptrShift(m, dx, dy) {
     const W = innerWidth - 3, H = innerHeight - 3;
     let nx = ptr.x + dx, ny = ptr.y + dy, px = 0, py = 0;
     if (nx < 2) { px = nx - 2; nx = 2; } if (nx > W) { px = nx - W; nx = W; }
     if (ny < 2) { py = ny - 2; ny = 2; } if (ny > H) { py = ny - H; ny = H; }
     ptr.x = nx; ptr.y = ny; ptrPlace();
-    if (px || py) { try { m.panBy([px * 3, py * 3], { animate: false }); } catch (_) {} }   // pushed past the edge: move the map
-    ptrHover();
+    if (px || py) { try { m.panBy([px * 2.5, py * 2.5], { animate: false }); } catch (_) {} }   // pushed past the edge: move the map
+  }
+  function glideFrame(t) {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - (glide.last || now)) / 1000); glide.last = now;
+    let vx = 0, vy = 0, any = false;
+    for (const dir in glide.dirs) {
+      const d = glide.dirs[dir];
+      if (now - d.at > d.wait) { delete glide.dirs[dir]; continue; }   // let go
+      if (!d.repeating) continue;                                       // a single tap: no glide
+      any = true;
+      if (dir === 'left') vx -= 1; if (dir === 'right') vx += 1; if (dir === 'up') vy -= 1; if (dir === 'down') vy += 1;
+    }
+    if (!Object.keys(glide.dirs).length || !ptr.on) { glide.raf = 0; glide.last = 0; ptrHover(); return; }
+    if (any && glide.map) {
+      const held = (now - glide.start) / 1000;
+      const speed = Math.min(1500, 520 + held * 1100);                  // px per second
+      const len = Math.hypot(vx, vy) || 1;
+      ptrShift(glide.map, vx / len * speed * dt, vy / len * speed * dt);
+      if (now - glide.hoverAt > 70) { glide.hoverAt = now; ptrHover(); }
+    }
+    glide.raf = requestAnimationFrame(glideFrame);
+  }
+  function ptrMove(m, dir) {
+    const now = performance.now();
+    glide.map = m;
+    const d = glide.dirs[dir];
+    if (d && now - d.at < 900) {                                        // the press is repeating: it's being held
+      const gap = now - d.at;
+      d.repeating = true; d.wait = Math.min(450, Math.max(170, gap * 1.8)); d.at = now;
+    } else {
+      if (!Object.keys(glide.dirs).length) glide.start = now;
+      glide.dirs[dir] = { at: now, wait: 900, repeating: false };
+      const hop = 22;                                                   // a tap: one clear step right away
+      ptrShift(m, { left: -hop, right: hop }[dir] || 0, { up: -hop, down: hop }[dir] || 0);
+      ptrHover();
+    }
+    if (!glide.raf) { glide.last = 0; glide.raf = requestAnimationFrame(glideFrame); }
+  }
+  // If the browser can read the controller's stick directly, use it: push a
+  // little to creep, all the way to fly (the repeated presses are then ignored).
+  let padAt = 0, padRaf = 0, padLast = 0;
+  function padPoll() {
+    padRaf = 0;
+    if (!ptr.on) return;
+    let gp = null;
+    try { gp = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(g => g && g.connected && g.axes && g.axes.length >= 2); } catch (_) {}
+    const now = performance.now(), dt = Math.min(0.05, (now - (padLast || now)) / 1000); padLast = now;
+    if (gp) {
+      const ax = gp.axes[0], ay = gp.axes[1], mag = Math.hypot(ax, ay);
+      if (mag > 0.18) {
+        padAt = now;
+        const m = mapOf(current);
+        const k = (Math.min(1, (mag - 0.18) / 0.82)) ** 1.6;            // gentle near the middle, fast at the edge
+        if (m) { ptrShift(m, ax / mag * k * 1600 * dt, ay / mag * k * 1600 * dt); ptrHover(); }
+      }
+    }
+    padRaf = requestAnimationFrame(padPoll);
   }
   function openOverlays() {
     const shown = (el) => el && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0;
@@ -571,7 +665,7 @@
   const MEDIA = { 10252: 'playpause', 415: 'play', 19: 'pause', 413: 'stop', 417: 'next', 412: 'prev', 179: 'playpause' };
   document.addEventListener('keydown', (e) => {
     // Apps that pass the remote/controller in as key names (Xbox) have no keyCode
-    const KEYNAME = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, GamepadA: PAD_A, GamepadB: PAD_B };
+    const KEYNAME = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, GamepadA: PAD_A, GamepadB: PAD_B, GamepadX: 197, GamepadY: 198, ColorF2Yellow: 405, ColorF3Blue: 406 };
     const key = e.key, k = e.keyCode || KEYNAME[key] || 0;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && !/^(button|checkbox|radio|range|submit|reset)$/i.test(document.activeElement.type));
@@ -581,6 +675,12 @@
       e.preventDefault(); e.stopPropagation();
       if (Date.now() - lastBackAt < 350) return;          // one press can arrive twice on Xbox (key + system Back)
       lastBackAt = Date.now(); handleBack(false); return;
+    }
+    if (k === 197 || k === 198 || k === 405 || k === 406) {               // X / blue: map pointer · Y / yellow: top buttons
+      if (typing) return;
+      e.preventDefault(); e.stopPropagation();
+      jumpTo((k === 197 || k === 406) ? 'map' : 'top');
+      return;
     }
     if (MEDIA[k] || /^Media/.test(key)) {
       e.preventDefault();
@@ -609,6 +709,7 @@
       if (m) {                                                            // the map is highlighted: move the pointer
         e.preventDefault(); e.stopPropagation();
         if (!ptr.on) ptrShow(m);
+        if (performance.now() - padAt < 250) return;                     // the stick is being read directly
         ptrMove(m, DIRS[k]);
         return;
       }
@@ -655,6 +756,9 @@
   });
 
   // Start with something highlighted (skip in a frame: the parent hands focus in)
-  const start = () => { if (!inFrame) setTimeout(focusFirst, 400); };
+  const start = () => {
+    if (!inFrame) setTimeout(focusFirst, 400);
+    setTimeout(() => { if (window.WTV_TV_MAP) radarTip(); }, 2500);       // the radar: say how to get around
+  };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
