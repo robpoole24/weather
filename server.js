@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-18T20:30:00Z build.1792400000
+// WeatherTV Server — updated 2026-10-18T21:00:00Z build.1792410000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -4566,6 +4566,12 @@ const liveVerifier = createLiveVerifier({
   isKnownLive: async (channelId, videoId) => {
     const s = cache.liveStatuses[channelId];
     return !!(s && s.isLive && (!videoId || !s.videoId || s.videoId === videoId));
+  },
+  // "Primary" = WebSub / Atom / polling found it — not the verifier itself. Used to
+  // decide whether a stream the verifier found first was caught later or missed.
+  isPrimaryLive: async (channelId, videoId) => {
+    const s = cache.liveStatuses[channelId];
+    return !!(s && s.isLive && s.source !== 'verifier' && (!videoId || !s.videoId || s.videoId === videoId));
   },
   onLive: async (r) => {
     const entry = { isLive: true, videoId: r.videoId, checkedAt: Date.now(), source: r.wasKnown ? (cache.liveStatuses[r.channelId]?.source || 'verifier') : 'verifier' };

@@ -14,6 +14,14 @@ const RUNS_KEY = 'wt:verifier:runs';
 const STREAMS_KEY = 'wt:verifier:streams';
 const MAX_RUNS = 200;                  // ~13h of history at 4-min sweeps
 const STREAM_RETENTION_DAYS = 30;
+// A stream only counts as missed if the primary system (WebSub/Atom/polling)
+// still hasn't picked it up this long after the stream started. YouTube's
+// WebSub notice can take a few minutes; without this grace period a stream
+// that went live a minute before a sweep was wrongly counted as a miss.
+const MISS_GRACE_MS = 15 * 60 * 1000;
+// Records judged before the grace period existed (no v:2) are left out of the
+// stats and the missed list: many of them were false misses.
+const JUDGING_VERSION = 2;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const decode = (s) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -163,6 +171,7 @@ function createLiveVerifier({
   getChannels,          // async () => [channelId] or [{ id, name, lastLiveDate? }]
   isSevereActive,       // async () => bool — while true, every channel is checked every sweep
   isKnownLive,          // async (channelId, videoId?) => bool — is WTV already showing THIS stream? REQUIRED for miss tracking.
+  isPrimaryLive,        // async (channelId, videoId?) => bool — showing it because the PRIMARY system found it (not this verifier)
   onLive,               // async ({ channelId, videoId, title, startedAt, wasKnown }) => {} — called every sweep a channel is live
   onOffline,            // async (channelId) => {} — only called for channels currently shown live
   store,                // { get: async key => value, set: async (key, object) => {} } e.g. rGet/rSet
@@ -250,8 +259,11 @@ function createLiveVerifier({
             const now = new Date().toISOString();
             if (!streams[r.videoId]) {
               // First time we've ever seen this stream: was the primary system already showing it?
-              streams[r.videoId] = { channelId: id, name, title: r.title, firstSeen: now, lastSeen: now, caughtByPrimary: known };
-              if (!known) run.missed.push({ channelId: id, name, videoId: r.videoId, title: r.title, startedAt: r.startedAt });
+              // If not, it's "pending": WTV shows it now (onLive below), and the primary
+              // system gets until MISS_GRACE_MS after the stream started to catch up
+              // before it's counted as a miss (see resolvePending).
+              streams[r.videoId] = { channelId: id, name, title: r.title, firstSeen: now, lastSeen: now,
+                startedAt: r.startedAt || null, caughtByPrimary: known ? true : null, v: JUDGING_VERSION };
             } else {
               streams[r.videoId].lastSeen = now;
             }
@@ -284,6 +296,7 @@ function createLiveVerifier({
 
     try {
       await Promise.all(Array.from({ length: concurrency }, worker));
+      await resolvePending(run);
     } finally {
       run.finishedAt = new Date().toISOString();
       run.durationSec = Math.round((Date.now() - t0) / 1000);
@@ -298,17 +311,39 @@ function createLiveVerifier({
     return run;
   }
 
+  // Decide pending streams: the primary system caught up (late but caught), or
+  // the grace period is over and it never did (a real miss).
+  async function resolvePending(run) {
+    const nowMs = Date.now();
+    const primary = isPrimaryLive || isKnownLive;
+    for (const [videoId, s] of Object.entries(streams)) {
+      if (s.caughtByPrimary !== null || s.v !== JUDGING_VERSION) continue;
+      let caught = false;
+      try { caught = primary ? !!(await primary(s.channelId, videoId)) : false; } catch (_) {}
+      const start = Date.parse(s.startedAt || '') || Date.parse(s.firstSeen);
+      if (caught) {
+        s.caughtByPrimary = true; s.caughtLate = true; s.caughtAt = new Date().toISOString();
+      } else if (nowMs - start >= MISS_GRACE_MS) {
+        s.caughtByPrimary = false; s.missedAt = new Date().toISOString();
+        run.missed.push({ channelId: s.channelId, name: s.name, videoId, title: s.title, startedAt: s.startedAt });
+      }
+    }
+  }
+
   function stats() {
     const windows = { '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 };
     const out = {};
-    const all = Object.values(streams);
+    const all = Object.values(streams).filter((s) => s.v === JUDGING_VERSION && s.caughtByPrimary !== null);   // judged with the grace period
     for (const [label, ms] of Object.entries(windows)) {
       const cutoff = Date.now() - ms;
       const inWin = all.filter((s) => Date.parse(s.firstSeen) >= cutoff);
       const missed = inWin.filter((s) => !s.caughtByPrimary).length;
-      out[label] = { streams: inWin.length, missed, missRate: inWin.length ? +(missed / inWin.length * 100).toFixed(1) : null };
+      const late = inWin.filter((s) => s.caughtByPrimary && s.caughtLate).length;
+      out[label] = { streams: inWin.length, missed, late, missRate: inWin.length ? +(missed / inWin.length * 100).toFixed(1) : null };
     }
     const recent = runs.filter((r) => Date.parse(r.startedAt) >= Date.now() - 864e5);
+    out.pending = Object.values(streams).filter((s) => s.v === JUDGING_VERSION && s.caughtByPrimary === null).length;
+    out.graceMin = MISS_GRACE_MS / 60000;
     out.stale24h = recent.reduce((n, r) => n + r.staleCleared.length, 0);
     out.mb24h = +(recent.reduce((n, r) => n + r.bytes, 0) / 1048576).toFixed(1);
     return out;
@@ -324,7 +359,7 @@ function createLiveVerifier({
       nextRunAt: started && lastRun ? new Date(Date.parse(lastRun) + sweepIntervalMs).toISOString() : null,
       intervalMin: sweepIntervalMs / 60000,
       stats: stats(),
-      recentMisses: Object.entries(streams).filter(([, s]) => !s.caughtByPrimary)
+      recentMisses: Object.entries(streams).filter(([, s]) => s.v === JUDGING_VERSION && s.caughtByPrimary === false)
         .sort((a, b) => b[1].firstSeen.localeCompare(a[1].firstSeen)).slice(0, 50)
         .map(([videoId, s]) => ({ videoId, ...s })),
       runs: runs.slice(0, 50),

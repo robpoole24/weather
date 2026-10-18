@@ -3272,6 +3272,8 @@ async function loadLiveVerifier() {
       pill(rateTxt('24h'), rateColor(s['24h'].missRate)),
       pill(rateTxt('7d'),  rateColor(s['7d'].missRate)),
       pill(rateTxt('30d'), rateColor(s['30d'].missRate)),
+      pill((s['24h'].late || 0) + ' Caught Late 24h', 'var(--muted)'),
+      pill((s.pending || 0) + ' Waiting (' + (s.graceMin || 15) + '-min grace)', 'var(--muted)'),
       pill(s.stale24h + ' Stale Cleared 24h', s.stale24h > 0 ? 'var(--gold)' : 'var(--green)'),
       pill(s.mb24h + ' MB 24h', 'var(--muted)'),
     ].join('');
