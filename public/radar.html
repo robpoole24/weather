@@ -115,6 +115,8 @@
   @keyframes sweep { to { transform:translate(-1px,-50%) rotate(360deg); } }
 
   #zip-form { display:flex; gap:0.3rem; align-items:center; }
+  /* TVs and the Xbox app have no way to share a link */
+  html.tv-mode #share-btn { display:none !important; }
   #zip-input {
     background:var(--surface2); border:1px solid var(--border);
     color:var(--text); font-family:'Barlow',sans-serif; font-size:0.82rem;
@@ -8657,7 +8659,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792260000"></script>
+<script src="/js/wtv-tv.js?v=1792290000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map

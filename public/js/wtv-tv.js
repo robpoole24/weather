@@ -123,6 +123,26 @@
       position: relative; z-index: 5; transition: outline-color .1s;
     }
     html.tv-mode .leaflet-container.tv-focus { outline-offset: -6px !important; }
+    html.tv-mode #tv-picker {
+      position: fixed; inset: 0; z-index: 2147483000; background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center;
+    }
+    html.tv-mode #tv-picker .tv-picker-box {
+      width: min(560px, 90vw); max-height: 82vh; display: flex; flex-direction: column; gap: 0.6rem;
+      background: #0f1724; border: 2px solid #00b4d8; border-radius: 12px; padding: 1.1rem 1.2rem;
+      box-shadow: 0 16px 50px rgba(0,0,0,0.7); font-family: 'Barlow', system-ui, sans-serif;
+    }
+    html.tv-mode #tv-picker .tv-picker-title { color: #e8f4fd; font-size: 1.35rem; font-weight: 700; }
+    html.tv-mode #tv-picker .tv-picker-list { overflow-y: auto; display: flex; flex-direction: column; gap: 0.35rem; padding: 6px; }
+    html.tv-mode #tv-picker .tv-picker-group { color: #7d97b3; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; margin: 0.5rem 0 0.1rem; }
+    html.tv-mode #tv-picker button {
+      text-align: left; font: 500 1.1rem 'Barlow', system-ui, sans-serif; color: #e8f4fd; cursor: pointer;
+      background: #16212f; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 0.6rem 0.9rem;
+    }
+    html.tv-mode #tv-picker button.on { border-color: #00b4d8; color: #00b4d8; }
+    html.tv-mode #tv-picker button.on::after { content: '  ✓'; }
+    html.tv-mode #tv-picker button[disabled] { opacity: 0.4; }
+    html.tv-mode #tv-picker .tv-picker-cancel { text-align: center; background: transparent; color: #7d97b3; }
     html.tv-mode #tv-map-hint {
       position: fixed; left: 50%; bottom: 3.5rem; transform: translateX(-50%); z-index: 99999;
       background: rgba(0,0,0,0.82); color: #fff; font: 600 15px 'Barlow', system-ui, sans-serif;
@@ -170,7 +190,68 @@
     if (el.tagName === 'IFRAME' && !el.hasAttribute('data-tv-frame')) return false;
     return true;
   }
-  const candidates = () => [...document.querySelectorAll(SELECTOR)].filter(visible);
+  const candidates = () => {
+    const pk = document.getElementById('tv-picker');
+    return [...(pk ? pk : document).querySelectorAll(SELECTOR)].filter(visible);
+  };
+
+  // ── Drop-down menus ───────────────────────────────────────────────────────
+  // The browser's own drop-down list can't be driven by a TV remote or the
+  // Xbox controller inside an app, so on TVs a <select> opens this list instead.
+  function labelOf(sel) {
+    let t = sel.getAttribute('aria-label') || sel.title || '';
+    if (!t && sel.id) { const l = document.querySelector('label[for="' + sel.id + '"]'); if (l) t = l.textContent; }
+    if (!t) { const l = sel.closest('label'); if (l) t = l.textContent; }
+    if (!t) { const p = sel.previousElementSibling; if (p && p.tagName === 'LABEL') t = p.textContent; }
+    return (t || 'Choose one').replace(/\s+/g, ' ').trim().slice(0, 60);
+  }
+  function closePicker(refocus) {
+    const pk = document.getElementById('tv-picker');
+    if (!pk) return false;
+    const sel = pk.__sel; pk.remove();
+    if (refocus !== false && sel && document.contains(sel)) setFocus(sel); else refocusSoon();
+    return true;
+  }
+  function openPicker(sel) {
+    closePicker(false);
+    const pk = document.createElement('div');
+    pk.id = 'tv-picker'; pk.setAttribute('role', 'dialog'); pk.setAttribute('aria-label', labelOf(sel));
+    pk.__sel = sel;
+    const box = document.createElement('div'); box.className = 'tv-picker-box';
+    const h = document.createElement('div'); h.className = 'tv-picker-title'; h.textContent = labelOf(sel);
+    const list = document.createElement('div'); list.className = 'tv-picker-list';
+    let chosen = null;
+    [...sel.children].forEach(node => {
+      const opts = node.tagName === 'OPTGROUP' ? [...node.children] : [node];
+      if (node.tagName === 'OPTGROUP') { const g = document.createElement('div'); g.className = 'tv-picker-group'; g.textContent = node.label; list.appendChild(g); }
+      opts.forEach(o => {
+        if (o.tagName !== 'OPTION' || o.hidden) return;
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'tv-picker-opt';
+        b.textContent = o.textContent.trim() || o.value;
+        if (o.disabled) b.disabled = true;
+        if (o.selected) { b.classList.add('on'); b.setAttribute('aria-current', 'true'); chosen = b; }
+        b.addEventListener('click', () => {
+          const changed = sel.value !== o.value;
+          sel.value = o.value;
+          closePicker();
+          if (changed) {
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        });
+        list.appendChild(b);
+      });
+    });
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'tv-picker-cancel';
+    cancel.textContent = 'Cancel'; cancel.setAttribute('data-tv-picker-cancel', '');
+    cancel.addEventListener('click', () => closePicker());
+    box.append(h, list, cancel); pk.appendChild(box);
+    pk.addEventListener('click', (e) => { if (e.target === pk) closePicker(); });
+    document.body.appendChild(pk);
+    const first = chosen || list.querySelector('.tv-picker-opt:not([disabled])') || cancel;
+    setTimeout(() => { setFocus(first); try { first.scrollIntoView({ block: 'center' }); } catch (_) {} }, 0);
+  }
+  api.openPicker = openPicker;
 
   // Prefer controls inside the topmost open overlay (popup, panel, dialog)
   function scopeOf(list) {
@@ -286,6 +367,7 @@
     return true;
   }
   function handleBack(fromChild) {
+    if (closePicker()) return;
     // 1) Close whatever is open on top (popups, panels, menus)
     for (let i = backHandlers.length - 1; i >= 0; i--) { try { if (backHandlers[i]()) { refocusSoon(); return; } } catch (_) {} }
     if (closeTopOverlay()) { refocusSoon(); return; }
@@ -381,12 +463,14 @@
       // A button that opens a text box (like 🔍): no web keyboard, only the app's box
       if (XBOX_APP) document.querySelectorAll('input, textarea').forEach(i => { if (isTextField(i)) i.setAttribute('inputmode', 'none'); });
       if (current.classList.contains('leaflet-container')) return;
+      if (current.tagName === 'SELECT') { openPicker(current); return; }
       current.click(); if (/^(INPUT|SELECT)$/.test(current.tagName)) current.focus();
       return;
     }
     if (k === 13 && current && !typing) {
       const t = current.tagName;
       if (current.classList.contains('leaflet-container')) { e.preventDefault(); return; }
+      if (t === 'SELECT' && current.size <= 1) { e.preventDefault(); openPicker(current); return; }
       if (t !== 'BUTTON' && t !== 'A' && t !== 'SELECT' && t !== 'INPUT') { e.preventDefault(); current.click(); }
     }
   }, true);
