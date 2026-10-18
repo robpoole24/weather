@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-18T20:45:00Z build.1792420000
+// WeatherTV Server — updated 2026-10-18T21:05:00Z build.1792430000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2601,6 +2601,11 @@ async function _countCameras() {
     const count = async (code) => {
       let r = { cameras: [], sources: {} };
       try { r = await _camerasFor(code); } catch (e) { console.warn(`[CamStats] ${code}:`, e.message); }
+      // State traffic-camera feeds are labelled with the state's own code ("wi",
+      // "fl"…): count them all as "dot" (State DOT) so they add up across states.
+      const src = {};
+      Object.entries(r.sources || {}).forEach(([k, n]) => { const key = /^[a-z]{2}$/.test(k) ? 'dot' : k; src[key] = (src[key] || 0) + n; });
+      r = { ...r, sources: src };
       let unique = 0;
       r.cameras.forEach(c => { const k = key(c); if (!seen.has(k)) { seen.add(k); unique++; } });
       Object.entries(r.sources).forEach(([s, n]) => { bySource[s] = (bySource[s] || 0) + n; });
@@ -2622,7 +2627,7 @@ async function _countCameras() {
       // Weak spots: the states with the fewest cameras, and states with no state-DOT feed
       fewest: us.filter(s => s.total > 0).slice(-10).reverse().map(s => ({ code: s.code, name: s.name, total: s.total })),
       none: us.filter(s => !s.total).map(s => s.code),
-      noDotFeed: us.filter(s => !s.sources.dot && !s.sources.otc).map(s => s.code),
+      noDotFeed: us.filter(s => !s.sources.dot && !s.sources.otc && !s.sources.road511).map(s => s.code),
       updatedAt: new Date().toISOString(),
       tookSeconds: Math.round((Date.now() - t0) / 1000),
     };
