@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-18T07:40:00Z build.1792350000
+// WeatherTV Server — updated 2026-10-18T09:50:00Z build.1792370000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2511,53 +2511,61 @@ require('./marine')(app);
 // and filtering by viewport on every pan/zoom. Users select the state they
 // want to monitor (typically where a storm is active) and see only those
 // cameras, which loads fast and doesn't lock up the map.
+// Every camera for one US state (or world region), merged and de-duplicated.
+// Used by the map (below) and by the camera counter (/api/cameras/stats).
+async function _camerasFor(code) {
+  const REGION = CAMERA_REGIONS.has(code);   // world regions — Community Cams only
+  // Find the STATE_DOTS entry for this state, if we have one
+  const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
+
+  const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams, calOesCams] = await Promise.all([
+    _loadOTC().catch(() => []),
+    dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
+    REGION ? Promise.resolve([]) : _loadWindy(code).catch(() => []),   // too large to grid-search
+    REGION ? Promise.resolve([]) : _loadNPS(code).catch(() => []),
+    code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
+    community.forState(code).catch(() => []),
+    REGION ? Promise.resolve([]) : _loadCalOES().then(l => l.filter(c => _inState(code, c.lat, c.lng, 2))).catch(() => []),
+  ]);
+
+  // Drop cameras with impossible coordinates (0,0, swapped lat/lng…). One bad
+  // Georgia camera made the map zoom out to the whole world. DOT cameras may
+  // sit just over a border, so they get ~25 miles of slack.
+  const stateDOT = [...stateDOTraw, ...(code === 'PA' ? _loadPennDOT() : [])]
+    .filter(c => _inState(code, c.lat, c.lng, 25, true));
+  if (stateDOTraw.length && stateDOT.length < stateDOTraw.length) {
+    console.log(`[Cameras] ${code}: dropped ${stateDOTraw.length - stateDOT.length} DOT cameras with coordinates outside the state`);
+  }
+
+  // Filter OTC to this state
+  const otcForState = otcAll.filter(c => c.state === code);
+
+  // Merge priority: STATE_DOTS (traffic) → OTC → Windy (scenic/weather).
+  // Deduplicate at 100m so we don't show two cameras from different sources
+  // that are essentially at the same location.
+  const merged = [...stateDOT];
+  for (const cam of [...communityCams, ...usgsCams, ...calOesCams, ...npsCams, ...otcForState, ...windyCams]) {
+    const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
+    if (!tooClose) merged.push(cam);
+  }
+
+  const sourceCounts = {};
+  merged.forEach(c => { sourceCounts[c.source] = (sourceCounts[c.source] || 0) + 1; });
+  return { cameras: merged, sources: sourceCounts };
+}
+
 app.get('/api/cameras/state/:code', async (req, res) => {
   const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');
-  const REGION = CAMERA_REGIONS.has(code);   // world regions — Community Cams only
+  const REGION = CAMERA_REGIONS.has(code);
   if (code.length !== 2 && !REGION) return res.status(400).json({ error: 'Invalid state code' });
 
   try {
-    // Find the STATE_DOTS entry for this state, if we have one
-    const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
-
-    const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams, calOesCams] = await Promise.all([
-      _loadOTC().catch(() => []),
-      dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
-      REGION ? Promise.resolve([]) : _loadWindy(code).catch(() => []),   // too large to grid-search
-      REGION ? Promise.resolve([]) : _loadNPS(code).catch(() => []),
-      code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
-      community.forState(code).catch(() => []),
-      REGION ? Promise.resolve([]) : _loadCalOES().then(l => l.filter(c => _inState(code, c.lat, c.lng, 2))).catch(() => []),
-    ]);
-
-    // Drop cameras with impossible coordinates (0,0, swapped lat/lng…). One bad
-    // Georgia camera made the map zoom out to the whole world. DOT cameras may
-    // sit just over a border, so they get ~25 miles of slack.
-    const stateDOT = [...stateDOTraw, ...(code === 'PA' ? _loadPennDOT() : [])]
-      .filter(c => _inState(code, c.lat, c.lng, 25, true));
-    if (stateDOTraw.length && stateDOT.length < stateDOTraw.length) {
-      console.log(`[Cameras] ${code}: dropped ${stateDOTraw.length - stateDOT.length} DOT cameras with coordinates outside the state`);
-    }
-
-    // Filter OTC to this state
-    const otcForState = otcAll.filter(c => c.state === code);
-
-    // Merge priority: STATE_DOTS (traffic) → OTC → Windy (scenic/weather).
-    // Deduplicate at 100m so we don't show two cameras from different sources
-    // that are essentially at the same location.
-    const merged = [...stateDOT];
-    for (const cam of [...communityCams, ...usgsCams, ...calOesCams, ...npsCams, ...otcForState, ...windyCams]) {
-      const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
-      if (!tooClose) merged.push(cam);
-    }
+    const { cameras: merged, sources: sourceCounts } = await _camerasFor(code);
 
     if (merged.length === 0) {
       return res.json({ cameras: [], total: 0, covered: false,
         message: `No camera feeds available for ${code} yet.` });
     }
-
-    const sourceCounts = {};
-    merged.forEach(c => { sourceCounts[c.source] = (sourceCounts[c.source] || 0) + 1; });
 
     res.set('Cache-Control', 'no-store');
     const bb = STATE_BBOX[code];
@@ -2567,6 +2575,72 @@ app.get('/api/cameras/state/:code', async (req, res) => {
     console.error(`[Cameras] State ${code} failed:`, e.message);
     res.status(500).json({ error: 'Camera data unavailable' });
   }
+});
+
+// ── Camera counter ───────────────────────────────────────────────────────────
+// GET /api/cameras/stats — how many live cameras the map can show, by US state
+// and world region, by source, and in total (each camera counted once, even if
+// it sits on a border and shows up for two states). Counted in the background
+// a few minutes after start-up and then every 12 hours, one area at a time so
+// the camera feeds aren't hammered. Public: for the site ("30,000+ live
+// cameras") and for spotting states that need more cameras.
+const CAMERA_REGION_NAMES = { CAN: 'Canada', MEX: 'Mexico & Central America', CAR: 'Caribbean', SAM: 'South America',
+  EUR: 'Europe', MEA: 'Middle East & Africa', ASI: 'Asia', OCE: 'Oceania' };
+const CAMERA_SOURCE_NAMES = { dot: 'State DOT', otc: 'Open traffic feeds', windy: 'Windy webcams', nps: 'National Parks',
+  usgs: 'USGS volcano cams', community: 'Community cams', caloes: 'ALERTCalifornia', road511: 'Road511' };
+const _stateNameByCode = Object.fromEntries(Object.entries(OTC_STATE_CODES).map(([n, c]) => [c, n]));
+let _camStats = null, _camStatsRunning = false;
+async function _countCameras() {
+  if (_camStatsRunning) return;
+  _camStatsRunning = true;
+  const t0 = Date.now();
+  try {
+    const states = Object.keys(STATE_BBOX).filter(c => c.length === 2).sort();
+    const seen = new Set(), bySource = {};
+    const key = (c) => c.id ? String(c.id) : `${(+c.lat).toFixed(4)},${(+c.lng).toFixed(4)}`;
+    const count = async (code) => {
+      let r = { cameras: [], sources: {} };
+      try { r = await _camerasFor(code); } catch (e) { console.warn(`[CamStats] ${code}:`, e.message); }
+      let unique = 0;
+      r.cameras.forEach(c => { const k = key(c); if (!seen.has(k)) { seen.add(k); unique++; } });
+      Object.entries(r.sources).forEach(([s, n]) => { bySource[s] = (bySource[s] || 0) + n; });
+      await new Promise(ok => setTimeout(ok, 1500));                   // gentle on the feeds
+      return { total: r.cameras.length, unique, sources: r.sources };
+    };
+    const us = [], world = [];
+    for (const code of states) { const r = await count(code); us.push({ code, name: _stateNameByCode[code] || code, total: r.total, sources: r.sources }); r.unique && (us.uniq = (us.uniq || 0) + r.unique); }
+    for (const code of Object.keys(CAMERA_REGION_NAMES)) { const r = await count(code); world.push({ code, name: CAMERA_REGION_NAMES[code], total: r.total, sources: r.sources }); r.unique && (world.uniq = (world.uniq || 0) + r.unique); }
+    us.sort((a, b) => b.total - a.total); world.sort((a, b) => b.total - a.total);
+    _camStats = {
+      total: seen.size,
+      us: { total: us.uniq || 0, states: us.map(({ code, name, total, sources }) => ({ code, name, total, sources })) },
+      world: { total: world.uniq || 0, regions: world },
+      bySource: Object.fromEntries(Object.entries(bySource).sort((a, b) => b[1] - a[1])),
+      sourceNames: CAMERA_SOURCE_NAMES,
+      // Weak spots: the states with the fewest cameras, and states with no state-DOT feed
+      fewest: us.filter(s => s.total > 0).slice(-10).reverse().map(s => ({ code: s.code, name: s.name, total: s.total })),
+      none: us.filter(s => !s.total).map(s => s.code),
+      noDotFeed: us.filter(s => !s.sources.dot && !s.sources.otc).map(s => s.code),
+      updatedAt: new Date().toISOString(),
+      tookSeconds: Math.round((Date.now() - t0) / 1000),
+    };
+    console.log(`[CamStats] ${_camStats.total} cameras (${_camStats.us.total} US, ${_camStats.world.total} elsewhere) in ${_camStats.tookSeconds}s`);
+  } catch (e) {
+    console.error('[CamStats] count failed:', e.message);
+  } finally {
+    _camStatsRunning = false;
+  }
+}
+setTimeout(_countCameras, 3 * 60 * 1000);
+setInterval(_countCameras, 12 * 60 * 60 * 1000);
+app.get('/api/cameras/stats', (req, res) => {
+  const origin = req.get('Origin') || '';
+  if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin); res.set('Vary', 'Origin');
+  }
+  if (!_camStats) return res.status(202).json({ pending: true, message: 'Counting cameras — try again in a few minutes.' });
+  res.set('Cache-Control', 'public, max-age=900');
+  res.json(_camStats);
 });
 
 // GET /api/aqi?lat=&lng=
