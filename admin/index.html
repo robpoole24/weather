@@ -3077,14 +3077,21 @@ async function loadCamsSummary() {
 async function loadCameraStats() {
   const el = document.getElementById('cs-summary'), tbl = document.getElementById('cs-table');
   try {
-    const r = await fetch('/api/cameras/stats', { cache: 'no-store' });
+    const r = await fetch('/api/cameras/stats?t=' + Date.now(), { cache: 'no-store' });
     const d = await r.json();
-    if (d.pending) { el.textContent = 'Counting cameras… (takes a few minutes after a deploy). Check back shortly.'; return; }
+    if (d.pending) {
+      const pr = d.progress;
+      el.textContent = pr ? `Counting cameras… ${pr.done} of ${pr.total} states & regions done. This refreshes by itself.`
+                          : 'The first count starts about a minute after a deploy. This refreshes by itself.';
+      clearTimeout(loadCameraStats.t); loadCameraStats.t = setTimeout(loadCameraStats, 15000);
+      return;
+    }
     const n = (x) => Number(x || 0).toLocaleString();
     const when = new Date(d.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const src = Object.entries(d.bySource || {}).map(([k, v]) => `${lvEsc((d.sourceNames || {})[k] || k)} ${n(v)}`).join(' · ');
     el.innerHTML = `<div style="font-size:1.6rem;font-weight:700;color:var(--text,#fff)">${n(d.total)} <span style="font-size:0.8rem;font-weight:400;color:var(--muted)">live cameras</span></div>`
-      + `<div>${n(d.us.total)} in the US · ${n(d.world.total)} elsewhere · counted ${lvEsc(when)}</div>`
+      + `<div>${n(d.us.total)} in the US · ${n(d.world.total)} elsewhere · counted ${lvEsc(when)}`
+      + (d.recounting ? ` · <span style="color:var(--accent)">recounting now (${d.recounting.done}/${d.recounting.total})</span>` : '') + `</div>`
       + `<div style="margin-top:0.3rem">${src}</div>`
       + `<div style="margin-top:0.5rem;color:var(--gold)">Weak spots: `
       + (d.fewest || []).map(s => `${lvEsc(s.name)} (${n(s.total)})`).join(', ')
@@ -3107,7 +3114,8 @@ async function recountCameras() {
   const poll = setInterval(async () => {
     try {
       const d = await (await fetch('/api/admin/cameras/recount')).json();
-      if (!d.running || Date.now() - started > 15 * 60 * 1000) { clearInterval(poll); b.disabled = false; b.textContent = '↻ Recount now'; loadCameraStats(); }
+      if (d.running && d.progress) b.textContent = `Counting… ${d.progress.done}/${d.progress.total}`;
+      if (!d.running || Date.now() - started > 30 * 60 * 1000) { clearInterval(poll); b.disabled = false; b.textContent = '↻ Recount now'; loadCameraStats(); }
     } catch (_) {}
   }, 10000);
 }

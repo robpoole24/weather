@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-18T21:00:00Z build.1792410000
+// WeatherTV Server — updated 2026-10-18T20:45:00Z build.1792420000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2589,7 +2589,7 @@ const CAMERA_REGION_NAMES = { CAN: 'Canada', MEX: 'Mexico & Central America', CA
 const CAMERA_SOURCE_NAMES = { dot: 'State DOT', otc: 'Open traffic feeds', windy: 'Windy webcams', nps: 'National Parks',
   usgs: 'USGS volcano cams', community: 'Community cams', caloes: 'ALERTCalifornia', road511: 'Road511' };
 const _stateNameByCode = Object.fromEntries(Object.entries(OTC_STATE_CODES).map(([n, c]) => [c, n]));
-let _camStats = null, _camStatsRunning = false;
+let _camStats = null, _camStatsRunning = false, _camProgress = null;
 async function _countCameras() {
   if (_camStatsRunning) return;
   _camStatsRunning = true;
@@ -2604,10 +2604,12 @@ async function _countCameras() {
       let unique = 0;
       r.cameras.forEach(c => { const k = key(c); if (!seen.has(k)) { seen.add(k); unique++; } });
       Object.entries(r.sources).forEach(([s, n]) => { bySource[s] = (bySource[s] || 0) + n; });
+      if (_camProgress) _camProgress.done++;
       await new Promise(ok => setTimeout(ok, 1500));                   // gentle on the feeds
       return { total: r.cameras.length, unique, sources: r.sources };
     };
     const us = [], world = [];
+    _camProgress = { done: 0, total: states.length + Object.keys(CAMERA_REGION_NAMES).length, startedAt: new Date().toISOString() };
     for (const code of states) { const r = await count(code); us.push({ code, name: _stateNameByCode[code] || code, total: r.total, sources: r.sources }); r.unique && (us.uniq = (us.uniq || 0) + r.unique); }
     for (const code of Object.keys(CAMERA_REGION_NAMES)) { const r = await count(code); world.push({ code, name: CAMERA_REGION_NAMES[code], total: r.total, sources: r.sources }); r.unique && (world.uniq = (world.uniq || 0) + r.unique); }
     us.sort((a, b) => b.total - a.total); world.sort((a, b) => b.total - a.total);
@@ -2624,29 +2626,36 @@ async function _countCameras() {
       updatedAt: new Date().toISOString(),
       tookSeconds: Math.round((Date.now() - t0) / 1000),
     };
+    rSet('wt:camstats', _camStats);                                   // shown straight away after a restart
     console.log(`[CamStats] ${_camStats.total} cameras (${_camStats.us.total} US, ${_camStats.world.total} elsewhere) in ${_camStats.tookSeconds}s`);
   } catch (e) {
     console.error('[CamStats] count failed:', e.message);
   } finally {
     _camStatsRunning = false;
+    _camProgress = null;
   }
 }
-setTimeout(_countCameras, 3 * 60 * 1000);
+// After a restart: show the last saved count right away, then count again a minute later
+(async () => { try { const saved = await rGet('wt:camstats'); if (saved && !_camStats) _camStats = typeof saved === 'string' ? JSON.parse(saved) : saved; } catch (_) {} })();
+setTimeout(_countCameras, 60 * 1000);
 setInterval(_countCameras, 12 * 60 * 60 * 1000);
 // Admin: count again now (POST), or check whether a count is running (GET)
 app.post('/api/admin/cameras/recount', (req, res) => {
   if (!_camStatsRunning) _countCameras();
   res.json({ running: true });
 });
-app.get('/api/admin/cameras/recount', (req, res) => res.json({ running: _camStatsRunning, updatedAt: _camStats && _camStats.updatedAt }));
+app.get('/api/admin/cameras/recount', (req, res) => res.json({ running: _camStatsRunning, progress: _camProgress, updatedAt: _camStats && _camStats.updatedAt }));
 app.get('/api/cameras/stats', (req, res) => {
   const origin = req.get('Origin') || '';
   if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
     res.set('Access-Control-Allow-Origin', origin); res.set('Vary', 'Origin');
   }
-  if (!_camStats) return res.status(202).json({ pending: true, message: 'Counting cameras — try again in a few minutes.' });
-  res.set('Cache-Control', 'public, max-age=900');
-  res.json(_camStats);
+  if (!_camStats) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(202).json({ pending: true, progress: _camProgress, message: 'Counting cameras — try again in a few minutes.' });
+  }
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(_camProgress ? { ..._camStats, recounting: _camProgress } : _camStats);
 });
 
 // GET /api/aqi?lat=&lng=
