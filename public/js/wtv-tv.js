@@ -123,6 +123,11 @@
       position: relative; z-index: 5; transition: outline-color .1s;
     }
     html.tv-mode .leaflet-container.tv-focus { outline-offset: -6px !important; }
+    html.tv-mode #tv-zoom-badge {
+      position: fixed; right: 1.2rem; top: 50%; transform: translateY(-50%); z-index: 2147482500; display: none;
+      background: rgba(0,0,0,0.85); color: #ffd000; border: 2px solid #ffd000; border-radius: 8px;
+      padding: 0.4rem 0.8rem; font: 700 1.3rem 'Barlow Condensed', 'Barlow', system-ui, sans-serif; pointer-events: none;
+    }
     html.tv-mode #tv-pointer {
       position: fixed; z-index: 2147482000; pointer-events: none; display: none;
       width: 38px; height: 38px; margin: -2px 0 0 -2px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
@@ -577,7 +582,7 @@
     if (!Object.keys(glide.dirs).length || !ptr.on) { glide.raf = 0; glide.last = 0; ptrHover(); return; }
     if (any && glide.map) {
       const held = (now - glide.start) / 1000;
-      const speed = Math.min(1500, 520 + held * 1100);                  // px per second
+      const speed = Math.min(650, 220 + held * 380);                    // px per second: easy to stop on a dot
       const len = Math.hypot(vx, vy) || 1;
       ptrShift(glide.map, vx / len * speed * dt, vy / len * speed * dt);
       if (now - glide.hoverAt > 70) { glide.hoverAt = now; ptrHover(); }
@@ -594,7 +599,7 @@
     } else {
       if (!Object.keys(glide.dirs).length) glide.start = now;
       glide.dirs[dir] = { at: now, wait: 900, repeating: false };
-      const hop = 22;                                                   // a tap: one clear step right away
+      const hop = 14;                                                   // a tap: one small step right away
       ptrShift(m, { left: -hop, right: hop }[dir] || 0, { up: -hop, down: hop }[dir] || 0);
       ptrHover();
     }
@@ -614,11 +619,43 @@
       if (mag > 0.18) {
         padAt = now;
         const m = mapOf(current);
-        const k = (Math.min(1, (mag - 0.18) / 0.82)) ** 1.6;            // gentle near the middle, fast at the edge
-        if (m) { ptrShift(m, ax / mag * k * 1600 * dt, ay / mag * k * 1600 * dt); ptrHover(); }
+        const k = (Math.min(1, (mag - 0.18) / 0.82)) ** 2;              // gentle near the middle, faster at the edge
+        if (m) { ptrShift(m, ax / mag * k * 700 * dt, ay / mag * k * 700 * dt); ptrHover(); }
       }
     }
     padRaf = requestAnimationFrame(padPoll);
+  }
+  // Zoom: each press counts right away (the level shows on screen); presses
+  // made while the map is still zooming are added up into one smooth zoom.
+  const zoomQ = { target: null, busy: false, guard: 0 };
+  function zoomBadge(z) {
+    let b = document.getElementById('tv-zoom-badge');
+    if (!b) { b = document.createElement('div'); b.id = 'tv-zoom-badge'; document.body.appendChild(b); }
+    b.textContent = 'Zoom ' + z; b.style.display = 'block';
+    clearTimeout(zoomBadge.t); zoomBadge.t = setTimeout(() => { b.style.display = 'none'; }, 1200);
+  }
+  function zoomStep(m, dir) {
+    const base = zoomQ.target != null ? zoomQ.target : m.getZoom();
+    zoomQ.target = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), Math.round(base) + dir));
+    zoomBadge(zoomQ.target);
+    if (!zoomQ.busy) zoomApply(m);
+  }
+  function zoomApply(m) {
+    const z = zoomQ.target;
+    if (z == null || z === m.getZoom()) { zoomQ.target = null; zoomQ.busy = false; return; }
+    zoomQ.busy = true;
+    const done = () => {
+      clearTimeout(zoomQ.guard);
+      if (!zoomQ.busy) return;
+      zoomQ.busy = false;
+      if (zoomQ.target != null && zoomQ.target !== z) zoomApply(m); else zoomQ.target = null;
+      ptrHover();
+    };
+    m.once('zoomend', done);
+    zoomQ.guard = setTimeout(done, 900);                                 // never get stuck waiting
+    const r = m.getContainer().getBoundingClientRect();
+    try { if (ptr.on) m.setZoomAround(L.point(ptr.x - r.left, ptr.y - r.top), z); else m.setZoom(z); }
+    catch (_) { try { m.setZoom(z); } catch (__) { done(); } }
   }
   function openOverlays() {
     const shown = (el) => el && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0;
@@ -697,12 +734,7 @@
     const m = mapOf(current);
     if (m && (k === 427 || k === 428 || k === PAD_RB || k === PAD_LB || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-')) {
       e.preventDefault();
-      const zin = (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+');
-      const r = m.getContainer().getBoundingClientRect();
-      const z = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), m.getZoom() + (zin ? 1 : -1)));
-      try { if (ptr.on) m.setZoomAround(L.point(ptr.x - r.left, ptr.y - r.top), z); else (zin ? m.zoomIn() : m.zoomOut()); }
-      catch (_) { zin ? m.zoomIn() : m.zoomOut(); }
-      setTimeout(ptrHover, 350);
+      zoomStep(m, (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+') ? 1 : -1);
       return;
     }
     if (DIRS[k]) {
