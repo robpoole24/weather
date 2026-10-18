@@ -44,8 +44,12 @@
     let top; try { top = window.top; void top.document.body; } catch (_) { return false; }
     const wv = top.chrome && top.chrome.webview;
     if (!wv || !wv.postMessage) return false;
+    // The A press that closes the app's box can reach the page too: don't
+    // let it open the box again straight away.
+    if (Date.now() - (top.__wtvCommitAt || 0) < 1000 || Date.now() - (top.__wtvClosedAt || 0) < 1000) return true;
     lastTextAsk = Date.now();
     top.__wtvTextTarget = el;
+    top.__wtvAsking = el;
     try { el.blur(); } catch (_) {}
     // The site may put the cursor back right away (e.g. search calls select()
     // after focus), which would bring up the web view's own keyboard over ours
@@ -80,9 +84,10 @@
     if (window === window.top) {
       // Called by the Xbox app with what was typed: fill the box and search
       window.__wtvTextCommit = function (v) {
-        const el = window.__wtvTextTarget; window.__wtvTextTarget = null;
+        const el = window.__wtvTextTarget; window.__wtvTextTarget = null; window.__wtvAsking = null;
         window.__wtvCommitAt = Date.now();
         if (!el || !el.isConnected) return;
+        setTimeout(() => afterTextBox(el), 60);
         el.value = v;
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -96,6 +101,29 @@
       };
     }
   }
+  // After the app's text box closes (Search or Cancel): on the radar, go back
+  // to the map pointer; elsewhere stay on the box that was typed into.
+  function afterTextBox(el) {
+    try {
+      const w = el.ownerDocument.defaultView;
+      if (w && w.WTV_TV && w.WTV_TV.textDone) w.WTV_TV.textDone(el);
+    } catch (_) {}
+  }
+  if (XBOX_APP && window === window.top) {
+    // Cancel: the app's box closes and the page gets the focus back without
+    // any text. That's how we know it was cancelled.
+    window.addEventListener('focus', () => {
+      const el = window.__wtvAsking;
+      if (!el) return;
+      setTimeout(() => {
+        if (window.__wtvAsking !== el) return;                          // Search arrived instead
+        window.__wtvAsking = null; window.__wtvTextTarget = null;
+        window.__wtvClosedAt = Date.now();
+        if (el.isConnected) afterTextBox(el);
+      }, 250);
+    });
+  }
+
   // "In a frame" means OUR page framing us (the radar inside the main page).
   // An app shell from another origin (the Samsung TV wrapper) doesn't count:
   // we act as the top page and ask the shell to exit at the home screen.
@@ -270,6 +298,11 @@
     setTimeout(() => { setFocus(first); try { first.scrollIntoView({ block: 'center' }); } catch (_) {} }, 0);
   }
   api.openPicker = openPicker;
+  api.textDone = (el) => {
+    const m = window.WTV_TV_MAP;
+    if (m && m.getContainer && document.contains(m.getContainer()) && visible(m.getContainer())) setFocus(m.getContainer());
+    else if (el && document.contains(el) && visible(el)) setFocus(el);
+  };
 
   // Prefer controls inside the topmost open overlay (popup, panel, dialog)
   function scopeOf(list) {
