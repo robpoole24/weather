@@ -123,6 +123,16 @@
       position: relative; z-index: 5; transition: outline-color .1s;
     }
     html.tv-mode .leaflet-container.tv-focus { outline-offset: -6px !important; }
+    html.tv-mode #tv-pointer {
+      position: fixed; z-index: 2147482000; pointer-events: none; display: none;
+      width: 38px; height: 38px; margin: -2px 0 0 -2px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));
+      transition: left .06s linear, top .06s linear;
+    }
+    html.tv-mode #tv-pointer::after {
+      content: ''; position: absolute; left: -9px; top: -9px; width: 22px; height: 22px; border-radius: 50%;
+      border: 3px solid #ffd000; opacity: 0; transition: opacity .12s;
+    }
+    html.tv-mode #tv-pointer.hot::after { opacity: 1; }
     html.tv-mode #tv-picker {
       position: fixed; inset: 0; z-index: 2147483000; background: rgba(0,0,0,0.72);
       display: flex; align-items: center; justify-content: center;
@@ -142,6 +152,7 @@
     html.tv-mode #tv-picker button.on { border-color: #00b4d8; color: #00b4d8; }
     html.tv-mode #tv-picker button.on::after { content: '  ✓'; }
     html.tv-mode #tv-picker button[disabled] { opacity: 0.4; }
+    html.tv-mode #tv-picker .tv-picker-tip { color: #7d97b3; font-size: 0.85rem; text-align: center; }
     html.tv-mode #tv-picker .tv-picker-cancel { text-align: center; background: transparent; color: #7d97b3; }
     html.tv-mode #tv-map-hint {
       position: fixed; left: 50%; bottom: 3.5rem; transform: translateX(-50%); z-index: 99999;
@@ -173,7 +184,7 @@
     }
     for (let n = el; n && n !== document.body; n = n.parentElement) {
       const cs = getComputedStyle(n);
-      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
+      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0 || n.style.opacity === '0') return false;   // inline 0 = fading out
     }
     // Covered by something else (e.g. a link sitting under the toolbar)? Check
     // what's actually on top at a few points inside it.
@@ -245,7 +256,10 @@
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'tv-picker-cancel';
     cancel.textContent = 'Cancel'; cancel.setAttribute('data-tv-picker-cancel', '');
     cancel.addEventListener('click', () => closePicker());
-    box.append(h, list, cancel); pk.appendChild(box);
+    const tip = document.createElement('div'); tip.className = 'tv-picker-tip';
+    tip.textContent = /Xbox/i.test(ua) ? 'D-pad to move · RB/LB jump a page · A to choose · B to cancel'
+                                       : 'Arrows to move · CH ▲/▼ jump a page · OK to choose · BACK to cancel';
+    box.append(h, list, cancel, tip); pk.appendChild(box);
     pk.addEventListener('click', (e) => { if (e.target === pk) closePicker(); });
     document.body.appendChild(pk);
     const first = chosen || list.querySelector('.tv-picker-opt:not([disabled])') || cancel;
@@ -281,7 +295,8 @@
     }
     tvFocusing = false;
     try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
-    if (el.classList.contains('leaflet-container')) showMapHint(); else hideMapHint();
+    if (el.classList.contains('leaflet-container')) { showMapHint(); const pm = mapOf(el); if (pm) ptrShow(pm); }
+    else { hideMapHint(); ptrHide(); }
     if (el.tagName === 'IFRAME' && !(opts && opts.noEnter)) enterFrame(el, (opts && opts.dir) || 'down');
     return true;
   }
@@ -313,7 +328,29 @@
     }
     return win;
   }
+  // Inside the drop-down list: step through the choices in order. Choices
+  // scrolled out of the list's box still count; each step scrolls the list.
+  function pickerItems() {
+    const pk = document.getElementById('tv-picker');
+    return pk ? [...pk.querySelectorAll('.tv-picker-opt:not([disabled]), .tv-picker-cancel')] : null;
+  }
+  function pickerStep(n) {
+    const items = pickerItems();
+    if (!items || !items.length) return false;
+    let i = items.indexOf(current);
+    const opts = items.length - 1;                      // the last item is Cancel
+    if (i < 0) i = 0;
+    else if (Math.abs(n) > 1) i = i >= opts ? (n > 0 ? opts : Math.max(0, opts - 1)) : Math.max(0, Math.min(opts - 1, i + n));
+    else i = Math.max(0, Math.min(items.length - 1, i + n));
+    setFocus(items[i]);
+    try { items[i].scrollIntoView({ block: 'nearest' }); } catch (_) {}
+    return true;
+  }
   function move(dir) {
+    if (pickerItems()) {
+      if (dir === 'down' || dir === 'up') pickerStep(dir === 'down' ? 1 : -1);
+      return true;
+    }
     const list = scopeOf(candidates());
     if (!current || !document.contains(current) || !visible(current)) return focusFirst();
     const next = best(current, dir, list);
@@ -390,7 +427,16 @@
     try { if (window.chrome && chrome.webview && chrome.webview.postMessage) { chrome.webview.postMessage('wtv-exit'); return; } } catch (_) {}
     try { window.close(); } catch (_) {}
   }
-  function refocusSoon() { setTimeout(() => { if (!current || !document.contains(current) || !visible(current)) focusFirst(); }, 120); }
+  function refocusSoon() {
+    // Checked twice: some boxes (map popups) fade out before they're removed
+    const check = (last) => {
+      if (current && document.contains(current) && visible(current)) { if (!last) setTimeout(() => check(true), 350); return; }
+      if (mapReturn && document.contains(mapReturn.el) && visible(mapReturn.el)) setFocus(mapReturn.el);   // back to the pointer
+      else focusFirst();
+      mapReturn = null;
+    };
+    setTimeout(() => check(false), 150);
+  }
 
   // ── Map hint (radar) ──────────────────────────────────────────────────────
   let hintTimer = null;
@@ -398,13 +444,124 @@
     let h = document.getElementById('tv-map-hint');
     if (!h) { h = document.createElement('div'); h.id = 'tv-map-hint'; document.body.appendChild(h); }
     h.textContent = /Xbox/i.test(ua)
-      ? 'D-pad or stick moves the map · RB/LB zoom · B returns to the buttons'
-      : 'Arrows move the map · CH ▲/▼ zoom · BACK returns to the buttons';
+      ? 'Stick moves the pointer (push past the edge to move the map) · A clicks · RB/LB zoom · B back to the buttons'
+      : 'Arrows move the pointer (push past the edge to move the map) · OK clicks · CH ▲/▼ zoom · BACK to the buttons';
     h.style.display = 'block';
     clearTimeout(hintTimer); hintTimer = setTimeout(() => { h.style.display = 'none'; }, 5000);
   }
   function hideMapHint() { const h = document.getElementById('tv-map-hint'); if (h) h.style.display = 'none'; }
   function mapOf(el) { const m = window.WTV_TV_MAP; return el && el.classList.contains('leaflet-container') && m && m.getContainer && m.getContainer() === el ? m : null; }
+
+  // ── Pointer on the map ────────────────────────────────────────────────────
+  // With the map highlighted, a big pointer works like a mouse: the stick or
+  // D-pad moves it (faster the longer you hold), pushing past the edge moves
+  // the map, hovering shows names, A clicks whatever is under it (dots, areas,
+  // the legend, the Layers button…), RB/LB zoom around it, B goes back to the
+  // buttons. Opening a camera, popup or panel moves the highlight into it;
+  // closing it brings the pointer back where it was.
+  const ptr = { el: null, x: 0, y: 0, on: false, hover: null, lastAt: 0, streak: 0, set: false };
+  let mapReturn = null;
+  function ptrShow(m) {
+    if (!ptr.el) {
+      ptr.el = document.createElement('div'); ptr.el.id = 'tv-pointer';
+      ptr.el.innerHTML = '<svg viewBox="0 0 32 32" width="38" height="38" aria-hidden="true"><path d="M3 2 L3 26 L9.5 20 L14 30 L18.5 28 L14 18.5 L23 18.5 Z" fill="#ffd000" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>';
+      document.body.appendChild(ptr.el);
+    }
+    if (!ptr.set) {                                       // first time: middle of the map
+      const r = m.getContainer().getBoundingClientRect();
+      ptr.x = Math.round(r.left + r.width / 2); ptr.y = Math.round(r.top + r.height / 2); ptr.set = true;
+    }
+    ptr.on = true; ptr.el.style.display = 'block';
+    ptrPlace(); ptrHover();
+  }
+  function ptrHide() {
+    if (!ptr.on) return;
+    ptr.on = false; if (ptr.el) ptr.el.style.display = 'none';
+    if (ptr.hover) { mouse(ptr.hover, 'mouseout', ptr.x, ptr.y); ptr.hover = null; }
+  }
+  function ptrPlace() { if (ptr.el) { ptr.el.style.left = ptr.x + 'px'; ptr.el.style.top = ptr.y + 'px'; } }
+  function mouse(el, type, x, y, related) {
+    try {
+      el.dispatchEvent(new MouseEvent(type, { bubbles: type !== 'mouseenter' && type !== 'mouseleave', cancelable: true, view: window,
+        clientX: x, clientY: y, screenX: x, screenY: y, button: 0, buttons: /down|move/.test(type) && ptr.down ? 1 : 0, relatedTarget: related || null }));
+    } catch (_) {}
+  }
+  const HOT = '.leaflet-interactive, .leaflet-marker-icon, a[href], button, [role="button"], [onclick], .lp-row, select, input, label, [tabindex]:not([tabindex="-1"])';
+  // What's under the pointer. Small dots get a little help: a near miss counts.
+  function ptrTarget() {
+    let el = document.elementFromPoint(ptr.x, ptr.y);
+    if (!el) return null;
+    const hot = el.closest && el.closest(HOT);
+    if (hot && !hot.classList.contains('leaflet-container') && !el.closest('.leaflet-tile-pane')) return { el, x: ptr.x, y: ptr.y };
+    let best = null, bestD = 24;
+    document.querySelectorAll('.leaflet-marker-icon').forEach(mk => {
+      if (mk.style.display === 'none') return;
+      const r = mk.getBoundingClientRect(); if (r.width < 1) return;
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2, d = Math.hypot(cx - ptr.x, cy - ptr.y);
+      if (d < bestD) { bestD = d; best = { el: document.elementFromPoint(cx, cy) || mk, x: cx, y: cy }; }
+    });
+    return best || { el, x: ptr.x, y: ptr.y };
+  }
+  function ptrHover() {
+    const t = ptrTarget(); const el = t && t.el;
+    if (el !== ptr.hover) {
+      if (ptr.hover) { mouse(ptr.hover, 'mouseout', t ? t.x : ptr.x, t ? t.y : ptr.y, el); }
+      if (el) mouse(el, 'mouseover', t.x, t.y, ptr.hover);
+      ptr.hover = el;
+    }
+    if (el) mouse(el, 'mousemove', t.x, t.y);
+    const hot = el && el.closest && el.closest(HOT);
+    if (ptr.el) ptr.el.classList.toggle('hot', !!(hot && !hot.classList.contains('leaflet-container')));
+  }
+  function ptrMove(m, dir) {
+    const now = Date.now();
+    ptr.streak = now - ptr.lastAt < 180 ? ptr.streak + 1 : 0; ptr.lastAt = now;
+    const step = Math.min(10 + ptr.streak * 5, 60);
+    const dx = { left: -step, right: step }[dir] || 0, dy = { up: -step, down: step }[dir] || 0;
+    const W = innerWidth - 3, H = innerHeight - 3;
+    let nx = ptr.x + dx, ny = ptr.y + dy, px = 0, py = 0;
+    if (nx < 2) { px = nx - 2; nx = 2; } if (nx > W) { px = nx - W; nx = W; }
+    if (ny < 2) { py = ny - 2; ny = 2; } if (ny > H) { py = ny - H; ny = H; }
+    ptr.x = nx; ptr.y = ny; ptrPlace();
+    if (px || py) { try { m.panBy([px * 3, py * 3], { animate: false }); } catch (_) {} }   // pushed past the edge: move the map
+    ptrHover();
+  }
+  function openOverlays() {
+    const shown = (el) => el && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden' && el.getBoundingClientRect().width > 0;
+    const out = [];
+    const cam = document.getElementById('camera-overlay'); if (shown(cam)) out.push(cam);
+    document.querySelectorAll('.leaflet-popup, #tv-picker, [role="dialog"], .modal, #lnw-panel, #meso-menu, #layer-panel.open, #forecast-panel.open, #alert-types-panel').forEach(o => { if (shown(o)) out.push(o); });
+    return out;
+  }
+  function ptrClick(m) {
+    const t = ptrTarget(); if (!t || !t.el) return;
+    const el = t.el;
+    const before = openOverlays();
+    const sel = el.closest && el.closest('select');
+    if (sel) { openPicker(sel); return; }
+    if (isTextField(el) && XBOX_APP) { mapReturn = { el: m.getContainer() }; askText(el); return; }
+    ptr.down = true;
+    mouse(el, 'mousedown', t.x, t.y);
+    ptr.down = false;
+    mouse(el, 'mouseup', t.x, t.y);
+    mouse(el, 'click', t.x, t.y);
+    setTimeout(() => {
+      const opened = openOverlays().filter(o => !before.includes(o));
+      if (opened.length) { mapReturn = { el: m.getContainer() }; jumpInto(opened[opened.length - 1]); }
+      else ptrHover();
+    }, 300);
+  }
+  // Move the highlight into something that just opened: a camera's ✕, the
+  // first link in a map popup, the first control in a panel.
+  function jumpInto(box) {
+    const items = [...box.querySelectorAll(SELECTOR)].filter(visible);
+    if (!items.length) return;
+    const isClose = (b) => /close/i.test(b.getAttribute('aria-label') || '') || /^(✕|×)$/.test((b.textContent || '').trim());
+    const close = items.find(isClose);
+    const content = items.find(b => b.classList.contains('lp-row'))
+      || items.find(b => !isClose(b) && !b.classList.contains('cam-expand') && !b.classList.contains('lp-head-btn') && !b.classList.contains('rx-ibtn'));
+    setFocus(box.id === 'camera-overlay' ? (close || items[0]) : (content || close || items[0]));
+  }
 
   // ── Keys ──────────────────────────────────────────────────────────────────
   // Arrows, plus the Xbox controller's D-pad (203–206) and left stick (211–214)
@@ -432,15 +589,27 @@
       mediaHandlers.forEach(fn => { try { fn(action); } catch (_) {} });
       return;
     }
+    if (pickerItems() && (k === 427 || k === 428 || k === PAD_RB || k === PAD_LB || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-' || key === 'PageUp' || key === 'PageDown')) {
+      e.preventDefault();                                                 // RB/LB, CH ▲/▼: a page at a time
+      pickerStep((k === 428 || k === PAD_RB || key === 'ChannelDown' || key === '+' || key === 'PageDown') ? 8 : -8);
+      return;
+    }
     const m = mapOf(current);
     if (m && (k === 427 || k === 428 || k === PAD_RB || k === PAD_LB || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-')) {
-      e.preventDefault(); (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+') ? m.zoomIn() : m.zoomOut(); return;
+      e.preventDefault();
+      const zin = (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+');
+      const r = m.getContainer().getBoundingClientRect();
+      const z = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), m.getZoom() + (zin ? 1 : -1)));
+      try { if (ptr.on) m.setZoomAround(L.point(ptr.x - r.left, ptr.y - r.top), z); else (zin ? m.zoomIn() : m.zoomOut()); }
+      catch (_) { zin ? m.zoomIn() : m.zoomOut(); }
+      setTimeout(ptrHover, 350);
+      return;
     }
     if (DIRS[k]) {
-      if (m) {                                                            // the map is highlighted: pan it
-        e.preventDefault(); e.stopPropagation(); showMapHint();
-        const step = Math.round(Math.min(innerWidth, innerHeight) / 4);
-        m.panBy({ left: [-step, 0], right: [step, 0], up: [0, -step], down: [0, step] }[DIRS[k]], { animate: true });
+      if (m) {                                                            // the map is highlighted: move the pointer
+        e.preventDefault(); e.stopPropagation();
+        if (!ptr.on) ptrShow(m);
+        ptrMove(m, DIRS[k]);
         return;
       }
       if (typing && (k === 37 || k === 39)) {                             // text box: move the cursor, and
@@ -462,14 +631,15 @@
       e.preventDefault();
       // A button that opens a text box (like 🔍): no web keyboard, only the app's box
       if (XBOX_APP) document.querySelectorAll('input, textarea').forEach(i => { if (isTextField(i)) i.setAttribute('inputmode', 'none'); });
-      if (current.classList.contains('leaflet-container')) return;
+      if (current.classList.contains('leaflet-container')) { const pm = mapOf(current); if (pm) ptrClick(pm); return; }
       if (current.tagName === 'SELECT') { openPicker(current); return; }
       current.click(); if (/^(INPUT|SELECT)$/.test(current.tagName)) current.focus();
+      refocusSoon();                                                      // e.g. a ✕ that closed its own box
       return;
     }
     if (k === 13 && current && !typing) {
       const t = current.tagName;
-      if (current.classList.contains('leaflet-container')) { e.preventDefault(); return; }
+      if (current.classList.contains('leaflet-container')) { e.preventDefault(); const pm = mapOf(current); if (pm) ptrClick(pm); return; }
       if (t === 'SELECT' && current.size <= 1) { e.preventDefault(); openPicker(current); return; }
       if (t !== 'BUTTON' && t !== 'A' && t !== 'SELECT' && t !== 'INPUT') { e.preventDefault(); current.click(); }
     }

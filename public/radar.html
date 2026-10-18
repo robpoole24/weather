@@ -4736,7 +4736,24 @@ function toggleLegend() {
   body.style.display = minimized ? '' : 'none';
   btn.textContent = minimized ? '▲ Hide' : '▼ Show';
   localStorage.setItem('legend-minimized', minimized ? 'false' : 'true');
+  fitPanelsAboveLegend();
 }
+// The tropical panels (top right) end just above the legend (bottom right) and
+// scroll inside, so the legend never covers them, open or folded.
+function fitPanelsAboveLegend() {
+  const leg = document.getElementById('radar-legend');
+  const lr = leg && getComputedStyle(leg).display !== 'none' ? leg.getBoundingClientRect() : null;
+  ['nhc-panel-tropical', 'nhc-panel-two'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || el.style.display === 'none') return;
+    const pr = el.getBoundingClientRect();
+    const overlapX = lr && lr.width > 0 && lr.left < pr.right && lr.right > pr.left;
+    const room = overlapX ? Math.floor(lr.top - pr.top - 10) : Math.floor(innerHeight * 0.8);
+    el.style.maxHeight = Math.max(120, room) + 'px';
+  });
+}
+setInterval(fitPanelsAboveLegend, 1500);
+window.addEventListener('resize', fitPanelsAboveLegend);
 (function restoreLegendState() {
   if (localStorage.getItem('legend-minimized') === 'true') {
     const body = document.getElementById('legend-body');
@@ -8659,7 +8676,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792290000"></script>
+<script src="/js/wtv-tv.js?v=1792330000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
