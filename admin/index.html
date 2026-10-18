@@ -617,6 +617,24 @@
       </div>
     </div>
   </div>
+  <!-- Camera Counter — every camera the radar map can show (/api/cameras/stats) -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">📊 Camera Counter</div>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" id="cs-recount" onclick="recountCameras()">↻ Recount now</button>
+        <a class="btn btn-primary btn-sm" href="/api/cameras/stats" target="_blank" rel="noopener" style="text-decoration:none">Open full stats ↗</a>
+      </div>
+    </div>
+    <div class="section-body">
+      <div id="cs-summary" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
+      <details style="margin-top:0.6rem">
+        <summary style="cursor:pointer;font-size:0.78rem;color:var(--accent)">Every state and region</summary>
+        <div id="cs-table" style="max-height:340px;overflow:auto;margin-top:0.5rem;font-size:0.76rem"></div>
+      </details>
+    </div>
+  </div>
+
   <!-- Alert Tests — banner/sound test + real push test + push system status -->
   <div class="section">
     <div class="section-header">
@@ -3055,6 +3073,44 @@ async function loadCamsSummary() {
       + (d.queue.length ? `<a href="/admin/cams.html#queue" style="color:var(--gold)"><strong>${d.queue.length}</strong> waiting for review</a>` : 'nothing waiting for review');
   } catch (e) { el.innerHTML = '<span style="color:var(--red)">✗ Could not load camera counts</span>'; }
 }
+// ── Camera Counter ───────────────────────────────────────────────────────────
+async function loadCameraStats() {
+  const el = document.getElementById('cs-summary'), tbl = document.getElementById('cs-table');
+  try {
+    const r = await fetch('/api/cameras/stats', { cache: 'no-store' });
+    const d = await r.json();
+    if (d.pending) { el.textContent = 'Counting cameras… (takes a few minutes after a deploy). Check back shortly.'; return; }
+    const n = (x) => Number(x || 0).toLocaleString();
+    const when = new Date(d.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const src = Object.entries(d.bySource || {}).map(([k, v]) => `${lvEsc((d.sourceNames || {})[k] || k)} ${n(v)}`).join(' · ');
+    el.innerHTML = `<div style="font-size:1.6rem;font-weight:700;color:var(--text,#fff)">${n(d.total)} <span style="font-size:0.8rem;font-weight:400;color:var(--muted)">live cameras</span></div>`
+      + `<div>${n(d.us.total)} in the US · ${n(d.world.total)} elsewhere · counted ${lvEsc(when)}</div>`
+      + `<div style="margin-top:0.3rem">${src}</div>`
+      + `<div style="margin-top:0.5rem;color:var(--gold)">Weak spots: `
+      + (d.fewest || []).map(s => `${lvEsc(s.name)} (${n(s.total)})`).join(', ')
+      + (d.none && d.none.length ? ` · <strong>No cameras:</strong> ${d.none.map(lvEsc).join(', ')}` : '')
+      + (d.noDotFeed && d.noDotFeed.length ? ` · <strong>No state traffic feed:</strong> ${d.noDotFeed.map(lvEsc).join(', ')}` : '')
+      + `</div>`;
+    const row = (x) => `<tr><td style="padding:2px 8px 2px 0">${lvEsc(x.name)}</td><td style="padding:2px 8px;text-align:right;color:var(--text,#fff)">${n(x.total)}</td>`
+      + `<td style="padding:2px 0;color:var(--muted)">${Object.entries(x.sources || {}).map(([k, v]) => `${lvEsc((d.sourceNames || {})[k] || k)} ${n(v)}`).join(' · ')}</td></tr>`;
+    tbl.innerHTML = `<table style="border-collapse:collapse;width:100%"><tr><th colspan="3" style="text-align:left;color:var(--accent);padding:4px 0">US states</th></tr>`
+      + d.us.states.map(row).join('')
+      + `<tr><th colspan="3" style="text-align:left;color:var(--accent);padding:8px 0 4px">Outside the US</th></tr>`
+      + d.world.regions.map(row).join('') + `</table>`;
+  } catch (e) { el.innerHTML = '<span style="color:var(--red)">✗ Could not load the camera counter</span>'; }
+}
+async function recountCameras() {
+  const b = document.getElementById('cs-recount');
+  b.disabled = true; b.textContent = 'Counting… (a few minutes)';
+  try { await fetch('/api/admin/cameras/recount', { method: 'POST' }); } catch (_) {}
+  const started = Date.now();
+  const poll = setInterval(async () => {
+    try {
+      const d = await (await fetch('/api/admin/cameras/recount')).json();
+      if (!d.running || Date.now() - started > 15 * 60 * 1000) { clearInterval(poll); b.disabled = false; b.textContent = '↻ Recount now'; loadCameraStats(); }
+    } catch (_) {}
+  }, 10000);
+}
 // ── Alert Tests ──────────────────────────────────────────────────────────────
 function openBannerTest(kind) {
   window.open('/radar.html?testAlert=' + encodeURIComponent(kind), '_blank', 'noopener');
@@ -3397,6 +3453,7 @@ loadFetchErrors();
 loadLiveVerifier();
 loadAlertTypesForTest();
 loadCamsSummary();
+loadCameraStats();
 setInterval(loadCamsSummary, 120000);
 loadPushStatus();
 setInterval(loadSystemHealth, 60000);

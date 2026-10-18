@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-18T09:50:00Z build.1792370000
+// WeatherTV Server — updated 2026-10-18T20:30:00Z build.1792400000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2633,6 +2633,12 @@ async function _countCameras() {
 }
 setTimeout(_countCameras, 3 * 60 * 1000);
 setInterval(_countCameras, 12 * 60 * 60 * 1000);
+// Admin: count again now (POST), or check whether a count is running (GET)
+app.post('/api/admin/cameras/recount', (req, res) => {
+  if (!_camStatsRunning) _countCameras();
+  res.json({ running: true });
+});
+app.get('/api/admin/cameras/recount', (req, res) => res.json({ running: _camStatsRunning, updatedAt: _camStats && _camStats.updatedAt }));
 app.get('/api/cameras/stats', (req, res) => {
   const origin = req.get('Origin') || '';
   if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
