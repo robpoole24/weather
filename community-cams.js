@@ -133,7 +133,7 @@ function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toS
 
 module.exports = function setupCommunityCams(app, deps) {
   const gazetteer = require('./gazetteer');
-  setTimeout(() => gazetteer.load(), 20 * 1000).unref?.();   // warm the world place list after startup
+  // The world place list loads on demand (discover/import call gazetteer.load()).
   const { rGet, rSet, fetchTextOverHttp, youtubeKey, stateFor, upstreamCount = () => {} } = deps;
   let db = { cams: [], queue: [], rejected: [], lastDiscovery: null, nextPlace: 0, channels: {} };
   let loaded = false;

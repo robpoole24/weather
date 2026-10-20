@@ -2,8 +2,8 @@
 //
 // Uses GeoNames "cities1000" (every town/city with 1,000+ people, ~160k places,
 // with coordinates, country and region). Free, CC BY 4.0 — credit: GeoNames
-// (https://www.geonames.org). Downloaded once at startup (~9 MB zip), cached in
-// /tmp, held in memory. No API calls, no cost: thousands of titles in seconds.
+// (https://www.geonames.org). Downloaded on first use (~9 MB zip), cached in
+// /tmp, held in memory while in use (dropped after 30 idle minutes). No API calls, no cost: thousands of titles in seconds.
 //
 //   locate(text, countryHint) → { lat, lng, name, region, cc, confident, why } | null
 //
@@ -82,8 +82,20 @@ function build(citiesTxt, admin1Txt) {
   }
 }
 
+// The place list is ~160k entries and only the admin camera tools (and a rare
+// forecast-search fallback) use it, so it is loaded on demand and dropped
+// again after IDLE_MS without use. Reloading from the /tmp copy takes ~1-2s.
+const IDLE_MS = 30 * 60 * 1000;
+let idleTimer = null;
+function touch() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { index = null; admin1 = new Map(); idleTimer = null;
+    console.log('[Gazetteer] place list unloaded (idle)'); }, IDLE_MS);
+  idleTimer.unref?.();
+}
+
 async function load(opts = {}) {
-  if (index) return true;
+  if (index) { touch(); return true; }
   if (loading) return loading;
   loading = (async () => {
     try {
@@ -94,6 +106,7 @@ async function load(opts = {}) {
       if (!fs.existsSync(af)) fs.writeFileSync(af, await get(ADMIN1));
       build(unzipFirstTxt(fs.readFileSync(zf)).toString('utf8'), fs.readFileSync(af, 'utf8'));
       console.log(`[Gazetteer] ${index.size.toLocaleString()} place names loaded (GeoNames, CC BY 4.0)`);
+      touch();
       return true;
     } catch (e) {
       console.warn('[Gazetteer] could not load GeoNames:', e.message);
@@ -116,6 +129,7 @@ const COUNTRY_WORDS = {
 
 function locate(text, countryHint) {
   if (!index) return null;
+  touch();
   const t = ' ' + norm(text) + ' ';
   // same text, keeping commas: "rauris, salzburg, austria"
   const tc = ' ' + String(text || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[’'`]/g, '')

@@ -4,7 +4,7 @@
   "description": "WeatherTV — Curated weather content app",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --max-old-space-size=512 server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {

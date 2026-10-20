@@ -1491,9 +1491,6 @@ const OTC_TTL = 60 * 60 * 1000; // 60 min — static file, rarely changes
 const _road511Cache = new Map();
 const ROAD511_TTL = 3 * 60 * 1000; // 3 min
 
-// Image proxy cache: key = url -> { buf, ct, ts }
-const _imgCache = new Map();
-const IMG_TTL = 25 * 1000; // 25s — keeps refresh cycle fresh
 
 // ── STATE DOT CAMERA SOURCES ─────────────────────────────────────────────────
 // The IBI Group / Skyline 511 platform is used by the majority of US state
@@ -3663,8 +3660,8 @@ app.get('/api/camera-hls', async (req, res) => {
 // GET /api/camera-image?url=...
 // CORS proxy for camera image URLs — almost all DOT servers block direct
 // browser requests with missing CORS headers. We fetch server-side and
-// pipe back the bytes with the correct headers. Cached 25s so repeated
-// refreshes within a poll cycle don't hammer upstream.
+// pipe back the bytes with the correct headers. Nothing is stored in memory;
+// the 25s Cache-Control lets Cloudflare absorb repeat requests.
 const _imgInflight = new Map();
 app.get('/api/camera-image', async (req, res) => {
   const rawUrl = (req.query.url || '').trim();
@@ -3685,18 +3682,16 @@ app.get('/api/camera-image', async (req, res) => {
     res.send(entry.buf);
   };
 
-  const cached = _imgCache.get(rawUrl);
-  if (cached && Date.now() - cached.ts < IMG_TTL) return send(cached);
-
+  // No server-side copy is kept: Cloudflare caches each frame for 25s via the
+  // Cache-Control header above, so a busy camera is still fetched once.
+  // _imgInflight only shares a fetch that is already in progress.
   try {
     let p = _imgInflight.get(rawUrl);
     if (!p) {
       upstreamCount('cameraImageUpstream');
       p = _fetchBinary(rawUrl, { maxBytes: 5 * 1024 * 1024 }).then(r => {
         if (r.status && r.status >= 400) { const e = new Error('upstream ' + r.status); e.status = r.status; throw e; }
-        const entry = { buf: r.buf, ct: r.ct, ts: Date.now() };
-        _lruSet(_imgCache, rawUrl, entry, 200);
-        return entry;
+        return { buf: r.buf, ct: r.ct };
       }).finally(() => _imgInflight.delete(rawUrl));
       _imgInflight.set(rawUrl, p);
     }
