@@ -1,4 +1,4 @@
-// WeatherTV alerts client — build.1790546400
+// WeatherTV alerts client — build.1792500000
 // Keeps the user's alert location + alert-type choices ON THE DEVICE and
 // turns them into push-topic subscriptions. Our server only relays the
 // subscribe call to Firebase; it never receives coordinates.
@@ -6,6 +6,13 @@ const WTVAlerts = (() => {
   const LS_LOC = 'wtv-alert-location';     // { lat, lon, ugc:[…], label, ts }
   const LS_TYPES = 'push-alert-types';     // chosen alert types (existing key)
   const LS_SUB = 'wtv-alert-subscription'; // { token, topics:[…] } last synced
+  const LS_KNOWN = 'push-alert-known';     // alert types this device has been offered
+  // The 17 types offered before the full list. People who saved choices back
+  // then haven't seen the newer types, so new on-by-default ones turn on for them.
+  const FIRST_TYPES = ['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning',
+    'Tornado Watch', 'Severe Thunderstorm Watch', 'Flood Warning', 'Flash Flood Watch', 'Winter Storm Warning',
+    'Blizzard Warning', 'Ice Storm Warning', 'High Wind Warning', 'Extreme Heat Warning', 'Red Flag Warning',
+    'Air Quality Alert', 'Dense Smoke Advisory', 'Special Weather Statement'];
   let catalog = null;
 
   const read = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (_) { return null; } };
@@ -57,9 +64,22 @@ const WTVAlerts = (() => {
   async function chosenCodes() {
     const cat = await alertTypes();
     const saved = read(LS_TYPES);
-    return cat.types.filter(t => t.always || (saved ? saved.includes(t.event) : t.defaultOn)).map(t => t.code);
+    const known = read(LS_KNOWN) || FIRST_TYPES;
+    return cat.types.filter(t => t.always || (saved ? (saved.includes(t.event) || (t.defaultOn && !known.includes(t.event))) : t.defaultOn))
+      .map(t => t.code);
   }
-  async function setTypes(types) { write(LS_TYPES, types); await sync(); }
+  // The choices shown in the settings (same rule as above, by name)
+  async function chosenTypes() {
+    const cat = await alertTypes();
+    const codes = await chosenCodes();
+    return cat.types.filter(t => codes.includes(t.code)).map(t => t.event);
+  }
+  async function setTypes(types) {
+    const cat = await alertTypes();
+    write(LS_TYPES, types);
+    write(LS_KNOWN, cat.types.map(t => t.event));   // everything in the list has now been offered
+    await sync();
+  }
 
   // Make Firebase's topic list for this token match (areas × chosen types)
   async function sync(token) {
@@ -73,14 +93,22 @@ const WTVAlerts = (() => {
     const add = want.filter(t => !have.includes(t));
     const remove = have.filter(t => !want.includes(t));
     if (!add.length && !remove.length) return { unchanged: true };
-    const r = await fetch('/api/radar/subscribe', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, add, remove }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok) write(LS_SUB, { token, topics: want.filter(t => !(j.failed || []).includes(t)) });
-    return j;
+    // The server takes up to 80 topics per call (areas × alert types can be ~180)
+    const failed = [];
+    let added = 0, removed = 0, ok = true, error = null;
+    for (let i = 0; i < Math.max(add.length, remove.length); i += 80) {
+      const r = await fetch('/api/radar/subscribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, add: add.slice(i, i + 80), remove: remove.slice(i, i + 80) }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { ok = false; error = j.error || ('HTTP ' + r.status); add.slice(i, i + 80).forEach(t => failed.push(t)); continue; }
+      (j.failed || []).forEach(t => failed.push(t));
+      added += j.added || 0; removed += j.removed || 0;
+    }
+    write(LS_SUB, { token, topics: want.filter(t => !failed.includes(t) && (have.includes(t) || add.includes(t))) });
+    return { ok: ok && !failed.length, added, removed, failed, error };
   }
 
-  return { setLocation, getLocation, setTypes, hasSavedTypes, alertTypes, sync, lookupAreas };
+  return { setLocation, getLocation, setTypes, chosenTypes, hasSavedTypes, alertTypes, sync, lookupAreas };
 })();
