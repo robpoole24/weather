@@ -1294,7 +1294,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="/js/wtv-alerts-core.js"></script>
-  <script src="/js/wtv-alerts.js"></script>
+  <script src="/js/wtv-alerts.js?v=1792500000"></script>
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
 <link rel="icon" href="/images/icon-192.png?v=2" type="image/png">
 <link rel="apple-touch-icon" href="/images/apple-touch-icon.png?v=2">
@@ -4776,68 +4776,85 @@ let _pushToken = null; // stored after successful registration
 async function loadNotificationPrefs(token) {
   _pushToken = token;
   try {
-    const res = await fetch('/api/radar/alert-types');
-    const data = await res.json();
-    renderNotifPrefs(data.types, token);
+    const data = await WTVAlerts.alertTypes();
+    const chosen = await WTVAlerts.chosenTypes().catch(() => null);
+    renderNotifPrefs(data.types, token, chosen);
   } catch(e) { console.warn('[Push] Could not load alert types:', e.message); }
 }
 
-function renderNotifPrefs(types, token) {
+function renderNotifPrefs(types, token, chosen) {
   let panel = document.getElementById('notif-prefs-panel');
   if (!panel) {
     panel = document.createElement('div');
     panel.id = 'notif-prefs-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'Alert notifications');
     panel.style.cssText = [
       'position:fixed','top:50%','left:50%',
       'transform:translate(-50%,-50%)',
       'background:var(--surface)','border:1px solid var(--border)',
       'border-radius:10px','padding:1.25rem 1.5rem',
-      'z-index:9999','max-width:360px','width:90%',
-      'max-height:80vh','overflow-y:auto',
+      'z-index:9999','max-width:430px','width:92%',
+      'max-height:82vh','overflow-y:auto',
       'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
       'font-family:Barlow,sans-serif',
     ].join(';');
     document.body.appendChild(panel);
   }
 
-  const groups = [
-    { label: '🔒 Always On',        types: types.filter(t => t.always) },
-    { label: '✅ Enabled by Default', types: types.filter(t => !t.always && t.defaultOn) },
-    { label: '➕ Optional',          types: types.filter(t => !t.always && !t.defaultOn) },
-  ];
-
+  // Sections in the catalog's own order (Severe storms, Tropical & coastal, …)
+  const ORDER = ['Severe storms', 'Tropical & coastal', 'Flooding', 'Winter & cold', 'Wind, fog & dust',
+    'Heat, fire & air', 'Mountains & volcanoes', 'Emergencies', 'Statements & outlooks'];
+  const groupNames = [];
+  types.forEach(t => { const g = t.group || 'Other'; if (!groupNames.includes(g)) groupNames.push(g); });
+  groupNames.sort((a, b) => (ORDER.indexOf(a) + 1 || 99) - (ORDER.indexOf(b) + 1 || 99));
   const saved = JSON.parse(localStorage.getItem('push-alert-types') || 'null');
+  const isOn = (t) => t.always || (chosen ? chosen.includes(t.event) : (saved ? saved.includes(t.event) : t.defaultOn));
+  const esc = (x) => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const sound = { siren: '🔊 siren', chime: '🔔 chime' };
 
   let html = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:1.1rem;font-weight:700;
-    color:var(--accent);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.75rem;
+    color:var(--accent);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.6rem;
     display:flex;justify-content:space-between;align-items:center">
     🔔 Alert Notifications
-    <button onclick="saveNotifPrefs()" title="Keep these choices"
+    <button onclick="saveNotifPrefs()" title="Keep these choices" aria-label="Close"
       style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.1rem">✕</button>
   </div>
-  <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem">
-    Choose which alerts send you a push notification. Always-on alerts cannot be disabled. Your location stays on this device — we never store it.
-  </p>`;
+  <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.6rem;line-height:1.45">
+    Every alert the National Weather Service issues for your area. Choose which send you a notification.
+    🔒 life-safety alerts can't be turned off. Your location stays on this device — we never store it.
+  </p>
+  <div style="display:flex;gap:0.4rem;margin-bottom:0.4rem">
+    <button type="button" onclick="notifPrefsSetAll(true)" style="font-size:0.72rem;background:none;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:0.2rem 0.5rem;cursor:pointer">All on</button>
+    <button type="button" onclick="notifPrefsSetAll(false)" style="font-size:0.72rem;background:none;border:1px solid var(--border);color:var(--text);border-radius:4px;padding:0.2rem 0.5rem;cursor:pointer">Only the defaults</button>
+  </div>`;
 
-  groups.forEach(group => {
-    if (!group.types.length) return;
-    html += `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;
-      font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);
-      margin:0.75rem 0 0.4rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem">
-      ${group.label}</div>`;
-    group.types.forEach(t => {
-      const checked = t.always || (saved ? saved.includes(t.event) : t.defaultOn);
-      const disabled = t.always ? 'disabled' : '';
-      html += `<label style="display:flex;align-items:center;gap:0.6rem;padding:0.3rem 0;
-        cursor:${t.always?'default':'pointer'};opacity:${t.always?'0.6':'1'}">
-        <input type="checkbox" data-event="${t.event}" ${checked?'checked':''} ${disabled}
-          style="accent-color:var(--accent);width:15px;height:15px;cursor:${t.always?'default':'pointer'}">
-        <span style="font-size:0.8rem">${t.icon} ${t.event}</span>
+  groupNames.forEach((g, gi) => {
+    const list = types.filter(t => (t.group || 'Other') === g);
+    const onCount = list.filter(isOn).length;
+    html += `<details class="np-group" ${gi === 0 ? 'open' : ''} style="border-top:1px solid var(--border);padding:0.35rem 0">
+      <summary style="cursor:pointer;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;
+        letter-spacing:0.08em;text-transform:uppercase;color:var(--text);display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+        <span>${esc(g)}</span><span class="np-count" style="color:var(--muted);font-weight:400;letter-spacing:0">${onCount} of ${list.length} on</span>
+      </summary>
+      <div style="display:flex;gap:0.4rem;margin:0.35rem 0 0.2rem">
+        <button type="button" onclick="notifPrefsGroup(this, true)" style="font-size:0.68rem;background:none;border:none;color:var(--accent);cursor:pointer;padding:0">All</button>
+        <button type="button" onclick="notifPrefsGroup(this, false)" style="font-size:0.68rem;background:none;border:none;color:var(--accent);cursor:pointer;padding:0">None</button>
+      </div>`;
+    list.forEach(t => {
+      html += `<label style="display:flex;align-items:center;gap:0.55rem;padding:0.25rem 0;
+        cursor:${t.always ? 'default' : 'pointer'};opacity:${t.always ? '0.65' : '1'}">
+        <input type="checkbox" data-event="${esc(t.event)}" data-default="${t.always || t.defaultOn ? 1 : 0}" ${isOn(t) ? 'checked' : ''} ${t.always ? 'disabled' : ''}
+          onchange="notifPrefsCount(this)"
+          style="accent-color:var(--accent);width:15px;height:15px;flex-shrink:0;cursor:${t.always ? 'default' : 'pointer'}">
+        <span style="font-size:0.8rem;flex:1">${t.icon} ${esc(t.event)}${t.always ? ' 🔒' : ''}</span>
+        ${sound[t.tier] ? `<span style="font-size:0.65rem;color:var(--muted);white-space:nowrap">${sound[t.tier]}</span>` : ''}
       </label>`;
     });
+    html += `</details>`;
   });
 
-  html += `<div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end">
+  html += `<div style="margin-top:0.9rem;display:flex;gap:0.5rem;justify-content:flex-end">
     <button onclick="saveNotifPrefs('${token}')"
       style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;
       letter-spacing:0.06em;text-transform:uppercase;background:var(--accent);color:#000;
@@ -4846,6 +4863,21 @@ function renderNotifPrefs(types, token) {
 
   panel.innerHTML = html;
   panel.style.display = '';
+}
+function notifPrefsCount(input) {
+  const g = input.closest('details'); if (!g) return;
+  const boxes = [...g.querySelectorAll('input[data-event]')];
+  g.querySelector('.np-count').textContent = `${boxes.filter(b => b.checked).length} of ${boxes.length} on`;
+}
+function notifPrefsGroup(btn, on) {
+  const g = btn.closest('details');
+  g.querySelectorAll('input[data-event]:not([disabled])').forEach(b => { b.checked = on; });
+  notifPrefsCount(g.querySelector('input[data-event]'));
+}
+function notifPrefsSetAll(on) {
+  const panel = document.getElementById('notif-prefs-panel');
+  panel.querySelectorAll('input[data-event]:not([disabled])').forEach(b => { b.checked = on ? true : b.dataset.default === '1'; });
+  panel.querySelectorAll('details').forEach(g => notifPrefsCount(g.querySelector('input[data-event]')));
 }
 
 // ── 🧪 Test links (invite only) ─────────────────────────────────────────────

@@ -763,8 +763,9 @@
     #radar-minimize-btn { cursor: default !important; }
   }
 </style>
+<script src="/js/wtv-alert-catalog.js?v=1792500000"></script>
 <script src="/js/wtv-alerts-core.js"></script>
-<script src="/js/wtv-alerts.js"></script>
+<script src="/js/wtv-alerts.js?v=1792500000"></script>
 <style>
   #storm-eta { display:none; position:fixed; left:12px; bottom:96px; z-index:850; max-width:min(360px, calc(100vw - 24px));
     background:rgba(10,14,20,0.92); border:1px solid var(--eta-color, #ff8c00); border-left-width:4px; border-radius:8px;
@@ -1245,23 +1246,8 @@
   </div>
   <div id="legend-body">
   <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--accent);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.4rem">NWS Alerts</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff0000"></div>Tornado Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff8c00"></div>Severe T-Storm Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff4500"></div>Extreme Wind Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Tornado Watch</span></div>
-  <div class="leg-row"><div class="leg-sw" style="background:#db8d00"></div>Severe T-Storm Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#00ff00"></div>Flash Flood Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#2e8b57"></div>Flash Flood Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#9370db"></div>Winter Storm Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#4169e1"></div>Winter Storm Watch</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff69b4"></div>Blizzard Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#daa520"></div>High Wind Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#c71585"></div>Excessive Heat Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#ff1493"></div>Red Flag Warning</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#888888"></div>Advisory / Statement</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#c97a1e"></div>Air Quality Alert</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#b05a00"></div>Dense Smoke Advisory</div>
-  <div class="leg-row"><div class="leg-sw" style="background:#d49030"></div>Smoke Advisory</div>
+  <!-- Filled in from the alerts on the map right now (updateAlertLegend) -->
+  <div id="leg-alerts"><div class="leg-row" style="color:var(--muted)">Loading alerts…</div></div>
 
   <div id="river-gauge-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#2ec44a;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">📏 River Gauges</div>
@@ -1378,6 +1364,19 @@ const ALERT_STYLE = {
   'Hazardous Weather Outlook':          { color:'#a0a0a0', fill:'#a0a0a0', fillOpacity:0.08, weight:0.5 },
 };
 const DEFAULT_STYLE = { color:'#888888', fill:'#888888', fillOpacity:0.12, weight:1 };
+// Every other NWS alert type (wtv-alert-catalog.js): its colour, filled more
+// strongly for warnings than for watches, advisories and statements.
+const _CAT = window.WTV_ALERT_CATALOG || { ALERT_CATALOG: [], ALERT_ALIASES: {}, ALERT_GROUPS: [] };
+const _FIRST_STYLE_KEYS = Object.keys(ALERT_STYLE);   // the types before the full list was added
+const ALERT_ALIASES = _CAT.ALERT_ALIASES || {};
+const ALERT_GROUP_OF = {};
+_CAT.ALERT_CATALOG.forEach(t => {
+  ALERT_GROUP_OF[t.event] = t.group;
+  if (ALERT_STYLE[t.event]) return;
+  const kind = /Warning|Emergency|Immediate/.test(t.event) ? [0.32, 2] : /Watch/.test(t.event) ? [0.18, 1.5]
+             : /Advisory|Alert|Danger/.test(t.event) ? [0.15, 1] : [0.08, 0.75];
+  ALERT_STYLE[t.event] = { color: t.color, fill: t.color, fillOpacity: kind[0], weight: kind[1] };
+});
 
 // ── ALERT TYPE FILTER ─────────────────────────────────────────────────────────
 // Controls which alert types render when the Alerts layer is on. Independent
@@ -1391,13 +1390,18 @@ let enabledAlertTypes = new Set(ALERT_TYPE_KEYS); // default: everything on
   try {
     const saved = JSON.parse(localStorage.getItem('wtv-alert-types') || 'null');
     if (Array.isArray(saved) && saved.length) {
-      enabledAlertTypes = new Set(saved.filter(t => ALERT_TYPE_KEYS.includes(t)));
+      // Types added since the filter was saved start out shown
+      const known = JSON.parse(localStorage.getItem('wtv-alert-types-known') || 'null') || _FIRST_STYLE_KEYS;
+      enabledAlertTypes = new Set([...saved.filter(t => ALERT_TYPE_KEYS.includes(t)), ...ALERT_TYPE_KEYS.filter(t => !known.includes(t))]);
     }
   } catch(_) {}
 })();
 
 function saveAlertTypePrefs() {
-  try { localStorage.setItem('wtv-alert-types', JSON.stringify([...enabledAlertTypes])); } catch(_) {}
+  try {
+    localStorage.setItem('wtv-alert-types', JSON.stringify([...enabledAlertTypes]));
+    localStorage.setItem('wtv-alert-types-known', JSON.stringify(ALERT_TYPE_KEYS));
+  } catch(_) {}
 }
 
 function isAlertTypeEnabled(event) {
@@ -1442,7 +1446,8 @@ function toggleAlertTypesPanel() {
 
 function buildAlertTypePanel() {
   const panel = document.getElementById('alert-types-panel');
-  const rows = ALERT_TYPE_KEYS.map(event => {
+  const groups = [...(_CAT.ALERT_GROUPS || []), 'Other'];
+  const row = (event) => {
     const s = ALERT_STYLE[event];
     const checked = enabledAlertTypes.has(event) ? 'checked' : '';
     return `
@@ -1451,6 +1456,12 @@ function buildAlertTypePanel() {
         <span style="display:inline-block;width:0.7rem;height:0.7rem;border-radius:2px;background:${s.color};flex-shrink:0;"></span>
         <span style="color:#dfe9f0;">${event}</span>
       </label>`;
+  };
+  const rows = groups.map(g => {
+    const list = ALERT_TYPE_KEYS.filter(e => (ALERT_GROUP_OF[e] || 'Other') === g);
+    if (!list.length) return '';
+    return `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#7a9bb5;padding:0.45rem 0.4rem 0.15rem">${g}</div>`
+      + list.map(row).join('');
   }).join('');
 
   panel.innerHTML = `
@@ -2498,7 +2509,7 @@ async function renderAlertLayers() {
     const geom = feature.geometry || buildGeomFromZones(feature.properties?.affectedZones);
     if (!geom) return;
     const props = feature.properties;
-    const event = props.event || 'Advisory';
+    const event = ALERT_ALIASES[props.event] || props.event || 'Advisory';
     count++;
     // The Alert Types filter controls what's DRAWN. Life-safety warnings still
     // reach the location banner even if the user hid them from the map.
@@ -2541,7 +2552,7 @@ async function renderAlertLayers() {
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
       // of polygon geometry (catches county-boundary edge cases).
-      const ugc = s.properties?.geocode?.UGC || [];
+      const ugc = props.geocode?.UGC || [];
       const inZone = (userZone   && ugc.includes(userZone))
                   || (userCounty && ugc.includes(userCounty));
       if (inPoly || inZone) {
@@ -2580,6 +2591,20 @@ async function renderAlertLayers() {
   status.textContent = shownCount > 0
     ? `${shownCount}${shownCount!==count ? ' of '+count : ''} active alert${count!==1?'s':''} · ${now}`
     : (count > 0 ? `${count} alert${count!==1?'s':''} hidden by filter · ${now}` : `No active alerts · ${now}`);
+  updateAlertLegend();
+}
+
+// The legend lists the alert types on the map right now, most serious first
+// (there are 90+ types, so a fixed list can't show them all).
+function updateAlertLegend() {
+  const el = document.getElementById('leg-alerts');
+  if (!el) return;
+  const seen = [...new Set(activeAlertFeatures.map(f => f.event))]
+    .sort((a, b) => alertPriorityRank(a) - alertPriorityRank(b));
+  const esc = (x) => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  el.innerHTML = seen.length
+    ? seen.map(e => `<div class="leg-row"><div class="leg-sw" style="background:${(ALERT_STYLE[e] || DEFAULT_STYLE).color}"></div>${esc(e)}</div>`).join('')
+    : '<div class="leg-row" style="color:var(--muted)">No alerts on the map right now</div>';
 }
 
 // ── Combined alert + MCD popup — handles overlapping polygons ─────────────
@@ -2656,6 +2681,7 @@ const ALERT_PRIORITY = [
   'High Wind Warning','Red Flag Warning','Excessive Heat Warning',
   'Special Weather Statement','Special Marine Warning',
 ];
+(window.WTV_ALERT_CATALOG ? window.WTV_ALERT_CATALOG.ALERT_CATALOG : []).forEach(t => { if (!ALERT_PRIORITY.includes(t.event)) ALERT_PRIORITY.push(t.event); });
 
 let bannerDismissed = false;
 let activeBannerAlerts = [];
@@ -2665,7 +2691,9 @@ let activeBannerAlerts = [];
 const dismissedAlertIds = new Set();
 
 // Warnings that always reach the location banner, regardless of the map filter
-const BANNER_ALWAYS = new Set(['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning']);
+const BANNER_ALWAYS = new Set(['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning',
+  'Tsunami Warning', 'Hurricane Warning', 'Typhoon Warning', 'Storm Surge Warning', 'Snow Squall Warning',
+  'Evacuation Immediate', 'Shelter In Place Warning', 'Civil Danger Warning', 'Earthquake Warning']);
 
 // ── In-page alert sounds (while the radar is open) ──────────────────────────
 // Outdoor-siren for tornado-level warnings, soft chime for other warnings.
@@ -2681,8 +2709,10 @@ function playAlertSound(alertId, event, params) {
   if (localStorage.getItem('wtv-alert-sound') === 'off' || _soundPlayed.has(alertId)) return;
   const ffCat = ((params && params.flashFloodDamageThreat) || [])[0] === 'CATASTROPHIC';
   let name = null;
-  if (event === 'Tornado Warning' || event === 'Extreme Wind Warning' || ffCat) name = 'tornado_siren';
-  else if (event === 'Severe Thunderstorm Warning' || event === 'Flash Flood Warning') name = 'alert_chime';
+  // Same sounds as the phone notifications (tier in wtv-alert-catalog.js)
+  const tier = ((window.WTV_ALERT_CATALOG ? window.WTV_ALERT_CATALOG.ALERT_CATALOG : []).find(t => t.event === event) || {}).tier;
+  if (event === 'Tornado Warning' || event === 'Extreme Wind Warning' || ffCat || tier === 'siren') name = 'tornado_siren';
+  else if (event === 'Severe Thunderstorm Warning' || event === 'Flash Flood Warning' || tier === 'chime') name = 'alert_chime';
   if (!name) return;
   _soundPlayed.add(alertId);
   try {
