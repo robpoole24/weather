@@ -1,4 +1,4 @@
-// WeatherTV alerts client — build.1792500000
+// WeatherTV alerts client — build.1792520000
 // Keeps the user's alert location + alert-type choices ON THE DEVICE and
 // turns them into push-topic subscriptions. Our server only relays the
 // subscribe call to Firebase; it never receives coordinates.
@@ -7,12 +7,21 @@ const WTVAlerts = (() => {
   const LS_TYPES = 'push-alert-types';     // chosen alert types (existing key)
   const LS_SUB = 'wtv-alert-subscription'; // { token, topics:[…] } last synced
   const LS_KNOWN = 'push-alert-known';     // alert types this device has been offered
+  const LS_DEFSEEN = 'push-alert-defaults-seen'; // on-by-default types when the choices were last saved
   // The 17 types offered before the full list. People who saved choices back
   // then haven't seen the newer types, so new on-by-default ones turn on for them.
   const FIRST_TYPES = ['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning',
     'Tornado Watch', 'Severe Thunderstorm Watch', 'Flood Warning', 'Flash Flood Watch', 'Winter Storm Warning',
     'Blizzard Warning', 'Ice Storm Warning', 'High Wind Warning', 'Extreme Heat Warning', 'Red Flag Warning',
     'Air Quality Alert', 'Dense Smoke Advisory', 'Special Weather Statement'];
+  // On-by-default types in earlier versions, for devices that saved before this was tracked.
+  // Anything on by default now that isn't in the matching list turns on once.
+  const FIRST_DEFAULTS = ['Flash Flood Warning', 'Tornado Watch', 'Severe Thunderstorm Watch'];
+  const OCT20_DEFAULTS = FIRST_DEFAULTS.concat(['Snow Squall Warning', 'Hurricane Warning', 'Typhoon Warning',
+    'Storm Surge Warning', 'Tropical Storm Warning', 'Earthquake Warning', 'Evacuation Immediate', 'Shelter In Place Warning',
+    'Civil Danger Warning', 'Civil Emergency Message', 'Nuclear Power Plant Warning', 'Radiological Hazard Warning',
+    'Hazardous Materials Warning', 'Fire Warning', 'Dust Storm Warning', 'Blowing Dust Warning', 'Hurricane Watch',
+    'Typhoon Watch', 'Storm Surge Watch', 'Tropical Storm Watch', 'Tsunami Watch']);
   let catalog = null;
 
   const read = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (_) { return null; } };
@@ -64,8 +73,8 @@ const WTVAlerts = (() => {
   async function chosenCodes() {
     const cat = await alertTypes();
     const saved = read(LS_TYPES);
-    const known = read(LS_KNOWN) || FIRST_TYPES;
-    return cat.types.filter(t => t.always || (saved ? (saved.includes(t.event) || (t.defaultOn && !known.includes(t.event))) : t.defaultOn))
+    const seen = read(LS_DEFSEEN) || (read(LS_KNOWN) ? OCT20_DEFAULTS : FIRST_DEFAULTS);
+    return cat.types.filter(t => t.always || (saved ? (saved.includes(t.event) || (t.defaultOn && !seen.includes(t.event))) : t.defaultOn))
       .map(t => t.code);
   }
   // The choices shown in the settings (same rule as above, by name)
@@ -78,6 +87,7 @@ const WTVAlerts = (() => {
     const cat = await alertTypes();
     write(LS_TYPES, types);
     write(LS_KNOWN, cat.types.map(t => t.event));   // everything in the list has now been offered
+    write(LS_DEFSEEN, cat.types.filter(t => t.defaultOn).map(t => t.event));
     await sync();
   }
 

@@ -61,7 +61,7 @@ async function showWeatherAlert(d) {
   const loud = here && d.tier !== 'quiet';
   const title = here ? `${test}${d.icon || '⚠️'} ${d.displayEvent}` : `${test}${d.displayEvent} nearby`;
   const body = here
-    ? `${d.area || d.headline}${until}`
+    ? `${d.summary ? d.summary + '\n' : ''}${d.area || d.headline}${until}`
     : `Issued near ${loc && loc.label ? loc.label : 'your location'} — your location is outside the warned area.${until}`;
   await self.registration.showNotification(title, {
     body,

@@ -110,7 +110,7 @@ function encodePolygon(geom) {
   if (!ring || ring.length < 3) return '';
   let pts = ring.map(([lon, lat]) => `${lat.toFixed(3)},${lon.toFixed(3)}`);
   let step = 1;
-  while (pts.join(';').length > 2400 && step < 64) {
+  while (pts.join(';').length > 2100 && step < 64) {   // FCM data must stay under 4 KB
     step *= 2;
     pts = ring.filter((_, i) => i % step === 0 || i === ring.length - 1).map(([lon, lat]) => `${lat.toFixed(3)},${lon.toFixed(3)}`);
   }
@@ -195,6 +195,25 @@ async function pollAlerts() {
   }
 }
 
+// What to expect, in the NWS's own words: the WHAT + WHEN bullets of an
+// advisory/watch/warning ("Visibility one quarter mile or less in dense fog.
+// Until 10 AM CDT this morning."), or the HAZARD line of a storm warning.
+function summarize(props) {
+  const d = String(props.description || '').replace(/\r/g, '');
+  const bullet = (name) => {
+    const m = d.match(new RegExp('\\*\\s*' + name + '\\.\\.\\.([\\s\\S]*?)(?=\\n\\s*\\*|\\n\\s*\\n|$)'));
+    return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+  };
+  let out = '';
+  const what = bullet('WHAT'), when = bullet('WHEN');
+  if (what) out = what + (when ? ' ' + when : '');
+  if (!out) { const h = d.match(/HAZARD\.\.\.([^\n]+(?:\n(?!\s*\n)[^\n]+)*)/); if (h) out = h[1].replace(/\s+/g, ' ').trim(); }
+  if (!out) { const first = d.replace(/\s+/g, ' ').trim().match(/^.*?[.!](?=\s|$)/); out = first ? first[0] : ''; }
+  out = restoreGeographicNames(out);
+  if (out && !/[.!]$/.test(out)) out += '.';
+  return out.length > 200 ? out.slice(0, 199).replace(/\s+\S*$/, '') + '…' : out;
+}
+
 function buildData(props, geometry, c, identity, test = false) {
   const expires = props.expires || new Date(Date.now() + 30 * 60000).toISOString();
   return {
@@ -204,7 +223,10 @@ function buildData(props, geometry, c, identity, test = false) {
     displayEvent: c.displayEvent,
     tier: c.tier,
     icon: c.meta.icon,
-    headline: restoreGeographicNames(props.headline || c.displayEvent).slice(0, 300),
+    // The phone app shows "headline" as the message: lead with what to expect
+    summary: test ? '' : summarize(props),
+    headline: (test ? '' : summarize(props)) || restoreGeographicNames(props.headline || c.displayEvent).slice(0, 300),
+    color: c.meta.color || '#f4a261',
     area: restoreGeographicNames(props.areaDesc || '').slice(0, 300),
     expires,
     poly: encodePolygon(geometry),
