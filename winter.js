@@ -199,6 +199,8 @@ function routes(app) {
 
 async function init(redisClient) {
   redis = redisClient || null;
+  // Remove the Explore Fall copies saved while that layer briefly ran (we don't use their data)
+  if (redis) redis.del('wt:foliage:v1', 'wt:foliage:v2', 'wt:flag:foliage').catch(() => {});
 }
 
 module.exports = { routes, init, _test: { decodePolyline, roadCategory } };
