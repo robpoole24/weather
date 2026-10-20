@@ -642,13 +642,9 @@
       <button class="btn btn-ghost btn-sm" onclick="loadSeasonalAdmin()">Refresh</button>
     </div>
     <div class="section-body">
-      <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Fall Colors (Explore Fall)</div>
-      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.6rem">Used with credit and a link to ExploreFall.com. If Explore Fall ever asks us to stop, switch it off here — it disappears from every app within about 10 minutes.</div>
+      <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Fall Colors (WeatherTV leaf-color model)</div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.6rem">Our own model on the tile service: 11 years of NASA satellite leaf records + NOAA temperatures and forecasts. The one-time build starts by itself when EARTHDATA_TOKEN is set and takes a few hours; after that it updates daily. Shown to viewers Sep–Nov.</div>
       <div id="fol-status" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
-      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.6rem">
-        <button class="btn btn-ghost btn-sm" id="fol-toggle" onclick="toggleFoliage()">…</button>
-        <button class="btn btn-ghost btn-sm" id="fol-refresh" onclick="refreshFoliageAdmin()">↻ Fetch the latest files now</button>
-      </div>
       <div style="font-weight:600;font-size:0.875rem;margin:1.2rem 0 0.25rem">Winter road conditions</div>
       <div id="roads-status" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
     </div>
@@ -3139,39 +3135,31 @@ async function recountCameras() {
   }, 10000);
 }
 // ── Seasonal layers ──────────────────────────────────────────────────────────
-let _folEnabled = true;
 async function loadSeasonalAdmin() {
-  const el = document.getElementById('fol-status'), btn = document.getElementById('fol-toggle');
+  const el = document.getElementById('fol-status');
   try {
-    const d = await (await fetch('/api/admin/foliage', { cache: 'no-store' })).json();
-    _folEnabled = d.enabled;
-    btn.textContent = d.enabled ? '⏸ Turn Fall Colors OFF for everyone' : '▶ Turn Fall Colors back ON';
-    btn.className = 'btn btn-sm ' + (d.enabled ? 'btn-ghost' : 'btn-primary');
+    const m = await (await fetch('https://tiles.watchweathertv.com/meta/foliage?t=' + Date.now(), { cache: 'no-store' })).json();
+    const b = m.build || {}, bt = m.backtest || {}, o = bt.overall;
     const when = (x) => x ? new Date(x).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
-    el.innerHTML = `<div><strong style="color:${d.enabled ? 'var(--green,#22c55e)' : 'var(--red,#f87171)'}">${d.enabled ? 'ON' : 'OFF'}</strong>`
-      + ` · ${d.inSeason ? 'in season (Sep–Nov)' : 'out of season — hidden from viewers until September'}`
-      + ` · Drive key ${d.keySet ? 'set ✓' : '<span style="color:var(--red,#f87171)">missing (GOOGLE_DRIVE_API_KEY)</span>'}</div>`
-      + `<div>${d.frames} map frame(s) · files updated ${lvEsc(when(d.updated))} · last checked ${lvEsc(when(d.checked))}</div>`
-      + ((d.files || []).length ? `<div>${d.files.map(f => lvEsc(f.kind + ': ' + f.name)).join(' · ')}</div>` : '')
-      + (d.error ? `<div style="color:var(--gold)">Last problem: ${lvEsc(d.error)}</div>` : '');
-  } catch (e) { el.innerHTML = '<span style="color:var(--red)">✗ Could not load</span>'; }
+    let h = '';
+    if (m.available) h += `<div><strong style="color:var(--green,#22c55e)">READY</strong> · map for ${lvEsc(m.now)} · forecast to ${lvEsc(m.week)} · observed temps through ${lvEsc(m.observedThrough || '—')}</div>`;
+    else if (m.baseline) h += `<div><strong style="color:var(--gold)">Baseline built</strong> · today's map is being made${m.error ? ' — <span style="color:var(--red,#f87171)">' + lvEsc(m.error) + '</span>' : ''}</div>`;
+    else h += `<div><strong style="color:var(--gold)">Building</strong> · ${lvEsc(b.step || 'not started')} ${lvEsc(b.detail || '')}${b.heartbeat ? ' · last activity ' + lvEsc(when(b.heartbeat * 1000)) : ''}</div>`
+      + (b.error ? `<div style="color:var(--red,#f87171)">Problem: ${lvEsc(b.error)}</div>` : '');
+    if (o) {
+      h += `<div style="margin-top:0.4rem"><strong>Replay check</strong> (each past year predicted without seeing it, vs. NASA satellite dates): `
+        + `model off by ${o.model_mae_days} days on average (${o.model_within_7_days}% within a week) · using the normal date: ${o.normal_date_mae_days} days (${o.normal_within_7_days}%)</div>`;
+      const rows = Object.entries(bt.regions || {}).filter(([, v]) => v).map(([k, v]) => `${lvEsc(k)} ${v.model_mae_days}d vs ${v.normal_date_mae_days}d`);
+      if (rows.length) h += `<div>${rows.join(' · ')}</div>`;
+    }
+    el.innerHTML = h;
+  } catch (e) { el.innerHTML = '<span style="color:var(--red)">✗ Could not reach the tile service</span>'; }
   try {
     const r = await (await fetch('/api/admin/roads', { cache: 'no-store' })).json();
     const rs = document.getElementById('roads-status');
     const row = (s) => `${s.id.toUpperCase()} ${s.key ? (s.error ? '⚠ ' + lvEsc(s.error) : (s.count != null ? s.count + ' segments' : 'key set ✓ (loads when someone views it)')) : '<span style="opacity:.6">no key</span>'}`;
     rs.innerHTML = r.states.map(row).join(' · ') + `<div style="margin-top:0.3rem">Road511: ${r.road511.key ? (r.road511.error ? '⚠ ' + lvEsc(r.road511.error) : 'key set ✓') : 'no key'}</div>`;
   } catch (_) {}
-}
-async function toggleFoliage() {
-  if (_folEnabled && !confirm('Turn Fall Colors off for every viewer?')) return;
-  await fetch('/api/admin/foliage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !_folEnabled }) }).catch(() => {});
-  loadSeasonalAdmin();
-}
-async function refreshFoliageAdmin() {
-  const b = document.getElementById('fol-refresh'); b.disabled = true; b.textContent = 'Fetching…';
-  await fetch('/api/admin/foliage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh: true }) }).catch(() => {});
-  b.disabled = false; b.textContent = '↻ Fetch the latest files now';
-  loadSeasonalAdmin();
 }
 // ── Alert Tests ──────────────────────────────────────────────────────────────
 function openBannerTest(kind) {

@@ -7101,8 +7101,8 @@ const WTV_INFO = {
   'ice-prob':      { t:'Chance of Icing', w:'The chance of a quarter inch or more of ice from freezing rain, for each of the next 3 days.', r:'A quarter inch of ice brings down tree limbs and power lines and makes roads glazed.' },
   'snow-depth':    { t:'Snow on the Ground', w:'How deep the snow is right now, from NOAA\'s daily national snow analysis.', r:'Useful for travel and for seeing where a storm has already hit.' },
   'roads':         { t:'Winter Road Conditions', w:'Road conditions reported by state transportation departments (511).', r:'Green · good. Blue · wet. Yellow · slippery or partly covered. White · snow covered. Pink · icy. Red · closed or travel not advised.' },
-  'fall-now':      { t:'Fall Colors — Now', w:'Where the leaves are changing right now, from Explore Fall.', r:'Green · little color. Yellow → orange → red · building to peak. Brown · past peak. Data by Explore Fall (ExploreFall.com), updated Mondays and Thursdays.' },
-  'fall-forecast': { t:'Fall Colors — Next 7 Days', w:'Explore Fall\'s forecast of leaf color for the coming week.', r:'Use it to plan a color drive. Data by Explore Fall (ExploreFall.com), updated Mondays and Thursdays.' },
+  'fall-now':      { t:'Fall Colors — Now', w:'Where the leaves are changing right now — WeatherTV\'s own estimate.', r:'Green · little color. Yellow → orange → red · building to peak. Brown · past peak. Built from 11 years of NASA satellite leaf records and NOAA temperatures, updated daily.' },
+  'fall-forecast': { t:'Fall Colors — Next 7 Days', w:'Where the color is expected to be a week from now, using NOAA\'s National Blend of Models forecast.', r:'Use it to plan a color drive. Updated daily.' },
   'ero':           { t:'Excessive Rainfall Outlook', w:'Today\'s flash flood risk from heavy rain.', r:'Marginal → Slight → Moderate → High. Moderate or High means dangerous flooding is possible.' },
   'qpe-1h':        { t:'1-Hour Rainfall', w:'How much rain fell in the last hour, estimated by radar.', r:'Over 1 inch in an hour can cause street flooding.' },
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
@@ -7987,7 +7987,7 @@ const MESO_ITEMS=[
 // One collapsible "Seasonal" section. Layers that are in season for the part of
 // the map you're looking at are listed; the rest wait under "Out of season
 // here", so the panel stays short but nothing is ever out of reach.
-// Today's sources cover the US (WPC, NOHRSC, MRMS, state 511, Explore Fall).
+// Today's sources cover the US (WPC, NOHRSC, MRMS, state 511, WeatherTV's leaf-color model).
 const NOAA_MS = 'https://mapservices.weather.noaa.gov';
 const SEASONAL_ITEMS = [
   {id:'ptype',       ico:'🌨', name:'Rain / Snow / Ice Radar',  sub:'Rain green · snow blue · sleet & freezing rain pink · lower 48', def:false, season:'winter'},
@@ -7996,11 +7996,16 @@ const SEASONAL_ITEMS = [
   {id:'ice-prob',    ico:'🧊', name:'Chance of Icing',          sub:'WPC · ¼″ of ice or more · Day 1–3',                          def:false, season:'winter'},
   {id:'snow-depth',  ico:'⛄', name:'Snow on the Ground',       sub:'NOHRSC daily snow depth',                                    def:false, season:'winter'},
   {id:'roads',       ico:'🛣', name:'Winter Road Conditions',   sub:'State 511 reports · zoom in · where states share them',      def:false, season:'winter'},
-  {id:'fall-now',      ico:'🍁', name:'Fall Colors — Now',          sub:'Explore Fall · where the leaves are right now',   def:false, season:'fall', needs:'foliage', frameKind:'now'},
-  {id:'fall-forecast', ico:'🍂', name:'Fall Colors — Next 7 Days',  sub:'Explore Fall · leaf color forecast',              def:false, season:'fall', needs:'foliage', frameKind:'forecast'},
+  {id:'fall-now',      ico:'🍁', name:'Fall Colors — Now',          sub:'Where the leaves are right now · updated daily',  def:false, season:'fall', needs:'foliage', frameKind:'now'},
+  {id:'fall-forecast', ico:'🍂', name:'Fall Colors — Next 7 Days',  sub:'Expected color a week from now · NOAA forecast',  def:false, season:'fall', needs:'foliage', frameKind:'forecast'},
 ];
 let _foliageStatus = null;
-fetch('/api/foliage/status').then(r => r.ok ? r.json() : null).then(j => { _foliageStatus = j; renderSeasonal(); }).catch(() => {});
+// Fall Colors: WeatherTV's own leaf-color model on the tile service (NASA MODIS + NOAA)
+function _loadFoliageMeta() {
+  fetch(`${WXTILES_BASE}/meta/foliage`).then(r => r.ok ? r.json() : null).then(j => { _foliageStatus = j; renderSeasonal(); }).catch(() => {});
+}
+_loadFoliageMeta();
+setInterval(_loadFoliageMeta, 60 * 60 * 1000);
 
 // Is any of the US (incl. Alaska) on screen? A zoomed-out world view counts.
 function _usOnScreen() {
@@ -8018,8 +8023,7 @@ function seasonalInSeason(item) {
   return true;
 }
 function seasonalAvailable(item) {
-  if (item.needs === 'foliage') return !!(_foliageStatus && _foliageStatus.available
-    && (!item.frameKind || (_foliageStatus.frames || []).some(f => f.kind === item.frameKind)));
+  if (item.needs === 'foliage') return !!(_foliageStatus && _foliageStatus.available);
   return true;
 }
 let _seasonSig = '';
@@ -8078,11 +8082,6 @@ function seasonalOptionsHTML(item) {
   if (item.id === 'snow-prob') chips = [['4', '4″+'], ['8', '8″+'], ['12', '12″+']].map(([v, l]) => _chip('snow-prob', 'snowIn', v, l)).join('')
     + '<span class="ws-sep"></span>' + [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('snow-prob', 'snowDay', v, l)).join('');
   if (item.id === 'ice-prob') chips = [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('ice-prob', 'iceDay', v, l)).join('');
-  if (item.frameKind && _foliageStatus) {
-    // Only when a file holds several days (one switch per file otherwise)
-    const frames = (_foliageStatus.frames || []).filter(f => f.kind === item.frameKind);
-    if (frames.length > 1) chips = frames.map(f => _chip(item.id, 'foliageFrame', f.id, f.label.replace(/[<>&"']/g, ''))).join('');
-  }
   return chips ? `<div class="ws-opts">${chips}</div>` : '';
 }
 function seasonalPick(id, key, val) {
@@ -8240,36 +8239,24 @@ function stopRoads() {
   document.getElementById('sl-roads')?.remove(); _seasonLegendVisibility();
 }
 
-// ── Fall colors (Explore Fall) ──
+// ── Fall colors (WeatherTV leaf-color model) ──
 let _foliageLayer = null;
-async function loadFoliageFrame(id) {
+function loadFoliageFrame(id) {
   const item = SEASONAL_ITEMS.find(i => i.id === id);
-  if (!item || !overlayState[id] || !_foliageStatus) return;
-  const frames = (_foliageStatus.frames || []).filter(f => f.kind === item.frameKind);
-  const fr = frames.find(f => f.id === winterUI.foliageFrame) || frames[0];
-  if (!fr) return;
-  if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
+  const m = _foliageStatus;
+  if (!item || !overlayState[id] || !m || !m.available) return;
+  const which = item.frameKind === 'now' ? 'now' : 'week';
+  const url = `${WXTILES_BASE}/tiles/foliage/${encodeURIComponent(m.version)}/${which}/{z}/{x}/{y}.png`;
+  if (_foliageLayer) _foliageLayer.setUrl(url);
+  else _foliageLayer = L.tileLayer(url, { opacity: 1, zIndex: 405, maxNativeZoom: 9, maxZoom: 16,
+    attribution: 'Fall colors: WeatherTV model · NASA MODIS · NOAA' }).addTo(map);
   const el = _seasonLegendBox('fall');
-  const credit = _foliageStatus.credit || { text: 'Fall foliage data: Explore Fall', url: 'https://www.explorefall.com' };
-  const legend = (fr.legend || []).map(x => `<div class="leg-row"><div class="leg-sw" style="background:${/^#[0-9a-f]{3,8}$/i.test(x.color) ? x.color : '#888'}"></div>${String(x.label || '').replace(/[<>&]/g, '')}</div>`).join('');
-  const when = item.frameKind === 'now' ? 'now' : 'next 7 days';
+  const fmt = (d) => { const t = new Date(d + 'T12:00:00Z'); return isNaN(t) ? '' : t.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' }); };
+  const when = which === 'now' ? 'now' : 'by ' + fmt(m.week);
+  const legend = (m.legend || []).map(x => `<div class="leg-row"><div class="leg-sw" style="background:${/^#[0-9a-f]{3,8}$/i.test(x.color) ? x.color : '#888'}"></div>${String(x.label || '').replace(/[<>&]/g, '')}</div>`).join('');
   if (el) el.innerHTML = _legTitle('🍁 Fall colors · ' + when) + legend
-    + `<div style="font-size:0.62rem;margin-top:0.2rem"><a href="${credit.url}" target="_blank" rel="noopener" style="color:#fbbf24">${credit.text} · ExploreFall.com</a></div>`;
-  try {
-    if (fr.image && fr.image.url) {
-      _foliageLayer = L.imageOverlay(fr.image.url, fr.image.bounds, { opacity: 0.7, zIndex: 413, attribution: credit.text }).addTo(map);
-    } else {
-      const data = await fetch('/api/foliage/data?frame=' + encodeURIComponent(fr.id)).then(r => r.json());
-      if (!overlayState[id]) return;
-      if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
-      _foliageLayer = L.geoJSON(data, {
-        style: f => ({ color: f.properties.color, weight: 0.4, opacity: 0.5, fillColor: f.properties.color, fillOpacity: Math.min(0.7, f.properties.opacity || 0.55) }),
-        onEachFeature: (f, l) => { if (f.properties.name) l.bindTooltip(String(f.properties.name).replace(/[<>&]/g, ''), { sticky: true }); },
-        attribution: credit.text,
-      }).addTo(map);
-      _foliageLayer.bringToBack?.();
-    }
-  } catch (e) { console.warn('[Foliage]', e.message); }
+    + _legNote('Shaded only where leaves change color. Estimated from satellite leaf records and NOAA temperatures'
+      + (m.observedThrough ? ` (observed through ${fmt(m.observedThrough)}, then the forecast)` : '') + '.');
 }
 function stopFoliage() {
   if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
