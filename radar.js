@@ -45,27 +45,11 @@ function initFirebase() {
 //        'chime' (soft two-note), 'quiet' (system default / low-key)
 // always: life-safety — every device subscribes, can't be turned off
 // defaultOn: on for new users, can be turned off
-const ALERT_META = {
-  'Tornado Warning':             { code:'TOR', icon:'🌪️', color:'#ff0000', tier:'siren', always:true  },
-  'Extreme Wind Warning':        { code:'EWW', icon:'💨', color:'#ff4500', tier:'siren', always:true  },
-  'Severe Thunderstorm Warning': { code:'SVR', icon:'⛈️', color:'#ff8c00', tier:'chime', always:true  },
-  'Flash Flood Warning':         { code:'FFW', icon:'🌊', color:'#00ff00', tier:'chime', always:false, defaultOn:true },
-  'Tornado Watch':               { code:'TOA', icon:'🌪️', color:'#ffff00', tier:'quiet', always:false, defaultOn:true },
-  'Severe Thunderstorm Watch':   { code:'SVA', icon:'⛈️', color:'#db8d00', tier:'quiet', always:false, defaultOn:true },
-  'Flood Warning':               { code:'FLW', icon:'🌊', color:'#2e8b57', tier:'quiet', always:false, defaultOn:false },
-  'Flash Flood Watch':           { code:'FFA', icon:'🌊', color:'#2e8b57', tier:'quiet', always:false, defaultOn:false },
-  'Winter Storm Warning':        { code:'WSW', icon:'❄️', color:'#9370db', tier:'quiet', always:false, defaultOn:false },
-  'Blizzard Warning':            { code:'BZW', icon:'❄️', color:'#ff69b4', tier:'quiet', always:false, defaultOn:false },
-  'Ice Storm Warning':           { code:'ISW', icon:'❄️', color:'#8b008b', tier:'quiet', always:false, defaultOn:false },
-  'High Wind Warning':           { code:'HWW', icon:'💨', color:'#daa520', tier:'quiet', always:false, defaultOn:false },
-  'Extreme Heat Warning':        { code:'EHW', icon:'🌡️', color:'#c71585', tier:'quiet', always:false, defaultOn:false },
-  'Red Flag Warning':            { code:'FWW', icon:'🔥', color:'#ff1493', tier:'quiet', always:false, defaultOn:false },
-  'Air Quality Alert':           { code:'AQA', icon:'😷', color:'#c97a1e', tier:'quiet', always:false, defaultOn:false },
-  'Dense Smoke Advisory':        { code:'DSA', icon:'💨', color:'#b05a00', tier:'quiet', always:false, defaultOn:false },
-  'Special Weather Statement':   { code:'SPS', icon:'⚠️', color:'#a0a0a0', tier:'quiet', always:false, defaultOn:false },
-};
-// NWS renamed "Excessive Heat" to "Extreme Heat" in 2025; accept both spellings
-const EVENT_ALIASES = { 'Excessive Heat Warning': 'Extreme Heat Warning' };
+// The full list lives in public/js/wtv-alert-catalog.js (shared with the radar map).
+const { ALERT_CATALOG, ALERT_ALIASES } = require('./public/js/wtv-alert-catalog.js');
+const ALERT_META = Object.fromEntries(ALERT_CATALOG.map(t => [t.event, t]));
+// Old / renamed NWS event names map onto the current ones
+const EVENT_ALIASES = ALERT_ALIASES;
 
 const DEFAULT_ALERT_TYPES = Object.entries(ALERT_META).filter(([, m]) => m.always || m.defaultOn).map(([k]) => k);
 const TOPIC_RE = /^a_[A-Z]{2}[CZ]\d{3}_[A-Z]{3}$/;
@@ -331,7 +315,7 @@ function routes(app) {
   app.get('/api/radar/alert-types', (req, res) => {
     res.set('Cache-Control', 'public, max-age=3600');
     const types = Object.entries(ALERT_META).map(([event, m]) => ({
-      event, code: m.code, icon: m.icon, color: m.color, tier: m.tier, always: m.always, defaultOn: m.defaultOn || false,
+      event, code: m.code, icon: m.icon, color: m.color, tier: m.tier, group: m.group, always: m.always, defaultOn: m.defaultOn || false,
     }));
     res.json({ types, defaults: DEFAULT_ALERT_TYPES });
   });
