@@ -8002,7 +8002,10 @@ const SEASONAL_ITEMS = [
 let _foliageStatus = null;
 // Fall Colors: WeatherTV's own leaf-color model on the tile service (NASA MODIS + NOAA)
 function _loadFoliageMeta() {
-  fetch(`${WXTILES_BASE}/meta/foliage`).then(r => r.ok ? r.json() : null).then(j => { _foliageStatus = j; renderSeasonal(); }).catch(() => {});
+  fetch(`${WXTILES_BASE}/meta/foliage`).then(r => r.ok ? r.json() : null).then(j => {
+    _foliageStatus = j; renderSeasonal();
+    ['fall-now', 'fall-forecast'].forEach(id => { if (overlayState[id]) loadFoliageFrame(id); });
+  }).catch(() => {});
 }
 _loadFoliageMeta();
 setInterval(_loadFoliageMeta, 60 * 60 * 1000);
@@ -8023,7 +8026,6 @@ function seasonalInSeason(item) {
   return true;
 }
 function seasonalAvailable(item) {
-  if (item.needs === 'foliage') return !!(_foliageStatus && _foliageStatus.available);
   return true;
 }
 let _seasonSig = '';
@@ -8244,7 +8246,16 @@ let _foliageLayer = null;
 function loadFoliageFrame(id) {
   const item = SEASONAL_ITEMS.find(i => i.id === id);
   const m = _foliageStatus;
-  if (!item || !overlayState[id] || !m || !m.available) return;
+  if (!item || !overlayState[id]) return;
+  if (!m || !m.available) {
+    // Always listed; until the model's first build is done, say so instead of an empty map
+    if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
+    const el = _seasonLegendBox('fall');
+    if (el) el.innerHTML = _legTitle('🍁 Fall colors') + _legNote(m && m.baseline
+      ? 'Today\u2019s leaf-color map is being made — check back in a few minutes.'
+      : 'WeatherTV\u2019s leaf-color map is being prepared from NASA and NOAA data. Check back soon.');
+    return;
+  }
   const which = item.frameKind === 'now' ? 'now' : 'week';
   const url = `${WXTILES_BASE}/tiles/foliage/${encodeURIComponent(m.version)}/${which}/{z}/{x}/{y}.png`;
   if (_foliageLayer) _foliageLayer.setUrl(url);
