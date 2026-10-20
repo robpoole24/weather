@@ -177,7 +177,7 @@ function lineInBox(coords, b) {
 // ════════════════════════════════════════════════════════════════════════════
 const FOLIAGE_FOLDER = process.env.FOLIAGE_DRIVE_FOLDER || '1c7tbG7arTIBLkDXM8F-ZTUchG4oHOyvU';
 const FOLIAGE_FLAG = 'wt:flag:foliage';
-const FOLIAGE_CACHE = 'wt:foliage:v1';
+const FOLIAGE_CACHE = 'wt:foliage:v2';   // v1 held collapsed outlines
 let foliage = { frames: [], updated: null, checked: null, error: null, files: [] };
 let foliageEnabled = true;
 
@@ -229,8 +229,10 @@ function simplify(pts, tol) {
     let max = 0, idx = -1;
     const [ax, ay] = pts[a], [bx, by] = pts[b];
     const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1e-12;
+    const closed = Math.hypot(dx, dy) < 1e-12;      // a closed ring starts and ends on the same point
     for (let i = a + 1; i < b; i++) {
-      const d = Math.abs(dy * pts[i][0] - dx * pts[i][1] + bx * ay - by * ax) / len;
+      const d = closed ? Math.hypot(pts[i][0] - ax, pts[i][1] - ay)
+        : Math.abs(dy * pts[i][0] - dx * pts[i][1] + bx * ay - by * ax) / len;
       if (d > max) { max = d; idx = i; }
     }
     if (max > tol && idx > 0) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
@@ -273,17 +275,18 @@ function parseKml(xml, images) {
     const ext = {};
     for (const d of allBlocks(pm, 'Data')) { const k = (d.match(/name="([^"]+)"/) || [])[1]; if (k) ext[k] = unCdata(tagText(d, 'value')); }
     for (const d of allBlocks(pm, 'SimpleData')) { const k = (d.match(/name="([^"]+)"/) || [])[1]; if (k) ext[k] = unCdata(d.replace(/<[^>]+>/g, '')); }
-    const props = { name, style: styleUrl.replace(/^#/, ''), color: st.fill?.hex || st.line?.hex || '#888888',
-      opacity: st.fill ? Math.max(0.35, Math.min(0.85, st.fill.alpha || 0.6)) : 0.6, ...ext };
+    const props = { ...ext, name, style: styleUrl.replace(/^#/, ''), color: st.fill?.hex || st.line?.hex || '#888888',
+      opacity: st.fill ? Math.max(0.35, Math.min(0.85, st.fill.alpha || 0.6)) : 0.6 };
     const out = [];
     for (const poly of allBlocks(pm, 'Polygon')) {
       const outer = parseCoords(tagText(tagText(poly, 'outerBoundaryIs'), 'coordinates'));
       if (outer.length < 4) continue;
       const tol = outer.length > 400 ? 0.01 : 0.003;
-      const rings = [simplify(outer, tol)];
+      const ring = (pts) => { const r = simplify(pts, tol); return r.length >= 4 ? r : pts; };
+      const rings = [ring(outer)];
       for (const ib of allBlocks(poly, 'innerBoundaryIs')) {
         const r = parseCoords(tagText(ib, 'coordinates'));
-        if (r.length >= 4) rings.push(simplify(r, tol));
+        if (r.length >= 4) rings.push(ring(r));
       }
       out.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: rings }, properties: props });
     }

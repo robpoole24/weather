@@ -2105,17 +2105,52 @@ const _windyCache = new Map();
 // Windy's player embed (doesn't expire); preview images are left out because
 // free-tier image tokens expire after 10 min.
 const WINDY_TTL = 6 * 60 * 60 * 1000;
+const WINDY_PARTIAL_TTL = 30 * 60 * 1000;      // a list cut short by Windy's limit is retried sooner
+const WINDY_REDIS_TTL = 3 * 24 * 3600;          // survives redeploys (camera locations barely change)
+
+// Windy's free API allows only a few requests per second. Every Windy search
+// (camera counter, viewers, all states) goes through this one queue with a
+// gap between calls, and the gap grows while Windy is answering "Too Many Requests".
+let _windyGap = 400, _windyChain = Promise.resolve();
+function _windyFetch(url, key) {
+  const run = _windyChain.then(async () => {
+    await new Promise(r => setTimeout(r, _windyGap));
+    let text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+    if (!/^\s*[{[]/.test(text)) {                  // "Too Many Requests" (plain text)
+      _windyGap = Math.min(5000, _windyGap * 2);
+      await new Promise(r => setTimeout(r, 3000));
+      text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+      if (!/^\s*[{[]/.test(text)) { const e = new Error('rate limited'); e.rateLimited = true; throw e; }
+    }
+    _windyGap = Math.max(400, Math.round(_windyGap * 0.9));
+    return JSON.parse(text);
+  });
+  _windyChain = run.catch(() => {});
+  return run;
+}
 
 async function _loadWindy(stateCode) {
   const key = process.env.WINDY_WEBCAM_KEY;
   if (!key) { console.log('[Cameras] Windy skipped — WINDY_WEBCAM_KEY not set'); return []; }
 
-  const cached = _windyCache.get(stateCode);
-  if (cached && Date.now() - cached.ts < WINDY_TTL) {
-    console.log(`[Cameras] Windy ${stateCode}: serving ${cached.cameras.length} from cache`);
+  let cached = _windyCache.get(stateCode);
+  if (!cached && redis) {
+    try {
+      const saved = JSON.parse((await redis.get('wt:windy:' + stateCode)) || 'null');
+      if (saved && Array.isArray(saved.cameras)) { cached = saved; _windyCache.set(stateCode, saved); }
+    } catch (_) {}
+  }
+  if (cached && Date.now() - cached.ts < (cached.partial ? WINDY_PARTIAL_TTL : WINDY_TTL)) {
     return cached.cameras;
   }
-  console.log(`[Cameras] Windy ${stateCode}: fetching fresh data...`);
+  if (cached && cached.loading) return cached.loading;
+  const loading = _loadWindyFresh(stateCode, key, cached);
+  _windyCache.set(stateCode, { ...(cached || { cameras: [], ts: 0 }), loading });
+  try { return await loading; }
+  catch (e) { _windyCache.set(stateCode, cached || { cameras: [], ts: Date.now(), partial: true }); return cached ? cached.cameras : []; }
+}
+
+async function _loadWindyFresh(stateCode, key, previous) {
 
   const bbox = STATE_BBOX[stateCode];
   if (!bbox) return [];
@@ -2137,7 +2172,7 @@ async function _loadWindy(stateCode) {
   }
   const allCameras = [];
   const seen = new Set();
-  let calls = 0;
+  let calls = 0, failed = 0;
   // A search that comes back FULL (50) means a dense area (NYC, Miami, LA…) —
   // split it into 4 smaller searches so the city itself gets covered.
   while (cells.length) {
@@ -2148,8 +2183,7 @@ async function _loadWindy(stateCode) {
       + `?nearby=${cLa.toFixed(4)},${cLo.toFixed(4)},${radiusKm}`
       + `&include=location,player&limit=50`;
     try {
-      const text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
-      const data = JSON.parse(text);
+      const data = await _windyFetch(url, key);
       const batch = data.webcams || data.data || [];
       if (batch.length >= 50 && depth < 2) {
         const q = half / 2;
@@ -2178,14 +2212,21 @@ async function _loadWindy(stateCode) {
         });
       });
     } catch (e) {
-      console.warn(`[Cameras] Windy ${stateCode} cell ${cLa.toFixed(1)},${cLo.toFixed(1)} failed:`, e.message);
+      failed++;
+      if (e.rateLimited && failed >= 3) { console.warn(`[Cameras] Windy ${stateCode}: Windy is limiting requests — stopping this state for now`); break; }
     }
-    await new Promise(r => setTimeout(r, 120));   // be gentle with Windy's rate limits
   }
-  console.log(`[Cameras] Windy ${stateCode}: ${calls} grid searches`);
-
-  _windyCache.set(stateCode, { cameras: allCameras, ts: Date.now() });
-  console.log(`[Cameras] Windy ${stateCode}: ${allCameras.length} webcams`);
+  // Never replace a good list with a worse one cut short by Windy's limit
+  if (failed && previous && previous.cameras && previous.cameras.length > allCameras.length) {
+    console.warn(`[Cameras] Windy ${stateCode}: ${failed} of ${calls} searches failed — keeping the earlier ${previous.cameras.length} webcams`);
+    const keep = { cameras: previous.cameras, ts: Date.now(), partial: true };
+    _windyCache.set(stateCode, keep);
+    return previous.cameras;
+  }
+  const entry = { cameras: allCameras, ts: Date.now(), partial: failed > 0 };
+  _windyCache.set(stateCode, entry);
+  if (redis && allCameras.length) redis.set('wt:windy:' + stateCode, JSON.stringify(entry), 'EX', WINDY_REDIS_TTL).catch(() => {});
+  console.log(`[Cameras] Windy ${stateCode}: ${allCameras.length} webcams from ${calls} searches` + (failed ? ` (${failed} failed — will retry within 30 min)` : ''));
   return allCameras;
 }
 
