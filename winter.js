@@ -193,17 +193,22 @@ function routes(app) {
     if ((b[2] - b[0]) > 30 || (b[3] - b[1]) > 20) return res.json({ type: 'FeatureCollection', features: [], tooWide: true });
     try {
       const states = ROAD_STATES.filter(st => process.env[st.env] && boxHits(st.box, b));
-      const parts = await Promise.all([...states.map(ibiState), road511(b)]);
+      const nec = require('./nec');
+      const necStates = Object.entries(nec.BOXES).filter(([, box]) => boxHits(box, b)).map(([code]) => code);
+      const parts = await Promise.all([...states.map(ibiState), road511(b), ...necStates.map(c => nec.roadWeather(c))]);
       const seen = new Set(), features = [];
       for (const f of parts.flat()) {
-        if (!lineInBox(f.geometry.type === 'MultiLineString' ? f.geometry.coordinates.flat() : f.geometry.coordinates, b)) continue;
-        const c = f.geometry.coordinates, k = JSON.stringify(c[0]) + JSON.stringify(c[c.length - 1]);
+        const g = f.geometry;
+        const pts = g.type === 'Point' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates.flat() : g.coordinates;
+        if (!lineInBox(pts, b)) continue;
+        const k = JSON.stringify(pts[0]) + JSON.stringify(pts[pts.length - 1]);
         if (seen.has(k)) continue; seen.add(k);
         features.push(f);
         if (features.length >= 4000) break;
       }
       res.set('Cache-Control', 'public, max-age=300');
-      res.json({ type: 'FeatureCollection', features, sources: states.map(s => s.id).concat(process.env.ROAD511_API_KEY ? ['road511'] : []) });
+      res.json({ type: 'FeatureCollection', features, sources: states.map(s => s.id).concat(process.env.ROAD511_API_KEY ? ['road511'] : [], necStates.map(c => 'nec-' + c)),
+        credits: necStates.length ? [nec.CREDIT] : [] });
     } catch (e) {
       res.status(502).json({ error: e.message });
     }

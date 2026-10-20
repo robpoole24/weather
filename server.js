@@ -6,7 +6,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const radar = require('./radar');
-const winter = require('./winter');   // road conditions + fall colors
+const winter = require('./winter');   // road conditions
+const nec = require('./nec');         // Maine/NH/VT DOT cameras + road weather (New England Compass)
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const { createLiveVerifier } = require('./live-verifier');
@@ -1623,6 +1624,10 @@ const STATE_DOTS = [
   // Same IBI/Skyline platform — keys: AK_511_KEY, CT_511_KEY
   { id:'ak', label:'Alaska DOT&PF', url:'https://511.alaska.gov/api/v2/get/cameras?format=json',   envKey:'AK_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
   { id:'ct', label:'Connecticut DOT', url:'https://ctroads.org/api/v2/get/cameras?format=json',    envKey:'CT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Maine, New Hampshire, Vermont — New England Compass developer portal (no key; credit the Tri-State DOTs)
+  { id:'me', label:'Maine DOT (New England Compass)',         cacheTTL:30*60*1000, load: () => nec.loadCameras('me') },
+  { id:'nh', label:'New Hampshire DOT (New England Compass)', cacheTTL:30*60*1000, load: () => nec.loadCameras('nh') },
+  { id:'vt', label:'Vermont AOT (New England Compass)',       cacheTTL:30*60*1000, load: () => nec.loadCameras('vt') },
 
   // ── Florida ──────────────────────────────────────────────────────────────
   // FL511 (fl511.com) runs on FDOT's proprietary SunGuide ATMS platform,
@@ -5878,6 +5883,7 @@ app.get(['/weatherstar/images/*', '/weatherstar3000/images/*'], (req, res) => {
 // radar.js registers GET routes that would otherwise be swallowed by app.get('*')
 radar.routes(app);
 winter.routes(app);
+nec.routes(app);
 
 // ── Shop (Fourthwall Storefront API) ─────────────────────────────────────────
 // GET /api/shop/products — the public product list for /shop.html, cached 10
