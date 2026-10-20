@@ -460,6 +460,17 @@
   .lp-row-body { flex:1; min-width:0; }
   .lp-row-name { font-size:0.82rem; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .lp-row.active .lp-row-name { color:var(--accent); }
+  .ws-opts { display:flex; flex-wrap:wrap; gap:0.3rem; align-items:center; padding:0.15rem 0 0.5rem 2rem; }
+  .ws-chip { font-family:'Barlow Condensed',sans-serif; font-size:0.7rem; letter-spacing:0.04em; background:none; color:var(--text);
+    border:1px solid var(--border); border-radius:999px; padding:0.15rem 0.55rem; cursor:pointer; }
+  .ws-chip.on { background:var(--accent); color:#000; border-color:var(--accent); font-weight:700; }
+  .ws-chip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .ws-sep { width:0.4rem; }
+  #lp-seasonal-details > summary { cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; }
+  #lp-seasonal-details > summary::-webkit-details-marker { display:none; }
+  #lp-seasonal-details > summary::after { content:'▾'; color:var(--muted); font-size:0.8rem; }
+  #lp-seasonal-details:not([open]) > summary::after { content:'▸'; }
+  #lp-offseason > summary { cursor:pointer; font-size:0.66rem; color:var(--muted); padding:0.3rem 0; }
   .lp-row-sub { font-size:0.66rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .lp-radio-dot { font-size:0.9rem; color:var(--muted); flex-shrink:0; }
   .lp-row.active .lp-radio-dot { color:var(--accent); }
@@ -531,6 +542,19 @@
   .fp-err { color:#f87171; }
   .fp-spinner { width:22px; height:22px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:fpSpin 0.7s linear infinite; margin:0 auto 0.6rem; }
   @keyframes fpSpin { to { transform:rotate(360deg); } }
+  .fp-school > summary { cursor:pointer; list-style:none; }
+  .fp-school > summary::-webkit-details-marker { display:none; }
+  .fp-school > summary::after { content:' ▾'; }
+  .fp-school:not([open]) > summary::after { content:' ▸'; }
+  .fp-school-times { display:grid; grid-template-columns:repeat(3,1fr); gap:0.4rem; }
+  .fp-school-t { background:rgba(255,255,255,0.04); border:1px solid var(--border); border-radius:8px; padding:0.45rem 0.3rem; text-align:center; }
+  .fp-school-t .when { font-size:0.62rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; }
+  .fp-school-t .temp { font-family:'Barlow Condensed',sans-serif; font-size:1.35rem; font-weight:700; line-height:1.1; }
+  .fp-school-t .feel { font-size:0.6rem; color:var(--muted); }
+  .fp-school-wear { display:flex; gap:0.6rem; align-items:center; margin-top:0.5rem; background:rgba(0,180,216,0.08); border:1px solid rgba(0,180,216,0.25); border-radius:8px; padding:0.5rem 0.6rem; }
+  .fp-school-wear .ico { font-size:1.35rem; line-height:1.15; max-width:3.4rem; flex-shrink:0; text-align:center; overflow-wrap:anywhere; }
+  .fp-school-wear .txt { font-size:0.78rem; line-height:1.4; }
+  .fp-school-wear .txt b { display:block; font-size:0.82rem; }
   .fp-section-label { font-family:'Barlow Condensed',sans-serif; font-size:0.68rem; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin:1rem 0 0.45rem; padding-bottom:0.22rem; border-bottom:1px solid var(--border); }
   .fp-storm-head { color:#f97316 !important; border-bottom-color:rgba(249,115,22,0.4) !important; }
 
@@ -763,9 +787,9 @@
     #radar-minimize-btn { cursor: default !important; }
   }
 </style>
-<script src="/js/wtv-alert-catalog.js?v=1792520000"></script>
+<script src="/js/wtv-alert-catalog.js?v=1792600000"></script>
 <script src="/js/wtv-alerts-core.js"></script>
-<script src="/js/wtv-alerts.js?v=1792520000"></script>
+<script src="/js/wtv-alerts.js?v=1792600000"></script>
 <style>
   #storm-eta { display:none; position:fixed; left:12px; bottom:96px; z-index:850; max-width:min(360px, calc(100vw - 24px));
     background:rgba(10,14,20,0.92); border:1px solid var(--eta-color, #ff8c00); border-left-width:4px; border-radius:8px;
@@ -1038,6 +1062,12 @@
       </div>
     </div>
 
+    <!-- ── School day: what to wear ── -->
+    <details id="fp-school-wrap" class="fp-school" style="display:none;">
+      <summary class="fp-section-label">🎒 School Day · <span id="fp-school-day"></span></summary>
+      <div id="fp-school"></div>
+    </details>
+
     <!-- ── 7-Day ── -->
     <div id="fp-daily-wrap" style="display:none;">
       <div class="fp-section-label">7-Day Forecast</div>
@@ -1207,6 +1237,14 @@
     <div id="lp-precip"></div>
   </div>
 
+  <div class="lp-section" id="lp-seasonal-section">
+    <details id="lp-seasonal-details">
+      <summary class="lp-section-label">Seasonal <span id="lp-seasonal-count" style="text-transform:none;letter-spacing:0;margin-left:auto;margin-right:0.4rem"></span></summary>
+      <div id="lp-seasonal"></div>
+      <details id="lp-offseason"><summary>Out of season here</summary><div id="lp-offseason-list"></div></details>
+    </details>
+  </div>
+
   <div class="lp-section">
     <div class="lp-section-label">Tropical</div>
     <div id="lp-tropical"></div>
@@ -1299,6 +1337,7 @@
     <div class="leg-row"><div class="leg-sw" style="background:#ffff00"></div><span style="color:#ccc">Slight Risk</span></div>
     <div class="leg-row"><div class="leg-sw" style="background:#99ff99"></div>Marginal Risk</div>
   </div>
+  <div id="season-legends" style="display:none"></div>
   <div id="qpe-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#00b4d8;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">🌧 Rainfall Accumulation</div>
     <div id="qpe-1h-label" style="display:none;font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">1-Hour QPE (inches)</div>
@@ -1508,6 +1547,30 @@ const map = L.map('map', {
   zoomControl:false
 });
 L.control.zoom({ position:'bottomright' }).addTo(map);
+
+// Leaflet has no jQuery-style event namespaces: map.on('moveend.lightning', …)
+// registered an event that never fires, so lightning, air quality, storm cells
+// and river gauges never refreshed when the map moved. This makes 'event.name'
+// work: it listens to 'event', and map.off('event.name') removes just those.
+(function addEventNamespaces(m) {
+  const on = m.on.bind(m), off = m.off.bind(m), reg = {};
+  const ns = (types) => typeof types === 'string' && /\.\w/.test(types);
+  m.on = function (types, fn, ctx) {
+    if (!ns(types) || typeof fn !== 'function') return on(types, fn, ctx);
+    types.trim().split(/\s+/).forEach(t => { const ev = t.split('.')[0]; if (t !== ev) (reg[t] = reg[t] || []).push(fn); on(ev, fn, ctx); });
+    return m;
+  };
+  m.off = function (types, fn, ctx) {
+    if (!ns(types)) return off(types, fn, ctx);
+    types.trim().split(/\s+/).forEach(t => {
+      const ev = t.split('.')[0];
+      if (t === ev) { off(ev, fn, ctx); return; }
+      (reg[t] || []).filter(f => !fn || f === fn).forEach(f => off(ev, f, ctx));
+      reg[t] = fn ? (reg[t] || []).filter(f => f !== fn) : [];
+    });
+    return m;
+  };
+})(map);
 
 // ── Zoom level indicator ─────────────────────────────────────────────────────
 const zoomIndicator = document.createElement('div');
@@ -2711,8 +2774,10 @@ function playAlertSound(alertId, event, params) {
   let name = null;
   // Same sounds as the phone notifications (tier in wtv-alert-catalog.js)
   const tier = ((window.WTV_ALERT_CATALOG ? window.WTV_ALERT_CATALOG.ALERT_CATALOG : []).find(t => t.event === event) || {}).tier;
-  if (event === 'Tornado Warning' || event === 'Extreme Wind Warning' || ffCat || tier === 'siren') name = 'tornado_siren';
-  else if (event === 'Severe Thunderstorm Warning' || event === 'Flash Flood Warning' || tier === 'chime') name = 'alert_chime';
+  // The siren is ONLY for tornado warnings; other warnings + severe watches get the urgent chime
+  if (event === 'Tornado Warning' || tier === 'siren') name = 'tornado_siren';
+  else if (ffCat || tier === 'urgent') name = 'alert_urgent';
+  else if (tier === 'soft') name = 'alert_soft';
   if (!name) return;
   _soundPlayed.add(alertId);
   try {
@@ -7028,6 +7093,13 @@ const WTV_INFO = {
   'lightning':     { t:'Lightning Strikes', w:'Lightning detected in the last 10 minutes.', r:'Newer strikes are brighter. If strikes are within about 10 miles of you, you are close enough to be struck.' },
   'storm-cells':   { t:'Storm Cell Vectors', w:'Arrows showing where each storm is heading and how fast.', r:'Follow the arrow to see if a storm is coming your way and roughly when.' },
   'fronts':        { t:'WPC Surface Analysis', w:'Fronts and pressure centers drawn by Weather Prediction Center forecasters.', r:'Weather changes along fronts. Storms often fire along cold fronts.' },
+  'ptype':         { t:'Rain / Snow / Ice Radar', w:'Live radar colored by what is falling: rain, snow, sleet, freezing rain or a mix.', r:'Pink means ice — sleet or freezing rain — the most dangerous for driving. Darker colors are heavier.' },
+  'wssi':          { t:'Winter Storm Severity', w:'The Weather Prediction Center\'s estimate of how much a winter storm will disrupt daily life over the next 3 days.', r:'Minor → Moderate → Major → Extreme. Major or Extreme means travel may be impossible and closures are likely.' },
+  'snow-prob':     { t:'Chance of Heavy Snow', w:'The chance of at least 4, 8 or 12 inches of snow, for each of the next 3 days.', r:'40%+ is a real possibility worth planning around; 70%+ means it\'s likely.' },
+  'ice-prob':      { t:'Chance of Icing', w:'The chance of a quarter inch or more of ice from freezing rain, for each of the next 3 days.', r:'A quarter inch of ice brings down tree limbs and power lines and makes roads glazed.' },
+  'snow-depth':    { t:'Snow on the Ground', w:'How deep the snow is right now, from NOAA\'s daily national snow analysis.', r:'Useful for travel and for seeing where a storm has already hit.' },
+  'roads':         { t:'Winter Road Conditions', w:'Road conditions reported by state transportation departments (511).', r:'Green · good. Blue · wet. Yellow · slippery or partly covered. White · snow covered. Pink · icy. Red · closed or travel not advised.' },
+  'fall-colors':   { t:'Fall Colors', w:'Where the leaves are changing, now and over the next 7 days, from Explore Fall.', r:'Data by Explore Fall (ExploreFall.com), updated Mondays and Thursdays through the fall.' },
   'ero':           { t:'Excessive Rainfall Outlook', w:'Today\'s flash flood risk from heavy rain.', r:'Marginal → Slight → Moderate → High. Moderate or High means dangerous flooding is possible.' },
   'qpe-1h':        { t:'1-Hour Rainfall', w:'How much rain fell in the last hour, estimated by radar.', r:'Over 1 inch in an hour can cause street flooding.' },
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
@@ -7159,6 +7231,72 @@ function omIndex(data) {
       thunder: code >= 95 ? pop : 0, sky: h.cloud_cover?.[i], wx: _omWx(code) });
   });
   return map.size ? map : null;
+}
+
+// ── School day: temps at drop-off, lunch and pick-up + what to wear ─────────
+// Like the morning-news "dress your kids" graphic. Uses the place's own time
+// zone. Weekends are skipped (holidays aren't known, so it says "Mon–Fri").
+function schoolDress(morningFeel, afternoonFeel, wet, snowy) {
+  const cold = Math.min(morningFeel, afternoonFeel);
+  let ico, head, line;
+  if (cold <= 0)       { ico = '🧥🧣🧤🥾'; head = 'Bundle up — dangerous cold'; line = 'Heavy winter coat, hat, mittens, scarf and boots. Cover all skin at the bus stop.'; }
+  else if (cold <= 20) { ico = '🧥🧣🧤';   head = 'Winter coat, hat & mittens'; line = 'Heavy coat, warm hat, mittens or gloves, and boots.'; }
+  else if (cold <= 35) { ico = '🧥🧤';     head = 'Winter coat & gloves';       line = 'Warm coat, gloves, and a hat for the morning.'; }
+  else if (cold <= 50) { ico = '🧥👖';     head = 'Jacket & long pants';         line = 'A warm jacket or fleece over long sleeves, and long pants.'; }
+  else if (cold <= 62) { ico = '👕🧶👖';   head = 'Light jacket or sweatshirt';  line = 'A sweatshirt or light jacket with pants.'; }
+  else if (cold <= 74) { ico = '👕👖';     head = 'T-shirt & pants';             line = 'Short or long sleeves with pants — comfortable all day.'; }
+  else if (cold <= 84) { ico = '👕🩳';     head = 'T-shirt & shorts';            line = 'Shorts and a T-shirt.'; }
+  else                 { ico = '🩳🧢💧';   head = 'Light clothes, stay cool';    line = 'Shorts, a light shirt, a hat, sunscreen and a water bottle.'; }
+  const extra = [];
+  if (afternoonFeel - morningFeel >= 15 && cold <= 62) extra.push('Dress in layers: chilly morning, ' + Math.round(afternoonFeel) + '° by pick-up.');
+  if (snowy) { ico += '❄️'; extra.push('Snow boots and snow pants for recess.'); }
+  else if (wet) { ico += '☔'; extra.push('Pack a raincoat or umbrella.'); }
+  return { ico, head, line: [line].concat(extra).join(' ') };
+}
+function renderSchoolForecast(data) {
+  const wrap = document.getElementById('fp-school-wrap'), box = document.getElementById('fp-school');
+  const h = data && data.hourly;
+  if (!wrap || !box || !h || !h.time || !h.temperature_2m) { if (wrap) wrap.style.display = 'none'; return; }
+  const off = (data.utc_offset_seconds || 0) * 1000;
+  const local = new Date(Date.now() + off);                       // place's clock, read with getUTC*
+  const idx = new Map(h.time.map((t, i) => [t, i]));
+  let day = null;
+  for (let add = 0; add < 7 && !day; add++) {
+    const d = new Date(local.getTime() + add * 86400000);
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    if (add === 0 && local.getUTCHours() >= 15) continue;          // today's pick-up has passed
+    const key = d.toISOString().slice(0, 10);
+    if (idx.has(key + 'T15:00')) day = { key, d, add };
+  }
+  if (!day) { wrap.style.display = 'none'; return; }
+  const at = (hr) => idx.get(`${day.key}T${String(hr).padStart(2, '0')}:00`);
+  const val = (arr, i) => (arr && i != null && Number.isFinite(arr[i])) ? arr[i] : null;
+  const pick = (hrs) => {
+    const is = hrs.map(at).filter(i => i != null);
+    const avg = (arr) => { const v = is.map(i => val(arr, i)).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    return { t: avg(h.temperature_2m), f: avg(h.apparent_temperature) ?? avg(h.temperature_2m), pop: Math.max(0, ...is.map(i => val(h.precipitation_probability, i) || 0)),
+      snow: is.some(i => (val(h.snowfall, i) || 0) > 0 || [71, 73, 75, 77, 85, 86].includes(val(h.weather_code, i))) };
+  };
+  const slots = [{ when: '7–8 AM', ...pick([7, 8]) }, { when: 'Noon', ...pick([12]) }, { when: '3 PM', ...pick([15]) }];
+  if (slots.some(s => s.t == null)) { wrap.style.display = 'none'; return; }
+  const school = [7, 8, 9, 10, 11, 12, 13, 14, 15].map(at).filter(i => i != null);
+  const wet = school.some(i => (val(h.precipitation_probability, i) || 0) >= 40);
+  const snowy = school.some(i => (val(h.snowfall, i) || 0) > 0.05 || [71, 73, 75, 77, 85, 86].includes(val(h.weather_code, i)));
+  const dress = schoolDress(slots[0].f, slots[2].f, wet, snowy);
+  const dayName = day.add === 0 ? 'Today' : day.add === 1 ? 'Tomorrow' : day.d.toLocaleDateString([], { weekday: 'long', timeZone: 'UTC' });
+  document.getElementById('fp-school-day').textContent = dayName;
+  box.innerHTML = `<div class="fp-school-times">${slots.map(s => `<div class="fp-school-t"><div class="when">${s.when}</div>
+      <div class="temp">${Math.round(s.t)}°</div><div class="feel">${Math.round(s.f) !== Math.round(s.t) ? 'feels ' + Math.round(s.f) + '°' : '&nbsp;'}${s.pop >= 30 ? ' · 💧' + Math.round(s.pop) + '%' : ''}</div></div>`).join('')}</div>
+    <div class="fp-school-wear"><div class="ico" aria-hidden="true">${dress.ico}</div><div class="txt"><b>${dress.head}</b>${dress.line}</div></div>
+    <div style="font-size:0.6rem;color:var(--muted);margin-top:0.3rem">Mon–Fri · check your school's calendar for days off.</div>`;
+  wrap.style.display = '';
+  if (!wrap.dataset.init) {
+    wrap.dataset.init = '1';
+    let saved = null; try { saved = localStorage.getItem('wtv-school-open'); } catch (_) {}
+    wrap.open = saved ? saved === '1' : true;
+    wrap.addEventListener('toggle', () => { try { localStorage.setItem('wtv-school-open', wrap.open ? '1' : '0'); } catch (_) {} });
+  }
 }
 
 // ── renderForecast ────────────────────────────────────────────────────────────
@@ -7481,6 +7619,7 @@ function renderForecast(data) {
     dailyEl.appendChild(row);
   });
   document.getElementById('fp-daily-wrap').style.display = 'block';
+  try { renderSchoolForecast(data); } catch (e) { console.warn('[School]', e.message); }
   // New location → offer the comparison again (loads only if the user asks)
   _mmData = null;
   document.getElementById('fp-models-wrap').style.display = 'block';
@@ -7841,7 +7980,295 @@ const MESO_ITEMS=[
   {id:'mcd',          ico:'💬', name:'Mesoscale Discussions', sub:'SPC forecaster updates · active MCDs', def:false},
   {id:'mesoanalysis', ico:'📈', name:'Mesoscale Analysis',    sub:'CAPE · helicity · shear · tornado parameter (HRRR, hourly)', def:false},
 ];
-const OVERLAY_ITEMS=ALERT_ITEMS.concat(MESO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
+// ── Seasonal layers (winter weather, road conditions, fall colors) ──────────
+// One collapsible "Seasonal" section. Layers that are in season for the part of
+// the map you're looking at are listed; the rest wait under "Out of season
+// here", so the panel stays short but nothing is ever out of reach.
+// Today's sources cover the US (WPC, NOHRSC, MRMS, state 511, Explore Fall).
+const NOAA_MS = 'https://mapservices.weather.noaa.gov';
+const SEASONAL_ITEMS = [
+  {id:'ptype',       ico:'🌨', name:'Rain / Snow / Ice Radar',  sub:'Rain green · snow blue · sleet & freezing rain pink · lower 48', def:false, season:'winter'},
+  {id:'wssi',        ico:'❄️', name:'Winter Storm Severity',    sub:'WPC impact index · Day 1–3',                                 def:false, season:'winter'},
+  {id:'snow-prob',   ico:'🌨', name:'Chance of Heavy Snow',     sub:'WPC · 4″ / 8″ / 12″ or more · Day 1–3',                      def:false, season:'winter'},
+  {id:'ice-prob',    ico:'🧊', name:'Chance of Icing',          sub:'WPC · ¼″ of ice or more · Day 1–3',                          def:false, season:'winter'},
+  {id:'snow-depth',  ico:'⛄', name:'Snow on the Ground',       sub:'NOHRSC daily snow depth',                                    def:false, season:'winter'},
+  {id:'roads',       ico:'🛣', name:'Winter Road Conditions',   sub:'State 511 reports · zoom in · where states share them',      def:false, season:'winter'},
+  {id:'fall-colors', ico:'🍁', name:'Fall Colors',              sub:'Explore Fall · now & 7-day forecast',                        def:false, season:'fall', needs:'foliage'},
+];
+let _foliageStatus = null;
+fetch('/api/foliage/status').then(r => r.ok ? r.json() : null).then(j => { _foliageStatus = j; renderSeasonal(); }).catch(() => {});
+
+// Is any of the US (incl. Alaska) on screen? A zoomed-out world view counts.
+function _usOnScreen() {
+  try {
+    const b = map.getBounds();
+    return b.getSouth() <= 72 && b.getNorth() >= 18 && b.getWest() <= -50 && b.getEast() >= -170;
+  } catch (_) { return true; }
+}
+function seasonalInSeason(item) {
+  const d = new Date(), md = (d.getMonth() + 1) * 100 + d.getDate();
+  const south = false;                 // today's sources are all US; southern seasons are ready for later sources
+  if (!_usOnScreen()) return false;
+  if (item.season === 'winter') return south ? (md >= 415 && md <= 1015) : (md >= 1015 || md <= 515);
+  if (item.season === 'fall') return south ? (md >= 301 && md <= 531) : (md >= 901 && md <= 1130);
+  return true;
+}
+function seasonalAvailable(item) {
+  if (item.needs === 'foliage') return !!(_foliageStatus && _foliageStatus.available);
+  return true;
+}
+let _seasonSig = '';
+function renderSeasonal() {
+  const box = document.getElementById('lp-seasonal'), off = document.getElementById('lp-offseason-list');
+  const sec = document.getElementById('lp-seasonal-section');
+  if (!box || !off || !sec) return;
+  const usable = SEASONAL_ITEMS.filter(seasonalAvailable);
+  const now = usable.filter(i => overlayState[i.id] || seasonalInSeason(i));
+  const later = usable.filter(i => !now.includes(i));
+  _seasonSig = now.map(i => i.id).join(',') + '|' + later.map(i => i.id).join(',');
+  box.innerHTML = now.length ? now.map(i => toggleRowHTML(i) + seasonalOptionsHTML(i)).join('')
+    : `<div style="font-size:0.68rem;color:var(--muted);padding:0.2rem 0 0.4rem">Nothing in season for this part of the map.</div>`;
+  off.innerHTML = later.map(toggleRowHTML).join('');
+  document.getElementById('lp-offseason').style.display = later.length ? '' : 'none';
+  document.getElementById('lp-seasonal-count').textContent = now.length ? `${now.length} in season` : '';
+  sec.style.display = usable.length ? '' : 'none';
+  const det = document.getElementById('lp-seasonal-details');
+  if (det && !det.dataset.init) {
+    det.dataset.init = '1';
+    let saved = null; try { saved = localStorage.getItem('wtv-seasonal-open'); } catch (_) {}
+    det.open = saved ? saved === '1' : now.length > 0;
+    det.addEventListener('toggle', () => { try { localStorage.setItem('wtv-seasonal-open', det.open ? '1' : '0'); } catch (_) {} });
+  }
+}
+// Re-sort the section when the map moves to a different season/area
+setTimeout(() => {
+  try {
+    map.on('moveend.seasonal', () => {
+      const prev = _seasonSig;
+      const usable = SEASONAL_ITEMS.filter(seasonalAvailable);
+      const now = usable.filter(i => overlayState[i.id] || seasonalInSeason(i));
+      const sig = now.map(i => i.id).join(',') + '|' + usable.filter(i => !now.includes(i)).map(i => i.id).join(',');
+      if (sig !== prev) renderSeasonal();
+    });
+  } catch (_) {}
+}, 0);
+
+// Day / amount pickers shown under an active layer
+let winterUI = { wssiDay: 'all', snowIn: '4', snowDay: '1', iceDay: '1', foliageFrame: '' };
+try { Object.assign(winterUI, JSON.parse(localStorage.getItem('wtv-winter-ui') || '{}')); } catch (_) {}
+const _chip = (id, key, val, label) => `<button type="button" class="ws-chip${String(winterUI[key]) === String(val) ? ' on' : ''}"
+  onclick="event.stopPropagation();seasonalPick('${id}','${key}','${val}')">${label}</button>`;
+function seasonalOptionsHTML(item) {
+  if (!overlayState[item.id]) return '';
+  let chips = '';
+  if (item.id === 'wssi') chips = [['all', 'Days 1–3'], ['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('wssi', 'wssiDay', v, l)).join('');
+  if (item.id === 'snow-prob') chips = [['4', '4″+'], ['8', '8″+'], ['12', '12″+']].map(([v, l]) => _chip('snow-prob', 'snowIn', v, l)).join('')
+    + '<span class="ws-sep"></span>' + [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('snow-prob', 'snowDay', v, l)).join('');
+  if (item.id === 'ice-prob') chips = [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('ice-prob', 'iceDay', v, l)).join('');
+  if (item.id === 'fall-colors' && _foliageStatus) {
+    const frames = _foliageStatus.frames || [];
+    if (frames.length > 1) chips = frames.map(f => _chip('fall-colors', 'foliageFrame', f.id, f.label.replace(/[<>&"']/g, ''))).join('');
+  }
+  return chips ? `<div class="ws-opts">${chips}</div>` : '';
+}
+function seasonalPick(id, key, val) {
+  winterUI[key] = val;
+  try { localStorage.setItem('wtv-winter-ui', JSON.stringify(winterUI)); } catch (_) {}
+  if (WINTER_WMS[id]) { const l = _winterLayers[id]; if (l) l.setParams({ layers: String(WINTER_WMS[id].layer()) }); renderWinterLegend(id); }
+  if (id === 'fall-colors') loadFoliageFrame();
+  renderPanel();
+}
+
+// ── NOAA map-service layers (WPC + NOHRSC) ──
+const WINTER_WMS = {
+  'wssi':       { svc: 'vector/services/outlooks/wpc_wssi', rest: 'vector/rest/services/outlooks/wpc_wssi', opacity: 0.6, z: 416,
+                  title: '❄️ Winter Storm Severity', attrib: 'Winter Storm Severity Index: NOAA/NWS WPC',
+                  layer: () => ({ all: 4, 1: 1, 2: 2, 3: 3 })[winterUI.wssiDay] || 4,
+                  sub: () => winterUI.wssiDay === 'all' ? 'Days 1–3 combined' : 'Day ' + winterUI.wssiDay, none: 'No winter storm impacts are forecast.' },
+  'snow-prob':  { svc: 'vector/services/precip/wpc_prob_winter_precip', rest: 'vector/rest/services/precip/wpc_prob_winter_precip', opacity: 0.6, z: 417,
+                  title: '🌨 Chance of heavy snow', attrib: 'Snowfall probabilities: NOAA/NWS WPC',
+                  layer: () => (Number(winterUI.snowDay) - 1) * 5 + ({ 4: 1, 8: 2, 12: 3 })[winterUI.snowIn],
+                  sub: () => `${winterUI.snowIn}″ or more · Day ${winterUI.snowDay}`, none: 'No heavy snow is forecast for this day.' },
+  'ice-prob':   { svc: 'vector/services/precip/wpc_prob_winter_precip', rest: 'vector/rest/services/precip/wpc_prob_winter_precip', opacity: 0.6, z: 418,
+                  title: '🧊 Chance of icing', attrib: 'Icing probabilities: NOAA/NWS WPC',
+                  layer: () => (Number(winterUI.iceDay) - 1) * 5 + 4,
+                  sub: () => `¼″ of ice or more · Day ${winterUI.iceDay}`, none: 'No significant icing is forecast for this day.' },
+  'snow-depth': { svc: 'raster/services/snow/NOHRSC_Snow_Analysis', rest: 'raster/rest/services/snow/NOHRSC_Snow_Analysis', opacity: 0.6, z: 414,
+                  title: '⛄ Snow on the ground', attrib: 'Snow depth: NOAA/NWS NOHRSC', raster: true,
+                  layer: () => 3, sub: () => 'Inches · daily analysis' },
+};
+const _winterLayers = {}, _arcLegendCache = {};
+function startWinterWms(id) {
+  const c = WINTER_WMS[id]; if (!c || _winterLayers[id]) return;
+  _winterLayers[id] = L.tileLayer.wms(`${NOAA_MS}/${c.svc}/MapServer/WMSServer`, {
+    layers: String(c.layer()), format: 'image/png', transparent: true, version: '1.3.0',
+    opacity: c.opacity, zIndex: c.z, attribution: c.attrib,
+  }).addTo(map);
+  renderWinterLegend(id);
+}
+function stopWinterWms(id) {
+  if (_winterLayers[id]) { map.removeLayer(_winterLayers[id]); delete _winterLayers[id]; }
+  document.getElementById('sl-' + id)?.remove();
+  _seasonLegendVisibility();
+}
+function _seasonLegendBox(id) {
+  const host = document.getElementById('season-legends');
+  let el = document.getElementById('sl-' + id);
+  if (!el && host) {
+    el = document.createElement('div'); el.id = 'sl-' + id;
+    el.style.cssText = 'margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem';
+    host.appendChild(el);
+  }
+  _seasonLegendVisibility();
+  return el;
+}
+function _seasonLegendVisibility() {
+  const host = document.getElementById('season-legends');
+  if (host) host.style.display = host.children.length ? '' : 'none';
+}
+const _legTitle = (t) => `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:#93c5fd;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.25rem">${t}</div>`;
+const _legNote = (t) => `<div style="font-size:0.62rem;color:var(--muted);margin-top:0.15rem;line-height:1.35">${t}</div>`;
+async function renderWinterLegend(id) {
+  const c = WINTER_WMS[id]; const el = _seasonLegendBox(id); if (!c || !el) return;
+  const lid = c.layer();
+  el.innerHTML = _legTitle(c.title) + `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">${c.sub()}</div><div class="leg-row" style="color:var(--muted)">Loading…</div>`;
+  try {
+    if (!_arcLegendCache[c.rest]) _arcLegendCache[c.rest] = fetch(`${NOAA_MS}/${c.rest}/MapServer/legend?f=json`).then(r => r.json());
+    const lg = await _arcLegendCache[c.rest];
+    const layer = (lg.layers || []).find(l => l.layerId === lid);
+    const nice = (s) => String(s || '').replace(/^(SLGT|MDT|HIGH): AT LEAST (\d+)% PROB$/i, '$2%+ chance').replace(/^Winter Weather Area$/, 'Winter weather (limited)');
+    const rows = ((layer && layer.legend) || []).filter(x => x.label).map(x =>
+      `<div class="leg-row"><img alt="" src="data:${x.contentType || 'image/png'};base64,${x.imageData}" style="width:16px;height:12px;border-radius:2px;flex-shrink:0">${nice(x.label)}${c.raster ? '″' : ''}</div>`);
+    let note = '';
+    if (!c.raster && c.none) {
+      const q = await fetch(`${NOAA_MS}/${c.rest}/MapServer/${lid}/query?where=1%3D1&returnCountOnly=true&f=json`).then(r => r.json()).catch(() => null);
+      if (q && q.count === 0) note = c.none;
+    }
+    if (!document.getElementById('sl-' + id)) return;      // turned off meanwhile
+    el.innerHTML = _legTitle(c.title) + `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">${c.sub()}</div>`
+      + (rows.length > 8 ? rows.filter((_, i) => i % 2 === 0) : rows).join('') + (note ? _legNote('✓ ' + note) : '') + _legNote(c.attrib);
+  } catch (e) {
+    el.innerHTML = _legTitle(c.title) + _legNote(c.attrib);
+  }
+}
+
+// ── Rain / snow / ice radar (WeatherTV tile service) ──
+let _ptypeLayer = null, _ptypeTimer = null, _ptypeScan = null;
+async function refreshPtype() {
+  try {
+    const m = await fetch(`${WXTILES_BASE}/meta/ptype`).then(r => r.json());
+    const el = _seasonLegendBox('ptype');
+    const swatch = (c, l) => `<div class="leg-row"><div class="leg-sw" style="background:${c}"></div>${l}</div>`;
+    if (!m.available) { if (el) el.innerHTML = _legTitle('🌨 Rain / snow / ice') + _legNote('Winter radar is unavailable right now — try again in a few minutes.'); return; }
+    if (m.scan !== _ptypeScan) {
+      _ptypeScan = m.scan;
+      const url = `${WXTILES_BASE}/tiles/ptype/${m.scan}/{z}/{x}/{y}.png`;
+      if (_ptypeLayer) _ptypeLayer.setUrl(url);
+      else _ptypeLayer = L.tileLayer(url, { opacity: 1, zIndex: 430, maxNativeZoom: 10, maxZoom: 16, attribution: 'Precip type: NOAA MRMS + HRRR' }).addTo(map);
+    }
+    const t = new Date(m.validIso);
+    if (el) el.innerHTML = _legTitle('🌨 Rain / snow / ice')
+      + swatch('#28b428', 'Rain') + swatch('#3c82f0', 'Snow') + swatch('#8c5adc', 'Rain & snow mix')
+      + swatch('#dc50b4', 'Sleet') + swatch('#e6325a', 'Freezing rain')
+      + _legNote(`Latest scan ${isNaN(t) ? '' : t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · darker = heavier · lower 48`);
+  } catch (e) { console.warn('[ptype]', e.message); }
+}
+function startPtype() { refreshPtype(); if (!_ptypeTimer) _ptypeTimer = setInterval(refreshPtype, 4 * 60 * 1000); }
+function stopPtype() {
+  if (_ptypeTimer) { clearInterval(_ptypeTimer); _ptypeTimer = null; }
+  if (_ptypeLayer) { map.removeLayer(_ptypeLayer); _ptypeLayer = null; }
+  _ptypeScan = null;
+  document.getElementById('sl-ptype')?.remove(); _seasonLegendVisibility();
+}
+
+// ── Winter road conditions ──
+const ROAD_COLORS = { good: '#22c55e', wet: '#38bdf8', slippery: '#facc15', snow: '#f8fafc', ice: '#f472b6', closed: '#ef4444' };
+const ROAD_LABELS = { good: 'Good / dry', wet: 'Wet', slippery: 'Slippery / partly covered', snow: 'Snow covered', ice: 'Icy', closed: 'Closed / travel not advised' };
+let _roadLayer = null, _roadTimer = null, _roadReq = 0;
+async function refreshRoads() {
+  if (!_roadLayer) return;
+  const el = _seasonLegendBox('roads');
+  const legend = (note) => _legTitle('🛣 Road conditions') + Object.keys(ROAD_COLORS).map(k =>
+    `<div class="leg-row"><div class="leg-sw" style="background:${ROAD_COLORS[k]};height:4px"></div>${ROAD_LABELS[k]}</div>`).join('') + (note ? _legNote(note) : '');
+  if (map.getZoom() < 6) { _roadLayer.clearLayers(); if (el) el.innerHTML = legend('Zoom in to see road conditions.'); return; }
+  const b = map.getBounds(), req = ++_roadReq;
+  try {
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v => v.toFixed(3)).join(',');
+    const fc = await fetch('/api/roads?bbox=' + bbox).then(r => r.json());
+    if (req !== _roadReq || !_roadLayer) return;
+    _roadLayer.clearLayers();
+    const shown = (fc.features || []).filter(f => ROAD_COLORS[f.properties.cat]);
+    _roadLayer.addData({ type: 'FeatureCollection', features: shown });
+    const note = shown.length ? `From state 511 systems · tap a road for details`
+      : (fc.sources && fc.sources.length ? 'No road reports here right now.' : 'This state doesn’t share road conditions with us yet.');
+    if (el) el.innerHTML = legend(note);
+  } catch (e) { if (el) el.innerHTML = legend('Road conditions are unavailable right now.'); }
+}
+function startRoads() {
+  if (_roadLayer) return;
+  const esc = (x) => String(x || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  _roadLayer = L.geoJSON(null, {
+    style: f => ({ color: ROAD_COLORS[f.properties.cat] || '#94a3b8', weight: 4, opacity: 0.9 }),
+    onEachFeature: (f, l) => {
+      const p = f.properties;
+      l.bindPopup(`<b>${esc(p.road) || 'Road'}</b>${p.where ? '<br>' + esc(p.where) : ''}<br>${esc(ROAD_LABELS[p.cat] || p.condition)}`
+        + `${p.surface && p.surface !== p.condition ? ' · ' + esc(p.surface) : ''}${p.updated ? '<br><span style="opacity:.7">Updated ' + new Date(p.updated).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + '</span>' : ''}`);
+    },
+  }).addTo(map);
+  map.on('moveend.roads', refreshRoads);
+  refreshRoads();
+  _roadTimer = setInterval(refreshRoads, 10 * 60 * 1000);
+}
+function stopRoads() {
+  map.off('moveend.roads');
+  if (_roadTimer) { clearInterval(_roadTimer); _roadTimer = null; }
+  if (_roadLayer) { map.removeLayer(_roadLayer); _roadLayer = null; }
+  document.getElementById('sl-roads')?.remove(); _seasonLegendVisibility();
+}
+
+// ── Fall colors (Explore Fall) ──
+let _foliageLayer = null;
+async function loadFoliageFrame() {
+  if (!overlayState['fall-colors'] || !_foliageStatus) return;
+  const frames = _foliageStatus.frames || [];
+  const fr = frames.find(f => f.id === winterUI.foliageFrame) || frames[0];
+  if (!fr) return;
+  if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
+  const el = _seasonLegendBox('fall-colors');
+  const credit = _foliageStatus.credit || { text: 'Fall foliage data: Explore Fall', url: 'https://www.explorefall.com' };
+  const legend = (fr.legend || []).map(x => `<div class="leg-row"><div class="leg-sw" style="background:${/^#[0-9a-f]{3,8}$/i.test(x.color) ? x.color : '#888'}"></div>${String(x.label || '').replace(/[<>&]/g, '')}</div>`).join('');
+  if (el) el.innerHTML = _legTitle('🍁 Fall colors · ' + String(fr.label).replace(/[<>&]/g, '')) + legend
+    + `<div style="font-size:0.62rem;margin-top:0.2rem"><a href="${credit.url}" target="_blank" rel="noopener" style="color:#fbbf24">${credit.text} · ExploreFall.com</a></div>`;
+  try {
+    if (fr.image && fr.image.url) {
+      _foliageLayer = L.imageOverlay(fr.image.url, fr.image.bounds, { opacity: 0.7, zIndex: 413, attribution: credit.text }).addTo(map);
+    } else {
+      const data = await fetch('/api/foliage/data?frame=' + encodeURIComponent(fr.id)).then(r => r.json());
+      if (!overlayState['fall-colors']) return;
+      _foliageLayer = L.geoJSON(data, {
+        style: f => ({ color: f.properties.color, weight: 0.4, opacity: 0.5, fillColor: f.properties.color, fillOpacity: Math.min(0.7, f.properties.opacity || 0.55) }),
+        onEachFeature: (f, l) => { if (f.properties.name) l.bindTooltip(String(f.properties.name).replace(/[<>&]/g, ''), { sticky: true }); },
+        attribution: credit.text,
+      }).addTo(map);
+      _foliageLayer.bringToBack?.();
+    }
+  } catch (e) { console.warn('[Foliage]', e.message); }
+}
+function startFoliage() { loadFoliageFrame(); }
+function stopFoliage() {
+  if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
+  document.getElementById('sl-fall-colors')?.remove(); _seasonLegendVisibility();
+}
+
+function applySeasonal(id, on) {
+  if (WINTER_WMS[id]) { on ? startWinterWms(id) : stopWinterWms(id); return true; }
+  if (id === 'ptype') { on ? startPtype() : stopPtype(); return true; }
+  if (id === 'roads') { on ? startRoads() : stopRoads(); return true; }
+  if (id === 'fall-colors') { on ? startFoliage() : stopFoliage(); return true; }
+  return false;
+}
+
+const OVERLAY_ITEMS=SEASONAL_ITEMS.concat(ALERT_ITEMS).concat(MESO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -7862,6 +8289,7 @@ function toggleLayerPanel(force){
   document.getElementById('layer-backdrop').classList.toggle('open',open);
 }
 function applyOverlay(id,on){
+  if (applySeasonal(id,on)) return;
   switch(id){
     case 'alerts':    if (on!==alertsVisible) toggleAlerts(); break;
     case 'spc':       if (on!==spcVisible) toggleSPC(); break;
@@ -7935,6 +8363,7 @@ function renderPanel(){
   document.getElementById('lp-surface').innerHTML=SURFACE_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-precip').innerHTML=PRECIP_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-tropical').innerHTML=TROPICAL_ITEMS.map(toggleRowHTML).join('');
+  renderSeasonal();
   // Site picker is needed if Velocity/SRV/Echo Tops is the active paint,
   // OR CC is toggled on — these are independent now, so both are checked.
   const needsSite=(activePaint in SS_PRODUCTS)||overlayState['cc'];

@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-20T16:00:00Z build.1792520000
+// WeatherTV Server — updated 2026-10-20T20:00:00Z build.1792600000
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const radar = require('./radar');
+const winter = require('./winter');   // road conditions + fall colors
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const { createLiveVerifier } = require('./live-verifier');
@@ -5835,6 +5836,7 @@ app.get(['/weatherstar/images/*', '/weatherstar3000/images/*'], (req, res) => {
 // Mount radar push notification routes BEFORE the catch-all —
 // radar.js registers GET routes that would otherwise be swallowed by app.get('*')
 radar.routes(app);
+winter.routes(app);
 
 // ── Shop (Fourthwall Storefront API) ─────────────────────────────────────────
 // GET /api/shop/products — the public product list for /shop.html, cached 10
@@ -6137,6 +6139,7 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`Admin: http://localhost:${PORT}/admin`);
 
   // Init radar module with Redis client once server is up
+  winter.init(redis);
   if (redis) {
     radar.init(redis);
   } else {

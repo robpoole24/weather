@@ -1294,7 +1294,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="/js/wtv-alerts-core.js"></script>
-  <script src="/js/wtv-alerts.js?v=1792520000"></script>
+  <script src="/js/wtv-alerts.js?v=1792600000"></script>
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
 <link rel="icon" href="/images/icon-192.png?v=2" type="image/png">
 <link rel="apple-touch-icon" href="/images/apple-touch-icon.png?v=2">
@@ -4811,7 +4811,7 @@ function renderNotifPrefs(types, token, chosen) {
   const saved = JSON.parse(localStorage.getItem('push-alert-types') || 'null');
   const isOn = (t) => t.always || (chosen ? chosen.includes(t.event) : (saved ? saved.includes(t.event) : t.defaultOn));
   const esc = (x) => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const sound = { siren: '🔊 siren', chime: '🔔 chime' };
+  const sound = { siren: '🔊 siren', urgent: '🔔 urgent' };
 
   let html = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:1.1rem;font-weight:700;
     color:var(--accent);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:0.6rem;
@@ -4854,6 +4854,7 @@ function renderNotifPrefs(types, token, chosen) {
     html += `</details>`;
   });
 
+  if (wtvRain()) html += `<div id="np-rain" style="border-top:1px solid var(--border);padding:0.6rem 0 0"></div>`;
   html += `<div style="margin-top:0.9rem;display:flex;gap:0.5rem;justify-content:flex-end">
     <button onclick="saveNotifPrefs('${token}')"
       style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:700;
@@ -4863,7 +4864,74 @@ function renderNotifPrefs(types, token, chosen) {
 
   panel.innerHTML = html;
   panel.style.display = '';
+  notifRainRender();
 }
+
+// ── Alert card (Android app, while it's open) ─────────────────────────────────
+// The phone's own notification plays the sound; this shows the alert over the
+// bottom half of the screen instead of taking over the whole screen.
+window.onNativeAlert = function (a) {
+  if (!a || !a.title) return;
+  const esc = (x) => String(x || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  document.getElementById('wtv-alert-card')?.remove();
+  const color = /^#[0-9a-f]{3,8}$/i.test(a.color || '') ? a.color : '#f4a261';
+  const card = document.createElement('div');
+  card.id = 'wtv-alert-card';
+  card.setAttribute('role', 'alertdialog');
+  card.setAttribute('aria-live', a.tier === 'soft' ? 'polite' : 'assertive');
+  card.style.cssText = `position:fixed;left:0;right:0;bottom:0;z-index:10001;max-height:50vh;overflow-y:auto;
+    background:var(--surface);border-top:4px solid ${color};border-radius:14px 14px 0 0;
+    box-shadow:0 -8px 32px rgba(0,0,0,0.55);padding:1rem 1.1rem calc(1rem + env(safe-area-inset-bottom));
+    font-family:Barlow,sans-serif;transform:translateY(100%);transition:transform .25s ease-out`;
+  card.innerHTML = `<div style="font-family:'Barlow Condensed',sans-serif;font-size:1.25rem;font-weight:700;letter-spacing:0.03em;color:${color};margin-bottom:0.4rem">${esc(a.title)}</div>
+    <div style="font-size:0.9rem;color:var(--text);line-height:1.45;white-space:pre-line">${esc(a.body)}</div>
+    <div style="display:flex;gap:0.6rem;margin-top:0.9rem">
+      <button type="button" id="wtv-alert-card-radar" style="flex:1;font-family:'Barlow Condensed',sans-serif;font-size:0.95rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;background:${color};color:#000;border:none;border-radius:6px;padding:0.65rem;cursor:pointer">Show on radar</button>
+      <button type="button" id="wtv-alert-card-close" style="flex:0 0 auto;font-family:'Barlow Condensed',sans-serif;font-size:0.95rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;background:none;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.65rem 1rem;cursor:pointer">Dismiss</button>
+    </div>`;
+  document.body.appendChild(card);
+  requestAnimationFrame(() => { card.style.transform = 'translateY(0)'; });
+  const close = () => { card.style.transform = 'translateY(100%)'; setTimeout(() => card.remove(), 260); };
+  card.querySelector('#wtv-alert-card-close').onclick = close;
+  card.querySelector('#wtv-alert-card-radar').onclick = () => { close(); if (typeof showPanel === 'function') showPanel('radar'); };
+  if (a.tier === 'soft') setTimeout(() => { if (document.body.contains(card)) close(); }, 20000);
+  card.querySelector('#wtv-alert-card-radar').focus();
+};
+
+// ── 🌧️ Rain heads-up (Android app only) ──────────────────────────────────────
+// The phone itself checks the 15-minute rain forecast (Open-Meteo) about every
+// 15 minutes and says "Rain likely in about 15 min". The place stays on the
+// phone; the Weather TV server is never involved.
+function wtvRain() {
+  try { return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.RainAlerts) || null; } catch (_) { return null; }
+}
+function wtvRainSendPlace() {
+  const r = wtvRain(), loc = window.WTVAlerts && WTVAlerts.getLocation();
+  if (!r || !loc || !Number.isFinite(loc.lat)) return Promise.resolve(null);
+  return r.setLocation({ lat: loc.lat, lon: loc.lon, label: loc.label || '' }).catch(() => null);
+}
+async function notifRainRender() {
+  const box = document.getElementById('np-rain'), r = wtvRain();
+  if (!box || !r) return;
+  const st = (await wtvRainSendPlace()) || (await r.getStatus().catch(() => null)) || {};
+  const note = !st.hasPlace ? 'Set your location first.'
+    : st.canNotify === false ? 'Notifications are off for Weather TV — turn them on in Android settings.'
+    : `For ${st.label || 'your location'} · checked about every 15 minutes`;
+  box.innerHTML = `<label style="display:flex;align-items:center;gap:0.55rem;cursor:pointer">
+      <input type="checkbox" id="np-rain-on" ${st.enabled ? 'checked' : ''} onchange="notifRainToggle(this.checked)"
+        style="accent-color:var(--accent);width:15px;height:15px;flex-shrink:0;cursor:pointer">
+      <span style="font-size:0.8rem;flex:1">🌧️ Rain heads-up <span style="color:var(--muted)">— “Rain likely in about 15 min”</span></span>
+    </label>
+    <div style="font-size:0.7rem;color:var(--muted);margin:0.2rem 0 0 1.6rem;line-height:1.4">${note.replace(/[<>&]/g, '')}</div>`;
+}
+async function notifRainToggle(on) {
+  const r = wtvRain(); if (!r) return;
+  await wtvRainSendPlace();
+  await r.setEnabled({ enabled: !!on }).catch(() => {});
+  notifRainRender();
+}
+document.addEventListener('DOMContentLoaded', () => { setTimeout(wtvRainSendPlace, 3000); });
+
 function notifPrefsCount(input) {
   const g = input.closest('details'); if (!g) return;
   const boxes = [...g.querySelectorAll('input[data-event]')];
@@ -4885,6 +4953,7 @@ function notifPrefsSetAll(on) {
 // the test" asks for notification permission (a tap is required on phones),
 // gets this phone's push address and redeems the link: ONE test push arrives.
 async function getPushTokenOnly() {
+  if (window._nativeFcmToken) return window._nativeFcmToken;   // inside the Android app
   if (!('Notification' in window) || !('serviceWorker' in navigator)) throw new Error("This browser can't receive notifications");
   if (!FIREBASE_CONFIG && !(await loadFirebaseConfig())) throw new Error('Notifications are not set up on the server');
   const [{ initializeApp, getApps }, { getMessaging, getToken }] = await Promise.all([
@@ -4909,6 +4978,7 @@ function showTestLinkPanel(invite) {
     ${iosBrowser ? `<p style="font-size:0.78rem;color:#f4a261;line-height:1.45;margin:0 0 0.9rem">On iPhone, alerts only work from the Home Screen app: tap Share → <strong>Add to Home Screen</strong>, open WeatherTV from there, then open this link again.</p>` : ''}
     <button id="wtv-test-go" style="width:100%;font-family:'Barlow Condensed',sans-serif;font-size:0.95rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;background:var(--accent);color:#000;border:none;border-radius:6px;padding:0.7rem;cursor:pointer">🔔 Send the test</button>
     <div id="wtv-test-msg" style="font-size:0.8rem;margin-top:0.6rem;min-height:1.2em;color:var(--muted)"></div>
+    ${wtvRain() ? `<button id="wtv-test-rain" style="margin-top:0.5rem;width:100%;font-family:'Barlow Condensed',sans-serif;font-size:0.85rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;background:none;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:0.55rem;cursor:pointer">🌧️ Show a sample rain heads-up</button>` : ''}
     <button onclick="document.getElementById('wtv-test-link').remove()" style="margin-top:0.4rem;width:100%;background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.8rem">Close</button>
   </div>`;
   document.body.appendChild(box);
@@ -4925,6 +4995,13 @@ function showTestLinkPanel(invite) {
       msg.textContent = '✓ Sent! A TEST alert should appear on this phone within a few seconds. If it doesn\u2019t, let WeatherTV know.';
     } catch (e) { msg.style.color = '#f87171'; msg.textContent = e.message; }
     btn.disabled = false;
+  };
+  const rainBtn = document.getElementById('wtv-test-rain');
+  if (rainBtn) rainBtn.onclick = async () => {
+    const msg = document.getElementById('wtv-test-msg');
+    const r = await wtvRain().test().catch(() => ({}));
+    msg.style.color = r.shown ? '#22c55e' : '#f87171';
+    msg.textContent = r.shown ? '✓ A sample “Rain likely in about 15 min” should be showing now.' : 'Notifications are off for Weather TV — turn them on in Android settings.';
   };
 }
 document.addEventListener('DOMContentLoaded', () => {

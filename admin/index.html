@@ -635,6 +635,25 @@
     </div>
   </div>
 
+  <!-- Seasonal layers — Fall Colors switch (Explore Fall) + road condition sources -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">🍁 Seasonal Layers</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadSeasonalAdmin()">Refresh</button>
+    </div>
+    <div class="section-body">
+      <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Fall Colors (Explore Fall)</div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.6rem">Used with credit and a link to ExploreFall.com. If Explore Fall ever asks us to stop, switch it off here — it disappears from every app within about 10 minutes.</div>
+      <div id="fol-status" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.6rem">
+        <button class="btn btn-ghost btn-sm" id="fol-toggle" onclick="toggleFoliage()">…</button>
+        <button class="btn btn-ghost btn-sm" id="fol-refresh" onclick="refreshFoliageAdmin()">↻ Fetch the latest files now</button>
+      </div>
+      <div style="font-weight:600;font-size:0.875rem;margin:1.2rem 0 0.25rem">Winter road conditions</div>
+      <div id="roads-status" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
+    </div>
+  </div>
+
   <!-- Alert Tests — banner/sound test + real push test + push system status -->
   <div class="section">
     <div class="section-header">
@@ -3119,6 +3138,41 @@ async function recountCameras() {
     } catch (_) {}
   }, 10000);
 }
+// ── Seasonal layers ──────────────────────────────────────────────────────────
+let _folEnabled = true;
+async function loadSeasonalAdmin() {
+  const el = document.getElementById('fol-status'), btn = document.getElementById('fol-toggle');
+  try {
+    const d = await (await fetch('/api/admin/foliage', { cache: 'no-store' })).json();
+    _folEnabled = d.enabled;
+    btn.textContent = d.enabled ? '⏸ Turn Fall Colors OFF for everyone' : '▶ Turn Fall Colors back ON';
+    btn.className = 'btn btn-sm ' + (d.enabled ? 'btn-ghost' : 'btn-primary');
+    const when = (x) => x ? new Date(x).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+    el.innerHTML = `<div><strong style="color:${d.enabled ? 'var(--green,#22c55e)' : 'var(--red,#f87171)'}">${d.enabled ? 'ON' : 'OFF'}</strong>`
+      + ` · ${d.inSeason ? 'in season (Sep–Nov)' : 'out of season — hidden from viewers until September'}`
+      + ` · Drive key ${d.keySet ? 'set ✓' : '<span style="color:var(--red,#f87171)">missing (GOOGLE_DRIVE_API_KEY)</span>'}</div>`
+      + `<div>${d.frames} map frame(s) · files updated ${lvEsc(when(d.updated))} · last checked ${lvEsc(when(d.checked))}</div>`
+      + ((d.files || []).length ? `<div>${d.files.map(f => lvEsc(f.kind + ': ' + f.name)).join(' · ')}</div>` : '')
+      + (d.error ? `<div style="color:var(--gold)">Last problem: ${lvEsc(d.error)}</div>` : '');
+  } catch (e) { el.innerHTML = '<span style="color:var(--red)">✗ Could not load</span>'; }
+  try {
+    const r = await (await fetch('/api/admin/roads', { cache: 'no-store' })).json();
+    const rs = document.getElementById('roads-status');
+    const row = (s) => `${s.id.toUpperCase()} ${s.key ? (s.error ? '⚠ ' + lvEsc(s.error) : (s.count != null ? s.count + ' segments' : 'key set ✓ (loads when someone views it)')) : '<span style="opacity:.6">no key</span>'}`;
+    rs.innerHTML = r.states.map(row).join(' · ') + `<div style="margin-top:0.3rem">Road511: ${r.road511.key ? (r.road511.error ? '⚠ ' + lvEsc(r.road511.error) : 'key set ✓') : 'no key'}</div>`;
+  } catch (_) {}
+}
+async function toggleFoliage() {
+  if (_folEnabled && !confirm('Turn Fall Colors off for every viewer?')) return;
+  await fetch('/api/admin/foliage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !_folEnabled }) }).catch(() => {});
+  loadSeasonalAdmin();
+}
+async function refreshFoliageAdmin() {
+  const b = document.getElementById('fol-refresh'); b.disabled = true; b.textContent = 'Fetching…';
+  await fetch('/api/admin/foliage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh: true }) }).catch(() => {});
+  b.disabled = false; b.textContent = '↻ Fetch the latest files now';
+  loadSeasonalAdmin();
+}
 // ── Alert Tests ──────────────────────────────────────────────────────────────
 function openBannerTest(kind) {
   window.open('/radar.html?testAlert=' + encodeURIComponent(kind), '_blank', 'noopener');
@@ -3129,7 +3183,7 @@ async function loadAlertTypesForTest() {
   try {
     const d = await (await fetch('/api/radar/alert-types')).json();
     sel.innerHTML = d.types.map(t => '<option value="' + lvEsc(t.event) + '">' + t.icon + ' ' + lvEsc(t.event) +
-      (t.tier === 'siren' ? ' (siren)' : t.tier === 'chime' ? ' (chime)' : '') + '</option>').join('');
+      (t.tier === 'siren' ? ' (siren)' : t.tier === 'urgent' ? ' (urgent chime)' : ' (soft chime)') + '</option>').join('');
   } catch (e) {
     sel.innerHTML = '<option>Tornado Warning</option>';
   }
@@ -3464,6 +3518,7 @@ loadLiveVerifier();
 loadAlertTypesForTest();
 loadCamsSummary();
 loadCameraStats();
+loadSeasonalAdmin();
 setInterval(loadCamsSummary, 120000);
 loadPushStatus();
 setInterval(loadSystemHealth, 60000);

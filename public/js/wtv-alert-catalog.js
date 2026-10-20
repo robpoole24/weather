@@ -6,7 +6,10 @@
 //   code      3 letters, used in push topic names (a_<zone>_<code>). NEVER change
 //             an existing code: phones are subscribed by it.
 //   group     section in the settings and in the map's Alert Types list
-//   tier      sound on phones: 'siren' | 'chime' | 'quiet'
+//   tier      sound on phones (set by the rule under the list):
+//               'siren'  — Tornado Warning only
+//               'urgent' — every other warning, Tornado/Severe Thunderstorm/tropical watches, emergencies
+//               'soft'   — everything else (watches, advisories, statements)
 //   always    life-safety: every phone gets it, can't be turned off
 //   defaultOn on for new users (can be turned off)
 //
@@ -123,6 +126,15 @@
     T('Hazardous Weather Outlook',    'HWO', 'statement', '📋', '#eee8aa'),
     T('Short Term Forecast',          'NOW', 'statement', '📋', '#98fb98'),
   ];
+
+  // Three sounds. The siren is ONLY for tornado warnings, so it always means "take cover".
+  const URGENT_ALSO = new Set(['Tornado Watch', 'Severe Thunderstorm Watch', 'Hurricane Watch', 'Typhoon Watch',
+    'Storm Surge Watch', 'Tropical Storm Watch', 'Tsunami Watch', 'Evacuation Immediate', 'Civil Emergency Message',
+    'Local Area Emergency']);
+  ALERT_CATALOG.forEach(t => {
+    t.tier = t.event === 'Tornado Warning' ? 'siren'
+      : (/Warning$/.test(t.event) || URGENT_ALSO.has(t.event)) ? 'urgent' : 'soft';
+  });
 
   // Old or renamed NWS event names → the current name, so nothing is missed
   // while offices switch over (NWS renamed several in 2024–25).

@@ -58,8 +58,10 @@ async function showWeatherAlert(d) {
   const here = WTVAlertsCore.atLocation(d, loc);
   const test = d.test === '1' ? 'TEST: ' : '';
   const until = d.expires ? ' · until ' + new Date(d.expires).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-  const loud = here && d.tier !== 'quiet';
-  const title = here ? `${test}${d.icon || '⚠️'} ${d.displayEvent}` : `${test}${d.displayEvent} nearby`;
+  const loud = here && d.tier !== 'soft' && d.tier !== 'quiet' && d.update !== 'cancelled';
+  const what = d.update === 'cancelled' ? `✅ ${d.displayEvent} cancelled`
+    : d.update === 'extended' ? `${d.icon || '⚠️'} ${d.displayEvent} extended` : `${d.icon || '⚠️'} ${d.displayEvent}`;
+  const title = here ? `${test}${what}` : `${test}${what.replace(/^\S+ /, '')} nearby`;
   const body = here
     ? `${d.summary ? d.summary + '\n' : ''}${d.area || d.headline}${until}`
     : `Issued near ${loc && loc.label ? loc.label : 'your location'} — your location is outside the warned area.${until}`;

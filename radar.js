@@ -41,8 +41,8 @@ function initFirebase() {
 
 // ── Alert catalog ────────────────────────────────────────────────────────────
 // code:  3-letter id used in topic names
-// tier:  sound class on devices — 'siren' (outdoor warning siren),
-//        'chime' (soft two-note), 'quiet' (system default / low-key)
+// tier:  sound class on devices — 'siren' (Tornado Warning only),
+//        'urgent' (other warnings, severe/tropical watches), 'soft' (everything else)
 // always: life-safety — every device subscribes, can't be turned off
 // defaultOn: on for new users, can be turned off
 // The full list lives in public/js/wtv-alert-catalog.js (shared with the radar map).
@@ -125,6 +125,13 @@ function vtecKey(props) {
   return m ? `${m[1]}.${m[2]}.${m[3]}.${m[4]}` : null;
 }
 
+// What NWS did to the alert, from the VTEC code: NEW, CON(tinue), EXT/EXA/EXB (extended
+// in time/area), CAN(celled), EXP(iring), UPG(raded)…
+function vtecAction(props) {
+  const m = ((props.parameters?.VTEC || [])[0] || '').match(/^\/[A-Z]\.([A-Z]{3})\./);
+  return m ? m[1] : null;
+}
+
 // Decide whether an alert (or an update to one) should be pushed, and how it's labelled
 function classify(props) {
   const event = EVENT_ALIASES[props.event] || props.event;
@@ -135,11 +142,20 @@ function classify(props) {
   let displayEvent = event, tier = meta.tier, level = 'base';
   if (event === 'Tornado Warning' && torThreat === 'CATASTROPHIC') { displayEvent = 'TORNADO EMERGENCY'; level = 'emergency'; }
   else if (event === 'Tornado Warning' && torThreat === 'CONSIDERABLE') { displayEvent = 'PDS Tornado Warning'; level = 'pds'; }
-  else if (event === 'Flash Flood Warning' && ffThreat === 'CATASTROPHIC') { displayEvent = 'FLASH FLOOD EMERGENCY'; tier = 'siren'; level = 'emergency'; }
-  // Updates (continuations, tweaks) only push when they ESCALATE the threat
-  if (props.messageType === 'Update' && level === 'base') return null;
-  if (props.messageType !== 'Alert' && props.messageType !== 'Update') return null;
-  return { event, meta, displayEvent, tier, level };
+  else if (event === 'Flash Flood Warning' && ffThreat === 'CATASTROPHIC') { displayEvent = 'FLASH FLOOD EMERGENCY'; level = 'emergency'; }
+  if (!['Alert', 'Update', 'Cancel'].includes(props.messageType)) return null;
+  // Follow-ups people need: the alert was EXTENDED (new end time / more area) or CANCELLED.
+  // Plain continuations don't push. An escalation (PDS, emergency) pushes as a new alert.
+  const action = vtecAction(props);
+  let update = null;
+  if (props.messageType === 'Cancel' || action === 'CAN') update = 'cancelled';
+  else if (level === 'base' && ['EXT', 'EXA', 'EXB'].includes(action)) update = 'extended';
+  if (props.messageType === 'Update' && level === 'base' && !update) return null;
+  if (props.messageType === 'Cancel' && !update) return null;
+  if (update && !vtecKey(props)) return null;           // can't tie it to the original alert
+  if (update === 'cancelled') { tier = 'soft'; level = 'base'; displayEvent = event; }  // never a siren for an all-clear
+  else if (update === 'extended' && tier === 'siren') tier = 'urgent';
+  return { event, meta, displayEvent, tier, level, update };
 }
 
 // ── Polling + sending ────────────────────────────────────────────────────────
@@ -175,8 +191,10 @@ async function pollAlerts() {
       const ugc = (props.geocode?.UGC || []).filter(u => UGC_RE.test(u));
       if (!ugc.length) continue;
 
-      // One push per alert per threat level (so an upgrade to Tornado Emergency pushes again)
-      const identity = (vtecKey(props) || props.id) + ':' + c.level;
+      // One push per alert per threat level (so an upgrade to Tornado Emergency pushes again),
+      // plus one per extension (each new end time) and one when it's cancelled
+      const identity = (vtecKey(props) || props.id) + ':' + c.level
+        + (c.update === 'extended' ? ':ext:' + (props.expires || props.sent || '') : c.update === 'cancelled' ? ':can' : '');
       const sentKey = SENT_PREFIX + identity;
       if (await redisClient.get(sentKey)) continue;
 
@@ -185,7 +203,7 @@ async function pollAlerts() {
         const ttl = Math.max(600, Math.min(86400, Math.round((Date.parse(props.expires || 0) - Date.now()) / 1000) + 3600));
         await redisClient.set(sentKey, '1', 'EX', ttl);
         bump('alertsSent');
-        stats.recent.unshift({ at: new Date().toISOString(), event: c.displayEvent, areas: ugc.length, area: (props.areaDesc || '').slice(0, 80) });
+        stats.recent.unshift({ at: new Date().toISOString(), event: c.displayEvent + (c.update ? ' (' + c.update + ')' : ''), areas: ugc.length, area: (props.areaDesc || '').slice(0, 80) });
         stats.recent = stats.recent.slice(0, 25);
       }
     }
@@ -218,7 +236,9 @@ function buildData(props, geometry, c, identity, test = false) {
   const expires = props.expires || new Date(Date.now() + 30 * 60000).toISOString();
   return {
     type: 'weather_alert',
-    alertKey: identity.replace(/[^A-Za-z0-9.:_-]/g, '_'),
+    // Same key for the alert and its updates, so phones REPLACE the earlier notification
+    alertKey: String(identity).split(':')[0].replace(/[^A-Za-z0-9._-]/g, '_'),
+    update: c.update || '',                    // '' | 'extended' | 'cancelled'
     event: c.event,
     displayEvent: c.displayEvent,
     tier: c.tier,

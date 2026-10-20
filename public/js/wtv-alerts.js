@@ -1,4 +1,4 @@
-// WeatherTV alerts client — build.1792520000
+// WeatherTV alerts client — build.1792600000
 // Keeps the user's alert location + alert-type choices ON THE DEVICE and
 // turns them into push-topic subscriptions. Our server only relays the
 // subscribe call to Firebase; it never receives coordinates.
@@ -63,6 +63,8 @@ const WTVAlerts = (() => {
       loc = { ...here, ugc: a.ugc, label: a.label, ts: Date.now() };
     }
     write(LS_LOC, loc);
+    // Android app: hand the place to the phone's own rain heads-up check
+    try { const rain = window.Capacitor?.Plugins?.RainAlerts; if (rain) rain.setLocation({ lat: loc.lat, lon: loc.lon, label: loc.label || '' }).catch(() => {}); } catch (_) {}
     await WTVAlertsCore.set('location', loc);   // for the service worker's polygon check
     await sync();
     return loc;
