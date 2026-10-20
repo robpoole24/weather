@@ -3158,7 +3158,7 @@ async function loadSeasonalAdmin() {
     const r = await (await fetch('/api/admin/roads', { cache: 'no-store' })).json();
     const rs = document.getElementById('roads-status');
     const row = (s) => `${s.id.toUpperCase()} ${s.key ? (s.error ? '⚠ ' + lvEsc(s.error) : (s.count != null ? s.count + ' segments' : 'key set ✓ (loads when someone views it)')) : '<span style="opacity:.6">no key</span>'}`;
-    rs.innerHTML = r.states.map(row).join(' · ') + `<div style="margin-top:0.3rem">Road511: ${r.road511.key ? (r.road511.error ? '⚠ ' + lvEsc(r.road511.error) : 'key set ✓') : 'no key'}</div>`;
+    rs.innerHTML = r.states.map(row).join(' · ') + `<div style="margin-top:0.3rem">Road511: ${r.road511.key ? (r.road511.error ? '⚠ ' + lvEsc(r.road511.error) : 'key set ✓') : 'no key'}${r.road511.callsToday != null ? ' · ' + r.road511.callsToday.toLocaleString() + ' of ' + r.road511.cap.toLocaleString() + ' calls today' : ''}</div>`;
   } catch (_) {}
 }
 // ── Alert Tests ──────────────────────────────────────────────────────────────

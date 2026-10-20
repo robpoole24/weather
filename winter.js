@@ -68,6 +68,8 @@ const ROAD_STATES = [
   { id: 'ut', base: 'https://prod-ut.ibi511.com',   env: 'UT_511_KEY', box: [-114.1, 36.9, -109.0, 42.1] },
   { id: 'ak', base: 'https://511.alaska.gov',       env: 'AK_511_KEY', box: [-170, 51, -129.9, 71.5] },
   { id: 'ct', base: 'https://ctroads.org',          env: 'CT_511_KEY', box: [-73.8, 40.9, -71.7, 42.1] },
+  // New England 511 = Maine, New Hampshire and Vermont (one system, one key)
+  { id: 'ne', base: 'https://newengland511.org',    env: 'NE_511_KEY', box: [-73.5, 42.7, -66.9, 47.5] },
   { id: 'az', base: 'https://az511.com',            env: 'AZ_511_KEY', box: [-114.9, 31.3, -109.0, 37.1] },
   { id: 'nc', base: 'https://www.drivenc.gov',      env: 'NC_511_KEY', box: [-84.4, 33.8, -75.4, 36.6] },
   { id: 'ga', base: 'https://511ga.org',            env: 'GA_511_KEY', box: [-85.7, 30.3, -80.8, 35.0] },
@@ -80,14 +82,17 @@ async function loadIbiState(st) {
   const key = process.env[st.env];
   if (!key) return { features: [], error: 'no key' };
   let lastErr = null;
-  for (const v of ['v2', 'v3']) {
+  // Newer sites answer /api/v2 or v3; older ones (511NY) use /api/GetWinterRoadConditions
+  const paths = ['/api/v2/get/winterroads', '/api/v3/get/winterroads', '/api/getwinterroadconditions'];
+  for (const path of paths) {
     try {
-      const txt = await getText(`${st.base}/api/${v}/get/winterroads?key=${encodeURIComponent(key)}&format=json`);
+      const txt = await getText(`${st.base}${path}?key=${encodeURIComponent(key)}&format=json`);
       const rows = JSON.parse(txt);
       const list = Array.isArray(rows) ? rows : (rows.WinterRoads || rows.winterRoads || rows.data || []);
       const features = [];
       for (const r of list) {
-        const poly = Array.isArray(r.EncodedPolyline) ? r.EncodedPolyline.join('') : r.EncodedPolyline;
+        const enc = r.EncodedPolyline ?? r.Polyline ?? r.EncodedPolylines;
+        const poly = Array.isArray(enc) ? enc.join('') : enc;
         const coords = decodePolyline(poly);
         if (coords.length < 2) continue;
         const cond = r['Overall Condition'] || r.OverallCondition || r['Overall-Condition'] || r.Condition || '';
@@ -121,8 +126,13 @@ async function ibiState(st) {
   return loading;
 }
 
-// Road511 (normalised feed across many states). Cached per 2° cell.
+// Road511 (normalised feed across many states). Cached per 2° cell for 15 min and
+// shared by every viewer, so calls don't grow with traffic. A daily cap keeps us
+// well inside the Starter plan's 50,000 requests/day.
 const _r511Cache = new Map();
+const R511_TTL = 15 * 60 * 1000;
+const R511_DAILY_CAP = Number(process.env.ROAD511_DAILY_CAP || 40000);
+let _r511Day = '', _r511Calls = 0;
 async function road511(bbox) {
   const key = process.env.ROAD511_API_KEY;
   if (!key) return [];
@@ -134,7 +144,14 @@ async function road511(bbox) {
   for (const [x, y] of cells) {
     const ck = x + ',' + y;
     let c = _r511Cache.get(ck);
-    if (!c || Date.now() - c.ts > ROAD_TTL) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (_r511Day !== today) { _r511Day = today; _r511Calls = 0; }
+    if ((!c || Date.now() - c.ts > R511_TTL) && _r511Calls >= R511_DAILY_CAP) {
+      if (c) out.push(...c.features);                 // over today's cap: keep serving what we have
+      continue;
+    }
+    if (!c || Date.now() - c.ts > R511_TTL) {
+      _r511Calls++;
       try {
         const txt = await getText(`https://api.road511.com/api/v1/features/geojson?type=road_conditions&bbox=${x},${y},${x + 2},${y + 2}&limit=1000`,
           { headers: { 'X-API-Key': key } });
@@ -148,10 +165,10 @@ async function road511(bbox) {
             updated: p.updated_at || p.last_updated || null, src: 'road511' } };
         });
         c = { ts: Date.now(), features: feats };
-        _roadStats.road511 = { count: (_roadStats.road511?.count || 0) + feats.length, at: new Date().toISOString() };
+        _roadStats.road511 = { count: (_roadStats.road511?.count || 0) + feats.length, at: new Date().toISOString(), callsToday: _r511Calls, cap: R511_DAILY_CAP };
       } catch (err) {
         c = { ts: Date.now(), features: [] };
-        _roadStats.road511 = { error: err.message, at: new Date().toISOString() };
+        _roadStats.road511 = { error: err.message, at: new Date().toISOString(), callsToday: _r511Calls, cap: R511_DAILY_CAP };
       }
       _r511Cache.set(ck, c);
       if (_r511Cache.size > 400) _r511Cache.delete(_r511Cache.keys().next().value);
