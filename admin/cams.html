@@ -319,6 +319,13 @@
 
       <div class="cams-panel" id="panel-checks">
       <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
+        <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Duplicates</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Finds the same camera listed twice — the same link, or the same channel streaming the same camera under a new video (24/7 streams restart with a new address). New imports are already checked automatically; this cleans up what came in before.</div>
+        <button class="btn btn-primary btn-sm" id="cc-dup-btn" onclick="ccFindDupes()">Find duplicates</button>
+        <pre id="cc-dup-status" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0.4rem 0 0"></pre>
+        <div id="cc-dup-list" style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.4rem"></div>
+      </div>
+      <div style="margin-bottom:1.25rem;padding-bottom:1.25rem;border-bottom:1px solid var(--border);">
         <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem">Check placements</div>
         <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">Looks at every camera on the map, works out which country it should be in (from its source or title) and checks its pin is actually there.
           About 1 second per camera, so a big list takes several minutes. Cameras you mark "It's fine" (or move) aren't checked again.</div>
@@ -704,6 +711,44 @@ function ccUseLocation(latId, lngId) {
     document.getElementById(latId).value = p.coords.latitude.toFixed(5);
     document.getElementById(lngId).value = p.coords.longitude.toFixed(5);
   }, () => alert('Location permission denied'), { timeout: 10000 });
+}
+// ── Duplicates ──
+async function ccFindDupes() {
+  const st = document.getElementById('cc-dup-status'), list = document.getElementById('cc-dup-list'), btn = document.getElementById('cc-dup-btn');
+  btn.disabled = true; st.textContent = 'Checking…'; list.innerHTML = '';
+  try {
+    const d = await (await fetch('/api/admin/community/dupes', { cache: 'no-store' })).json();
+    const extras = d.mapGroups.reduce((n, g) => n + g.filter(c => !c.keep).length, 0);
+    st.textContent = `Map: ${d.mapSize} cameras · ${d.mapGroups.length} cameras listed more than once (${extras} extra copies)\n`
+      + `Queue: ${d.queueSize} waiting · ${d.queueDupes.length} are duplicates`
+      + (d.recentlyBlocked.length ? `\nKept out of the queue since the last restart: ${d.recentlyBlocked.length}` : '');
+    let h = '';
+    if (d.queueDupes.length) {
+      h += `<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap"><strong style="font-size:0.8rem">Queue duplicates</strong>
+        <button class="btn btn-primary btn-sm" onclick="ccCleanDupes({queue:true})">Remove all ${d.queueDupes.length} from the queue</button></div>`
+        + d.queueDupes.slice(0, 100).map(q => `<div style="font-size:0.75rem;color:var(--muted)">• ${lvEsc(q.name)} → same as ${q.onMap ? 'map camera' : 'queued'} “${lvEsc(q.matches)}” (${lvEsc(q.why)})</div>`).join('')
+        + (d.queueDupes.length > 100 ? `<div style="font-size:0.75rem;color:var(--muted)">…and ${d.queueDupes.length - 100} more</div>` : '');
+    }
+    if (d.mapGroups.length) {
+      h += `<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.6rem"><strong style="font-size:0.8rem">On the map</strong>
+        <button class="btn btn-primary btn-sm" onclick="ccCleanDupes({map:true})">Remove all ${extras} extra copies (keeps the ✓ one)</button></div>`
+        + d.mapGroups.map(g => `<div style="border:1px solid var(--border);border-radius:6px;padding:0.4rem 0.6rem;font-size:0.76rem">`
+          + g.map(c => `<div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between;padding:0.15rem 0">
+              <span>${c.keep ? '✓ <strong>keep</strong>' : '✗'} ${lvEsc(c.name)} <span style="color:var(--muted)">${lvEsc(c.channelTitle)} · ${c.live === true ? 'live' : c.live === false ? 'offline' : 'unknown'}${c.why ? ' · ' + lvEsc(c.why) : ''}</span>
+                ${c.kind === 'yt-video' ? `<a href="https://www.youtube.com/watch?v=${encodeURIComponent(c.ref)}" target="_blank" rel="noopener" style="color:var(--accent)">open ↗</a>` : ''}</span>
+              ${c.keep ? '' : `<button class="btn btn-ghost btn-sm" onclick="ccCleanDupes({map:true, ids:['${c.id}']})">Remove</button>`}</div>`).join('')
+          + `</div>`).join('');
+    }
+    if (!h) h = '<div style="font-size:0.8rem;color:var(--green)">✓ No duplicates found.</div>';
+    list.innerHTML = h;
+  } catch (e) { st.textContent = '✗ ' + e.message; }
+  btn.disabled = false;
+}
+async function ccCleanDupes(body) {
+  if (body.map && !body.ids && !confirm('Remove every extra copy from the map? The ✓ one in each group stays.')) return;
+  try { const r = await ccPost('dupes/clean', body); alert(`Removed ${r.queueRemoved} from the queue and ${r.mapRemoved} from the map.`); }
+  catch (e) { alert(e.message); }
+  loadCommunity(); ccFindDupes();
 }
 async function ccPost(path, body) {
   const r = await fetch('/api/admin/community/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });

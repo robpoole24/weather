@@ -95,8 +95,18 @@ async function loadIbiState(st) {
         const poly = Array.isArray(enc) ? enc.join('') : enc;
         const coords = decodePolyline(poly);
         if (coords.length < 2) continue;
-        const cond = r['Overall Condition'] || r.OverallCondition || r['Overall-Condition'] || r.Condition || '';
-        const surface = r.RoadSurface || r.SurfaceCondition || '';
+        let cond = r['Overall Condition'] || r.OverallCondition || r['Overall-Condition'] || r.Condition || '';
+        let surface = r.RoadSurface || r.SurfaceCondition || '';
+        // States name these differently (Idaho, Utah…): fall back to any condition-like field
+        if (!cond && !surface) {
+          const bits = [];
+          for (const [k, v] of Object.entries(r)) {
+            if (!/cond|surface|pavement|travel|roadstate/i.test(k) || /id$|time|date|updated|polyline|location|area|roadway/i.test(k)) continue;
+            if (typeof v === 'string' && v.trim()) bits.push(v.trim());
+            else if (Array.isArray(v)) v.forEach(x => { if (typeof x === 'string' && x.trim()) bits.push(x.trim()); else if (x && typeof x === 'object') Object.values(x).forEach(y => { if (typeof y === 'string' && y.trim() && y.length < 60) bits.push(y.trim()); }); });
+          }
+          cond = [...new Set(bits)].join(', ');
+        }
         features.push({
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: coords },

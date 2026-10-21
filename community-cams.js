@@ -377,6 +377,51 @@ module.exports = function setupCommunityCams(app, deps) {
   }
   const known = (ref) => db.cams.some(c => c.ref === ref) || db.queue.some(q => q.ref === ref) || db.rejected.includes(ref);
 
+  // ── Duplicate check ─────────────────────────────────────────────────────────
+  // Same link, OR the same channel streaming the same camera under a new video
+  // id (24/7 streams restart with a new address and nearly the same title):
+  // same channel + near-identical title, or same channel + same spot + similar
+  // title. Titles that differ only by camera number ("Cam 1" / "Cam 2") are
+  // different cameras.
+  const _norm = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const sameChannel = (a, b) => (a.channelId && b.channelId) ? a.channelId === b.channelId
+    : !!(_norm(a.channelTitle) && _norm(a.channelTitle) === _norm(b.channelTitle));
+  // "Cam 2", "#3", "View 4" — but not "24/7", "4K", "1080p"
+  const camNumbers = (t) => (String(t || '').match(/(?:\bcam(?:era)?|#|\bview|\bangle|\bno\.?)\s*(\d{1,3})(?![\d\/x:]|\s*(?:k|p|fps)\b)/gi) || [])
+    .map(m => m.replace(/\D/g, '')).sort().join(',');
+  const kmApart = (a, b) => {
+    if (![a.lat, a.lng, b.lat, b.lng].every(Number.isFinite)) return Infinity;
+    const R = 6371, dLat = (b.lat - a.lat) * Math.PI / 180, dLng = (b.lng - a.lng) * Math.PI / 180;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+  function dupeOf(item, pool) {
+    for (const o of pool) {
+      if (!o || o === item || (o.id && o.id === item.id)) continue;
+      if (o.ref && o.ref === item.ref) return { other: o, why: 'same link' };
+      if (!sameChannel(item, o)) continue;
+      const ta = item.streamTitle || item.name, tb = o.streamTitle || o.name;
+      if (camNumbers(ta) !== camNumbers(tb)) continue;
+      const sim = titleSimilarity(ta, tb, item.channelTitle || o.channelTitle);
+      if (sim >= 0.75) return { other: o, why: 'same channel, same stream title' };
+      if (sim >= 0.4 && kmApart(item, o) < 0.15) return { other: o, why: 'same channel, same spot' };
+    }
+    return null;
+  }
+  // Every automatic route into the review queue goes through here
+  const _dupeLog = [];
+  function enqueue(item) {
+    if (db.rejected.includes(item.ref)) return false;
+    const d = dupeOf(item, db.cams) || dupeOf(item, db.queue);
+    if (d) {
+      _dupeLog.unshift({ at: Date.now(), name: item.name, ref: item.ref, matches: d.other.name, onMap: db.cams.includes(d.other), why: d.why });
+      _dupeLog.length = Math.min(_dupeLog.length, 200);
+      return false;
+    }
+    db.queue.push(item);
+    return true;
+  }
+
   // ── Live checks ───────────────────────────────────────────────────────────
   // Videos: YouTube API, 50 per call, 1 quota unit per call.
   async function checkVideos(cams) {
@@ -544,11 +589,10 @@ module.exports = function setupCommunityCams(app, deps) {
         if (db.cams.some(c => c.channelId === channelId && titleSimilarity(c.streamTitle, v.title, v.channelTitle) >= 0.6)) continue;
         const place = placeFromTitle(v.title, v.channelTitle);
         const { hit, confident } = await placeIt(place, countryHint(v.title));
-        db.queue.push({ id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(v.title).slice(0, 120), channelTitle: decodeEntities(v.channelTitle), confident,
+        if (enqueue({ id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(v.title).slice(0, 120), channelTitle: decodeEntities(v.channelTitle), channelId, confident,
           thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
-          source: 'channel', foundAt: Date.now() });
-        queued++;
+          source: 'channel', foundAt: Date.now() })) queued++;
       }
     }
     trimQueue();
@@ -607,12 +651,11 @@ module.exports = function setupCommunityCams(app, deps) {
       if (!id || known(id)) continue;
       const text = `${sn.title || ''} ${sn.description || ''}`;
       if (!CAM_WORDS.test(text) || NOT_CAM_WORDS.test(text)) continue;
-      db.queue.push({
-        id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(sn.title).slice(0, 120), channelTitle: decodeEntities(sn.channelTitle), confident: false,
+      if (enqueue({
+        id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(sn.title).slice(0, 120), channelTitle: decodeEntities(sn.channelTitle), channelId: sn.channelId || null, confident: false,
         thumb: `https://i.ytimg.com/vi/${id}/hqdefault_live.jpg`, ...(await placeDiscovered(sn, place)),
         source: 'discovery', foundAt: Date.now(),
-      });
-      added++;
+      })) added++;
     }
     trimQueue();
     await save();
@@ -681,13 +724,14 @@ module.exports = function setupCommunityCams(app, deps) {
         const hit = (await geocode(place))[0];
         if (hit) { la = hit.lat; lo = hit.lng; guess = `${guess} → looked up: ${hit.label}`; }
       }
-      db.queue.push({
+      const added = enqueue({
         id: uid(), ...p, name: String(place || '').slice(0, 120) || 'Suggested camera',
         thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : (p.kind === 'image' ? p.ref : p.kind === 'link' ? p.preview : null),
         lat: Number.isFinite(la) ? la : null, lng: Number.isFinite(lo) ? lo : null,
         locationGuess: guess, note: String(note || '').slice(0, 300),
         source: 'suggestion', foundAt: Date.now(),
       });
+      if (!added) return res.json({ ok: true, message: 'Already on our list — thank you!' });
       trimQueue();
       await save();
       res.json({ ok: true, message: 'Thanks! We will review it soon.' });
@@ -734,12 +778,69 @@ module.exports = function setupCommunityCams(app, deps) {
       await load();
       const q = db.queue.find(x => x.id === (req.body || {}).id);
       if (!q) throw new Error('Not in the queue');
+      const d = !(req.body || {}).force && dupeOf(q, db.cams);
+      if (d) return res.status(409).json({ error: `Already on the map as “${d.other.name}” (${d.why})`, duplicateOf: d.other.id });
       const cam = await approveInto(q, req.body || {});
       db.queue = db.queue.filter(x => x.id !== q.id);
       await save();
       res.json({ ok: true, cam });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
+  // ── Duplicate finder ─────────────────────────────────────────────────────
+  function findDupes() {
+    // Queue entries that repeat a map camera, or an older queue entry
+    const queueDupes = [];
+    db.queue.forEach((q, i) => {
+      const d = dupeOf(q, db.cams) || dupeOf(q, db.queue.slice(0, i));
+      if (d) queueDupes.push({ id: q.id, name: q.name, ref: q.ref, matches: d.other.name, onMap: db.cams.includes(d.other), why: d.why });
+    });
+    // Map cameras that are the same feed, grouped
+    const parent = db.cams.map((_, i) => i);
+    const find = (i) => parent[i] === i ? i : (parent[i] = find(parent[i]));
+    for (let i = 0; i < db.cams.length; i++) {
+      for (let j = i + 1; j < db.cams.length; j++) {
+        if (dupeOf(db.cams[i], [db.cams[j]])) parent[find(j)] = find(i);
+      }
+    }
+    const groups = new Map();
+    db.cams.forEach((c, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(c); });
+    const mapGroups = [...groups.values()].filter(g => g.length > 1).map(g => {
+      // Keep: live now, then most recently live, then the first approved
+      const ranked = [...g].sort((a, b) => (b.live === true) - (a.live === true) || (b.lastLive || 0) - (a.lastLive || 0) || (a.addedAt || 0) - (b.addedAt || 0));
+      return g.map(c => ({ id: c.id, name: c.name, ref: c.ref, kind: c.kind, channelTitle: c.channelTitle || '', live: c.live,
+        lat: c.lat, lng: c.lng, keep: c === ranked[0], why: c === ranked[0] ? '' : (dupeOf(c, [ranked[0]]) || dupeOf(ranked[0], [c]) || {}).why || 'same feed' }));
+    });
+    return { queueDupes, mapGroups };
+  }
+  app.get('/api/admin/community/dupes', async (req, res) => {
+    await load();
+    const r = findDupes();
+    res.json({ ...r, recentlyBlocked: _dupeLog.slice(0, 50), queueSize: db.queue.length, mapSize: db.cams.length });
+  });
+  app.post('/api/admin/community/dupes/clean', async (req, res) => {
+    await load();
+    const b = req.body || {};
+    const { queueDupes, mapGroups } = findDupes();
+    let queueRemoved = 0, mapRemoved = 0;
+    if (b.queue) {
+      const drop = new Set(queueDupes.map(q => q.id));
+      queueRemoved = db.queue.length; db.queue = db.queue.filter(q => !drop.has(q.id)); queueRemoved -= db.queue.length;
+    }
+    if (b.map) {
+      // Only the extras flagged in the groups (never the one marked "keep")
+      const drop = new Set(mapGroups.flatMap(g => g.filter(c => !c.keep).map(c => c.id)));
+      const ids = Array.isArray(b.ids) ? new Set(b.ids.filter(id => drop.has(id))) : drop;
+      const gone = db.cams.filter(c => ids.has(c.id));
+      db.cams = db.cams.filter(c => !ids.has(c.id));
+      // Remember the removed copies' links (unless the kept one shares the link) so they don't come back
+      gone.forEach(c => { if (!db.cams.some(k => k.ref === c.ref)) db.rejected.push(c.ref); });
+      db.rejected = db.rejected.slice(-3000);
+      mapRemoved = gone.length;
+    }
+    await save();
+    res.json({ ok: true, queueRemoved, mapRemoved });
+  });
+
   app.post('/api/admin/community/reject', async (req, res) => {
     await load();
     const q = db.queue.find(x => x.id === (req.body || {}).id);
@@ -823,13 +924,14 @@ module.exports = function setupCommunityCams(app, deps) {
         if (known(p.ref)) { report.push(`• already listed: ${place || line.slice(0, 40)}`); skipped++; continue; }
         const { hit, confident } = await placeIt(place, countryHint(place));
         if (!hit) noPlace++;
-        db.queue.push({
+        const ok = enqueue({
           id: uid(), importId, ...p, name: decodeEntities(place) || 'Imported camera', confident,
           thumb: p.kind === 'yt-video' ? `https://i.ytimg.com/vi/${p.ref}/mqdefault.jpg` : p.kind === 'link' ? p.preview : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `Looked up: ${hit.label}` : (place ? `Couldn't find "${place}" — set it on the map` : 'No place given'),
           source: 'import', foundAt: Date.now(),
         });
+        if (!ok) { report.push(`• duplicate of a listed camera: ${place || line.slice(0, 40)}`); skipped++; continue; }
         queued++;
         report.push(`${hit ? '✓' : '?'} ${place || '(no place)'}${hit ? ' → ' + hit.label.split(',').slice(0, 3).join(',') : ''}`);
       }
@@ -909,12 +1011,12 @@ module.exports = function setupCommunityCams(app, deps) {
         if (known(id)) { skipped++; continue; }
         const place = placeFromTitle(v.title, v.channelTitle);
         const { hit, confident } = await placeIt(place, countryHint(v.title));
-        db.queue.push({
+        if (!enqueue({
           id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(v.title).slice(0, 120), channelTitle: decodeEntities(v.channelTitle), confident,
           thumb: `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
           source: 'channel', foundAt: Date.now(),
-        });
+        })) { skipped++; report.push(`• duplicate (same stream already listed): ${v.title}`); continue; }
         queued++;
         report.push(`${hit ? '✓' : '?'} ${v.title}`);
       }
@@ -1010,13 +1112,14 @@ module.exports = function setupCommunityCams(app, deps) {
         if (!found.length) throw new Error('No camera links on that page, and no camera player or camera image we recognize on it either');
         const title = clean((html0.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || html0.match(/<title>([^<]+)<\/title>/i) || [])[1] || start.hostname);
         const { hit, confident, place } = await placeFromParts(title, countryHint(title + ' ' + start.hostname));
-        found.forEach((one, i) => db.queue.push({ id: uid(), importId, ...one, name: (found.length > 1 ? `${title} — camera ${i + 1}` : title).slice(0, 120), confident,
+        let pageQueued = 0;
+        found.forEach((one, i) => { if (enqueue({ id: uid(), importId, ...one, name: (found.length > 1 ? `${title} — camera ${i + 1}` : title).slice(0, 120), confident,
           thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : one.kind === 'image' ? one.ref : null,
           lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
           locationGuess: hit ? `From page title "${place}" → ${hit.label}` : `Couldn't place "${place}" — set it on the map`,
-          source: 'import', foundAt: Date.now() }));
+          source: 'import', foundAt: Date.now() })) pageQueued++; });
         await save();
-        return res.json({ ok: true, importId, found: found.length, queued: found.length, skipped: 0, noPlayer: 0,
+        return res.json({ ok: true, importId, found: found.length, queued: pageQueued, skipped: found.length - pageQueued, noPlayer: 0,
           report: [`This page holds ${found.length} camera${found.length > 1 ? 's' : ''} (${[...new Set(found.map(f => f.provider || f.kind))].join(', ')}) — added to the review queue.`] });
       }
 
@@ -1042,12 +1145,12 @@ module.exports = function setupCommunityCams(app, deps) {
         if (!pl.hit && city) pl = { ...(await placeIt([city, country].join(', '), cc)), place: [city, country].join(', ') };
         found.forEach((one, k) => {
           if (known(one.ref)) { skipped++; return; }
-          db.queue.push({ id: uid(), importId, ...one, name: (found.length > 1 ? `${name0} — camera ${k + 1}` : name0).slice(0, 120), confident: !!pl.confident,
+          const ok = enqueue({ id: uid(), importId, ...one, name: (found.length > 1 ? `${name0} — camera ${k + 1}` : name0).slice(0, 120), confident: !!pl.confident,
             thumb: one.kind === 'yt-video' ? `https://i.ytimg.com/vi/${one.ref}/hqdefault_live.jpg` : one.kind === 'image' ? one.ref : one.kind === 'link' ? one.preview : null,
             lat: pl.hit ? pl.hit.lat : null, lng: pl.hit ? pl.hit.lng : null,
             locationGuess: pl.hit ? `${pl.place} → ${pl.hit.label}` : `Couldn't place "${pl.place || name0}" — set it on the map`,
             source: 'import', foundAt: Date.now() });
-          queued++;
+          if (ok) queued++; else skipped++;
         });
         if (report.length < 400) report.push(`${pl.hit ? '✓' : '?'} ${name0}${found.length > 1 ? ` (${found.length} cameras)` : ''}`);
         if (i % 10 === 0) await save();
@@ -1340,11 +1443,13 @@ module.exports = function setupCommunityCams(app, deps) {
     let approved = 0; const failed = [];
     for (const q of ready) {
       try {
+        const d = dupeOf(q, db.cams);
+        if (d) { db.queue = db.queue.filter(x => x.id !== q.id); throw new Error(`duplicate of “${d.other.name}” on the map (${d.why}) — removed from the queue`); }
         const state = stateFor(q.lat, q.lng);
         if (!state) throw new Error('could not work out where that is');
         db.cams.push({ id: q.id, kind: q.kind, ref: q.ref, page: q.page || null, preview: q.preview || null, provider: q.provider || null,
                        placedBy: q.locationGuess || null,
-                       name: q.name, channelTitle: q.channelTitle || '', lat: q.lat, lng: q.lng,
+                       name: q.name, channelTitle: q.channelTitle || '', channelId: q.channelId || null, lat: q.lat, lng: q.lng,
                        state, addedAt: Date.now(), source: q.source, live: null });
         db.queue = db.queue.filter(x => x.id !== q.id);
         approved++;
