@@ -115,6 +115,39 @@
   #toast.show { opacity:1; transform:translateY(0); }
 
   /* Modal */
+  /* ── Camera stats report ── */
+  #cs-modal { display:none; position:fixed; inset:0; z-index:1000; background:rgba(4,8,14,0.82); overflow:auto; padding:2rem 1rem; }
+  #cs-modal.open { display:block; }
+  .csm { max-width:1040px; margin:0 auto; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.6); }
+  .csm-head { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; padding:1rem 1.25rem;
+    background:var(--surface); border-bottom:1px solid var(--border); border-radius:12px 12px 0 0; }
+  .csm-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.25rem; letter-spacing:0.04em; }
+  .csm-sub { font-size:0.75rem; color:var(--muted); }
+  .csm-body { padding:1.25rem; }
+  .csm-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.75rem; margin-bottom:1.25rem; }
+  .csm-tile { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:0.8rem 0.9rem; }
+  .csm-tile .v { font-family:'Barlow Condensed',sans-serif; font-size:1.9rem; font-weight:700; line-height:1; }
+  .csm-tile .l { font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; margin-top:0.3rem; }
+  .csm-h { font-family:'Barlow Condensed',sans-serif; font-size:0.8rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin:1.25rem 0 0.5rem; }
+  .csm-src { display:grid; grid-template-columns:150px 1fr 110px; gap:0.6rem; align-items:center; font-size:0.8rem; margin-bottom:0.35rem; }
+  .csm-bar { height:10px; border-radius:5px; background:rgba(255,255,255,0.05); overflow:hidden; }
+  .csm-bar > i { display:block; height:100%; border-radius:5px; }
+  .csm-chip { display:inline-block; font-size:0.72rem; padding:0.15rem 0.5rem; border-radius:999px; margin:0 0.3rem 0.35rem 0; border:1px solid var(--border); }
+  .csm-tools { display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin:0.4rem 0 0.6rem; }
+  .csm-tools input { flex:1; min-width:180px; background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:0.4rem 0.6rem; font-size:0.8rem; }
+  .csm-f { font-size:0.72rem; padding:0.25rem 0.6rem; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text); cursor:pointer; }
+  .csm-f.on { background:var(--accent); color:#000; border-color:var(--accent); font-weight:700; }
+  .csm-table { width:100%; border-collapse:collapse; font-size:0.8rem; }
+  .csm-table th { text-align:left; font-weight:600; color:var(--muted); font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em; padding:0.4rem 0.5rem;
+    border-bottom:1px solid var(--border); cursor:pointer; user-select:none; white-space:nowrap; position:sticky; top:62px; background:var(--surface); }
+  .csm-table td { padding:0.4rem 0.5rem; border-bottom:1px solid rgba(255,255,255,0.04); vertical-align:middle; }
+  .csm-table tr:hover td { background:rgba(0,180,216,0.05); }
+  .csm-num { text-align:right; font-variant-numeric:tabular-nums; }
+  .csm-stack { display:flex; height:9px; border-radius:5px; overflow:hidden; background:rgba(255,255,255,0.05); min-width:140px; }
+  .csm-stack > i { display:block; height:100%; }
+  .csm-legend { display:flex; flex-wrap:wrap; gap:0.75rem; font-size:0.72rem; color:var(--muted); margin-bottom:0.5rem; }
+  .csm-legend span::before { content:''; display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:0.3rem; background:var(--c); vertical-align:-1px; }
+  @media (max-width:640px) { .csm-src { grid-template-columns:110px 1fr 80px; } .csm-hide-sm { display:none; } }
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:100; align-items:center; justify-content:center; }
   .modal-overlay.open { display:flex; }
   .modal { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:1.5rem; max-width:500px; width:90%; max-height:80vh; overflow-y:auto; }
@@ -623,7 +656,7 @@
       <div class="section-title">📊 Camera Counter</div>
       <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" id="cs-recount" onclick="recountCameras()">↻ Recount now</button>
-        <a class="btn btn-primary btn-sm" href="/api/cameras/stats" target="_blank" rel="noopener" style="text-decoration:none">Open full stats ↗</a>
+        <button class="btn btn-primary btn-sm" onclick="openCamStats()">Open full stats</button>
       </div>
     </div>
     <div class="section-body">
@@ -3088,6 +3121,111 @@ async function loadCamsSummary() {
       + (d.queue.length ? `<a href="/admin/cams.html#queue" style="color:var(--gold)"><strong>${d.queue.length}</strong> waiting for review</a>` : 'nothing waiting for review');
   } catch (e) { el.innerHTML = '<span style="color:var(--red)">✗ Could not load camera counts</span>'; }
 }
+// ── Camera stats report (modal) ─────────────────────────────────────────────
+const CSM_COLORS = { dot: '#00b4d8', otc: '#3b82f6', road511: '#38bdf8', windy: '#f4a261', caloes: '#f97316',
+  community: '#52b788', nps: '#a3e635', usgs: '#c084fc' };
+const CSM_TRAFFIC = ['dot', 'otc', 'road511'];
+let _csm = { data: null, filter: 'us', sort: 'total', dir: -1, q: '' };
+async function openCamStats() {
+  let m = document.getElementById('cs-modal');
+  if (!m) {
+    m = document.createElement('div'); m.id = 'cs-modal';
+    m.onclick = (e) => { if (e.target === m) closeCamStats(); };
+    document.body.appendChild(m);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && m.classList.contains('open')) closeCamStats(); });
+  }
+  m.innerHTML = '<div class="csm"><div class="csm-body" style="color:var(--muted)">Loading…</div></div>';
+  m.classList.add('open'); document.body.style.overflow = 'hidden';
+  try {
+    _csm.data = await (await fetch('/api/cameras/stats?t=' + Date.now(), { cache: 'no-store' })).json();
+    renderCamStats();
+  } catch (e) { m.innerHTML = '<div class="csm"><div class="csm-body" style="color:var(--red)">✗ Could not load the camera stats</div></div>'; }
+}
+function closeCamStats() { const m = document.getElementById('cs-modal'); if (m) m.classList.remove('open'); document.body.style.overflow = ''; }
+function csmRows() {
+  const d = _csm.data;
+  const us = (d.us.states || []).map(s => ({ ...s, kind: 'us' }));
+  const world = (d.world.regions || []).map(s => ({ ...s, kind: 'world' }));
+  const traffic = (s) => CSM_TRAFFIC.reduce((n, k) => n + ((s.sources || {})[k] || 0), 0);
+  let rows = (_csm.filter === 'world' ? world : _csm.filter === 'all' ? us.concat(world) : us).map(s => ({ ...s, traffic: traffic(s) }));
+  if (_csm.filter === 'nofeed') rows = us.map(s => ({ ...s, traffic: traffic(s) })).filter(s => (d.noDotFeed || []).includes(s.code));
+  const q = _csm.q.trim().toLowerCase();
+  if (q) rows = rows.filter(s => (s.name + ' ' + s.code).toLowerCase().includes(q));
+  const key = _csm.sort;
+  rows.sort((a, b) => key === 'name' ? a.name.localeCompare(b.name) * _csm.dir : ((a[key] || 0) - (b[key] || 0)) * _csm.dir);
+  return rows;
+}
+function renderCamStats() {
+  const d = _csm.data, n = (x) => Number(x || 0).toLocaleString(), m = document.getElementById('cs-modal');
+  const names = d.sourceNames || {};
+  const when = new Date(d.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const srcs = Object.entries(d.bySource || {}).sort((a, b) => b[1] - a[1]);
+  const max = srcs.length ? srcs[0][1] : 1;
+  const statesWithTraffic = (d.us.states || []).filter(s => CSM_TRAFFIC.some(k => (s.sources || {})[k])).length;
+  const rows = csmRows();
+  const arrow = (k) => _csm.sort === k ? (_csm.dir < 0 ? ' ▼' : ' ▲') : '';
+  m.innerHTML = `<div class="csm" role="dialog" aria-label="Camera stats">
+    <div class="csm-head">
+      <div style="flex:1;min-width:200px"><div class="csm-title">📊 Camera Report</div>
+        <div class="csm-sub">Counted ${lvEsc(when)}${d.tookSeconds ? ' · took ' + Math.round(d.tookSeconds / 60) + ' min' : ''}</div></div>
+      <a class="btn btn-ghost btn-sm" href="/api/cameras/stats" target="_blank" rel="noopener" style="text-decoration:none">Raw data ↗</a>
+      <button class="btn btn-ghost btn-sm" onclick="closeCamStats()" aria-label="Close">✕ Close</button>
+    </div>
+    <div class="csm-body">
+      <div class="csm-tiles">
+        <div class="csm-tile"><div class="v" style="color:var(--accent)">${n(d.total)}</div><div class="l">Live cameras</div></div>
+        <div class="csm-tile"><div class="v">${n(d.us.total)}</div><div class="l">In the US</div></div>
+        <div class="csm-tile"><div class="v">${n(d.world.total)}</div><div class="l">Outside the US</div></div>
+        <div class="csm-tile"><div class="v">${statesWithTraffic}<span style="font-size:1rem;color:var(--muted)"> / ${(d.us.states || []).length}</span></div><div class="l">States with traffic cams</div></div>
+      </div>
+
+      <div class="csm-h">By source</div>
+      ${srcs.map(([k, v]) => `<div class="csm-src"><div>${lvEsc(names[k] || k)}</div>
+        <div class="csm-bar"><i style="width:${Math.max(1, v / max * 100)}%;background:${CSM_COLORS[k] || '#94a3b8'}"></i></div>
+        <div class="csm-num">${n(v)} <span style="color:var(--muted)">· ${Math.round(v / d.total * 100)}%</span></div></div>`).join('')}
+
+      <div class="csm-h">Gaps</div>
+      <div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.3rem">Fewest cameras</div>
+      <div>${(d.fewest || []).map(s => `<span class="csm-chip" style="border-color:rgba(244,162,97,0.5);color:var(--gold)">${lvEsc(s.name)} · ${n(s.total)}</span>`).join('')}</div>
+      ${(d.noDotFeed || []).length ? `<div style="font-size:0.75rem;color:var(--muted);margin:0.4rem 0 0.3rem">No state traffic feed (${d.noDotFeed.length})</div>
+        <div>${d.noDotFeed.map(c => `<span class="csm-chip" style="border-color:rgba(230,57,70,0.5);color:#f87171">${lvEsc(c)}</span>`).join('')}</div>` : ''}
+      ${(d.none || []).length ? `<div style="font-size:0.75rem;color:var(--muted);margin:0.4rem 0 0.3rem">No cameras at all</div><div>${d.none.map(c => `<span class="csm-chip">${lvEsc(c)}</span>`).join('')}</div>` : ''}
+
+      <div class="csm-h">States & regions</div>
+      <div class="csm-tools">
+        <input type="search" placeholder="Search a state or region…" value="${lvEsc(_csm.q)}" oninput="_csm.q=this.value;csmRerenderTable()" aria-label="Search">
+        ${[['us', 'US states'], ['nofeed', 'No traffic feed'], ['world', 'Outside the US'], ['all', 'Everything']].map(([k, l]) =>
+          `<button class="csm-f${_csm.filter === k ? ' on' : ''}" onclick="_csm.filter='${k}';renderCamStats()">${l}</button>`).join('')}
+      </div>
+      <div class="csm-legend">${Object.keys(CSM_COLORS).filter(k => d.bySource && d.bySource[k]).map(k => `<span style="--c:${CSM_COLORS[k]}">${lvEsc(names[k] || k)}</span>`).join('')}</div>
+      <div id="csm-table-wrap">${csmTableHTML(rows, arrow)}</div>
+    </div></div>`;
+}
+function csmTableHTML(rows, arrow) {
+  const n = (x) => Number(x || 0).toLocaleString(), names = (_csm.data.sourceNames || {});
+  const noFeed = new Set(_csm.data.noDotFeed || []);
+  return `<table class="csm-table"><thead><tr>
+      <th onclick="csmSort('name')">Name${arrow('name')}</th>
+      <th class="csm-num" onclick="csmSort('total')">Total${arrow('total')}</th>
+      <th class="csm-num" onclick="csmSort('traffic')">Traffic${arrow('traffic')}</th>
+      <th class="csm-hide-sm">Mix</th></tr></thead><tbody>
+    ${rows.map(s => {
+      const parts = Object.entries(s.sources || {}).sort((a, b) => b[1] - a[1]);
+      const tip = parts.map(([k, v]) => `${names[k] || k}: ${n(v)}`).join(' · ');
+      return `<tr><td>${lvEsc(s.name)}${s.kind === 'us' && noFeed.has(s.code) ? ' <span title="No state traffic feed" style="color:#f87171">●</span>' : ''}</td>
+        <td class="csm-num"><strong>${n(s.total)}</strong></td>
+        <td class="csm-num" style="color:${s.traffic ? 'var(--text)' : 'var(--muted)'}">${s.traffic ? n(s.traffic) : '—'}</td>
+        <td class="csm-hide-sm" title="${lvEsc(tip)}"><div class="csm-stack">${parts.map(([k, v]) => `<i style="width:${v / Math.max(1, s.total) * 100}%;background:${CSM_COLORS[k] || '#94a3b8'}"></i>`).join('')}</div>
+          <div style="font-size:0.66rem;color:var(--muted);margin-top:0.15rem">${lvEsc(tip)}</div></td></tr>`;
+    }).join('') || '<tr><td colspan="4" style="color:var(--muted)">Nothing matches.</td></tr>'}
+    </tbody></table>`;
+}
+function csmRerenderTable() {
+  const arrow = (k) => _csm.sort === k ? (_csm.dir < 0 ? ' ▼' : ' ▲') : '';
+  document.getElementById('csm-table-wrap').innerHTML = csmTableHTML(csmRows(), arrow);
+}
+function csmSort(k) { if (_csm.sort === k) _csm.dir *= -1; else { _csm.sort = k; _csm.dir = k === 'name' ? 1 : -1; } csmRerenderTable(); }
+
 // ── Camera Counter ───────────────────────────────────────────────────────────
 async function loadCameraStats() {
   const el = document.getElementById('cs-summary'), tbl = document.getElementById('cs-table');
