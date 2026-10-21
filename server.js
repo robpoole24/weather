@@ -123,6 +123,7 @@ function adminAuth(req, res, next) {
 // and adminAuth would never run, regardless of whether ADMIN_PASSWORD is set.
 app.use('/admin', adminAuth, express.static(path.join(__dirname, 'admin')));
 app.use('/api/admin', adminAuth);
+app.get('/api/admin/cameras/dot-status', (req, res) => res.json({ note: 'Each state camera feed, as of its last load (feeds load when someone views that state, or during a recount).', states: _dotStatus }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Load / Save data ──
@@ -1908,6 +1909,8 @@ function _parseGenericCameraJSON(raw, dot) {
   return _recordsToCameras(recs, dot.id, dot.id);
 }
 
+// What each state's camera feed last answered — /api/admin/cameras/dot-status
+const _dotStatus = {};
 async function _loadStateDOT(dot) {
   const cached = _stateDOTCache.get(dot.id);
   if (cached && Date.now() - cached.ts < dot.cacheTTL) return cached.cameras;
@@ -1933,13 +1936,36 @@ async function _loadStateDOT(dot) {
   }
 
   let cameras = [];
+  const st = _dotStatus[dot.id] = { label: dot.label, at: new Date().toISOString(), host: (() => { try { return new URL(dot.url).host; } catch (_) { return null; } })() };
+  let text = '';
   try {
-    const text = await fetchTextOverHttp(url);
+    // fetch (not fetchTextOverHttp) so the HTTP status is known: an empty reply
+    // is usually 429 (511 sites allow 10 calls/minute) or 401/403 (key not active)
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
+    let r;
+    try { r = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: 'application/json' }, signal: ctl.signal }); }
+    finally { clearTimeout(t); }
+    st.status = r.status;
+    text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}${r.status === 429 ? ' — rate limited (10 calls/minute)' : r.status === 401 || r.status === 403 ? ' — key rejected or not activated yet' : ''}${text ? '' : ' (empty reply)'}`);
+    if (!text.trim()) throw new Error('HTTP 200 with an empty reply');
     const raw = JSON.parse(text);
+    const list = Array.isArray(raw) ? raw : null;
+    st.received = list ? list.length : `not a list (${Object.keys(raw || {}).slice(0, 6).join(', ')})`;
+    if (list && list[0]) {
+      st.sampleFields = Object.keys(list[0]).slice(0, 25);
+      const v = Array.isArray(list[0].Views) ? list[0].Views[0] : null;
+      if (v) st.sampleViewFields = Object.keys(v);
+      st.viewStatuses = [...new Set(list.flatMap(c => (c.Views || []).map(x => x.Status)))].slice(0, 6);
+    }
     cameras = dot.parse(raw, dot.id, dot);
+    st.cameras = cameras.length;
     console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`);
   } catch (e) {
-    console.warn(`[Cameras] ${dot.label} failed:`, e.message);
+    st.error = e.message;
+    // What the server sent back instead (key removed), e.g. "<Error><Message>Invalid Key</Message></Error>"
+    st.answer = String(text || '').replace(/key=[^&"'\s]+/gi, 'key=…').replace(/\s+/g, ' ').slice(0, 200);
+    console.warn(`[Cameras] ${dot.label} failed:`, e.message, st.answer ? '— answered: ' + st.answer : '');
   }
 
   _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
