@@ -7103,8 +7103,8 @@ const WTV_INFO = {
   'ice-prob':      { t:'Chance of Icing', w:'The chance of a quarter inch or more of ice from freezing rain, for each of the next 3 days.', r:'A quarter inch of ice brings down tree limbs and power lines and makes roads glazed.' },
   'snow-depth':    { t:'Snow on the Ground', w:'How deep the snow is right now, from NOAA\'s daily national snow analysis.', r:'Useful for travel and for seeing where a storm has already hit.' },
   'roads':         { t:'Winter Road Conditions', w:'Road conditions reported by state transportation departments (511).', r:'Green · good. Blue · wet. Yellow · slippery or partly covered. White · snow covered. Pink · icy. Red · closed or travel not advised.' },
-  'fall-now':      { t:'Fall Colors — Now', w:'Where the leaves are changing right now — WeatherTV\'s own estimate.', r:'Green · little color. Yellow → orange → red · building to peak. Brown · past peak. Built from 11 years of NASA satellite leaf records and NOAA temperatures, updated daily.' },
-  'fall-forecast': { t:'Fall Colors — Next 7 Days', w:'Where the color is expected to be a week from now, using NOAA\'s National Blend of Models forecast.', r:'Use it to plan a color drive. Updated daily.' },
+  'fall-now':      { t:'Fall Colors — Now', w:'Where the leaves are changing right now — WeatherTV\'s own estimate.', r:'Green · little color. Yellow → orange → red · building to peak. Brown · past peak. Based on each area\'s usual timing from 11 years of NASA satellite leaf records; updated daily.' },
+  'fall-forecast': { t:'Fall Colors — Next 7 Days', w:'Where the color is expected to be a week from now.', r:'Use it to plan a color drive. Updated daily.' },
   'ero':           { t:'Excessive Rainfall Outlook', w:'Today\'s flash flood risk from heavy rain.', r:'Marginal → Slight → Moderate → High. Moderate or High means dangerous flooding is possible.' },
   'qpe-1h':        { t:'1-Hour Rainfall', w:'How much rain fell in the last hour, estimated by radar.', r:'Over 1 inch in an hour can cause street flooding.' },
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
@@ -7999,7 +7999,7 @@ const SEASONAL_ITEMS = [
   {id:'snow-depth',  ico:'⛄', name:'Snow on the Ground',       sub:'NOHRSC daily snow depth',                                    def:false, season:'winter'},
   {id:'roads',       ico:'🛣', name:'Winter Road Conditions',   sub:'State 511 reports · zoom in · where states share them',      def:false, season:'winter'},
   {id:'fall-now',      ico:'🍁', name:'Fall Colors — Now',          sub:'Where the leaves are right now · updated daily',  def:false, season:'fall', needs:'foliage', frameKind:'now'},
-  {id:'fall-forecast', ico:'🍂', name:'Fall Colors — Next 7 Days',  sub:'Expected color a week from now · NOAA forecast',  def:false, season:'fall', needs:'foliage', frameKind:'forecast'},
+  {id:'fall-forecast', ico:'🍂', name:'Fall Colors — Next 7 Days',  sub:'Expected color a week from now',  def:false, season:'fall', needs:'foliage', frameKind:'forecast'},
 ];
 let _foliageStatus = null;
 // Fall Colors: WeatherTV's own leaf-color model on the tile service (NASA MODIS + NOAA)
@@ -8272,8 +8272,7 @@ function loadFoliageFrame(id) {
   const when = which === 'now' ? 'now' : 'by ' + fmt(m.week);
   const legend = (m.legend || []).map(x => `<div class="leg-row"><div class="leg-sw" style="background:${/^#[0-9a-f]{3,8}$/i.test(x.color) ? x.color : '#888'}"></div>${String(x.label || '').replace(/[<>&]/g, '')}</div>`).join('');
   if (el) el.innerHTML = _legTitle('🍁 Fall colors · ' + when) + legend
-    + _legNote('Shaded only where leaves change color. Estimated from satellite leaf records and NOAA temperatures'
-      + (m.observedThrough ? ` (observed through ${fmt(m.observedThrough)}, then the forecast)` : '') + '.');
+    + _legNote('Estimated from each area\u2019s usual timing in 11 years of NASA satellite leaf records. Peak can shift a week or so with the weather.');
 }
 function stopFoliage() {
   if (_foliageLayer) { map.removeLayer(_foliageLayer); _foliageLayer = null; }
