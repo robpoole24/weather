@@ -67,7 +67,7 @@ const ROAD_STATES = [
   { id: 'nv', base: 'https://www.nvroads.com',      env: 'NV_511_KEY', box: [-120.1, 35.0, -114.0, 42.1] },
   { id: 'ut', base: 'https://prod-ut.ibi511.com',   env: 'UT_511_KEY', box: [-114.1, 36.9, -109.0, 42.1] },
   { id: 'ak', base: 'https://511.alaska.gov',       env: 'AK_511_KEY', box: [-170, 51, -129.9, 71.5] },
-  { id: 'ct', base: 'https://ctroads.org',          env: 'CT_511_KEY', box: [-73.8, 40.9, -71.7, 42.1] },
+  // (Connecticut's API has no winter road conditions — only signs, events, advisories)
   // New England 511 = Maine, New Hampshire and Vermont (one system, one key)
   { id: 'ne', base: 'https://newengland511.org',    env: 'NE_511_KEY', box: [-73.5, 42.7, -66.9, 47.5] },
   { id: 'az', base: 'https://az511.com',            env: 'AZ_511_KEY', box: [-114.9, 31.3, -109.0, 37.1] },
@@ -79,7 +79,7 @@ const ROAD_TTL = 10 * 60 * 1000, ROAD_MISS_TTL = 6 * 3600 * 1000;
 const _roadStats = {};          // state id → { ok, count, error, at }
 
 async function loadIbiState(st) {
-  const key = process.env[st.env];
+  const key = (process.env[st.env] || '').trim();
   if (!key) return { features: [], error: 'no key' };
   let lastErr = null;
   // Newer sites answer /api/v2 or v3; older ones (511NY) use /api/GetWinterRoadConditions
