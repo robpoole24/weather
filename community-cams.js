@@ -413,6 +413,13 @@ module.exports = function setupCommunityCams(app, deps) {
   function enqueue(item) {
     if (db.rejected.includes(item.ref)) return false;
     const d = dupeOf(item, db.cams) || dupeOf(item, db.queue);
+    const onMap = d && db.cams.includes(d.other);
+    if (d && onMap && d.why !== 'same link' && item.kind === 'yt-video' && d.other.kind === 'yt-video'
+        && d.other.live === false && ['channel', 'discovery'].includes(item.source)) {
+      swapStream(d.other, item.ref, item.name, 'restarted stream found by ' + item.source);   // scans only list live streams
+      _dupeLog.unshift({ at: Date.now(), name: item.name, ref: item.ref, matches: d.other.name, onMap: true, why: 'swapped in as the new stream' });
+      return false;
+    }
     if (d) {
       _dupeLog.unshift({ at: Date.now(), name: item.name, ref: item.ref, matches: d.other.name, onMap: db.cams.includes(d.other), why: d.why });
       _dupeLog.length = Math.min(_dupeLog.length, 200);
@@ -539,10 +546,21 @@ module.exports = function setupCommunityCams(app, deps) {
   }
 
   // Ended streams → find their replacement on the same channel
+  // Move a channel's new live stream into an existing map camera, keeping its
+  // name, location and history (24/7 streams restart with a new video id)
+  function swapStream(c, newRef, newTitle, why) {
+    console.log(`[Community] New stream for "${c.name}": ${c.ref} → ${newRef} (${why})`);
+    (c.history || (c.history = [])).push({ ref: c.ref, until: Date.now() });
+    c.history = c.history.slice(-10);
+    c.ref = newRef; if (newTitle) c.streamTitle = newTitle;
+    c.live = true; c.ended = false; c.lastLive = Date.now();
+    c.lastError = null; c.replacedAt = Date.now(); c.replacements = (c.replacements || 0) + 1;
+  }
+
   async function replaceEnded() {
     if (!youtubeKey) return 0;
-    const dead = db.cams.filter(c => c.kind === 'yt-video' && c.live === false && c.channelId && c.streamTitle
-      && (c.ended || (c.lastLive && Date.now() - c.lastLive > 30 * 60 * 1000))
+    const dead = db.cams.filter(c => c.kind === 'yt-video' && c.live === false && c.channelId && (c.streamTitle || c.name)
+      && (c.ended || !c.lastLive || Date.now() - c.lastLive > 30 * 60 * 1000)
       && (!c.replaceCheckedAt || Date.now() - c.replaceCheckedAt > 2 * 3600 * 1000));   // each camera checked at most every 2 h
     const byChannel = new Map();
     dead.forEach(c => { if (!byChannel.has(c.channelId)) byChannel.set(c.channelId, []); byChannel.get(c.channelId).push(c); });
@@ -557,16 +575,12 @@ module.exports = function setupCommunityCams(app, deps) {
         let best = null, bestSim = 0;
         for (const [id, v] of live) {
           if (onMap.has(id) || db.rejected.includes(id)) continue;
-          const sim = titleSimilarity(c.streamTitle, v.title, v.channelTitle || c.channelTitle);
+          const sim = titleSimilarity(c.streamTitle || c.name, v.title, v.channelTitle || c.channelTitle);
           if (sim > bestSim) { bestSim = sim; best = { id, ...v }; }
         }
         if (best && bestSim >= 0.6) {
-          console.log(`[Community] Replaced ended stream for "${c.name}": ${c.ref} → ${best.id} (title match ${Math.round(bestSim * 100)}%)`);
-          (c.history || (c.history = [])).push({ ref: c.ref, until: Date.now() });
-          c.history = c.history.slice(-10);
           onMap.delete(c.ref); onMap.add(best.id);
-          c.ref = best.id; c.streamTitle = best.title; c.live = true; c.ended = false; c.lastLive = Date.now();
-          c.lastError = null; c.replacedAt = Date.now(); c.replacements = (c.replacements || 0) + 1;
+          swapStream(c, best.id, best.title, `ended stream replaced, title match ${Math.round(bestSim * 100)}%`);
           replaced++;
         }
       }
@@ -615,7 +629,10 @@ module.exports = function setupCommunityCams(app, deps) {
       if (db.cams.length) console.log(`[Community] live check: ${live}/${db.cams.length} live` + (unknown ? `, ${unknown} unknown` : ''));
     } finally { checking = false; }
   }
-  const visible = (c) => !c.recorded && (c.live !== false || (c.lastLive && Date.now() - c.lastLive < HIDE_AFTER_OFFLINE_MS));
+  // Off the map: a stream YouTube says has ENDED (until its replacement is found),
+  // or one offline for 6+ hours. A short blip keeps it on the map.
+  const visible = (c) => !c.recorded && !(c.live === false && c.ended)
+    && (c.live !== false || (c.lastLive && Date.now() - c.lastLive < HIDE_AFTER_OFFLINE_MS));
 
   // A search result is placed from ITS OWN title + description — YouTube
   // returns live cams from anywhere for "New Orleans live cam", so the search
@@ -805,10 +822,15 @@ module.exports = function setupCommunityCams(app, deps) {
     const groups = new Map();
     db.cams.forEach((c, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(c); });
     const mapGroups = [...groups.values()].filter(g => g.length > 1).map(g => {
-      // Keep: live now, then most recently live, then the first approved
-      const ranked = [...g].sort((a, b) => (b.live === true) - (a.live === true) || (b.lastLive || 0) - (a.lastLive || 0) || (a.addedAt || 0) - (b.addedAt || 0));
+      // Keep the first-approved camera (your name + location); if another copy
+      // is the one streaming now, its stream moves into the kept camera.
+      const keep = [...g].sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0))[0];
+      const liveOne = [...g].sort((a, b) => (b.live === true) - (a.live === true) || (b.lastLive || 0) - (a.lastLive || 0))[0];
+      const takesStream = liveOne !== keep && liveOne.live === true && keep.live !== true && liveOne.kind === 'yt-video' && keep.kind === 'yt-video';
       return g.map(c => ({ id: c.id, name: c.name, ref: c.ref, kind: c.kind, channelTitle: c.channelTitle || '', live: c.live,
-        lat: c.lat, lng: c.lng, keep: c === ranked[0], why: c === ranked[0] ? '' : (dupeOf(c, [ranked[0]]) || dupeOf(ranked[0], [c]) || {}).why || 'same feed' }));
+        lat: c.lat, lng: c.lng, keep: c === keep, streamFrom: c === keep && takesStream ? liveOne.id : null,
+        givesStream: takesStream && c === liveOne,
+        why: c === keep ? '' : (dupeOf(c, [keep]) || dupeOf(keep, [c]) || {}).why || 'same feed' }));
     });
     return { queueDupes, mapGroups };
   }
@@ -830,10 +852,17 @@ module.exports = function setupCommunityCams(app, deps) {
       // Only the extras flagged in the groups (never the one marked "keep")
       const drop = new Set(mapGroups.flatMap(g => g.filter(c => !c.keep).map(c => c.id)));
       const ids = Array.isArray(b.ids) ? new Set(b.ids.filter(id => drop.has(id))) : drop;
+      // Before removing a copy that holds the live stream, move its stream into the kept camera
+      for (const g of mapGroups) {
+        const k = g.find(c => c.keep && c.streamFrom);
+        if (!k || !ids.has(k.streamFrom)) continue;
+        const kept = db.cams.find(c => c.id === k.id), from = db.cams.find(c => c.id === k.streamFrom);
+        if (kept && from) { swapStream(kept, from.ref, from.streamTitle || from.name, 'merged duplicate'); if (from.channelId) kept.channelId = from.channelId; }
+      }
       const gone = db.cams.filter(c => ids.has(c.id));
       db.cams = db.cams.filter(c => !ids.has(c.id));
       // Remember the removed copies' links (unless the kept one shares the link) so they don't come back
-      gone.forEach(c => { if (!db.cams.some(k => k.ref === c.ref)) db.rejected.push(c.ref); });
+      gone.forEach(c => { if (!db.cams.some(k => k.ref === c.ref)) db.rejected.push(c.ref); });   // the moved stream's ref now belongs to the kept camera, so it isn't rejected
       db.rejected = db.rejected.slice(-3000);
       mapRemoved = gone.length;
     }
