@@ -32,7 +32,19 @@
   const bandColor = (km) => (LAYERS.find(l => km <= l.top + 1e-6) || LAYERS[LAYERS.length - 1]).color;
   const CONVECTIVE = /Tornado|Severe Thunderstorm|Extreme Wind|Special Weather Statement|Severe Weather Statement/;
 
-  const S = { on: false, lat: null, lng: null, label: '', fh: 0, data: null, marker: null, card: null,
+  // Testers: radar.html?hodotest=<DEBUG_KEY> → past HRRR runs + a self-check against HRRR's own numbers
+  let TEST_KEY = '';
+  try {
+    const q = new URLSearchParams(location.search);
+    if (q.get('hodotest')) {
+      sessionStorage.setItem('wtv-hodo-test', q.get('hodotest'));
+      q.delete('hodotest');
+      history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash);
+    }
+    TEST_KEY = sessionStorage.getItem('wtv-hodo-test') || '';
+  } catch (_) {}
+
+  const S = { cycle: null, on: false, lat: null, lng: null, label: '', fh: 0, data: null, marker: null, card: null,
     reqId: 0, retry: null, pending: null, storms: [], stormIdx: -1, stormsAt: 0, arrows: false, flat: false,
     mouse: null, idleTimer: null };
 
@@ -77,6 +89,13 @@
   .hodo-nav { display:flex; gap:6px; padding:6px 10px; }
   .hodo-nav button { flex:1; }
   .hodo-foot { padding:4px 12px 10px; font-size:.66rem; color:#7a9bb5; line-height:1.4; }
+  .hodo-test { margin:6px 10px; padding:8px; border:1px dashed rgba(244,162,97,.6); border-radius:6px; font-size:.74rem; }
+  .hodo-test input { width:120px; background:#0a0e14; color:#e8f4fd; border:1px solid rgba(255,255,255,.2); border-radius:4px; padding:4px 6px; font:.74rem monospace; }
+  .hodo-test button { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); color:#e8f4fd; border-radius:5px; padding:3px 8px; cursor:pointer; font-size:.72rem; }
+  .hodo-test table { width:100%; border-collapse:collapse; margin-top:6px; }
+  .hodo-test td, .hodo-test th { padding:2px 4px; text-align:right; font-variant-numeric:tabular-nums; }
+  .hodo-test td:first-child, .hodo-test th:first-child { text-align:left; }
+  .hodo-test .v-match { color:#30d158; } .hodo-test .v-close { color:#ffd60a; } .hodo-test .v-check { color:#ff6b6b; }
   .hodo-btn { margin-top:8px; background:rgba(0,180,216,.12); border:1px solid rgba(0,180,216,.5); color:#7fdcff; border-radius:6px;
     padding:5px 10px; font:600 .75rem 'Barlow',sans-serif; cursor:pointer; }
   .hodo-cross { pointer-events:auto; }
@@ -115,6 +134,9 @@
       <div class="hodo-fav" hidden></div>
       <div class="hodo-read"></div>
       <div class="hodo-nav"><button data-act="prev">◀ Previous storm</button><button data-act="next">Next storm ▶</button></div>
+      ${TEST_KEY ? `<div class="hodo-test">🧪 <b>Tester</b> · HRRR run <input class="hodo-run" placeholder="YYYYMMDDHH" maxlength="10" aria-label="HRRR run, UTC">
+        <button data-act="run">Load</button> <button data-act="latest">Latest</button>
+        <div style="opacity:.7;margin-top:3px">UTC, last 30 days — e.g. 2026102200 is 7 PM CDT Oct 21</div><div class="hodo-check"></div></div>` : ''}
       <div class="hodo-foot"></div>`;
     document.body.appendChild(c);
     c.addEventListener('click', (e) => {
@@ -127,6 +149,8 @@
       else if (a === 'arrows') { S.arrows = !S.arrows; b.classList.toggle('on', S.arrows); view.draw(); }
       else if (a === 'prev') jumpStorm(-1);
       else if (a === 'next') jumpStorm(1);
+      else if (a === 'run') { const v = (S.card.querySelector('.hodo-run').value || '').trim(); if (/^\d{10}$/.test(v)) { S.cycle = v; S.fh = 0; S.data = null; load(); } else status('Type the run as YYYYMMDDHH (UTC).'); }
+      else if (a === 'latest') { S.cycle = null; S.fh = 0; S.data = null; S.card.querySelector('.hodo-run').value = ''; load(); }
     });
     ['pointerdown', 'wheel', 'keydown'].forEach(ev => c.addEventListener(ev, wake, { passive: true }));
     L.DomEvent.disableClickPropagation(c); L.DomEvent.disableScrollPropagation(c);
@@ -226,9 +250,13 @@
     if (!S.data) status('Loading the wind profile…');
     let d;
     try {
-      const r = await fetch(`${BASE}/meta/hodograph?lat=${S.lat.toFixed(3)}&lon=${S.lng.toFixed(3)}&fh=${S.fh}`);
+      const qs = `lat=${S.lat.toFixed(3)}&lon=${S.lng.toFixed(3)}&fh=${S.fh}`;
+      const r = await fetch(TEST_KEY
+        ? `${BASE}/meta/debug/hodograph?key=${encodeURIComponent(TEST_KEY)}&${qs}${S.cycle ? '&cycle=' + S.cycle : ''}`
+        : `${BASE}/meta/hodograph?${qs}`);
+      if (r.status === 404 && TEST_KEY) throw new Error('tester key not accepted');
       d = await r.json();
-    } catch (e) { d = { status: 'error', error: 'Couldn\'t reach the wind data. Check your connection.' }; }
+    } catch (e) { d = { status: 'error', error: /tester key/.test(e.message) ? 'Tester key not accepted (check DEBUG_KEY).' : 'Couldn\'t reach the wind data. Check your connection.' }; }
     if (id !== S.reqId || !S.on) return;
     if (d.status === 'preparing') {
       status(tries < 2 ? 'Getting this hour\'s winds from the HRRR model…' : 'Still preparing — the first look each hour takes about a minute…');
@@ -246,7 +274,16 @@
   function render(d) {
     const valid = new Date(d.validIso);
     const when = isNaN(valid) ? '' : valid.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    $('.hodo-time').textContent = `${d.fh === 0 ? 'Now' : '+' + d.fh + ' h'} · ${when} · ${d.source}`;
+    const day = d.past && !isNaN(valid) ? valid.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' : '';
+    $('.hodo-time').textContent = d.past ? `Run ${d.cycle} +${d.fh} h · ${day}${when}` : `${d.fh === 0 ? 'Now' : '+' + d.fh + ' h'} · ${when} · ${d.source}`;
+    const chk = S.card.querySelector('.hodo-check');
+    if (chk) {
+      const c = d.check;
+      chk.innerHTML = !c ? `<div style="margin-top:6px;opacity:.75">Self-check: HRRR's own numbers aren't available for this spot${d.source !== 'HRRR' ? ' (GFS area)' : ''}.</div>`
+        : `<div style="margin-top:6px">Self-check vs HRRR's own numbers: <b class="v-${c.verdict}">${({ match: '✓ Match', close: '≈ Close', check: '✗ Check' })[c.verdict]}</b></div>
+          <table><tr><th></th><th>Ours</th><th>HRRR</th><th></th></tr>${c.rows.map(r => `<tr><td>${r.name}</td><td>${r.ours}</td><td>${r.hrrr}</td><td class="v-${r.ok ? 'match' : 'check'}">${r.ok ? '✓' : '✗'}</td></tr>`).join('')}</table>
+          <div style="opacity:.65;margin-top:4px">${escapeHtml(c.note)}</div>`;
+    }
     $('[data-act="hour-"]').disabled = d.fh <= (d.hours || [0])[0];
     $('[data-act="hour+"]').disabled = d.fh >= (d.hours || [0]).slice(-1)[0];
     const rm = d.rm;
