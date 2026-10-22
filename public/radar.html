@@ -2680,6 +2680,8 @@ function updateAlertLegend() {
 // Leaflet only shows whichever polygon happens to be on top -- and avoids a
 // popup race between the alert and MCD layers when they overlap (very common).
 map.on('click', (e) => {
+  // TV: with the hodograph open, OK on the map moves its crosshair instead
+  if (window.WTV_TV && WTV_TV.active && window.WTV_HODO && WTV_HODO.active()) return;
   const alertMatches = activeAlertFeatures.filter(a => pointInPolygon(e.latlng.lat, e.latlng.lng, a.geometry));
   const mcdMatches = (mcdVisible ? activeMCDFeatures : []).filter(m => pointInPolygon(e.latlng.lat, e.latlng.lng, m.geometry));
   const totalMatches = alertMatches.length + mcdMatches.length;
@@ -2691,6 +2693,7 @@ map.on('click', (e) => {
       <div style="margin-top:4px;font-weight:600">${a.headline}</div>
       <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">${a.areaDesc}</div>
       <div class="exp">Expires: ${a.expires}</div>
+      ${window.WTV_HODO && /Tornado|Severe Thunderstorm|Extreme Wind|Special Weather Statement/.test(a.event) ? WTV_HODO.button(e.latlng.lat, e.latlng.lng, a.event) : ''}
       ${a.fullText ? `
       <div style="margin-top:8px;max-height:140px;overflow-y:auto;
         border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;
@@ -5103,6 +5106,7 @@ async function refreshStormCells() {
         <div>Moving toward: <strong>${compassName(dir)} at ${fmtSpeedKt(spd)}</strong></div>
         ${stormFlag(p.TVS ?? p.tvs) ? '<div style="color:#ff0000;margin-top:2px">⚠ Tornado vortex signature (TVS)</div>' : ''}
         ${stormFlag(p.MESO ?? p.meso) ? '<div style="color:#ff8c00;margin-top:2px">⚠ Mesocyclone detected</div>' : ''}
+        ${window.WTV_HODO ? WTV_HODO.button(lat + (spd ? 10 / 111 * Math.cos(dir * Math.PI / 180) : 0), lng + (spd ? 10 / 111 * Math.sin(dir * Math.PI / 180) / Math.cos(lat * Math.PI / 180) : 0), 'Storm cell') : ''}
         <div class="exp">IEM NEXRAD Storm Attributes</div></div>`, { maxWidth: 240 });
       _stormCellLayer.addLayer(mk);
     });
@@ -7115,6 +7119,7 @@ const WTV_INFO = {
   'aqi':           { t:'Air Quality Index', w:'Air quality readings from monitoring stations.', r:'0–50 good · 51–100 moderate · 101–150 unhealthy for sensitive groups · 151+ unhealthy for everyone.' },
   'cameras':       { t:'Location Cams', w:'Traffic, park, beach, volcano and scenic cameras.', r:'Turn this on, pick a state, then tap a camera to see what it looks like there right now.' },
   'mcd':           { t:'Mesoscale Discussions', w:'Short notes from Storm Prediction Center forecasters about storms in the next few hours.', r:'They often come out before a watch. If one covers you, a watch may follow.' },
+  'hodograph':     { t:'Hodograph', w:'How the wind changes speed and direction from the ground up to about 10 km, at the crosshair — drawn in 3D, with height rising off the map.', r:'A curve that bends clockwise near the ground means storms can spin — the classic tornado set-up. A long straight line means storms that split; a short wiggly one, pulse storms. Higher helicity (SRH) and STP mean more tornado-favorable.' },
   'mesoanalysis':  { t:'Mesoscale Analysis', w:'Maps of storm ingredients: instability, wind shear and spin.', r:'Expert tool. Higher values of CAPE, shear and the tornado parameter mean a better setup for severe storms.' },
 };
 
@@ -7984,6 +7989,7 @@ const CAM_ITEMS=[
 const MESO_ITEMS=[
   {id:'mcd',          ico:'💬', name:'Mesoscale Discussions', sub:'SPC forecaster updates · active MCDs', def:false},
   {id:'mesoanalysis', ico:'📈', name:'Mesoscale Analysis',    sub:'CAPE · helicity · shear · tornado parameter (HRRR, hourly)', def:false},
+  {id:'hodograph',    ico:'🌀', name:'Hodograph',             sub:'3D wind profile · drag the crosshair or jump storm to storm (HRRR)', def:false},
 ];
 // ── Seasonal layers (winter weather, road conditions, fall colors) ──────────
 // One collapsible "Seasonal" section. Layers that are in season for the part of
@@ -8320,6 +8326,7 @@ function applyOverlay(id,on){
     case 'spc':       if (on!==spcVisible) toggleSPC(); break;
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); syncMesoButtons(); break;
     case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
+    case 'hodograph':    if (window.WTV_HODO) WTV_HODO.setMode(on); break;
     case 'live-near':    if (on) startLiveNear(); else stopLiveNear(); break;
     case 'raw-radar':    setRadarSource(on); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
@@ -9175,7 +9182,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792360000"></script>
+<script src="/js/wtv-tv.js?v=1792700000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
@@ -9195,5 +9202,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
     WTV_TV.onMedia((a) => { if (a === 'playpause' || a === 'play' || a === 'pause') togglePlay(); else if (a === 'next') stepFrame(1); else if (a === 'prev') stepFrame(-1); });
   }
 </script>
+<!-- 3D hodograph (Layers › Mesoscale, warning/storm popups, right-click) -->
+<script src="/js/wtv-hodograph.js?v=1792700000"></script>
 </body>
 </html>

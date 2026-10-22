@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792147000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792700000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -14,6 +14,7 @@
 // Pages can hook in:
 //   WTV_TV.onBack(fn)   fn() returns true if it closed something
 //   WTV_TV.onMedia(fn)  fn(action) — 'playpause' | 'play' | 'pause' | 'stop' | 'next' | 'prev'
+//   WTV_TV.onKey(fn)    fn(keyCode, key) — return true to use the key (checked before anything else)
 //   data-tv-skip        on any element: never highlight it
 //   data-tv-initial     on one element: where the highlight starts
 (function () {
@@ -23,7 +24,9 @@
   const isTV = params.get('tv') === '1'
     || /Tizen|SMART-TV|SmartTV|SMARTTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey|Xbox/i.test(ua)
     || (window.parent !== window && (() => { try { return !!window.parent.WTV_TV && window.parent.WTV_TV.active; } catch (_) { return false; } })());
-  const api = { active: isTV, onBack, onMedia, focusFirst, focusEl: (el) => setFocus(el) };   // focusEl: move the highlight only
+  const keyHooks = [];
+  const onKey = (fn) => keyHooks.push(fn);   // fn(keyCode, key) returns true when it used the key
+  const api = { active: isTV, onBack, onMedia, onKey, focusFirst, focusEl: (el) => setFocus(el) };   // focusEl: move the highlight only
   window.WTV_TV = api;
   if (!isTV) return;
 
@@ -735,10 +738,15 @@
   const MEDIA = { 10252: 'playpause', 415: 'play', 19: 'pause', 413: 'stop', 417: 'next', 412: 'prev', 179: 'playpause' };
   document.addEventListener('keydown', (e) => {
     // Apps that pass the remote/controller in as key names (Xbox) have no keyCode
-    const KEYNAME = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, GamepadA: PAD_A, GamepadB: PAD_B, GamepadX: 197, GamepadY: 198, ColorF2Yellow: 405, ColorF3Blue: 406 };
+    const KEYNAME = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, GamepadA: PAD_A, GamepadB: PAD_B, GamepadX: 197, GamepadY: 198, ColorF2Yellow: 405, ColorF3Blue: 406,
+      ColorF0Red: 403, ColorF1Green: 404, GamepadLeftTrigger: 201, GamepadRightTrigger: 202 };
     const key = e.key, k = e.keyCode || KEYNAME[key] || 0;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && !/^(button|checkbox|radio|range|submit|reset)$/i.test(document.activeElement.type));
+    // Pages can claim extra keys (e.g. the hodograph: red/green, LT/RT)
+    if (!typing && keyHooks.some(fn => { try { return fn(k, key) === true; } catch (_) { return false; } })) {
+      e.preventDefault(); e.stopPropagation(); return;
+    }
 
     // Back: Samsung 10009, other TVs XF86Back/GoBack/BrowserBack; Escape for testing
     if (k === 10009 || k === PAD_B || key === 'GamepadB' || key === 'XF86Back' || key === 'GoBack' || key === 'BrowserBack' || (key === 'Escape' && !typing) || (key === 'Backspace' && !typing)) {
