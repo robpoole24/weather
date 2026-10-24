@@ -451,6 +451,15 @@
   .lp-head-btn:hover { color:var(--accent); border-color:var(--accent); }
 
   .lp-section { padding:0.7rem 0.85rem; border-bottom:1px solid rgba(0,180,216,0.1); }
+  .lp-howto { margin-top:0.45rem; padding:0.5rem 0.6rem; border-radius:6px; background:rgba(255,255,255,0.035); border:1px solid rgba(0,180,216,0.12); font-size:0.74rem; line-height:1.45; color:#c8ddf0; }
+  .lp-howto-title { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.7rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin-bottom:0.25rem; }
+  .lp-howto-dev { text-transform:none; letter-spacing:0; font-weight:600; opacity:0.8; }
+  .lp-howto ol { margin:0; padding-left:1.15rem; display:none; }
+  .lp-howto li + li { margin-top:0.2rem; }
+  .lp-howto b { color:#fff; font-weight:600; }
+  html.viewer-desktop .lp-howto ol[data-viewer="desktop"], html.viewer-touch .lp-howto ol[data-viewer="touch"],
+  html.viewer-tv .lp-howto ol[data-viewer="tv"], html.viewer-xbox .lp-howto ol[data-viewer="xbox"] { display:block; }
+  html.tv-mode .lp-howto { font-size:1rem; }
   .lp-section-label { font-family:'Barlow Condensed',sans-serif; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:0.5rem; }
 
   .lp-row { display:flex; align-items:center; gap:0.6rem; padding:0.5rem 0.55rem; border-radius:6px; cursor:pointer; border:1px solid transparent; transition:background 0.12s, border-color 0.12s; }
@@ -789,7 +798,7 @@
     #radar-minimize-btn { cursor: default !important; }
   }
 </style>
-<script src="/js/wtv-alert-catalog.js?v=1792600000"></script>
+<script src="/js/wtv-alert-catalog.js?v=1792800000"></script>
 <script src="/js/wtv-alerts-core.js"></script>
 <script src="/js/wtv-alerts.js?v=1792600000"></script>
 <style>
@@ -1189,6 +1198,38 @@
     <div id="lp-meso"></div>
   </div>
 
+  <div class="lp-section" id="lp-hodo-section">
+    <div class="lp-section-label"><span aria-hidden="true">🌀</span> Hodograph</div>
+    <div id="lp-hodo"></div>
+    <div class="lp-howto" aria-label="How to use the hodograph">
+      <div class="lp-howto-title">How to use it <span class="lp-howto-dev"></span></div>
+      <ol data-viewer="desktop">
+        <li>Turn on <b>Hodograph</b> above. A crosshair appears on the map.</li>
+        <li>Drag the crosshair, or <b>right-click</b> anywhere and choose <b>Hodograph here</b>. Press <b>H</b> to open it at the mouse.</li>
+        <li>Drag the picture to turn and tilt it. <b>◀ ▶</b> change the hour; <b>Previous / Next storm</b> jump between warnings.</li>
+        <li>In a warning's popup, <b>Storm environment</b> opens it for that storm.</li>
+      </ol>
+      <ol data-viewer="touch">
+        <li>Tap the <b>Hodograph</b> switch above. A crosshair appears on the map.</li>
+        <li>Drag the crosshair, or <b>long-press</b> anywhere on the map and tap <b>Hodograph here</b>.</li>
+        <li>Swipe the picture sideways to turn it. <b>Swipe the panel up</b> (or tap its handle) to see all the numbers.</li>
+        <li>In a warning's popup, tap <b>Storm environment</b> for that storm.</li>
+      </ol>
+      <ol data-viewer="tv">
+        <li>Press <b>OK</b> on <b>Hodograph</b> above. A crosshair appears on the map.</li>
+        <li>Use the <b>arrows</b> to move the pointer, then press <b>OK</b> on the map to move the hodograph there.</li>
+        <li><b>RED / GREEN</b> jump storm to storm. <b>▲ ▼</b> scroll the panel.</li>
+        <li><b>BACK</b> closes it.</li>
+      </ol>
+      <ol data-viewer="xbox">
+        <li>Press <b>A</b> on <b>Hodograph</b> above. A crosshair appears on the map.</li>
+        <li>Move the pointer with the <b>left stick</b>, then press <b>A</b> on the map to move the hodograph there.</li>
+        <li><b>LT / RT</b> jump storm to storm. The <b>right stick</b> (or <b>▲ ▼</b>) scrolls the panel.</li>
+        <li><b>B</b> closes it.</li>
+      </ol>
+    </div>
+  </div>
+
   <div class="lp-section">
     <div class="lp-section-label">Storm Chaser Overlays</div>
     <div id="lp-chaser"></div>
@@ -1424,7 +1465,9 @@ _CAT.ALERT_CATALOG.forEach(t => {
 // from the master Alerts toggle — Alerts on/off shows or hides the whole layer;
 // this filters WHICH types are included. Persisted so a user's preference
 // (e.g. hiding low-priority advisories during an active outbreak) sticks.
-const ALERT_TYPE_KEYS = Object.keys(ALERT_STYLE);
+// The Alert Types list follows the catalog: sections in order, worst first in each
+const ALERT_EXCLUDED = new Set(_CAT.ALERT_EXCLUDED || []);
+const ALERT_TYPE_KEYS = _CAT.ALERT_CATALOG.length ? _CAT.ALERT_CATALOG.map(t => t.event) : Object.keys(ALERT_STYLE);
 let enabledAlertTypes = new Set(ALERT_TYPE_KEYS); // default: everything on
 
 (function loadAlertTypePrefs() {
@@ -1448,6 +1491,7 @@ function saveAlertTypePrefs() {
 function isAlertTypeEnabled(event) {
   // Unknown/uncategorized event types default to shown (fail open, so a new
   // NWS event type added in the future isn't silently hidden).
+  if (ALERT_EXCLUDED.has(event)) return false;      // non-weather notices aren't shown at all
   if (!ALERT_TYPE_KEYS.includes(event)) return true;
   return enabledAlertTypes.has(event);
 }
@@ -1487,7 +1531,7 @@ function toggleAlertTypesPanel() {
 
 function buildAlertTypePanel() {
   const panel = document.getElementById('alert-types-panel');
-  const groups = [...(_CAT.ALERT_GROUPS || []), 'Other'];
+  const groups = [...(_CAT.ALERT_GROUPS || [])];
   const row = (event) => {
     const s = ALERT_STYLE[event];
     const checked = enabledAlertTypes.has(event) ? 'checked' : '';
@@ -1499,7 +1543,7 @@ function buildAlertTypePanel() {
       </label>`;
   };
   const rows = groups.map(g => {
-    const list = ALERT_TYPE_KEYS.filter(e => (ALERT_GROUP_OF[e] || 'Other') === g);
+    const list = ALERT_TYPE_KEYS.filter(e => ALERT_GROUP_OF[e] === g);
     if (!list.length) return '';
     return `<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#7a9bb5;padding:0.45rem 0.4rem 0.15rem">${g}</div>`
       + list.map(row).join('');
@@ -2574,7 +2618,10 @@ async function renderAlertLayers() {
     const geom = feature.geometry || buildGeomFromZones(feature.properties?.affectedZones);
     if (!geom) return;
     const props = feature.properties;
-    const event = ALERT_ALIASES[props.event] || props.event || 'Advisory';
+    let event = ALERT_ALIASES[props.event] || props.event || 'Advisory';
+    if (ALERT_EXCLUDED.has(event)) return;                    // civil / law-enforcement notices: not shown
+    // A Flash Flood Warning with a catastrophic damage threat is a Flash Flood Emergency
+    if (event === 'Flash Flood Warning' && ((props.parameters && props.parameters.flashFloodDamageThreat) || [])[0] === 'CATASTROPHIC') event = 'Flash Flood Emergency';
     count++;
     // The Alert Types filter controls what's DRAWN. Life-safety warnings still
     // reach the location banner even if the user hid them from the map.
@@ -2746,7 +2793,7 @@ const ALERT_PRIORITY = [
   'Severe Thunderstorm Warning','Flash Flood Warning','Flood Warning',
   'Tornado Watch','Severe Thunderstorm Watch','Flash Flood Watch',
   'Flood Watch','Winter Storm Warning','Blizzard Warning','Ice Storm Warning',
-  'High Wind Warning','Red Flag Warning','Excessive Heat Warning',
+  'High Wind Warning','Red Flag Warning','Extreme Heat Warning',
   'Special Weather Statement','Special Marine Warning',
 ];
 (window.WTV_ALERT_CATALOG ? window.WTV_ALERT_CATALOG.ALERT_CATALOG : []).forEach(t => { if (!ALERT_PRIORITY.includes(t.event)) ALERT_PRIORITY.push(t.event); });
@@ -2761,7 +2808,7 @@ const dismissedAlertIds = new Set();
 // Warnings that always reach the location banner, regardless of the map filter
 const BANNER_ALWAYS = new Set(['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning',
   'Tsunami Warning', 'Hurricane Warning', 'Typhoon Warning', 'Storm Surge Warning', 'Snow Squall Warning',
-  'Evacuation Immediate', 'Shelter In Place Warning', 'Civil Danger Warning', 'Earthquake Warning']);
+  'Flash Flood Emergency', 'Earthquake Warning']);
 
 // ── In-page alert sounds (while the radar is open) ──────────────────────────
 // Outdoor-siren for tornado-level warnings, soft chime for other warnings.
@@ -7989,8 +8036,26 @@ const CAM_ITEMS=[
 const MESO_ITEMS=[
   {id:'mcd',          ico:'💬', name:'Mesoscale Discussions', sub:'SPC forecaster updates · active MCDs', def:false},
   {id:'mesoanalysis', ico:'📈', name:'Mesoscale Analysis',    sub:'CAPE · helicity · shear · tornado parameter (HRRR, hourly)', def:false},
-  {id:'hodograph',    ico:'🌀', name:'Hodograph',             sub:'3D wind profile · drag the crosshair or jump storm to storm (HRRR)', def:false},
 ];
+const HODO_ITEMS=[
+  {id:'hodograph',    ico:'🌀', name:'Hodograph',             sub:'3D wind profile at the crosshair · storm to storm (HRRR)', def:false},
+];
+// Which "How to use it" steps to show: one set per kind of screen
+(function(){
+  const ua = navigator.userAgent, h = document.documentElement;
+  const inTvFrame = (() => { try { return window.parent !== window && !!window.parent.WTV_TV && window.parent.WTV_TV.active; } catch (_) { return false; } })();
+  const tv = inTvFrame || /[?&]tv=1/.test(location.search) || /Tizen|SMART-TV|SmartTV|SMARTTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey|Xbox/i.test(ua);
+  let pua = ''; try { pua = window.parent !== window ? window.parent.navigator.userAgent : ''; } catch (_) {}
+  const kind = /Xbox/i.test(ua + pua) ? 'xbox' : tv ? 'tv'
+    : (window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches) ? 'touch' : 'desktop';
+  h.classList.add('viewer-' + kind);
+  window.WTV_VIEWER = kind;
+  const label = () => {
+    const el = document.querySelector('.lp-howto-dev');
+    if (el) el.textContent = '· ' + ({ xbox:'Xbox', tv:'TV remote', touch:'phone & tablet', desktop:'computer' })[kind];
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', label); else label();
+})();
 // ── Seasonal layers (winter weather, road conditions, fall colors) ──────────
 // One collapsible "Seasonal" section. Layers that are in season for the part of
 // the map you're looking at are listed; the rest wait under "Out of season
@@ -8299,7 +8364,7 @@ function applySeasonal(id, on) {
   return false;
 }
 
-const OVERLAY_ITEMS=SEASONAL_ITEMS.concat(ALERT_ITEMS).concat(MESO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
+const OVERLAY_ITEMS=SEASONAL_ITEMS.concat(ALERT_ITEMS).concat(MESO_ITEMS).concat(HODO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -8380,6 +8445,7 @@ function renderPanel(){
   document.getElementById('lp-extended-section').style.display = 'none';
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-meso').innerHTML=MESO_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-hodo').innerHTML=HODO_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
   // Vibration sub-row under the lightning toggle
   const _vr = document.createElement('div');
@@ -9182,7 +9248,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792700000"></script>
+<script src="/js/wtv-tv.js?v=1792800000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
@@ -9203,6 +9269,6 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
   }
 </script>
 <!-- 3D hodograph (Layers › Mesoscale, warning/storm popups, right-click) -->
-<script src="/js/wtv-hodograph.js?v=1792710000"></script>
+<script src="/js/wtv-hodograph.js?v=1792800000"></script>
 </body>
 </html>

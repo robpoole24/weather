@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792700000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792800000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -151,8 +151,10 @@
     html.tv-mode .tv-focus {
       outline: 4px solid #ffd000 !important; outline-offset: 3px !important;
       box-shadow: 0 0 0 7px rgba(255,208,0,0.28), 0 0 22px rgba(255,208,0,0.55) !important;
-      position: relative; z-index: 5; transition: outline-color .1s;
+      transition: outline-color .1s;
     }
+    html.tv-mode .tv-focus:not([data-tv-scroller]) { position: relative; z-index: 5; }
+    html.tv-mode .tv-focus[data-tv-scroller] { outline-offset: -4px !important; box-shadow: inset 0 0 0 2px rgba(255,208,0,0.35) !important; }
     html.tv-mode .leaflet-container.tv-focus { outline-offset: -6px !important; }
     html.tv-mode #tv-zoom-badge {
       position: fixed; right: 1.2rem; top: 50%; transform: translateY(-50%); z-index: 2147482500; display: none;
@@ -238,8 +240,76 @@
   }
   const candidates = () => {
     const pk = document.getElementById('tv-picker');
-    return [...(pk ? pk : document).querySelectorAll(SELECTOR)].filter(visible);
+    if (pk) return [...pk.querySelectorAll(SELECTOR)].filter(visible);
+    return [...document.querySelectorAll(SELECTOR)].concat(textScrollers()).filter(visible);
   };
+
+  // ── Scrolling areas ───────────────────────────────────────────────────────
+  // A box of text that scrolls (an alert's full text, a long list) has nothing
+  // to highlight inside it, so the remote could never scroll it. Those boxes
+  // become stops of their own: ▲/▼ scroll them, and move on at the top/bottom.
+  // Boxes with buttons inside scroll as the highlight moves through them.
+  function isScroller(el) {
+    if (!el || el === document.body || el === document.documentElement || el.classList.contains('leaflet-container')) return false;
+    if (el.scrollHeight - el.clientHeight < 8) return false;
+    return /(auto|scroll)/.test(getComputedStyle(el).overflowY);
+  }
+  function scrollerOf(el) {
+    for (let n = el && el.parentElement; n && n !== document.body; n = n.parentElement) if (isScroller(n)) return n;
+    return null;
+  }
+  const scrollCache = { t: 0, list: [] };
+  function textScrollers() {
+    const now = performance.now();
+    if (now - scrollCache.t < 400) return scrollCache.list;
+    const out = [], all = document.body ? document.body.getElementsByTagName('*') : [];
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (el.scrollHeight - el.clientHeight < 8 || el.matches(SELECTOR) || !isScroller(el)) continue;
+      if (el.querySelector(SELECTOR)) continue;                         // has its own buttons/links
+      if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+      el.setAttribute('data-tv-scroller', '');
+      out.push(el);
+    }
+    scrollCache.t = now; scrollCache.list = out;
+    return out;
+  }
+  const canScroll = (sc, dir) => dir === 'down' ? sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2 : sc.scrollTop > 2;
+  function scrollStep(sc, dir, page) {
+    const by = Math.max(60, sc.clientHeight * (page ? 0.9 : 0.6));
+    sc.scrollTop += dir === 'down' ? by : -by;
+    scrollCache.t = 0;
+  }
+  function inView(el, sc) {
+    const r = el.getBoundingClientRect(), b = sc.getBoundingClientRect();
+    return r.top >= b.top - 2 && (r.bottom <= b.bottom + 2 || r.top < b.top + b.height * 0.5);
+  }
+  // What ▲/▼ on the right stick (or LB/RB) should scroll right now
+  function scrollTarget() {
+    if (current && current.hasAttribute && current.hasAttribute('data-tv-scroller') && document.contains(current)) return current;
+    const own = current && scrollerOf(current);
+    if (own) return own;
+    let win = null, area = 0;                                           // else the biggest scrolling box on screen
+    for (const el of textScrollers().concat([...document.querySelectorAll('#layer-panel, #forecast-panel, #lnw-panel, [role="dialog"]')].filter(isScroller))) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 40 || r.height < 40 || r.bottom < 0 || r.top > innerHeight) continue;
+      if (r.width * r.height > area) { area = r.width * r.height; win = el; }
+    }
+    return win;
+  }
+  function scrollFree(dir, page) {
+    const sc = scrollTarget();
+    if (!sc || !canScroll(sc, dir)) return false;
+    scrollStep(sc, dir, page);
+    keepFocusInView(sc);
+    return true;
+  }
+  // After a scroll, don't leave the highlight on something scrolled out of sight
+  function keepFocusInView(sc) {
+    if (!current || current === sc || !sc.contains(current) || inView(current, sc)) return;
+    const inside = candidates().filter(el => sc.contains(el) && el !== sc && inView(el, sc));
+    if (inside.length) setFocus(inside[0]);
+  }
 
   // ── Drop-down menus ───────────────────────────────────────────────────────
   // The browser's own drop-down list can't be driven by a TV remote or the
@@ -394,6 +464,14 @@
     const list = scopeOf(candidates());
     if (!current || !document.contains(current) || !visible(current)) return focusFirst();
     const next = best(current, dir, list);
+    if (dir === 'up' || dir === 'down') {
+      const sc = current.hasAttribute('data-tv-scroller') ? current : scrollerOf(current);
+      if (sc) {
+        const nextInside = next && next !== sc && sc.contains(next);
+        if (nextInside && inView(next, sc)) return setFocus(next, { dir });
+        if (canScroll(sc, dir)) { scrollStep(sc, dir); keepFocusInView(sc); return true; }
+      }
+    }
     if (next) return setFocus(next, { dir });
     if (inFrame) { window.parent.postMessage({ wtvTv: 'exit', dir }, location.origin); if (current) current.classList.remove('tv-focus'); current = null; return true; }
     return false;
@@ -661,6 +739,24 @@
     }
     padRaf = requestAnimationFrame(padPoll);
   }
+  // Right stick, read straight from the controller where the browser allows it
+  let rsRaf = 0, rsLast = 0, rsAt = 0;
+  function rsPoll() {
+    rsRaf = 0;
+    let gp = null;
+    try { gp = [...(navigator.getGamepads ? navigator.getGamepads() : [])].find(g => g && g.connected && g.axes && g.axes.length >= 4); } catch (_) {}
+    if (!gp) return;                                                    // pad gone: wait for it to come back
+    const now = performance.now(), dt = Math.min(0.05, (now - (rsLast || now)) / 1000); rsLast = now;
+    const ay = gp.axes[3];
+    if (Math.abs(ay) > 0.25 && !ptr.on) {
+      const sc = scrollTarget();
+      if (sc) { rsAt = now; sc.scrollTop += Math.sign(ay) * ((Math.abs(ay) - 0.25) / 0.75) ** 1.5 * 1100 * dt; keepFocusInView(sc); }
+    }
+    rsRaf = requestAnimationFrame(rsPoll);
+  }
+  window.addEventListener('gamepadconnected', () => { if (!rsRaf) { rsLast = 0; rsRaf = requestAnimationFrame(rsPoll); } });
+  setTimeout(() => { if (!rsRaf) { rsLast = 0; rsRaf = requestAnimationFrame(rsPoll); } }, 1500);
+
   // Zoom: each press counts right away (the level shows on screen); presses
   // made while the map is still zooming are added up into one smooth zoom.
   const zoomQ = { target: null, busy: false, guard: 0 };
@@ -772,7 +868,15 @@
       pickerStep((k === 428 || k === PAD_RB || key === 'ChannelDown' || key === '+' || key === 'PageDown') ? 8 : -8);
       return;
     }
+    if (k === 215 || k === 216 || key === 'GamepadRightThumbstickUp' || key === 'GamepadRightThumbstickDown') {
+      e.preventDefault();                                                 // right stick: scroll what's on screen
+      if (performance.now() - rsAt > 250) scrollFree((k === 216 || key === 'GamepadRightThumbstickDown') ? 'down' : 'up');
+      return;
+    }
     const m = mapOf(current);
+    if (!m && !typing && (k === PAD_RB || k === PAD_LB || k === 427 || k === 428 || key === 'PageUp' || key === 'PageDown')) {
+      if (scrollFree((k === PAD_RB || k === 428 || key === 'PageDown') ? 'down' : 'up', true)) { e.preventDefault(); return; }
+    }
     if (m && (k === 427 || k === 428 || k === PAD_RB || k === PAD_LB || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-')) {
       e.preventDefault();
       zoomStep(m, (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+') ? 1 : -1);

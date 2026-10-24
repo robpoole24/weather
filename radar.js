@@ -47,7 +47,8 @@ function initFirebase() {
 // defaultOn: on for new users, can be turned off
 // The full list lives in public/js/wtv-alert-catalog.js (shared with the radar map).
 const { ALERT_CATALOG, ALERT_ALIASES } = require('./public/js/wtv-alert-catalog.js');
-const ALERT_META = Object.fromEntries(ALERT_CATALOG.map(t => [t.event, t]));
+// Map-only entries (Flash Flood Emergency, Special Marine Warning) are never offered for push
+const ALERT_META = Object.fromEntries(ALERT_CATALOG.filter(t => !t.mapOnly).map(t => [t.event, t]));
 // Old / renamed NWS event names map onto the current ones
 const EVENT_ALIASES = ALERT_ALIASES;
 

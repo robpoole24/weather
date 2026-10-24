@@ -54,7 +54,7 @@
   #hodo-card { position:fixed; z-index:1200; right:12px; top:64px; width:360px; max-height:calc(100% - 80px);
     overflow-y:auto; background:rgba(10,14,20,0.96); border:1px solid var(--border, rgba(0,180,216,0.25));
     border-radius:10px; color:#e8f4fd; font-family:'Barlow',system-ui,sans-serif; box-shadow:0 10px 30px rgba(0,0,0,0.5);
-    display:none; transition:opacity .4s; overscroll-behavior:contain; }
+    display:none; transition:opacity .4s, max-height .25s; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; }
   #hodo-card.open { display:block; }
   #hodo-card.dim { opacity:.35; }
   .hodo-head { display:flex; align-items:center; gap:8px; padding:10px 12px 6px; }
@@ -99,9 +99,19 @@
   .hodo-btn { margin-top:8px; background:rgba(0,180,216,.12); border:1px solid rgba(0,180,216,.5); color:#7fdcff; border-radius:6px;
     padding:5px 10px; font:600 .75rem 'Barlow',sans-serif; cursor:pointer; }
   .hodo-cross { pointer-events:auto; }
+  .hodo-grip { display:none; }
   @media (max-width: 700px) {
-    #hodo-card { left:0; right:0; top:auto; bottom:0; width:auto; max-height:58%; border-radius:14px 14px 0 0; }
-    .hodo-stage { max-width:300px; margin:0 auto; }
+    /* Phones: a bottom sheet. Swipe up on it to scroll; tap the handle to make it taller. */
+    #hodo-card { left:0; right:0; top:auto; bottom:0; width:auto; max-height:62%; border-radius:14px 14px 0 0;
+      padding-bottom:env(safe-area-inset-bottom, 0); }
+    #hodo-card.tall { max-height:calc(100% - 56px); }
+    .hodo-grip { display:block; width:100%; height:18px; border:0; background:none; cursor:pointer; padding:6px 0 0; }
+    .hodo-grip::before { content:''; display:block; width:42px; height:5px; border-radius:3px; margin:0 auto; background:rgba(255,255,255,.28); }
+    .hodo-head { padding-top:2px; }
+    .hodo-stage { width:min(280px, 34vh); max-width:none; margin:0 auto; }
+  }
+  @media (max-width: 700px) and (pointer: coarse) {
+    .hodo-stage { touch-action:pan-y; }   /* side-to-side turns it; up/down scrolls the sheet */
   }
   html.tv-mode #hodo-card { width:34vw; right:1.5vw; top:9vh; max-height:86vh; font-size:1.25rem; }
   html.tv-mode .hodo-title { font-size:1.5rem; }
@@ -119,6 +129,7 @@
     const c = document.createElement('div');
     c.id = 'hodo-card'; c.setAttribute('role', 'dialog'); c.setAttribute('aria-label', 'Hodograph');
     c.innerHTML = `
+      <button class="hodo-grip" data-act="grow" aria-label="Make the hodograph panel taller or shorter"></button>
       <div class="hodo-head"><span class="hodo-title">🌀 Hodograph</span><span class="hodo-where"></span>
         <button class="hodo-x" data-act="close" aria-label="Close the hodograph">✕</button></div>
       <div class="hodo-stage" data-tv-skip><canvas aria-label="3D hodograph"></canvas><div class="hodo-status"></div></div>
@@ -143,6 +154,7 @@
       const b = e.target.closest('button[data-act]'); if (!b) return;
       const a = b.dataset.act;
       if (a === 'close') close();
+      else if (a === 'grow') c.classList.toggle('tall');
       else if (a === 'hour-') setHour(S.fh - 1);
       else if (a === 'hour+') setHour(S.fh + 1);
       else if (a === 'flat') { S.flat = !S.flat; view.setFlat(S.flat); b.textContent = S.flat ? '3D' : '2D'; }
@@ -153,6 +165,17 @@
       else if (a === 'latest') { S.cycle = null; S.fh = 0; S.data = null; S.card.querySelector('.hodo-run').value = ''; load(); }
     });
     ['pointerdown', 'wheel', 'keydown'].forEach(ev => c.addEventListener(ev, wake, { passive: true }));
+    // Phones: if the web view doesn't scroll the panel itself, scroll it by hand
+    let sw = null;
+    c.addEventListener('touchstart', (e) => { const t = e.touches[0]; sw = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, top: c.scrollTop, native: false, manual: false } : null; }, { passive: true });
+    c.addEventListener('scroll', () => { if (sw && !sw.manual) sw.native = true; }, { passive: true });
+    c.addEventListener('touchmove', (e) => {
+      if (!sw || sw.native) return;
+      const t = e.touches[0], dy = t.clientY - sw.y, dx = t.clientX - sw.x;
+      if (!sw.manual && (Math.abs(dy) < 30 || Math.abs(dy) < Math.abs(dx) * 1.2)) return;
+      sw.manual = true; c.scrollTop = sw.top - (dy - Math.sign(dy) * 30);
+    }, { passive: true });
+    c.addEventListener('touchend', () => { sw = null; }, { passive: true });
     L.DomEvent.disableClickPropagation(c); L.DomEvent.disableScrollPropagation(c);
     S.card = c;
     view.attach(c.querySelector('canvas'), c.querySelector('.hodo-stage'));
@@ -261,11 +284,14 @@
     if (d.status === 'preparing') {
       status(tries < 2 ? 'Getting this hour\'s winds from the HRRR model…' : 'Still preparing — the first look each hour takes about a minute…');
       if (tries < 25) S.retry = setTimeout(() => load(tries + 1), (d.retryAfter || 8) * 1000);
+      else status('The model data is taking longer than usual. Close this and try again in a few minutes.');
       return;
     }
     if (d.status !== 'ok') { status(d.error || 'Wind data isn\'t available here right now.'); return; }
     S.data = d; status('');
     render(d);
+    // Shown from the previous HRRR run (same valid time) while the newest one loads: swap it in quietly
+    if (d.newerLoading && tries < 12) S.retry = setTimeout(() => load(tries + 1), (d.retryAfter || 20) * 1000);
   }
 
   const fmt = (v, unit) => (v == null ? '—' : `${v}<small>${unit}</small>`);
@@ -305,10 +331,13 @@
     const total = d.shear['0-6'] ? ` Bulk 0–6 km shear ${d.shear['0-6'].bulk} kt; total ${d.shear['0-6'].total} kt along the curve.` : '';
     const lead = d.summary.startsWith(d.shape.label) ? '' : `<b>${d.shape.label}.</b> `;
     $('.hodo-read').innerHTML = `${lead}${escapeHtml(d.summary)}${total}`;
-    $('.hodo-foot').innerHTML = `${escapeHtml(d.credit)} · model estimate, not an observation.<br>` + (TV
+    const touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    $('.hodo-foot').innerHTML = `${escapeHtml(d.credit)} · model estimate, not an observation.`
+      + (d.fromCycle ? ' From the previous run while the newest one loads.' : '') + '<br>' + (TV
       ? (/Xbox/i.test(navigator.userAgent) ? 'A moves the hodograph to the pointer · LT/RT storm to storm · B closes'
         : 'OK moves the hodograph to the pointer · RED/GREEN storm to storm · BACK closes')
-      : 'Tip: drag the crosshair, drag the picture to turn it, or right-click the map (long-press on phones) for a hodograph anywhere. Press H at the mouse.');
+      : touch ? 'Tip: drag the crosshair, swipe the picture sideways to turn it, or long-press the map for a hodograph anywhere. Swipe up for more.'
+      : 'Tip: drag the crosshair, drag the picture to turn it, or right-click the map for a hodograph anywhere. Press H at the mouse.');
     const s = stormList(false);
     $('[data-act="prev"]').disabled = $('[data-act="next"]').disabled = !s.length;
     view.setData(d);
@@ -452,11 +481,11 @@
       size();
       // Drag to turn (left/right) and tilt (up/down)
       let drag = null;
-      stage.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw, elev }; stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing'; });
+      stage.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw, elev, panY: getComputedStyle(stage).touchAction === 'pan-y' }; stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing'; });
       stage.addEventListener('pointermove', (e) => {
         if (!drag) return;
         yaw = drag.yaw + (e.clientX - drag.x) * 0.01;
-        if (!S.flat) elev = Math.max(8 * deg, Math.min(90 * deg, drag.elev + (e.clientY - drag.y) * 0.008));
+        if (!S.flat && !(e.pointerType === 'touch' && drag.panY)) elev = Math.max(8 * deg, Math.min(90 * deg, drag.elev + (e.clientY - drag.y) * 0.008));
         lastUser = performance.now(); kick();
       });
       const end = () => { drag = null; stage.style.cursor = 'grab'; lastUser = performance.now(); };
