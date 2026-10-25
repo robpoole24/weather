@@ -377,8 +377,8 @@
     const touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
     $('.hodo-foot').innerHTML = `${escapeHtml(d.credit)} · model estimate, not an observation.`
       + (d.fromCycle ? ' From the previous run while the newest one loads.' : '') + '<br>' + (TV
-      ? (/Xbox/i.test(navigator.userAgent) ? 'A moves the hodograph to the pointer · LT/RT storm to storm · B closes'
-        : 'OK moves the hodograph to the pointer · RED/GREEN storm to storm · BACK closes')
+      ? (/Xbox/i.test(navigator.userAgent) ? 'A moves the hodograph to the pointer · X switches between the map and this panel (▲▼ scroll it) · LT/RT storm to storm · B closes'
+        : 'OK moves the hodograph to the pointer · BLUE switches between the map and this panel (▲▼ scroll it) · RED/GREEN storm to storm · BACK closes')
       : touch ? 'Tip: drag the crosshair, swipe the picture sideways to turn it, or long-press the map for a hodograph anywhere. Swipe up for more.'
       : 'Tip: drag the crosshair, drag the picture to turn it, or right-click the map for a hodograph anywhere. Press H at the mouse.');
     const s = stormList(false);
@@ -465,8 +465,8 @@
   function tvHint() {
     if (!TV || typeof showToast !== 'function') return;
     showToast(/Xbox/i.test(navigator.userAgent)
-      ? 'Hodograph: point at a storm, press A (or click the right stick) · LT/RT storm to storm · RB/LB zoom · B closes'
-      : 'Hodograph: point at a storm and press OK · RED/GREEN storm to storm · CH ▲▼ zoom · BACK closes');
+      ? 'Hodograph: point at a storm and press A · X switches to the panel · LT/RT storm to storm · B closes'
+      : 'Hodograph: point at a storm and press OK · BLUE switches to the panel · RED/GREEN storm to storm · BACK closes');
   }
   // TV: close the Layers panel and put the remote on the map, pointer showing
   function tvToMap() {
@@ -479,6 +479,14 @@
       wake();
       if (k === 403 || k === 201 || key === 'ColorF0Red' || key === 'GamepadLeftTrigger') { jumpStorm(-1); return true; }
       if (k === 404 || k === 202 || key === 'ColorF1Green' || key === 'GamepadRightTrigger') { jumpStorm(1); return true; }
+      // X / BLUE: switch between the map and the hodograph panel (to scroll it or use its buttons)
+      if (k === 197 || k === 406 || key === 'GamepadX' || key === 'ColorF3Blue') {
+        const cur = document.querySelector('.tv-focus');
+        if (cur && S.card && S.card.contains(cur)) { tvToMap(); return true; }
+        const b = [...S.card.querySelectorAll('button[data-act]')].find(x => !x.disabled && x.dataset.act !== 'close' && x.dataset.act !== 'grow');
+        if (b && WTV_TV.focusEl) { WTV_TV.focusEl(b); return true; }
+        return false;
+      }
       // Right stick click: hodograph at the pointer
       if (k === 210 || key === 'GamepadRightThumbstick') { if (WTV_TV.pointerClick) WTV_TV.pointerClick(); return true; }
       return false;

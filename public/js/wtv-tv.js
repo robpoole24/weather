@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792900000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1793000000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -278,7 +278,7 @@
   }
   const canScroll = (sc, dir) => dir === 'down' ? sc.scrollTop + sc.clientHeight < sc.scrollHeight - 2 : sc.scrollTop > 2;
   function scrollStep(sc, dir, page) {
-    const by = Math.max(60, sc.clientHeight * (page ? 0.9 : 0.6));
+    const by = Math.max(page === 'stick' ? 40 : 60, sc.clientHeight * (page === 'stick' ? 0.22 : page ? 0.9 : 0.6));
     sc.scrollTop += dir === 'down' ? by : -by;
     scrollCache.t = 0;
   }
@@ -291,13 +291,18 @@
     if (current && current.hasAttribute && current.hasAttribute('data-tv-scroller') && document.contains(current)) return current;
     const own = current && scrollerOf(current);
     if (own) return own;
-    let win = null, area = 0;                                           // else the biggest scrolling box on screen
-    for (const el of textScrollers().concat([...document.querySelectorAll('#layer-panel, #forecast-panel, #lnw-panel, [role="dialog"]')].filter(isScroller))) {
-      const r = el.getBoundingClientRect();
-      if (r.width < 40 || r.height < 40 || r.bottom < 0 || r.top > innerHeight) continue;
-      if (r.width * r.height > area) { area = r.width * r.height; win = el; }
-    }
-    return win;
+    // else an open panel (hodograph, Layers…), else the biggest scrolling box on screen
+    const pick = (els) => {
+      let win = null, area = 0;
+      for (const el of els) {
+        const r = el.getBoundingClientRect();
+        if (r.width < 40 || r.height < 40 || r.bottom < 0 || r.top > innerHeight || getComputedStyle(el).display === 'none') continue;
+        if (r.width * r.height > area) { area = r.width * r.height; win = el; }
+      }
+      return win;
+    };
+    return pick([...document.querySelectorAll('[role="dialog"], #alert-types-panel > div, #layer-panel, #forecast-panel, #lnw-panel')].filter(isScroller))
+      || pick(textScrollers());
   }
   function scrollFree(dir, page) {
     const sc = scrollTarget();
@@ -470,6 +475,12 @@
     // go in that direction (the map underneath used to win, e.g. Alert Types)
     const box = current.closest(BOX_SEL);
     let next = box ? best(current, dir, list.filter(el => box.contains(el))) : null;
+    if (!next && box && (dir === 'up' || dir === 'down')) {
+      // At the bottom of a panel: scroll what's left, then stay (▲, Back or X/Y leave it)
+      const sc = isScroller(box) ? box : (current.hasAttribute('data-tv-scroller') ? current : scrollerOf(current));
+      if (sc && box.contains(sc) && canScroll(sc, dir)) { scrollStep(sc, dir); keepFocusInView(sc); return true; }
+      if (dir === 'down') return true;
+    }
     if (!next) next = best(current, dir, list);
     if (dir === 'up' || dir === 'down') {
       const sc = current.hasAttribute('data-tv-scroller') ? current : scrollerOf(current);
@@ -877,13 +888,16 @@
     }
     if (k === 215 || k === 216 || key === 'GamepadRightThumbstickUp' || key === 'GamepadRightThumbstickDown') {
       e.preventDefault();                                                 // right stick: scroll what's on screen
-      if (performance.now() - rsAt > 250) scrollFree((k === 216 || key === 'GamepadRightThumbstickDown') ? 'down' : 'up');
+      if (performance.now() - rsAt > 250) scrollFree((k === 216 || key === 'GamepadRightThumbstickDown') ? 'down' : 'up', 'stick');
       return;
     }
     const m = mapOf(current);
-    if (!m && !typing && (k === PAD_RB || k === PAD_LB || k === 427 || k === 428 || key === 'PageUp' || key === 'PageDown')) {
-      if (scrollFree((k === PAD_RB || k === 428 || key === 'PageDown') ? 'down' : 'up', true)) { e.preventDefault(); return; }
+    // LB/RB (the Xbox app sends them as - and +), CH ▲/▼: a page at a time in lists and panels
+    if (!m && !typing && (k === PAD_RB || k === PAD_LB || k === 427 || k === 428 || key === 'PageUp' || key === 'PageDown' || key === '+' || key === '-')) {
+      if (scrollFree((k === PAD_RB || k === 428 || key === 'PageDown' || key === '+') ? 'down' : 'up', true)) { e.preventDefault(); return; }
     }
+    // Right stick click on the map = A at the pointer
+    if (m && (k === 210 || key === 'GamepadRightThumbstick')) { e.preventDefault(); ptrClick(m); return; }
     if (m && (k === 427 || k === 428 || k === PAD_RB || k === PAD_LB || key === 'ChannelUp' || key === 'ChannelDown' || key === '+' || key === '-')) {
       e.preventDefault();
       zoomStep(m, (k === 427 || k === PAD_RB || key === 'ChannelUp' || key === '+') ? 1 : -1);
