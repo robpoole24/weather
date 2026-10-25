@@ -4742,13 +4742,15 @@ liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data
 })();
 
 // Subscribe all hasLive channels on startup (only when APP_URL is set)
-async function subscribeAllChannels() {
+// force: re-subscribe every channel even if Redis says its lease is still good
+async function subscribeAllChannels(force = false) {
   if (!process.env.APP_URL) {
     console.log('[WebSub] APP_URL not set — WebSub disabled (expected on localhost)');
     return;
   }
 
-  const channels = getLiveChannels();
+  // All hours: a restart overnight used to subscribe only the forecasters
+  const channels = getLiveChannels(true);
   const RENEW_WINDOW = 24 * 60 * 60 * 1000; // re-subscribe if expiring within 24h
   const now = Date.now();
 
@@ -4758,6 +4760,7 @@ async function subscribeAllChannels() {
   const toSubscribe = [];
   let skipped = 0;
   for (const ch of channels) {
+    if (force === true) { toSubscribe.push(ch); continue; }
     try {
       const stored = await rGet('wt:ws:' + ch.id);
       if (stored !== null && stored !== undefined) {
@@ -4961,8 +4964,8 @@ app.post('/api/admin/websub/subscribe', async (req, res) => {
   if (!process.env.APP_URL) {
     return res.status(400).json({ error: 'APP_URL not configured — WebSub requires a public URL' });
   }
-  await subscribeAllChannels();
-  res.json({ ok: true, message: 'WebSub subscriptions renewed for all channels' });
+  subscribeAllChannels(true).catch(e => console.error('[WebSub] Forced renewal failed:', e.message));
+  res.json({ ok: true, message: 'Re-subscribing every channel with YouTube now (takes a few minutes)' });
 });
 
 // Admin endpoint to resubscribe a single channel — for fixing one FAILED row
@@ -4984,6 +4987,21 @@ app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
 
 // Start WebSub subscriptions after boot (10s delay)
 setTimeout(subscribeAllChannels, 10000);
+
+// Watchdog: 200+ channels post something every few hours, so 12 hours with no
+// push at all means the subscriptions have quietly lapsed. Re-subscribe them all.
+let _websubHealAt = 0;
+setInterval(() => {
+  if (!process.env.APP_URL) return;
+  const now = Date.now();
+  const last = cache.lastNotificationReceived || 0;
+  if (now - SERVER_START_TIME < 60 * 60 * 1000 || now - last < 12 * 3600 * 1000 || now - _websubHealAt < 12 * 3600 * 1000) return;
+  _websubHealAt = now;
+  const hrs = last ? Math.round((now - last) / 3600000) + 'h' : 'ever';
+  console.warn('[WebSub] No YouTube push in ' + hrs + ' — re-subscribing every channel');
+  logEvent({ type: 'websub', severity: 'warning', source: 'watchdog', message: 'No WebSub push in ' + hrs + ' — forced re-subscribe of all channels' });
+  subscribeAllChannels(true).catch(e => console.error('[WebSub] Watchdog renewal failed:', e.message));
+}, 30 * 60 * 1000);
 
 // ════════════════════════════════════════════
 // SCHEDULED RECENT VIDEO FETCHER

@@ -1478,10 +1478,9 @@
   <div id="status-bar" role="status" aria-live="polite" aria-atomic="false">
     <span class="status-item"><span class="status-dot"></span>WeatherTV v1.0</span>
     <span class="status-item status-divider">|</span>
-    <span class="status-item" id="notification-status">Notifications: —</span>
-    <span class="status-item status-divider">|</span>
-    <span class="status-item" id="video-update-status">Videos: —</span>
-    <span class="status-item status-divider">|</span>
+    <!-- Shown only once storm alerts are on: where they're for (click to change). Fetch times live in the admin panel. -->
+    <span class="status-item" id="notification-status" style="display:none"></span>
+    <span class="status-item status-divider" id="notification-divider" style="display:none">|</span>
     <span class="status-item" id="time-display"></span>
     <!-- Live Chat button injected here by showChatButton() — sits left of About -->
     <span id="chat-btn-slot" style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;flex-shrink:0;"></span>
@@ -1725,8 +1724,6 @@ async function init() {
   await checkAllLiveStatuses();
   loadHighlights();
   loadPlaylists();
-  setTimeout(updateCacheStatus, 1500);
-  setInterval(updateCacheStatus, 60000);
 }
 
 // Load all group/channel data from the server API
@@ -4698,7 +4695,7 @@ async function _syncNativePush(lat, lng) {
   const loc = WTVAlerts.getLocation();
   if (loc && !r.error) {
     const notifEl = document.getElementById('notification-status');
-    if (notifEl) notifEl.textContent = `Notifications: ${loc.label}`;
+    if (notifEl) showNotifStatus(`🔔 Alerts: ${loc.label}`);
   }
 }
 
@@ -4755,7 +4752,7 @@ async function initPushNotifications(lat, lng) {
       console.log(`[Push] Alerts active for ${loc.label} (${(loc.ugc || []).join(', ')})`);
       // Update status bar
       const notifEl = document.getElementById('notification-status');
-      if (notifEl) notifEl.textContent = `Notifications: ${loc.label}`;
+      if (notifEl) showNotifStatus(`🔔 Alerts: ${loc.label}`);
       // Only show notification preferences panel on first registration
       // (no saved prefs yet). On subsequent loads it stays hidden — user
       // can re-open it via the settings area if they want to change prefs.
@@ -5104,31 +5101,11 @@ function formatPreciseTime(timestamp) {
   return hrs + 'h ' + remainingMins + 'm ago';
 }
 
-async function updateCacheStatus() {
-  try {
-    const res = await fetch('/api/cache/status');
-    const data = await res.json();
-
-    const videoEl = document.getElementById('video-update-status');
-    const notifEl = document.getElementById('notification-status');
-
-    if (!videoEl || !notifEl) {
-      console.warn('[WeatherTV] Status bar elements not found');
-      return;
-    }
-
-    const liveTime = data.liveStatuses && data.liveStatuses.lastChecked;
-    const videoTime = data.recentVideos && data.recentVideos.lastFetch;
-    const notifTime = data.liveStatuses && data.liveStatuses.lastNotification;
-
-    console.log('[WeatherTV] Cache status:', { liveTime, videoTime, data });
-
-    notifEl.textContent = 'Notifications: ' + formatPreciseTime(notifTime);
-    videoEl.textContent = 'Videos: ' + formatPreciseTime(videoTime);
-
-  } catch(e) {
-    console.error('[WeatherTV] Cache status error:', e);
-  }
+// Status bar: "🔔 Alerts: <place>" once storm alerts are set up (click to change them)
+function showNotifStatus(text) {
+  const el = document.getElementById('notification-status'), div = document.getElementById('notification-divider');
+  if (!el) return;
+  el.textContent = text; el.style.display = ''; if (div) div.style.display = '';
 }
 
 
@@ -5267,7 +5244,7 @@ init();
 </div>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1793000000"></script>
+<script src="/js/wtv-tv.js?v=1793100000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing
