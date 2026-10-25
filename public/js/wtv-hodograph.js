@@ -63,7 +63,7 @@
   .hodo-storm b { display:block; font:700 .95rem 'Barlow Condensed',sans-serif; letter-spacing:.03em; color:#fff; }
   .hodo-storm span { display:block; font-size:.7rem; color:#c8ddf0; margin-top:1px; }
   .hodo-storm[hidden] { display:none; }
-  html.tv-mode .hodo-storm b { font-size:1.4rem; } html.tv-mode .hodo-storm span { font-size:1rem; }
+  html.tv-mode .hodo-storm b { font-size:1.1rem; } html.tv-mode .hodo-storm span { font-size:.8rem; }
   .hodo-where { flex:1; font-size:.72rem; color:#7a9bb5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .hodo-x { background:none; border:1px solid rgba(255,255,255,.15); color:#e8f4fd; border-radius:6px; width:30px; height:30px; cursor:pointer; font-size:.9rem; }
   .hodo-stage { position:relative; margin:0 10px; background:radial-gradient(circle at 50% 60%, #1a1530 0%, #0d0b18 75%);
@@ -118,15 +118,22 @@
   @media (max-width: 700px) and (pointer: coarse) {
     .hodo-stage { touch-action:pan-y; }   /* side-to-side turns it; up/down scrolls the sheet */
   }
-  html.tv-mode #hodo-card { width:34vw; right:1.5vw; top:9vh; max-height:86vh; font-size:1.25rem; }
-  html.tv-mode .hodo-title { font-size:1.5rem; }
-  html.tv-mode .hodo-stage { aspect-ratio:auto; height:42vh; }
-  html.tv-mode .hodo-tile b { font-size:1.6rem; }
-  html.tv-mode .hodo-tile span, html.tv-mode .hodo-legend { font-size:.95rem; }
-  html.tv-mode .hodo-read { font-size:1.1rem; }
-  html.tv-mode .hodo-fav { font-size:1.15rem; }
-  html.tv-mode .hodo-bar button, html.tv-mode .hodo-nav button { font-size:1.05rem; padding:8px 14px; }
-  html.tv-mode .hodo-where, html.tv-mode .hodo-time, html.tv-mode .hodo-foot { font-size:1rem; }`;
+  /* TV / Xbox: a compact side panel (about a quarter of the screen); scroll it for the rest */
+  html.tv-mode #hodo-card { width:clamp(340px, 24vw, 460px); right:1vw; top:8vh; max-height:72vh; font-size:1rem; }
+  html.tv-mode .hodo-head { padding:8px 10px 4px; }
+  html.tv-mode .hodo-title { font-size:1.15rem; }
+  html.tv-mode .hodo-stage { aspect-ratio:auto; height:30vh; }
+  html.tv-mode .hodo-tiles { gap:4px; }
+  html.tv-mode .hodo-tile { padding:4px 3px; }
+  html.tv-mode .hodo-tile b { font-size:1.15rem; }
+  html.tv-mode .hodo-tile span, html.tv-mode .hodo-legend { font-size:.72rem; }
+  html.tv-mode .hodo-read { font-size:.88rem; }
+  html.tv-mode .hodo-fav { font-size:.88rem; }
+  html.tv-mode .hodo-bar button, html.tv-mode .hodo-nav button { font-size:.85rem; padding:5px 10px; }
+  html.tv-mode .hodo-where, html.tv-mode .hodo-time, html.tv-mode .hodo-foot { font-size:.8rem; }
+  html.tv-mode .hodo-storm { margin:0 10px 6px; padding:5px 8px; }
+  /* With the Layers panel open, step aside so the map stays visible (the crosshair stays) */
+  html.tv-mode body:has(#layer-panel.open) #hodo-card { display:none; }`;
   document.head.appendChild(css);
 
   // ── Card ──────────────────────────────────────────────────────────────────
@@ -294,6 +301,7 @@
     if (!S.card || !S.marker) return;
     const pt = map.latLngToContainerPoint([S.lat, S.lng]), size = map.getSize();
     const r = S.card.getBoundingClientRect(), m = map.getContainer().getBoundingClientRect();
+    if (r.width < 10) return;                                    // panel hidden (e.g. behind the Layers panel on TV)
     const sheet = r.width >= m.width - 2;                         // phone bottom sheet
     let dx = 0, dy = 0;
     if (sheet) { const free = r.top - m.top; if (pt.y > free - 40 || pt.y < 40) dy = pt.y - free / 2; }

@@ -28,7 +28,9 @@
   const onKey = (fn) => keyHooks.push(fn);   // fn(keyCode, key) returns true when it used the key
   const api = { active: isTV, onBack, onMedia, onKey, focusFirst, focusEl: (el) => setFocus(el),   // focusEl: move the highlight only
     // Press OK at the map pointer (e.g. the hodograph's right-stick click)
-    pointerClick: () => { const m = window.WTV_TV_MAP; if (!m || !ptr.on) return false; ptrClick(m); return true; } };
+    pointerClick: () => { const m = window.WTV_TV_MAP; if (!m || !ptr.on) return false; ptrClick(m); return true; },
+    // The Xbox app (1.3+) reads the right stick itself and calls this ~30×/s: v = -1…1
+    stick: (v) => { if (Math.abs(v) < 0.15) return; rsAt = performance.now(); wheelAt(Math.sign(v) * ((Math.abs(v) - 0.15) / 0.85) ** 1.5 * 38); } };
   window.WTV_TV = api;
   if (!isTV) return;
 
@@ -172,6 +174,9 @@
       border: 3px solid #ffd000; opacity: 0; transition: opacity .12s;
     }
     html.tv-mode #tv-pointer.hot::after { opacity: 1; }
+    html.tv-mode #tv-pointer.grab svg path { fill: #40e0ff; }
+    html.tv-mode #tv-grab-tip { position: fixed; z-index: 2147482600; display: none; pointer-events: none; background: rgba(0,0,0,0.85);
+      color: #40e0ff; border: 1px solid #40e0ff; border-radius: 6px; padding: 0.25rem 0.6rem; font: 600 0.95rem 'Barlow', system-ui, sans-serif; }
     html.tv-mode #tv-picker {
       position: fixed; inset: 0; z-index: 2147483000; background: rgba(0,0,0,0.72);
       display: flex; align-items: center; justify-content: center;
@@ -578,6 +583,7 @@
     return true;
   }
   function handleBack(fromChild) {
+    if (ptr.grab) { grabEnd(); return; }
     if (closePicker()) return;
     // 1) Close whatever is open on top (popups, panels, menus)
     for (let i = backHandlers.length - 1; i >= 0; i--) { try { if (backHandlers[i]()) { refocusSoon(); return; } } catch (_) {} }
@@ -697,6 +703,11 @@
     let nx = ptr.x + dx, ny = ptr.y + dy, px = 0, py = 0;
     if (nx < 2) { px = nx - 2; nx = 2; } if (nx > W) { px = nx - W; nx = W; }
     if (ny < 2) { py = ny - 2; ny = 2; } if (ny > H) { py = ny - H; ny = H; }
+    if (ptr.grab && document.contains(ptr.grab)) {                     // holding a scroll bar: the pointer rides the bar
+      const r = ptr.grab.getBoundingClientRect();
+      ptr.x = Math.min(r.right - 4, Math.max(r.right - 16, ptr.x)); ptr.y = Math.max(r.top + 2, Math.min(r.bottom - 2, ny));
+      ptrPlace(); grabTo(ptr.y); grabTip(); return;
+    }
     ptr.x = nx; ptr.y = ny; ptrPlace();
     if (px || py) { try { m.panBy([px * 2.5, py * 2.5], { animate: false }); } catch (_) {} }   // pushed past the edge: move the map
   }
@@ -766,10 +777,7 @@
     if (!gp) return;                                                    // pad gone: wait for it to come back
     const now = performance.now(), dt = Math.min(0.05, (now - (rsLast || now)) / 1000); rsLast = now;
     const ay = gp.axes[3];
-    if (Math.abs(ay) > 0.25 && !ptr.on) {
-      const sc = scrollTarget();
-      if (sc) { rsAt = now; sc.scrollTop += Math.sign(ay) * ((Math.abs(ay) - 0.25) / 0.75) ** 1.5 * 1100 * dt; keepFocusInView(sc); }
-    }
+    if (Math.abs(ay) > 0.25) { rsAt = now; wheelAt(Math.sign(ay) * ((Math.abs(ay) - 0.25) / 0.75) ** 1.5 * 1100 * dt); }
     rsRaf = requestAnimationFrame(rsPoll);
   }
   window.addEventListener('gamepadconnected', () => { if (!rsRaf) { rsLast = 0; rsRaf = requestAnimationFrame(rsPoll); } });
@@ -814,7 +822,67 @@
     document.querySelectorAll('.leaflet-popup, #tv-picker, [role="dialog"], .modal, #lnw-panel, #meso-menu, #layer-panel.open, #forecast-panel.open, #alert-types-panel').forEach(o => { if (shown(o)) out.push(o); });
     return out;
   }
+  // ── Scroll bars with the pointer ──────────────────────────────────────────
+  // A on a scroll bar grabs it: the bar then follows the pointer up and down
+  // (the controller can't "hold" a click), and A or B lets go. The right
+  // stick scrolls whatever box is under the pointer, like a mouse wheel.
+  function scrollerAt(x, y) {
+    let el = document.elementFromPoint(x, y);
+    for (; el && el !== document.body && el !== document.documentElement; el = el.parentElement) if (isScroller(el)) return el;
+    return null;
+  }
+  function scrollbarAt(x, y) {
+    // The bar itself, or the strip just inside it (thin bars are hard to hit exactly)
+    for (const dx of [0, -10, 10]) {
+      const sc = scrollerAt(x + dx, y);
+      if (!sc) continue;
+      const r = sc.getBoundingClientRect(), cs = getComputedStyle(sc);
+      const bar = Math.max(0, sc.offsetWidth - sc.clientWidth - (parseFloat(cs.borderLeftWidth) || 0) - (parseFloat(cs.borderRightWidth) || 0));
+      const zone = Math.max(bar, 8) + 14;
+      if (x >= r.right - zone && x <= r.right + 6 && y >= r.top && y <= r.bottom) return sc;
+    }
+    return null;
+  }
+  function grabTo(y) {
+    const sc = ptr.grab; if (!sc || !document.contains(sc)) return grabEnd();
+    const r = sc.getBoundingClientRect(), track = sc.clientHeight, range = sc.scrollHeight - sc.clientHeight;
+    const thumb = Math.max(24, track * track / sc.scrollHeight);
+    const f = Math.max(0, Math.min(1, (y - r.top - thumb / 2) / Math.max(1, track - thumb)));
+    sc.scrollTop = f * range;
+    scrollCache.t = 0;
+  }
+  function grabStart(sc) {
+    ptr.grab = sc;
+    if (ptr.el) ptr.el.classList.add('grab');
+    let tip = document.getElementById('tv-grab-tip');
+    if (!tip) { tip = document.createElement('div'); tip.id = 'tv-grab-tip'; document.body.appendChild(tip); }
+    tip.textContent = (XBOX_APP || /Xbox/i.test(ua) ? 'Move up/down to scroll · A or B to let go' : 'Move up/down to scroll · OK or BACK to let go');
+    tip.style.display = 'block'; grabTip();
+    grabTo(ptr.y);
+  }
+  function grabTip() {
+    const tip = document.getElementById('tv-grab-tip'); if (!tip || !ptr.grab) return;
+    tip.style.left = Math.min(innerWidth - 330, ptr.x + 28) + 'px'; tip.style.top = (ptr.y + 30) + 'px';
+  }
+  function grabEnd() {
+    ptr.grab = null;
+    if (ptr.el) ptr.el.classList.remove('grab');
+    const tip = document.getElementById('tv-grab-tip'); if (tip) tip.style.display = 'none';
+    return true;
+  }
+  // Wheel-style scrolling at the pointer (right stick); dy in pixels
+  function wheelAt(dy) {
+    const sc = (ptr.on && scrollerAt(ptr.x, ptr.y)) || scrollTarget();
+    if (!sc) return false;
+    sc.scrollTop += dy; scrollCache.t = 0;
+    if (!ptr.on) keepFocusInView(sc); else ptrHover();
+    return true;
+  }
+
   function ptrClick(m) {
+    if (ptr.grab) { grabEnd(); return; }                                // A again: let go of the scroll bar
+    const bar = scrollbarAt(ptr.x, ptr.y);
+    if (bar) { grabStart(bar); return; }
     const t = ptrTarget(); if (!t || !t.el) return;
     const el = t.el;
     const before = openOverlays();
@@ -828,8 +896,9 @@
     mouse(el, 'click', t.x, t.y);
     setTimeout(() => {
       const opened = openOverlays().filter(o => !before.includes(o));
-      if (opened.length) { mapReturn = { el: m.getContainer() }; jumpInto(opened[opened.length - 1]); }
-      else ptrHover();
+      const menu = opened.length && opened[opened.length - 1].matches('#alert-types-panel, #meso-menu, #hodo-card');
+      if (opened.length && !menu) { mapReturn = { el: m.getContainer() }; jumpInto(opened[opened.length - 1]); }
+      else ptrHover();                                                  // menus: keep using the pointer in them
     }, 300);
   }
   // Move the highlight into something that just opened: a camera's ✕, the
@@ -888,7 +957,10 @@
     }
     if (k === 215 || k === 216 || key === 'GamepadRightThumbstickUp' || key === 'GamepadRightThumbstickDown') {
       e.preventDefault();                                                 // right stick: scroll what's on screen
-      if (performance.now() - rsAt > 250) scrollFree((k === 216 || key === 'GamepadRightThumbstickDown') ? 'down' : 'up', 'stick');
+      if (performance.now() - rsAt > 250) {
+        const down = k === 216 || key === 'GamepadRightThumbstickDown';
+        if (ptr.on) wheelAt(down ? 90 : -90); else scrollFree(down ? 'down' : 'up', 'stick');
+      }
       return;
     }
     const m = mapOf(current);
