@@ -830,7 +830,11 @@
   .fpm-days { display:flex; flex-direction:column; gap:0.2rem; }
   .fpm-day { display:grid; grid-template-columns:3.2rem 1fr auto; gap:0.4rem; align-items:center; font-size:0.72rem; padding:0.25rem 0; border-bottom:1px solid var(--border); }
   .fpm-day b { font-family:'Barlow Condensed', sans-serif; font-size:0.8rem; }
-  .fpm-agree { font:700 0.62rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; padding:0.1rem 0.35rem; border-radius:3px; }
+  .fpm-key { font-size:0.68rem; line-height:1.45; color:#9fb6c9; margin:0.45rem 0 0.2rem; padding:0.45rem 0.55rem; border-radius:5px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.07); }
+  .fpm-key b { color:#dfe9f0; font-weight:600; }
+  .fpm-key span { font-weight:700; }
+  html.tv-mode .fpm-key { font-size:0.9rem; }
+  .fpm-agree { white-space:nowrap; font:700 0.62rem 'Barlow Condensed', sans-serif; letter-spacing:0.06em; text-transform:uppercase; padding:0.1rem 0.35rem; border-radius:3px; }
   .fpm-foot { font-size:0.62rem; color:var(--muted); margin-top:0.4rem; }
 </style>
 <style>
@@ -1098,6 +1102,7 @@
         <div id="fp-models-chart"></div>
         <div id="fp-models-legend" class="fpm-legend"></div>
         <div id="fp-models-days" class="fpm-days"></div>
+        <div id="fp-models-key" class="fpm-key"></div>
         <div class="fpm-foot">Models: ECMWF, ECMWF AI, GFS, ICON, GEM, UK Met Office, JMA, Météo-France · via Open-Meteo</div>
       </div>
     </div>
@@ -6513,15 +6518,32 @@ function renderModelComparison() {
     const loV = shown.map(m => m.daily.min && m.daily.min[k]).filter(v => v != null);
     const pV  = shown.map(m => m.daily.precip && m.daily.precip[k]).filter(v => v != null);
     if (!hiV.length) return;
-    const spread = Math.max(...hiV) - Math.min(...hiV);
-    const [txt, col] = spread <= 3 ? ['Agree', '#22c55e'] : spread <= 7 ? ['Some spread', '#f4a261'] : ['Disagree', '#ef4444'];
     const label = k === 0 || day === nowDay ? 'Today' : new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
     const rng = (a, f) => { const mn = Math.min(...a), mx = Math.max(...a); return f(mn) === f(mx) ? f(mn) : `${f(mn)}–${f(mx)}`; };
-    rows.push(`<div class="fpm-day"><b>${label}</b><span>H ${rng(hiV, v => Math.round(v))}° · L ${rng(loV, v => Math.round(v))}°` +
-      (pV.length && Math.max(...pV) >= 0.01 ? ` · ${rng(pV, v => v.toFixed(2))}"` : '') +
-      `</span><span class="fpm-agree" style="color:${col};border:1px solid ${col}">${txt}</span></div>`);
+    let txt, col, tip, info;
+    if (_mmView === 'precip') {
+      // Rain: how far apart the models' totals are for that day (wider allowance for big totals)
+      if (!pV.length) return;
+      const mx = Math.max(...pV), mn = Math.min(...pV), spread = mx - mn;
+      const wet = pV.filter(v => v >= 0.05).length;
+      [txt, col] = spread <= Math.max(0.10, mx * 0.25) ? ['Agree', '#22c55e'] : spread <= Math.max(0.25, mx * 0.5) ? ['Some spread', '#f4a261'] : ['Wide variance', '#ef4444'];
+      tip = `The models' rain totals for this day are ${spread.toFixed(2)}" apart`;
+      info = (mx < 0.01 ? 'Dry' : `${rng(pV, v => v.toFixed(2))}"`) + ` · ${wet === 0 ? 'no model shows rain' : wet === pV.length ? 'all models show rain' : `${wet} of ${pV.length} models: rain`}`;
+    } else {
+      // Temperature: how far apart the models' highs are
+      const spread = Math.max(...hiV) - Math.min(...hiV);
+      [txt, col] = spread <= 3 ? ['Agree', '#22c55e'] : spread <= 7 ? ['Some spread', '#f4a261'] : ['Wide variance', '#ef4444'];
+      tip = `The models' highs for this day are ${Math.round(spread)}° apart`;
+      info = `H ${rng(hiV, v => Math.round(v))}° · L ${rng(loV, v => Math.round(v))}°`;
+    }
+    rows.push(`<div class="fpm-day"><b>${label}</b><span>${info}</span>` +
+      `<span class="fpm-agree" title="${tip}" style="color:${col};border:1px solid ${col}">${txt}</span></div>`);
   });
   document.getElementById('fp-models-days').innerHTML = rows.join('');
+  const G = '<span style="color:#22c55e">Agree</span>', Y = '<span style="color:#f4a261">Some spread</span>', Rd = '<span style="color:#ef4444">Wide variance</span>';
+  document.getElementById('fp-models-key').innerHTML = _mmView === 'precip'
+    ? `<b>What the badges mean</b> · how closely the models agree on each day's rain total: ${G} within about 0.10" — a confident forecast · ${Y} somewhat apart — rain likely, amounts could change · ${Rd} far apart — some models bring real rain and others little or none, so check back. (Bigger totals get more room: 1.00" vs 1.20" still counts as agreeing.)`
+    : `<b>What the badges mean</b> · how closely the models agree on each day's high temperature: ${G} within 3° — a confident forecast · ${Y} 4–7° apart — likely, but could shift · ${Rd} more than 7° apart — uncertain; often a front or storm system whose timing the models don't agree on, so check back.`;
 }
 let _mapTempMode = 'none'; // 'none' | 'feelslike' | 'forecast'
 
@@ -7111,7 +7133,7 @@ const WTV_INFO = {
   'rain-icons':    { t:'How to read our icons', w:'Our weather icons carry three clues at once.', r:'Cloud color: white · rain unlikely, gray · possible, dark gray · likely. Number of drops: 1 light, 2 moderate, 3 heavy. A lightning bolt means thunderstorms, snowflakes mean snow, pink drops mean freezing rain or sleet. The words under each icon spell it all out — how widespread, how heavy and what kind, like "Scattered light showers."' },
   'fc-hourly':     { t:'Hourly forecast', w:'The next 24 hours, hour by hour.', r:'Each card shows the time, the sky, the temperature, "FL" (feels like), the chance of rain and the wind. Swipe sideways for more hours. The line chart below shows how the temperature rises and falls.' },
   'fc-daily':      { t:'7-day forecast', w:'The next week, one row per day. Tap a day for the full breakdown.', r:'Big number · the high. Smaller number · the overnight low. The colored bar shows that day\'s range against the whole week, so a long bar means a big swing. Blue % is the chance of rain.' },
-  'fc-models':     { t:'Model comparison', w:'Weather forecasts start as computer models run by different countries. This shows what 8 of them predict for your spot.', r:'Lines bunched together · the models agree, so the forecast is more trustworthy. Lines spread apart · they disagree, so expect changes. Agreement usually drops after 3–4 days.' },
+  'fc-models':     { t:'Model comparison', w:'Weather forecasts start as computer models run by different countries. This shows what 8 of them predict for your spot.', r:'Lines bunched together · the models agree, so the forecast is more trustworthy. Lines spread apart · they disagree, so expect changes. Agreement usually drops after 3–4 days. Each day’s badge shows how closely the models agree: on highs in the Temperature tab, on rain totals in the Precipitation tab. Agree · Some spread · Wide variance (uncertain — check back).' },
   'fc-storm':      { t:'Storm indicators', w:'Ingredients meteorologists check before thunderstorms. Shown only when there is notable storm energy nearby.', r:'CAPE is fuel: over 1,000 means storms can grow tall, over 2,500 strong storms are possible. Lifted Index below 0 means unstable air; below −6 is very unstable. These are ingredients, not a guarantee — storms still need a trigger.' },
   'fc-nws':        { t:'NWS detailed forecast', w:'The written forecast from your local National Weather Service office, made by human meteorologists.', r:'Tap a period to read the full text. This is the same forecast your local TV meteorologists start from.' },
   'fc-tempmap':    { t:'Temperature map', w:'Colors the whole map by temperature so you can see warm and cold areas at a glance.', r:'Feels Like · wind chill and heat index right now. Hi/Lo · today\'s forecast high and low. Turn it Off to see the radar clearly.' },
