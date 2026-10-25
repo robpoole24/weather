@@ -4408,7 +4408,9 @@ function getRecentFetchHour() {
 // ── Helper: get channels eligible for live check based on time (EST) ──
 // Forecasters: checked 6am-2am EST (stop 2am-6am)
 // Chasers/Creators: checked 6am-midnight EST (stop midnight-6am)
-function getLiveChannels() {
+// allHours: skip the overnight pause. The free live verifier uses it, so chasers in
+// other time zones (Australia streams during the US night) are still caught.
+function getLiveChannels(allHours = false) {
   const channels = [];
   try {
     const data = loadData();
@@ -4424,6 +4426,7 @@ function getLiveChannels() {
     data.groups.forEach(g => {
       g.channels.forEach(ch => {
         if (!ch.hasLive || ch.enabled === false) return;
+        if (allHours) { channels.push({ ...ch, _group: g.id }); return; }
 
         if (g.id === FORECASTER_GROUP) {
           // Forecasters: active 6am-2am EST (pause 2am-6am)
@@ -4469,6 +4472,7 @@ async function checkLiveStatus(channelId) {
     '&channelId=' + channelId + '&part=id&eventType=live&type=video';
   const data = await ytFetch(url);
   if (checkQuotaError(data)) { markQuotaExceeded(true); throw new Error('quota_exceeded'); }
+  if (data.error) throw new Error('YouTube API: ' + (data.error.message || data.error.code));   // not "offline"
   return !!(data.items && data.items.length > 0);
 }
 
@@ -4639,7 +4643,7 @@ async function websubSubscribe(channelId) {
 // Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 4).
 const liveVerifier = createLiveVerifier({
   // lastLiveDate drives how often each channel is checked (see TIERS in live-verifier.js)
-  getChannels: async () => getLiveChannels().map(ch => ({ id: ch.id, name: ch.name, lastLiveDate: (cache.channelActivity[ch.id] || {}).lastLiveDate || null })),
+  getChannels: async () => getLiveChannels(true).map(ch => ({ id: ch.id, name: ch.name, lastLiveDate: (cache.channelActivity[ch.id] || {}).lastLiveDate || null })),
   // Severe weather → check every channel every sweep: any active Tornado or
   // Extreme Wind Warning, or a named Atlantic storm (from the NHC proxy cache)
   isSevereActive: async () => {
@@ -4677,6 +4681,18 @@ const liveVerifier = createLiveVerifier({
     console.log('[LiveVerifier] OFFLINE (stale live cleared): ' + channelId);
   },
   store: { get: rGet, set: rSet },
+  // YouTube shows cloud servers a "confirm you're not a bot" page that hides the
+  // live flag. When that page still names a video, ask the API about it (1 unit).
+  confirmVideo: async (videoId) => {
+    const key = getApiKey();
+    if (!key || key === 'YOUR_YOUTUBE_API_KEY' || primaryQuotaExceeded || !/^[\w-]{11}$/.test(videoId)) return null;
+    trackBurn(true, 1);
+    const data = await ytFetch('https://www.googleapis.com/youtube/v3/videos?key=' + key + '&id=' + videoId + '&part=liveStreamingDetails&fields=items/liveStreamingDetails');
+    if (checkQuotaError(data)) { markQuotaExceeded(true); return null; }
+    if (data.error) { console.error('[LiveVerifier] API confirm failed: ' + ((data.error.errors || [])[0] || {}).reason + ' ' + (data.error.message || '')); return null; }
+    const d = data.items && data.items[0] && data.items[0].liveStreamingDetails;
+    return !!(d && d.actualStartTime && !d.actualEndTime);
+  },
   sweepIntervalMs: (Number(process.env.LIVE_VERIFIER_INTERVAL_MIN) || 4) * 60 * 1000,
 });
 liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data, /run, /check/:channelId
@@ -4885,6 +4901,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
         '&id=' + feedVideoId + '&part=liveStreamingDetails&fields=items/liveStreamingDetails';
       ytFetch(url).then(data => {
         if (checkQuotaError(data)) { markQuotaExceeded(true); return; }
+        if (data.error) { console.error('[WebSub] Detail check API error for ' + channelId + ': ' + (((data.error.errors || [])[0] || {}).reason || data.error.code) + ' ' + (data.error.message || '')); return; }
         const details = data.items && data.items[0] && data.items[0].liveStreamingDetails;
         // Active live stream: has actualStartTime but no actualEndTime
         const isLive = !!(details && details.actualStartTime && !details.actualEndTime);
@@ -4911,6 +4928,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
           '&channelId=' + channelId + '&part=id&eventType=live&type=video';
         ytFetch(url).then(data => {
           if (checkQuotaError(data)) { markQuotaExceeded(true); return; }
+          if (data.error) { console.error('[WebSub] Search API error for ' + channelId + ': ' + (data.error.message || data.error.code)); return; }
           const isLive = !!(data.items && data.items.length > 0);
           const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
           const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
@@ -5394,10 +5412,12 @@ app.get('/api/yt/quota-status', (req, res) => {
   });
 });
 
-// Manual trigger for live check — for diagnostics
+// "Check Now": a free sweep of every live channel's /live page (any hour, no quota).
+// The old API poll did nothing while WebSub was active, so the button looked broken.
 app.post('/api/admin/trigger-live-check', async (req, res) => {
-  res.json({ ok: true, message: 'Live check triggered' });
-  await scheduledLiveCheck();
+  const n = getLiveChannels(true).length;
+  res.json({ ok: true, message: 'Checking ' + n + ' channels\' /live pages (free) — results in the Live Verifier panel in about a minute' });
+  liveVerifier.sweep('manual-all').catch(e => console.error('[LiveVerifier] manual sweep failed:', e.message));
 });
 
 // Manual trigger for live status check
@@ -5565,6 +5585,8 @@ app.post('/api/admin/lookup-live', async (req, res) => {
       '&channelId=' + channelId + '&part=id,snippet&eventType=live&type=video&maxResults=1';
     const data = await ytFetch(url);
     if (checkQuotaError(data)) { markQuotaExceeded(); return res.status(429).json({ error: 'quota_exceeded' }); }
+    // Any other API error (bad/rotated key, API not enabled) is NOT "offline": say so, change nothing
+    if (data.error) return res.json({ isLive: false, error: 'YouTube API: ' + (((data.error.errors || [])[0] || {}).reason || data.error.code) + ' — ' + (data.error.message || '') });
     const isLive = !!(data.items && data.items.length > 0);
     const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
     const title = isLive && data.items[0].snippet ? data.items[0].snippet.title : null;

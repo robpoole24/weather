@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792800000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1792900000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -26,7 +26,9 @@
     || (window.parent !== window && (() => { try { return !!window.parent.WTV_TV && window.parent.WTV_TV.active; } catch (_) { return false; } })());
   const keyHooks = [];
   const onKey = (fn) => keyHooks.push(fn);   // fn(keyCode, key) returns true when it used the key
-  const api = { active: isTV, onBack, onMedia, onKey, focusFirst, focusEl: (el) => setFocus(el) };   // focusEl: move the highlight only
+  const api = { active: isTV, onBack, onMedia, onKey, focusFirst, focusEl: (el) => setFocus(el),   // focusEl: move the highlight only
+    // Press OK at the map pointer (e.g. the hodograph's right-stick click)
+    pointerClick: () => { const m = window.WTV_TV_MAP; if (!m || !ptr.on) return false; ptrClick(m); return true; } };
   window.WTV_TV = api;
   if (!isTV) return;
 
@@ -456,6 +458,7 @@
     try { items[i].scrollIntoView({ block: 'nearest' }); } catch (_) {}
     return true;
   }
+  const BOX_SEL = '#alert-types-panel, #meso-menu, [role="dialog"], .leaflet-popup, #layer-panel, #forecast-panel, #lnw-panel, #tv-picker';
   function move(dir) {
     if (pickerItems()) {
       if (dir === 'down' || dir === 'up') pickerStep(dir === 'down' ? 1 : -1);
@@ -463,7 +466,11 @@
     }
     const list = scopeOf(candidates());
     if (!current || !document.contains(current) || !visible(current)) return focusFirst();
-    const next = best(current, dir, list);
+    // Inside a drop-down, popup or panel: stay inside it while there's somewhere to
+    // go in that direction (the map underneath used to win, e.g. Alert Types)
+    const box = current.closest(BOX_SEL);
+    let next = box ? best(current, dir, list.filter(el => box.contains(el))) : null;
+    if (!next) next = best(current, dir, list);
     if (dir === 'up' || dir === 'down') {
       const sc = current.hasAttribute('data-tv-scroller') ? current : scrollerOf(current);
       if (sc) {

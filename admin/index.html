@@ -3523,13 +3523,15 @@ async function verifierLookup(sync) {
       'already-offline': ' · <span style="color:var(--muted)">WeatherTV already shows offline</span>',
     }[r.applied] || '';
     if (r.status === 'live') {
-      resultEl.innerHTML = '<span style="color:var(--red)">● LIVE</span> — ' + lvEsc(r.title || 'Untitled stream') + watch + appliedTxt;
+      resultEl.innerHTML = '<span style="color:var(--red)">● LIVE</span> — ' + lvEsc(r.title || 'Untitled stream') + watch + appliedTxt
+        + (r.confirmedBy === 'api' ? ' <span style="color:var(--muted)">(YouTube showed the server a bot check; confirmed with a 1-unit API call)</span>' : '');
     } else if (r.status === 'upcoming') {
       resultEl.innerHTML = '<span style="color:var(--gold)">◷ Scheduled / waiting room</span> — ' + lvEsc(r.title || '') + watch + ' · not live yet' + appliedTxt;
     } else if (r.status === 'offline') {
       resultEl.innerHTML = '<span style="color:var(--muted)">Not currently live</span>' + appliedTxt;
     } else if (r.status === 'throttled' || r.status === 'blocked') {
-      resultEl.innerHTML = '<span style="color:var(--red)">⚠ YouTube ' + r.status + ' the free check</span> — use API Lookup (100 units) instead';
+      resultEl.innerHTML = '<span style="color:var(--red)">⚠ YouTube ' + r.status + ' the free check' + (r.note === 'bot-check' ? ' (\'confirm you\'re not a bot\' page)' : '') + '</span>'
+        + (r.videoId ? ' — it points at <a href="https://youtu.be/' + lvEsc(r.videoId) + '" target="_blank" style="color:var(--accent)">' + lvEsc(r.title || r.videoId) + '</a>, but the API check couldn\'t confirm it (key or quota problem?).' : ' — use API Lookup (100 units) instead');
     } else {
       resultEl.innerHTML = '<span style="color:var(--red)">✗ Check failed: ' + lvEsc(r.error || r.code || 'unknown') + '</span>';
     }
@@ -3593,6 +3595,10 @@ async function lookupLive(markLive) {
     const data = await res.json();
     if (data.error === 'quota_exceeded') {
       resultEl.innerHTML = '<span style="color:var(--red)">⚠ Quota exceeded — try again tomorrow</span>';
+      return;
+    }
+    if (data.error) {
+      resultEl.innerHTML = '<span style="color:var(--red)">✗ ' + lvEsc(data.error) + '</span> · live status left unchanged';
       return;
     }
     if (data.isLive) {

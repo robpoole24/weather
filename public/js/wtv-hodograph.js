@@ -59,6 +59,11 @@
   #hodo-card.dim { opacity:.35; }
   .hodo-head { display:flex; align-items:center; gap:8px; padding:10px 12px 6px; }
   .hodo-title { font:700 1rem 'Barlow Condensed',sans-serif; letter-spacing:.06em; text-transform:uppercase; }
+  .hodo-storm { margin:0 10px 8px; padding:7px 10px; border-radius:6px; background:rgba(255,80,80,.10); border:1px solid rgba(255,120,120,.35); }
+  .hodo-storm b { display:block; font:700 .95rem 'Barlow Condensed',sans-serif; letter-spacing:.03em; color:#fff; }
+  .hodo-storm span { display:block; font-size:.7rem; color:#c8ddf0; margin-top:1px; }
+  .hodo-storm[hidden] { display:none; }
+  html.tv-mode .hodo-storm b { font-size:1.4rem; } html.tv-mode .hodo-storm span { font-size:1rem; }
   .hodo-where { flex:1; font-size:.72rem; color:#7a9bb5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .hodo-x { background:none; border:1px solid rgba(255,255,255,.15); color:#e8f4fd; border-radius:6px; width:30px; height:30px; cursor:pointer; font-size:.9rem; }
   .hodo-stage { position:relative; margin:0 10px; background:radial-gradient(circle at 50% 60%, #1a1530 0%, #0d0b18 75%);
@@ -132,6 +137,7 @@
       <button class="hodo-grip" data-act="grow" aria-label="Make the hodograph panel taller or shorter"></button>
       <div class="hodo-head"><span class="hodo-title">🌀 Hodograph</span><span class="hodo-where"></span>
         <button class="hodo-x" data-act="close" aria-label="Close the hodograph">✕</button></div>
+      <div class="hodo-storm" hidden aria-live="polite"></div>
       <div class="hodo-stage" data-tv-skip><canvas aria-label="3D hodograph"></canvas><div class="hodo-status"></div></div>
       <div class="hodo-legend">${LAYERS.map(l => `<span><i style="background:${l.color}"></i>${l.label}</span>`).join('')}</div>
       <div class="hodo-bar">
@@ -191,7 +197,7 @@
   let dragT = 0;
   function placeMarker() {
     if (!S.marker) {
-      S.marker = L.marker([S.lat, S.lng], { icon: crossIcon, draggable: !TV, keyboard: false, zIndexOffset: 2000, title: 'Drag to move the hodograph' }).addTo(map);
+      S.marker = L.marker([S.lat, S.lng], { icon: crossIcon, draggable: !TV, interactive: !TV, keyboard: false, zIndexOffset: 2000, title: 'Drag to move the hodograph' }).addTo(map);
       S.marker.on('drag', () => {
         const p = S.marker.getLatLng(); S.lat = p.lat; S.lng = p.lng; S.label = '';
         if (Date.now() - dragT > 700) { dragT = Date.now(); load(); }
@@ -218,13 +224,18 @@
       S.card.classList.add('open');
       const p = startingPoint();
       S.lat = p.lat; S.lng = p.lng; S.label = p.label || '';
+      const si = S.storms.indexOf(p);
+      S.storm = p.title && si >= 0 ? { title: p.title, where: p.where || '', idx: si + 1, n: S.storms.length } : null;
+      if (si >= 0) S.stormIdx = si;
+      stormLine();
+      if (S.storm) { map.setView([S.lat, S.lng], Math.max(map.getZoom(), 8), { animate: false }); flash(p); }
       placeMarker();
       if (!map.getBounds().contains([S.lat, S.lng])) map.panTo([S.lat, S.lng], { animate: false });
       keepVisible();
       view.intro();
       load();
       tvHint();
-      if (TV && WTV_TV.focusEl) setTimeout(() => WTV_TV.focusEl(S.card.querySelector('[data-act="next"]')), 300);
+      if (TV) setTimeout(tvToMap, 250);
     } else {
       clearTimeout(S.retry); S.reqId++;
       if (S.card) S.card.classList.remove('open', 'dim');
@@ -242,9 +253,41 @@
     if (typeof overlayState !== 'undefined' && !overlayState['hodograph'] && typeof toggleOverlayFromToolbar === 'function') toggleOverlayFromToolbar('hodograph');
     else setMode(true);
   }
-  function moveTo(lat, lng, label) {
+  function moveTo(lat, lng, label, storm) {
     S.lat = lat; S.lng = lng; S.label = label || '';
+    S.storm = storm || null;
+    stormLine();
     placeMarker(); keepVisible(); load();
+  }
+  // Which storm this is, in big type: what the warning is and where
+  function stormLine() {
+    const el = S.card && S.card.querySelector('.hodo-storm');
+    if (!el) return;
+    const st = S.storm;
+    if (!st) {
+      // Picked by hand: say which warning (if any) the crosshair is in
+      let a = null;
+      try { a = (activeAlertFeatures || []).filter(f => f.geometry && typeof pointInPolygon === 'function' && pointInPolygon(S.lat, S.lng, f.geometry))
+        .sort((x, y) => (typeof alertPriorityRank === 'function' ? alertPriorityRank(x.event) - alertPriorityRank(y.event) : 0))[0]; } catch (_) {}
+      if (!a) { el.hidden = true; return; }
+      el.innerHTML = `<b>${escapeHtml(a.event)}</b><span>${escapeHtml(String(a.areaDesc || '').split(';').slice(0, 2).join(', '))}</span>`;
+      el.hidden = false; return;
+    }
+    const keys = TV ? (/Xbox/i.test(navigator.userAgent) ? 'LT / RT' : 'RED / GREEN') : 'Previous / Next';
+    el.innerHTML = `<b>${escapeHtml(st.title)}</b><span>${escapeHtml(st.where || '')}${st.where ? ' · ' : ''}Storm ${st.idx} of ${st.n} · ${keys} for the others</span>`;
+    el.hidden = false;
+  }
+  // Briefly outline the warning (or ring the storm) being looked at
+  let flashLayer = null, flashTimer = 0;
+  function flash(st) {
+    if (flashLayer) { map.removeLayer(flashLayer); flashLayer = null; }
+    clearTimeout(flashTimer);
+    try {
+      flashLayer = st.geometry
+        ? L.geoJSON(st.geometry, { interactive: false, style: { color: '#ffffff', weight: 4, dashArray: '8 6', fill: false, opacity: 1 } }).addTo(map)
+        : L.circle([st.lat, st.lng], { radius: 9000, interactive: false, color: '#ffffff', weight: 3, dashArray: '6 6', fill: false }).addTo(map);
+      flashTimer = setTimeout(() => { if (flashLayer) { map.removeLayer(flashLayer); flashLayer = null; } }, 6000);
+    } catch (_) {}
   }
   // Pan so the crosshair isn't hidden behind the card (bottom sheet on phones, side panel elsewhere)
   function keepVisible() {
@@ -380,10 +423,18 @@
       (activeAlertFeatures || []).forEach(a => {
         if (!CONVECTIVE.test(a.event || '') || !a.geometry) return;
         const c = centroid(a.geometry); if (!c) return;
-        list.push({ ...c, rank: rankOf(a.event), label: `${a.event} · ${String(a.areaDesc || '').split(';')[0]}` });
+        const where = String(a.areaDesc || '').split(';').slice(0, 2).map(x => x.trim()).filter(Boolean).join(', ');
+        list.push({ ...c, rank: rankOf(a.event), label: `${a.event} · ${where}`, title: a.event, where, geometry: a.geometry });
       });
     } catch (_) {}
-    list = list.concat(_cells);
+    // Radar storms: name the warning or county they're in when there is one
+    list = list.concat(_cells.map(cell => {
+      let inside = null;
+      try { inside = (activeAlertFeatures || []).find(a => a.geometry && typeof pointInPolygon === 'function' && pointInPolygon(cell.lat, cell.lng, a.geometry)); } catch (_) {}
+      const where = inside ? String(inside.areaDesc || '').split(';')[0].trim()
+        : `${Math.abs(cell.lat).toFixed(1)}°${cell.lat >= 0 ? 'N' : 'S'} ${Math.abs(cell.lng).toFixed(1)}°${cell.lng >= 0 ? 'E' : 'W'}`;
+      return { ...cell, title: cell.label, where };
+    }));
     const ref = S.lat != null ? L.latLng(S.lat, S.lng) : map.getCenter();
     list.forEach(s => { s.d = ref.distanceTo([s.lat, s.lng]); });
     list.sort((a, b) => a.rank - b.rank || a.d - b.d);
@@ -398,8 +449,10 @@
     if (!list.length) { if (typeof showToast === 'function') showToast('No severe storms or warnings right now'); return; }
     S.stormIdx = (S.stormIdx + step + list.length) % list.length;
     const s = list[S.stormIdx];
-    if (!map.getBounds().pad(-0.1).contains([s.lat, s.lng])) map.panTo([s.lat, s.lng], { animate: false });
-    moveTo(s.lat, s.lng, `${S.stormIdx + 1}/${list.length} · ${s.label}`);
+    // Always bring the storm into view, close enough to see what it is
+    map.setView([s.lat, s.lng], Math.max(map.getZoom(), 8), { animate: false });
+    flash(s);
+    moveTo(s.lat, s.lng, s.label, { title: s.title || s.label, where: s.where || '', idx: S.stormIdx + 1, n: list.length });
   }
 
   // ── TV: dim when idle, hints, keys ────────────────────────────────────────
@@ -411,7 +464,14 @@
   }
   function tvHint() {
     if (!TV || typeof showToast !== 'function') return;
-    showToast(/Xbox/i.test(navigator.userAgent) ? 'Hodograph: A moves it · LT/RT storm to storm · B closes' : 'Hodograph: OK moves it · RED/GREEN storm to storm · BACK closes');
+    showToast(/Xbox/i.test(navigator.userAgent)
+      ? 'Hodograph: point at a storm, press A (or click the right stick) · LT/RT storm to storm · RB/LB zoom · B closes'
+      : 'Hodograph: point at a storm and press OK · RED/GREEN storm to storm · CH ▲▼ zoom · BACK closes');
+  }
+  // TV: close the Layers panel and put the remote on the map, pointer showing
+  function tvToMap() {
+    try { if (typeof toggleLayerPanel === 'function') toggleLayerPanel(false); } catch (_) {}
+    if (WTV_TV.focusEl) WTV_TV.focusEl(map.getContainer());
   }
   if (TV) {
     if (WTV_TV.onKey) WTV_TV.onKey((k, key) => {
@@ -419,9 +479,20 @@
       wake();
       if (k === 403 || k === 201 || key === 'ColorF0Red' || key === 'GamepadLeftTrigger') { jumpStorm(-1); return true; }
       if (k === 404 || k === 202 || key === 'ColorF1Green' || key === 'GamepadRightTrigger') { jumpStorm(1); return true; }
+      // Right stick click: hodograph at the pointer
+      if (k === 210 || key === 'GamepadRightThumbstick') { if (WTV_TV.pointerClick) WTV_TV.pointerClick(); return true; }
       return false;
     });
-    WTV_TV.onBack(() => { if (S.on) { close(); return true; } return false; });
+    // Back: Layers panel open → close it and go to the map; in the hodograph
+    // panel → back to the map; on the map → close the hodograph
+    WTV_TV.onBack(() => {
+      if (!S.on) return false;
+      const lp = document.getElementById('layer-panel');
+      const cur = document.querySelector('.tv-focus');
+      if ((lp && lp.classList.contains('open')) || (cur && S.card && S.card.contains(cur))) { tvToMap(); return true; }
+      if (cur && !cur.classList.contains('leaflet-container')) return false;   // something else open: let it close
+      close(); return true;
+    });
   }
 
   // ── Map hooks: right-click / long-press, H key, TV pointer clicks ─────────

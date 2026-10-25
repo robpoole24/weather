@@ -1,4 +1,4 @@
-// WeatherTV Live Verifier — build.1791730000
+// WeatherTV Live Verifier — build.1792900000
 // Zero-quota secondary live check: loads youtube.com/channel/{id}/live directly
 // and reads the page's own player data to confirm whether the channel is live NOW.
 // Tracks every run + every stream the primary (WebSub/Atom) system missed, and
@@ -97,13 +97,21 @@ function parseLivePage(channelId, html, finalUrl = '') {
   const isLiveNow = /"isLiveNow":true/.test(html);
   const isLiveFlag = /"videoDetails":\{[^{}]*?"isLive":true/.test(html);
   const liveMicrodata = /itemprop="isLiveBroadcast" content="True"/i.test(html) && !/itemprop="endDate"/.test(html);
+  const liveBadge = /BADGE_STYLE_TYPE_LIVE_NOW/.test(html);
   const isUpcoming = /"isUpcoming":true/.test(html) || /"status":"LIVE_STREAM_OFFLINE"/.test(html);
+  // YouTube's "Sign in to confirm you're not a bot" wall (common for cloud servers like
+  // Railway): the page still names the video but hides the player data that says
+  // whether it's live. That's "blocked", not "offline" — the server confirms the
+  // video with a 1-unit API call instead.
+  const botWall = /"status":"LOGIN_REQUIRED"/.test(html) || /confirm you(?:\\u2019|’|'|&#39;)re not a bot/i.test(html)
+    || /"status":"UNPLAYABLE"/.test(html) && !/"videoDetails"/.test(html);
 
   const title = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<meta property="og:title" content="([^"]*)"/);
   const start = html.match(/"startTimestamp":"([^"]+)"/);
   const base = { channelId, videoId, title: title ? decode(title[1]) : null, startedAt: start ? start[1] : null };
   if (isUpcoming) return { ...base, status: 'upcoming' };
-  if (isLiveNow || isLiveFlag || liveMicrodata) return { ...base, status: 'live' };
+  if (isLiveNow || isLiveFlag || liveMicrodata || liveBadge) return { ...base, status: 'live' };
+  if (botWall) return { ...base, status: 'blocked', note: 'bot-check' };
   return { ...base, status: 'offline' };
 }
 
@@ -141,7 +149,8 @@ async function diagnoseChannel(channelId) {
         isLiveNow_true: has('"isLiveNow":true'), isLiveNow_false: has('"isLiveNow":false'),
         isLive_true: has('"isLive":true'), isUpcoming_true: has('"isUpcoming":true'),
         liveMicrodata: has(/itemprop="isLiveBroadcast"/), endDate: has(/itemprop="endDate"/),
-        consentOrBotWall: has('consent.youtube.com') || has('google.com/sorry') || has('g-recaptcha'),
+        consentOrBotWall: has('consent.youtube.com') || has('google.com/sorry') || has('g-recaptcha') || has('"status":"LOGIN_REQUIRED"') || has(/not a bot/i),
+        liveBadge: has('BADGE_STYLE_TYPE_LIVE_NOW'),
       },
       snippets: { canonical: snip('rel="canonical"'), ogUrl: snip('property="og:url"'), liveBroadcastDetails: snip('"liveBroadcastDetails"', 220) },
       parsed: code === 200 ? parseLivePage(channelId, html, finalUrl) : null,
@@ -175,6 +184,7 @@ function createLiveVerifier({
   onLive,               // async ({ channelId, videoId, title, startedAt, wasKnown }) => {} — called every sweep a channel is live
   onOffline,            // async (channelId) => {} — only called for channels currently shown live
   store,                // { get: async key => value, set: async (key, object) => {} } e.g. rGet/rSet
+  confirmVideo,         // async (videoId) => true | false | null — cheap API check when YouTube hides the live flag (null = couldn't tell)
   concurrency = 3,
   sweepIntervalMs = 4 * 60 * 1000,
   offlineConfirmations = 2,
@@ -232,7 +242,7 @@ function createLiveVerifier({
       if (last == null && tier.everyMin > 0 && !shownLive && !severe) {
         lastChecked.set(c.id, nowMs - Math.random() * tier.everyMin * 60000);
       }
-      const due = shownLive || severe || tier.everyMin === 0
+      const due = /^manual/.test(trigger) || shownLive || severe || tier.everyMin === 0
         || nowMs - (lastChecked.get(c.id) ?? 0) >= tier.everyMin * 60000 - 30000;
       if (due) list.push(c);
     }
@@ -248,7 +258,7 @@ function createLiveVerifier({
     async function worker() {
       while (i < list.length && Date.now() >= pausedUntil) {
         const { id, name } = list[i++];
-        const r = await checkChannelLive(id);
+        const r = await resolveBlocked(await checkChannelLive(id));
         lastChecked.set(id, Date.now());
         run.checked++; run.bytes += r.bytes || 0;
         try {
@@ -311,6 +321,16 @@ function createLiveVerifier({
     return run;
   }
 
+  // A bot-walled page that still names a video: ask the API about that one video
+  async function resolveBlocked(r) {
+    if (r.status !== 'blocked' || !r.videoId || !confirmVideo) return r;
+    let live = null;
+    try { live = await confirmVideo(r.videoId); } catch (_) {}
+    if (live === true) return { ...r, status: 'live', confirmedBy: 'api' };
+    if (live === false) return { ...r, status: 'offline', confirmedBy: 'api' };
+    return r;
+  }
+
   // Decide pending streams: the primary system caught up (late but caught), or
   // the grace period is over and it never did (a real miss).
   async function resolvePending(run) {
@@ -370,7 +390,7 @@ function createLiveVerifier({
   function mountAdmin(app, base = '/admin/live-verifier') {
     app.get(`${base}/data`, async (req, res) => { await load(); res.json(snapshot()); });
     app.post(`${base}/run`, (req, res) => { sweep('manual'); res.json({ started: true }); });
-    app.get(`${base}/check/:channelId`, async (req, res) => res.json(await checkChannelLive(req.params.channelId)));
+    app.get(`${base}/check/:channelId`, async (req, res) => res.json(await resolveBlocked(await checkChannelLive(req.params.channelId))));
     app.get(`${base}/debug/:channelId`, async (req, res) => {
       const id = req.params.channelId;
       const d = await diagnoseChannel(id);
@@ -381,7 +401,7 @@ function createLiveVerifier({
     // Check one channel AND update WTV's live status to match (free — no API quota)
     app.post(`${base}/check/:channelId/apply`, async (req, res) => {
       const id = req.params.channelId;
-      const r = await checkChannelLive(id);
+      const r = await resolveBlocked(await checkChannelLive(id));
       let applied = null;
       try {
         if (r.status === 'live') {

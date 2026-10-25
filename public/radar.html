@@ -1216,16 +1216,16 @@
         <li>In a warning's popup, tap <b>Storm environment</b> for that storm.</li>
       </ol>
       <ol data-viewer="tv">
-        <li>Press <b>OK</b> on <b>Hodograph</b> above. A crosshair appears on the map.</li>
-        <li>Use the <b>arrows</b> to move the pointer, then press <b>OK</b> on the map to move the hodograph there.</li>
-        <li><b>RED / GREEN</b> jump storm to storm. <b>▲ ▼</b> scroll the panel.</li>
-        <li><b>BACK</b> closes it.</li>
+        <li>Press <b>OK</b> on <b>Hodograph</b> above. This panel closes and the pointer appears on the map.</li>
+        <li>Move the pointer onto a storm with the <b>arrows</b> and press <b>OK</b>. <b>CH ▲ ▼</b> zoom in and out.</li>
+        <li><b>RED / GREEN</b> go storm to storm: the map moves to each one and outlines its warning.</li>
+        <li><b>BACK</b> returns to the map from the hodograph panel; on the map it closes the hodograph.</li>
       </ol>
       <ol data-viewer="xbox">
-        <li>Press <b>A</b> on <b>Hodograph</b> above. A crosshair appears on the map.</li>
-        <li>Move the pointer with the <b>left stick</b>, then press <b>A</b> on the map to move the hodograph there.</li>
-        <li><b>LT / RT</b> jump storm to storm. The <b>right stick</b> (or <b>▲ ▼</b>) scrolls the panel.</li>
-        <li><b>B</b> closes it.</li>
+        <li>Press <b>A</b> on <b>Hodograph</b> above. This panel closes and the pointer appears on the map.</li>
+        <li>Move the pointer onto a storm with the <b>left stick</b>, then press <b>A</b> (or click the <b>right stick</b>). <b>RB / LB</b> zoom.</li>
+        <li><b>LT / RT</b> go storm to storm: the map moves to each one and outlines its warning.</li>
+        <li><b>B</b> returns to the map from the hodograph panel; on the map it closes the hodograph.</li>
       </ol>
     </div>
   </div>
@@ -9248,7 +9248,7 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
 </script>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1792800000"></script>
+<script src="/js/wtv-tv.js?v=1792900000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     window.WTV_TV_MAP = map;   // lets the remote pan/zoom the radar map
@@ -9269,6 +9269,6 @@ document.getElementById('radar-toolbar').addEventListener('scroll', () => {
   }
 </script>
 <!-- 3D hodograph (Layers › Mesoscale, warning/storm popups, right-click) -->
-<script src="/js/wtv-hodograph.js?v=1792800000"></script>
+<script src="/js/wtv-hodograph.js?v=1792900000"></script>
 </body>
 </html>
