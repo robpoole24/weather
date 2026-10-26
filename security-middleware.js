@@ -171,7 +171,10 @@ function securityHeaders(req, res, next) {
     "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.twitch.tv https://player.twitch.tv https://clips.twitch.tv https://webcams.windy.com" +
       // Community Cams: camera hosts' own embed players (Nest, Brownrice, IPCamLive, RTSP.me, Angelcam)
       " https://video.nest.com https://player.brownrice.com https://*.brownrice.com https://ipcamlive.com https://rtsp.me https://v.angelcam.com",
-    tvShell ? "frame-ancestors *" : "frame-ancestors 'self'",
+    // The Samsung app's own page is a local file (file:, or app: on some models).
+    // "*" alone only covers web pages, and newer TVs enforce that strictly — the
+    // site was blocked inside the app and never finished loading.
+    tvShell ? "frame-ancestors * file: app:" : "frame-ancestors 'self'",
   ].join('; '));
   // Remove fingerprinting header
   res.removeHeader('X-Powered-By');

@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1793000000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1793300000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -1027,6 +1027,8 @@
 
   // Start with something highlighted (skip in a frame: the parent hands focus in)
   const start = () => {
+    // Samsung app wrapper: tell it the site really opened (it hides its loading screen on this)
+    if (inShell) { try { window.parent.postMessage({ wtvTv: 'shell-ready' }, '*'); } catch (_) {} }
     if (!inFrame) setTimeout(focusFirst, 400);
     setTimeout(() => { if (window.WTV_TV_MAP) radarTip(); }, 2500);       // the radar: say how to get around
   };
