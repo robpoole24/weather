@@ -1535,14 +1535,7 @@ const STATE_DOTS = [
     cacheTTL: 10 * 60 * 1000,
     parse: _parseIBI511,
   },
-  {
-    id: 'ny',
-    label: 'New York DOT',
-    url: 'https://511ny.org/api/v2/get/cameras?format=json',
-    envKey: 'NY_511_KEY',
-    cacheTTL: 10 * 60 * 1000,
-    parse: _parseIBI511,
-  },
+  // New York: see the CARS entry further down (one entry per state — the first match wins)
   {
     id: 'ga',
     label: 'Georgia DOT',
