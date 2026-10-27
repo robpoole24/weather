@@ -6,12 +6,16 @@
 //     road_conditions feed (ROAD511_API_KEY). Fetched only for states the map
 //     is looking at, cached 10 min, so the 511 limits (10 calls/min) hold.
 //
+//   CARS 511 states (New York…) come from cars.js: their road-condition
+//   segments, with the login in Railway variables.
+//
 //   (Fall colors moved to the tile service: WeatherTV's own leaf-color model.)
 //
 // Nothing here receives or stores anything about viewers.
 'use strict';
 
 let redis = null;
+const cars = require('./cars');   // CARS 511 states (New York…): road-condition segments
 const UA = 'WeatherTV/1.0 (watchweathertv.com)';
 
 async function getText(url, opts = {}) {
@@ -202,10 +206,13 @@ function routes(app) {
     if (b.length !== 4 || !b.every(Number.isFinite) || b[2] <= b[0] || b[3] <= b[1]) return res.status(400).json({ error: 'bbox=w,s,e,n' });
     if ((b[2] - b[0]) > 30 || (b[3] - b[1]) > 20) return res.json({ type: 'FeatureCollection', features: [], tooWide: true });
     try {
-      const states = ROAD_STATES.filter(st => process.env[st.env] && boxHits(st.box, b));
+      // A state on the newer CARS feed replaces its old 511 entry
+      const carsStates = cars.STATES.filter(st => cars.configured(st.id) && boxHits(st.box, b));
+      const states = ROAD_STATES.filter(st => process.env[st.env] && boxHits(st.box, b) && !carsStates.some(c => c.id === st.id));
       const nec = require('./nec');
       const necStates = Object.entries(nec.BOXES).filter(([, box]) => boxHits(box, b)).map(([code]) => code);
-      const parts = await Promise.all([...states.map(ibiState), road511(b), ...necStates.map(c => nec.roadWeather(c))]);
+      const parts = await Promise.all([...states.map(ibiState), road511(b), ...necStates.map(c => nec.roadWeather(c)),
+        ...carsStates.map(st => cars.roads(st.id, roadCategory))]);
       const seen = new Set(), features = [];
       for (const f of parts.flat()) {
         const g = f.geometry;
@@ -217,7 +224,7 @@ function routes(app) {
         if (features.length >= 4000) break;
       }
       res.set('Cache-Control', 'public, max-age=300');
-      res.json({ type: 'FeatureCollection', features, sources: states.map(s => s.id).concat(process.env.ROAD511_API_KEY ? ['road511'] : [], necStates.map(c => 'nec-' + c)),
+      res.json({ type: 'FeatureCollection', features, sources: states.map(s => s.id).concat(process.env.ROAD511_API_KEY ? ['road511'] : [], necStates.map(c => 'nec-' + c), carsStates.map(s => 'cars-' + s.id)),
         credits: necStates.length ? [nec.CREDIT] : [] });
     } catch (e) {
       res.status(502).json({ error: e.message });

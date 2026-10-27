@@ -1,0 +1,186 @@
+// CARS 511 feeds (Castle Rock "CARS" program) — New York first; other CARS
+// states (Minnesota, Iowa, Kansas, Indiana…) use the same format, so adding one
+// is a new line in STATES plus its two Railway variables.
+//
+//   Road conditions  events API (TMDD/CARS JSON), the state's road-condition
+//                    segments → lines on the Winter Road Conditions layer
+//   Cameras          CARS-Hub CCTV inventory (XML) → Location Cams
+//
+// Login: HTTP Basic, from Railway variables only ({ST}_CARS_USER /
+// {ST}_CARS_PASSWORD). Never put them in code or URLs.
+// Polling: fetched only while someone is looking, then cached — NYSDOT asks
+// for no more than once every 5 minutes; we use 10 (roads) and 30 (cameras).
+// Nothing here receives or stores anything about viewers.
+'use strict';
+
+const UA = 'WeatherTV/1.0 (watchweathertv.com)';
+
+const STATES = [
+  { id: 'ny', name: 'New York',
+    api: 'https://nysdot.carsprogram.org/carsapi_v1/api/events',
+    cctv: 'https://nysdot.carsprogram.org/hub/data/cctv.xml',
+    user: 'NY_CARS_USER', pass: 'NY_CARS_PASSWORD',
+    // The state's own road-condition reports (the feed also carries roadwork, events, crashes…)
+    roadCategory: /road-conditions|winter/i,
+    box: [-79.8, 40.5, -71.8, 45.1],
+    credit: '511NY · New York State DOT', page: 'https://511ny.org' },
+];
+const byId = Object.fromEntries(STATES.map(s => [s.id, s]));
+
+function auth(st) {
+  const u = (process.env[st.user] || '').trim(), p = (process.env[st.pass] || '').trim();
+  return u && p ? 'Basic ' + Buffer.from(u + ':' + p).toString('base64') : null;
+}
+const configured = (st) => !!auth(st);
+
+async function get(st, url, { timeout = 45000, accept = 'application/json' } = {}) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const r = await fetch(url, { headers: { Authorization: auth(st), 'User-Agent': UA, Accept: accept }, signal: ctl.signal });
+    if (!r.ok) {
+      const e = new Error('HTTP ' + r.status + (r.status === 401 ? ' — login refused (check ' + st.user + ' / ' + st.pass + ')' : ''));
+      e.status = r.status; throw e;
+    }
+    return { text: await r.text(), headers: r.headers };
+  } finally { clearTimeout(t); }
+}
+
+// Every page of the events API (Link: rel="next" until there's none)
+async function allEvents(st, query) {
+  let url = st.api + '?' + query, out = [];
+  for (let page = 0; url && page < 20; page++) {
+    const { text, headers } = await get(st, url);
+    const rows = JSON.parse(text);
+    if (!Array.isArray(rows)) throw new Error('events: not a list');
+    out = out.concat(rows);
+    const next = (headers.get('link') || '').match(/<([^>]+)>\s*;\s*rel="?next"?/i);
+    url = next ? next[1].replace(/^http:/, 'https:') : null;   // their Link says http://
+  }
+  return out;
+}
+
+const stats = {};    // state → { roads: {...}, cameras: {...} }
+const stat = (id, kind, v) => { (stats[id] = stats[id] || {})[kind] = { ...v, at: new Date().toISOString() }; };
+
+// ── Road conditions ──────────────────────────────────────────────────────────
+const ROAD_TTL = 10 * 60 * 1000;
+const _roads = new Map();   // id → { ts, features, loading }
+
+function eventToRoad(e, st, roadCategory) {
+  const g = e.geometry;
+  if (!g || !/LineString/.test(g.type) || !Array.isArray(g.coordinates)) return null;
+  const det = (e.details || [])[0] || {};
+  const loc = (det.locations || [])[0] || {};
+  const code = (e.headline && e.headline.code) || '';
+  // The code is the condition ("snow covered", "no active reporting"…); the
+  // description also holds place names, so it's only a fallback
+  const cat = roadCategory(code || e.description || '');
+  const t = (e['update-time'] && e['update-time'].time) || (det['update-time'] && det['update-time'].time);
+  const between = String(e.description || '').match(/\bbetween\b(.+?)(?:\.|$)/i);
+  return {
+    type: 'Feature', geometry: { type: g.type, coordinates: g.coordinates },
+    properties: {
+      cat, condition: code ? code.charAt(0).toUpperCase() + code.slice(1) : '', surface: '',
+      road: loc['route-designator'] || '',
+      where: (loc['segment-names'] && loc['segment-names'][0]) || (between ? 'Between' + between[1] : ''),
+      updated: t ? new Date(t).toISOString() : null, src: st.id,
+    },
+  };
+}
+
+async function loadRoads(st, roadCategory) {
+  // eventClassifications=winterDriving (from NYSDOT's migration guide) keeps the
+  // download small; if it's ever ignored we still keep only road conditions
+  const rows = await allEvents(st, 'eventClassifications=winterDriving&limit=500');
+  const features = [];
+  for (const e of rows) {
+    if (!st.roadCategory.test((e.headline && e.headline.category) || '')) continue;
+    const f = eventToRoad(e, st, roadCategory);
+    if (f) features.push(f);
+  }
+  stat(st.id, 'roads', { events: rows.length, segments: features.length,
+    conditions: features.reduce((m, f) => (m[f.properties.condition] = (m[f.properties.condition] || 0) + 1, m), {}) });
+  return features;
+}
+
+// roadCategory (good / wet / slippery / snow / ice / closed / unknown) comes from winter.js
+function roads(id, roadCategory) {
+  const st = byId[id];
+  if (!st || !configured(st)) return Promise.resolve([]);
+  const c = _roads.get(id);
+  if (c && Date.now() - c.ts < ROAD_TTL) return Promise.resolve(c.features);
+  if (c && c.loading) return c.loading;
+  const loading = loadRoads(st, roadCategory)
+    .then(features => { _roads.set(id, { ts: Date.now(), features }); return features; })
+    .catch(e => {
+      stat(id, 'roads', { error: e.message });
+      console.warn(`[CARS ${id}] road conditions: ${e.message}`);
+      const old = (c && c.features) || [];
+      _roads.set(id, { ts: Date.now() - ROAD_TTL + 2 * 60 * 1000, features: old });   // retry in 2 min
+      return old;
+    });
+  _roads.set(id, { ...(c || { ts: 0, features: [] }), loading });
+  return loading;
+}
+
+// ── Cameras (CARS-Hub CCTV inventory) ────────────────────────────────────────
+const tag = (xml, name) => { const m = xml.match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`)); return m ? m[1].trim() : ''; };
+const blocks = (xml, name) => xml.match(new RegExp(`<${name}\\b[^>]*>[\\s\\S]*?</${name}>`, 'g')) || [];
+const unesc = (s) => String(s || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+// Hub coordinates are millionths of a degree (40890088 → 40.890088)
+const deg = (v) => { const n = Number(v); return !Number.isFinite(n) ? NaN : Math.abs(n) > 1000 ? n / 1e6 : n; };
+
+function parseCctv(xml, st) {
+  const out = [], seen = new Set();
+  for (const inv of blocks(xml, 'cctvInventory')) {
+    const owner = unesc(tag(tag(inv, 'owner'), 'organization-name'));
+    for (const b of blocks(inv, 'inventory-item')) {
+      const id = tag(b, 'device-id');
+      const lat = deg(tag(b, 'latitude')), lng = deg(tag(b, 'longitude'));
+      if (!id || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+      if (Math.abs(lat) < 1 && Math.abs(lng) < 1) continue;          // portable cameras without a position report 0,0
+      const key = owner + ':' + id;
+      if (seen.has(key)) continue; seen.add(key);
+      const img = unesc(tag(tag(b, 'still-image'), 'url'));
+      const video = unesc(tag(b, 'video-url'));
+      if (!img && !video) continue;
+      out.push({
+        id: `${st.id}-${(owner || 'x').replace(/\W+/g, '').toLowerCase()}-${id}`,
+        name: unesc(tag(b, 'device-name')) || unesc(tag(b, 'route-designator')) || 'Traffic Camera',
+        lat, lng,
+        imageUrl: /^https?:\/\//.test(img) ? img : null,
+        videoUrl: /^https?:\/\//.test(video) ? video : null,
+        direction: null,
+        source: st.id,
+        provider: owner && !/^NYSDOT$/i.test(owner) ? `${st.credit} · ${owner}` : st.credit,
+        pageUrl: st.page,
+      });
+    }
+  }
+  return out;
+}
+
+async function loadCameras(id) {
+  const st = byId[id];
+  if (!st || !st.cctv || !configured(st)) return [];
+  try {
+    const { text } = await get(st, st.cctv, { accept: 'application/xml, text/xml, */*', timeout: 60000 });
+    const cams = parseCctv(text, st);
+    stat(id, 'cameras', { count: cams.length, withVideo: cams.filter(c => c.videoUrl).length });
+    return cams;
+  } catch (e) {
+    stat(id, 'cameras', { error: e.message });
+    throw e;
+  }
+}
+
+function routes(app) {
+  // Admin: what each CARS state last returned (never shows the login)
+  app.get('/api/admin/cars', (req, res) => {
+    res.json(STATES.map(s => ({ id: s.id, name: s.name, configured: configured(s), ...(stats[s.id] || {}) })));
+  });
+}
+
+module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, routes,
+  _test: { parseCctv, eventToRoad, deg } };

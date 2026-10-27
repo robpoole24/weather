@@ -8,6 +8,7 @@ const path = require('path');
 const radar = require('./radar');
 const winter = require('./winter');   // road conditions
 const nec = require('./nec');         // Maine/NH/VT DOT cameras + road weather (New England Compass)
+const cars = require('./cars');       // CARS 511 states (New York…): cameras + road conditions, login in Railway variables
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const { createLiveVerifier } = require('./live-verifier');
@@ -1580,8 +1581,9 @@ const STATE_DOTS = [
   },
 
   // ── Waiting on keys: these stay OFF until their variable is set ─────────
-  // New York — 511NY (older v1 API: Url/VideoUrl on each camera). NY_511_KEY
-  { id:'ny', label:'New York 511', url:'https://511ny.org/api/getcameras?format=json', envKey:'NY_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // New York — 511NY's CARS-Hub camera inventory (~2,900 NYSDOT + NYC DOT cameras).
+  // Login: NY_CARS_USER / NY_CARS_PASSWORD. (Replaces the retired 511ny.org/api/getcameras.)
+  { id:'ny', label:'New York 511 (NYSDOT CARS)', envKey:'NY_CARS_USER', cacheTTL:30*60*1000, load: () => cars.loadCameras('ny') },
   // Virginia — VDOT SmarterRoads. The camera feed address is shown in your
   // SmarterRoads account once approved: set VA_511_URL to it and VA_511_KEY to
   // the token (sent as ?token=, change with VA_511_AUTH_PARAM). Fields are
@@ -5954,6 +5956,7 @@ app.get(['/weatherstar/images/*', '/weatherstar3000/images/*'], (req, res) => {
 radar.routes(app);
 winter.routes(app);
 nec.routes(app);
+cars.routes(app);
 
 // ── Shop (Fourthwall Storefront API) ─────────────────────────────────────────
 // GET /api/shop/products — the public product list for /shop.html, cached 10
