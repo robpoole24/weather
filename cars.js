@@ -193,14 +193,18 @@ const WEATHER_KINDS = [
 // Roadwork, events and the like only count if their own code says weather
 // (their descriptions mention streets like "Rice Rd" and "weather permitting")
 const PLANNED = /roadwork|construction|special-event|sporting-event|phrases/i;
+// What kind of weather hazard a piece of text describes (null = none)
+function weatherKind(text) {
+  const t = String(text || '').replace(/weather[- ]permit\w*/gi, '');
+  return (WEATHER_KINDS.find(([, re]) => re.test(t)) || [])[0] || null;
+}
 const ms = (t) => (t && Number.isFinite(t.time) ? t.time : null);
 
 function eventToHazard(e, st, now) {
   const det = (e.details || [])[0] || {};
   const head = e.headline || {}, code = String(head.code || ''), cat = String(head.category || '');
   // "This work is weather permitting" is in lots of roadwork notes: not a hazard
-  const text = (PLANNED.test(cat) ? code : code + ' ' + String(e.description || '')).replace(/weather[- ]permit\w*/gi, '');
-  const kind = (WEATHER_KINDS.find(([, re]) => re.test(text)) || [])[0] || null;
+  const kind = weatherKind(PLANNED.test(cat) ? code : code + ' ' + String(e.description || ''));
   const closed = /closure/i.test(cat) || /^(road )?closed$/i.test(code);
   if (!kind && !closed) return null;
   if (st.roadCategory.test(cat)) return null;            // road-condition segments live on the roads layer
@@ -257,26 +261,11 @@ function hazards(id) {
 }
 
 function routes(app) {
-  // Road closures & weather hazards in the map view: ?bbox=w,s,e,n
-  app.get('/api/road-hazards', async (req, res) => {
-    const b = String(req.query.bbox || '').split(',').map(Number);
-    if (b.length !== 4 || !b.every(Number.isFinite) || b[2] <= b[0] || b[3] <= b[1]) return res.status(400).json({ error: 'bbox=w,s,e,n' });
-    const hit = (box) => box[0] <= b[2] && box[2] >= b[0] && box[1] <= b[3] && box[3] >= b[1];
-    // Neighbouring states' events can ride along in a feed, so look a little past each state's edge
-    const sts = STATES.filter(s => configured(s) && hit([s.box[0] - 2, s.box[1] - 2, s.box[2] + 2, s.box[3] + 2]));
-    try {
-      const all = (await Promise.all(sts.map(s => hazards(s.id)))).flat();
-      const items = all.filter(h => h.lat >= b[1] && h.lat <= b[3] && h.lng >= b[0] && h.lng <= b[2]).slice(0, 1500);
-      res.set('Cache-Control', 'public, max-age=120');
-      res.json({ items, states: sts.map(s => s.name), covered: STATES.filter(configured).map(s => s.name) });
-    } catch (e) { res.status(502).json({ error: e.message }); }
-  });
-
   // Admin: what each CARS state last returned (never shows the login)
   app.get('/api/admin/cars', (req, res) => {
     res.json(STATES.map(s => ({ id: s.id, name: s.name, configured: configured(s), ...(stats[s.id] || {}) })));
   });
 }
 
-module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, hazards, routes,
+module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, hazards, routes, weatherKind, PLANNED,
   _test: { parseCctv, eventToRoad, eventToHazard, deg } };

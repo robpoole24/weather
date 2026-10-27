@@ -65,18 +65,18 @@ function roadCategory(...texts) {
 
 // IBI/Skyline 511 states (same keys as the cameras). Boxes are rough state outlines.
 const ROAD_STATES = [
-  { id: 'wi', base: 'https://511wi.gov',            env: 'WI_511_KEY', box: [-92.9, 42.4, -86.2, 47.1] },
-  { id: 'ny', base: 'https://511ny.org',            env: 'NY_511_KEY', box: [-79.8, 40.5, -71.8, 45.1] },
-  { id: 'id', base: 'https://511.idaho.gov',        env: 'ID_511_KEY', box: [-117.3, 41.9, -111.0, 49.1] },
-  { id: 'nv', base: 'https://www.nvroads.com',      env: 'NV_511_KEY', box: [-120.1, 35.0, -114.0, 42.1] },
-  { id: 'ut', base: 'https://prod-ut.ibi511.com',   env: 'UT_511_KEY', box: [-114.1, 36.9, -109.0, 42.1] },
-  { id: 'ak', base: 'https://511.alaska.gov',       env: 'AK_511_KEY', box: [-170, 51, -129.9, 71.5] },
+  { id: 'wi', name: 'Wisconsin', base: 'https://511wi.gov',            env: 'WI_511_KEY', box: [-92.9, 42.4, -86.2, 47.1] },
+  { id: 'ny', name: 'New York', base: 'https://511ny.org',            env: 'NY_511_KEY', box: [-79.8, 40.5, -71.8, 45.1] },
+  { id: 'id', name: 'Idaho', base: 'https://511.idaho.gov',        env: 'ID_511_KEY', box: [-117.3, 41.9, -111.0, 49.1] },
+  { id: 'nv', name: 'Nevada', base: 'https://www.nvroads.com',      env: 'NV_511_KEY', box: [-120.1, 35.0, -114.0, 42.1] },
+  { id: 'ut', name: 'Utah', base: 'https://prod-ut.ibi511.com',   env: 'UT_511_KEY', box: [-114.1, 36.9, -109.0, 42.1] },
+  { id: 'ak', name: 'Alaska', base: 'https://511.alaska.gov',       env: 'AK_511_KEY', box: [-170, 51, -129.9, 71.5] },
   // (Connecticut's API has no winter road conditions — only signs, events, advisories)
   // New England 511 = Maine, New Hampshire and Vermont (one system, one key)
-  { id: 'ne', base: 'https://newengland511.org',    env: 'NE_511_KEY', box: [-73.5, 42.7, -66.9, 47.5] },
-  { id: 'az', base: 'https://az511.com',            env: 'AZ_511_KEY', box: [-114.9, 31.3, -109.0, 37.1] },
-  { id: 'nc', base: 'https://www.drivenc.gov',      env: 'NC_511_KEY', box: [-84.4, 33.8, -75.4, 36.6] },
-  { id: 'ga', base: 'https://511ga.org',            env: 'GA_511_KEY', box: [-85.7, 30.3, -80.8, 35.0] },
+  { id: 'ne', name: 'Maine, New Hampshire & Vermont', base: 'https://newengland511.org',    env: 'NE_511_KEY', box: [-73.5, 42.7, -66.9, 47.5] },
+  { id: 'az', name: 'Arizona', base: 'https://az511.com',            env: 'AZ_511_KEY', box: [-114.9, 31.3, -109.0, 37.1] },
+  { id: 'nc', name: 'North Carolina', base: 'https://www.drivenc.gov',      env: 'NC_511_KEY', box: [-84.4, 33.8, -75.4, 36.6] },
+  { id: 'ga', name: 'Georgia', base: 'https://511ga.org',            env: 'GA_511_KEY', box: [-85.7, 30.3, -80.8, 35.0] },
 ];
 const _roadCache = new Map();   // state id → { ts, features, error }
 const ROAD_TTL = 10 * 60 * 1000, ROAD_MISS_TTL = 6 * 3600 * 1000;
@@ -192,6 +192,66 @@ async function road511(bbox) {
   return out;
 }
 
+// ── Road closures & weather hazards from the same IBI 511 states ─────────────
+// /api/v2/get/event (roadwork · closures · accidentsAndIncidents). Same keys
+// and the same sorting as the CARS states: weather-caused events, plus roads
+// fully closed right now. Ordinary roadwork, crashes and events are left out.
+const HAZ_TTL = 5 * 60 * 1000;
+const _ibiHaz = new Map();      // state id → { ts, items, loading, miss }
+function ibiEventToHazard(ev, st, now) {
+  const type = String(ev.EventType || ''), sub = String(ev.EventSubType || ''), desc = String(ev.Description || '');
+  const kind = cars.weatherKind(/roadwork|special/i.test(type) ? sub : sub + ' ' + desc + ' ' + String(ev.Comment || ''));
+  const closed = ev.IsFullClosure === true || (/closure/i.test(type) && /\b(road|roadway|highway|bridge|ramp|all lanes)\b[^.]{0,40}\bclosed\b|\bclosed\b[^.]{0,20}\b(both directions|to (all )?traffic)\b/i.test(desc));
+  if (!kind && !closed) return null;
+  const sec = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) * 1000 : null);
+  const start = sec(ev.StartDate), end = sec(ev.PlannedEndDate);
+  if (start && start > now + 15 * 60 * 1000) return null;
+  if (end && end < now) return null;
+  const lat = Number(ev.Latitude), lng = Number(ev.Longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (Math.abs(lat) < 1 && Math.abs(lng) < 1)) return null;
+  let line = null;
+  if (ev.EncodedPolyline) {
+    const pts = decodePolyline(ev.EncodedPolyline);
+    if (pts.length > 1) line = pts.filter((_, i, a) => a.length < 400 || i % Math.ceil(a.length / 400) === 0).map(([x, y]) => [+y.toFixed(5), +x.toFixed(5)]);
+  }
+  const title = sub && !/^(roadwork|closures|accidentsAndIncidents)$/i.test(sub) ? sub : (closed ? 'Road closed' : (kind ? 'Weather hazard' : 'Hazard'));
+  return {
+    id: st.id + '-' + ev.ID, kind: kind || 'closure', closed,
+    title: title.charAt(0).toUpperCase() + title.slice(1),
+    road: ev.RoadwayName || '', text: [desc, ev.Comment].filter(Boolean).join(' ').slice(0, 600),
+    lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
+    start: start ? new Date(start).toISOString() : null, end: end ? new Date(end).toISOString() : null,
+    updated: sec(ev.LastUpdated) ? new Date(sec(ev.LastUpdated)).toISOString() : null,
+    priority: ev.Severity || null, src: st.id, credit: (new URL(st.base).host.replace(/^www\./, '')) + ' · ' + st.name + ' 511',
+  };
+}
+async function loadIbiHazards(st) {
+  const key = (process.env[st.env] || '').trim();
+  let lastErr = null;
+  for (const path of ['/api/v2/get/event', '/api/getevents']) {
+    try {
+      const rows = JSON.parse(await getText(`${st.base}${path}?key=${encodeURIComponent(key)}&format=json`, { timeout: 30000 }));
+      const list = Array.isArray(rows) ? rows : (rows.Events || rows.events || []);
+      const now = Date.now(), items = [];
+      for (const ev of list) { const h = ibiEventToHazard(ev, st, now); if (h) items.push(h); }
+      _roadStats['events-' + st.id] = { events: list.length, shown: items.length, at: new Date().toISOString() };
+      return { items };
+    } catch (e) { lastErr = e; if (e.status && e.status !== 404) break; }
+  }
+  _roadStats['events-' + st.id] = { error: lastErr ? lastErr.message : 'failed', at: new Date().toISOString() };
+  return { items: [], miss: lastErr && lastErr.status === 404 };
+}
+function ibiHazards(st) {
+  const c = _ibiHaz.get(st.id);
+  if (c && Date.now() - c.ts < (c.miss ? ROAD_MISS_TTL : HAZ_TTL)) return Promise.resolve(c.items);
+  if (c && c.loading) return c.loading;
+  const loading = loadIbiHazards(st)
+    .then(r => { _ibiHaz.set(st.id, { ts: Date.now(), items: r.items, miss: r.miss }); return r.items; })
+    .catch(() => { _ibiHaz.set(st.id, { ts: Date.now(), items: (c && c.items) || [] }); return (c && c.items) || []; });
+  _ibiHaz.set(st.id, { ...(c || { ts: 0, items: [] }), loading });
+  return loading;
+}
+
 const boxHits = (a, b) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 function lineInBox(coords, b) {
   for (const [x, y] of coords) if (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) return true;
@@ -229,6 +289,29 @@ function routes(app) {
     } catch (e) {
       res.status(502).json({ error: e.message });
     }
+  });
+  // ── Road closures & weather hazards in the map view: ?bbox=w,s,e,n ──
+  app.get('/api/road-hazards', async (req, res) => {
+    const b = String(req.query.bbox || '').split(',').map(Number);
+    if (b.length !== 4 || !b.every(Number.isFinite) || b[2] <= b[0] || b[3] <= b[1]) return res.status(400).json({ error: 'bbox=w,s,e,n' });
+    if ((b[2] - b[0]) > 40 || (b[3] - b[1]) > 25) return res.json({ items: [], tooWide: true });
+    // Feeds can carry events just over a state line, so look a little past each state's edge
+    const near = (box) => boxHits([box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2], b);
+    const carsStates = cars.STATES.filter(st => cars.configured(st.id));
+    const ibiStates = ROAD_STATES.filter(st => process.env[st.env] && !carsStates.some(c => c.id === st.id));
+    const covered = carsStates.map(s => s.name).concat(ibiStates.map(s => s.name));
+    try {
+      const parts = await Promise.all([...carsStates.filter(st => near(st.box)).map(st => cars.hazards(st.id)),
+        ...ibiStates.filter(st => near(st.box)).map(ibiHazards)]);
+      const seen = new Set(), items = [];
+      for (const h of parts.flat()) {
+        if (h.lat < b[1] || h.lat > b[3] || h.lng < b[0] || h.lng > b[2] || seen.has(h.id)) continue;
+        seen.add(h.id); items.push(h);
+        if (items.length >= 1500) break;
+      }
+      res.set('Cache-Control', 'public, max-age=120');
+      res.json({ items, states: parts.length ? covered : [], covered });
+    } catch (e) { res.status(502).json({ error: e.message }); }
   });
   app.get('/api/admin/roads', (req, res) => {
     res.json({ states: ROAD_STATES.map(s => ({ id: s.id, key: !!process.env[s.env], ...(_roadStats[s.id] || {}) })),

@@ -7176,7 +7176,7 @@ const WTV_INFO = {
   'snow-prob':     { t:'Chance of Heavy Snow', w:'The chance of at least 4, 8 or 12 inches of snow, for each of the next 3 days.', r:'40%+ is a real possibility worth planning around; 70%+ means it\'s likely.' },
   'ice-prob':      { t:'Chance of Icing', w:'The chance of a quarter inch or more of ice from freezing rain, for each of the next 3 days.', r:'A quarter inch of ice brings down tree limbs and power lines and makes roads glazed.' },
   'snow-depth':    { t:'Snow on the Ground', w:'How deep the snow is right now, from NOAA\'s daily national snow analysis.', r:'Useful for travel and for seeing where a storm has already hit.' },
-  'hazards':       { t:'Road Closures & Hazards', w:'Roads closed right now and weather problems on the road — flooding, snow and ice, downed trees and power lines, slides, fires — from state transportation departments (511). New York so far; more states as they join.', r:'Red ring · the road is closed. Tap a sign for details. Ordinary roadwork, crashes and events are left out.' },
+  'hazards':       { t:'Road Closures & Hazards', w:'Roads closed right now and weather problems on the road — flooding, snow and ice, downed trees and power lines, slides, fires — from state transportation departments (511), in the states that share them with us.', r:'Red ring · the road is closed. Tap a sign for details. Ordinary roadwork, crashes and events are left out.' },
   'roads':         { t:'Winter Road Conditions', w:'Road conditions reported by state transportation departments (511).', r:'Green · good. Blue · wet. Yellow · slippery or partly covered. White · snow covered. Pink · icy. Red · closed or travel not advised.' },
   'fall-now':      { t:'Fall Colors — Now', w:'Where the leaves are changing right now — WeatherTV\'s own estimate.', r:'Green · little color. Yellow → orange → red · building to peak. Brown · past peak. Based on each area\'s usual timing from 11 years of NASA satellite leaf records; updated daily.' },
   'fall-forecast': { t:'Fall Colors — Next 7 Days', w:'Where the color is expected to be a week from now.', r:'Use it to plan a color drive. Updated daily.' },
@@ -8028,7 +8028,7 @@ const EXTENDED_ITEMS=[
 const ALERT_ITEMS=[
   {id:'alerts',ico:'⚠️',name:'NWS Alerts',sub:'Warnings & watches',def:true},
   {id:'banner',ico:'🔔',name:'Warning Banner',sub:'Scroll alert inside polygon',def:true},
-  {id:'hazards',ico:'🚧',name:'Road Closures & Hazards',sub:'Closed roads, flooding, downed lines · state 511 (New York so far)',def:false},
+  {id:'hazards',ico:'🚧',name:'Road Closures & Hazards',sub:'Closed roads, flooding, downed lines · from state 511 systems',def:false},
 ];
 const CHASER_ITEMS=[
   {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
@@ -8336,7 +8336,7 @@ async function refreshHazards() {
           { maxWidth: 300 })
         .addTo(_hazLayer);
     });
-    if (!(d.states || []).length && !_hazHinted) { _hazHinted = true; showToast(`Road closures are available for ${(d.covered || ['New York']).join(', ')} so far`); }
+    if (!(d.states || []).length && !_hazHinted) { _hazHinted = true; showToast((d.covered || []).length ? `Road closures aren’t shared for this area yet · available in ${d.covered.length} states` : 'Road closures aren’t available right now'); }
   } catch (e) { console.warn('[hazards]', e.message); }
 }
 function startHazards() {
