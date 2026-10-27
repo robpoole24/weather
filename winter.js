@@ -314,8 +314,13 @@ function routes(app) {
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
   app.get('/api/admin/roads', (req, res) => {
-    res.json({ states: ROAD_STATES.map(s => ({ id: s.id, key: !!process.env[s.env], ...(_roadStats[s.id] || {}) })),
-      road511: { key: !!process.env.ROAD511_API_KEY, ...(_roadStats.road511 || {}) } });
+    // roads / events: what each feed returned the last time someone looked (nothing yet = not used since the last restart)
+    const none = 'not checked since restart';
+    res.json({ states: ROAD_STATES.map(s => ({ id: s.id, name: s.name, key: !!process.env[s.env],
+        roads: _roadStats[s.id] || none, events: _roadStats['events-' + s.id] || none })),
+      road511: { key: !!process.env.ROAD511_API_KEY, ...(_roadStats.road511 || {}) },
+      cars: cars.STATES.map(s => ({ id: s.id, name: s.name, configured: cars.configured(s.id) })),
+      note: 'Feeds are only fetched while someone has the layer on. Open the map with Winter Road Conditions or Road Closures & Hazards on over a state, then reload this page. New York (CARS) details: /api/admin/cars' });
   });
 }
 
