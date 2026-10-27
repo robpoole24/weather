@@ -175,12 +175,108 @@ async function loadCameras(id) {
   }
 }
 
+// ── Road closures & weather hazards ──────────────────────────────────────────
+// From the full events feed: anything weather-caused (flooding, snow, downed
+// lines, storm damage, slides, fires…) plus roads that are closed right now.
+// Roadwork that isn't a closure, crashes, sports and concerts are left out.
+const HAZ_TTL = 5 * 60 * 1000;      // NYSDOT's recommended polling rate
+const _haz = new Map();             // id → { ts, items, loading }
+const WEATHER_KINDS = [
+  ['flood',  /\bflood(s|ed|ing)?\b|\bhigh water\b|\bwater over (the )?road|\bwash(ed)? ?out\b/i],
+  ['snow',   /\bsnow\b|\bheavy snow\b|\bice\b|\bicy\b|\bsleet\b|\bfreezing rain\b|\bblack ice\b|\bwhite ?out\b|\bblowing snow\b|\bwinter storm\b/i],
+  ['wind',   /\bdowned (power )?(lines?|wires?|trees?)\b|\b(wires?|lines?|trees?) down\b|\bfallen trees?\b|\bstorm damage\b|\bhigh winds?\b|\bwind damage\b|\bhurricane\b|\btornado\b/i],
+  ['slide',  /\b(land|mud|rock) ?slides?\b|\brockfall\b|\bsinkhole\b|\broad surface collapse\b|\bavalanche\b/i],
+  ['fire',   /\bbrush fire\b|\bforest fire\b|\bwild ?fire\b/i],
+  ['fog',    /\bdense fog\b|\bfog\b|\blow visibility\b/i],
+  ['weather',/\badverse weather\b|\bsevere weather\b|\bweather (related|conditions)\b|\bearthquake damage\b/i],
+];
+// Roadwork, events and the like only count if their own code says weather
+// (their descriptions mention streets like "Rice Rd" and "weather permitting")
+const PLANNED = /roadwork|construction|special-event|sporting-event|phrases/i;
+const ms = (t) => (t && Number.isFinite(t.time) ? t.time : null);
+
+function eventToHazard(e, st, now) {
+  const det = (e.details || [])[0] || {};
+  const head = e.headline || {}, code = String(head.code || ''), cat = String(head.category || '');
+  // "This work is weather permitting" is in lots of roadwork notes: not a hazard
+  const text = (PLANNED.test(cat) ? code : code + ' ' + String(e.description || '')).replace(/weather[- ]permit\w*/gi, '');
+  const kind = (WEATHER_KINDS.find(([, re]) => re.test(text)) || [])[0] || null;
+  const closed = /closure/i.test(cat) || /^(road )?closed$/i.test(code);
+  if (!kind && !closed) return null;
+  if (st.roadCategory.test(cat)) return null;            // road-condition segments live on the roads layer
+  const start = ms(det['start-time']), end = ms(det['end-time']);
+  if (start && start > now + 15 * 60 * 1000) return null; // planned, hasn't started
+  if (end && end < now) return null;                      // already over
+  const loc = (det.locations || [])[0] || {};
+  const geo = (loc['primary-location'] || {})['geo-location'] || {};
+  let lat = Number(geo.latitude), lng = Number(geo.longitude);
+  const g = e.geometry || {};
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    const c = g.type === 'Point' ? g.coordinates : Array.isArray(g.coordinates) ? g.coordinates[0] : null;
+    if (c) { lng = Number(c[0]); lat = Number(c[1]); }
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (Math.abs(lat) < 1 && Math.abs(lng) < 1)) return null;
+  const line = g.type === 'LineString' && Array.isArray(g.coordinates) && g.coordinates.length > 1
+    ? g.coordinates.filter((_, i, a) => a.length < 400 || i % Math.ceil(a.length / 400) === 0).map(([x, y]) => [+(+y).toFixed(5), +(+x).toFixed(5)]) : null;
+  return {
+    id: e['event-id'], kind: kind || 'closure', closed,
+    title: code ? code.charAt(0).toUpperCase() + code.slice(1) : (closed ? 'Road closed' : 'Hazard'),
+    road: loc['route-designator'] || '', text: String(e.description || '').slice(0, 600),
+    lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
+    start: start ? new Date(start).toISOString() : null, end: end && end < now + 5 * 365 * 864e5 ? new Date(end).toISOString() : null,
+    updated: ms(e['update-time']) ? new Date(ms(e['update-time'])).toISOString() : null,
+    priority: e.priority || null, src: st.id, credit: st.credit,
+  };
+}
+
+async function loadHazards(st) {
+  const rows = await allEvents(st, 'limit=500');
+  const now = Date.now(), items = [];
+  for (const e of rows) { const h = eventToHazard(e, st, now); if (h) items.push(h); }
+  stat(st.id, 'hazards', { events: rows.length, shown: items.length,
+    kinds: items.reduce((m, h) => (m[h.kind] = (m[h.kind] || 0) + 1, m), {}) });
+  return items;
+}
+function hazards(id) {
+  const st = byId[id];
+  if (!st || !configured(st)) return Promise.resolve([]);
+  const c = _haz.get(id);
+  if (c && Date.now() - c.ts < HAZ_TTL) return Promise.resolve(c.items);
+  if (c && c.loading) return c.loading;
+  const loading = loadHazards(st)
+    .then(items => { _haz.set(id, { ts: Date.now(), items }); return items; })
+    .catch(e => {
+      stat(id, 'hazards', { error: e.message });
+      console.warn(`[CARS ${id}] hazards: ${e.message}`);
+      const old = (c && c.items) || [];
+      _haz.set(id, { ts: Date.now() - HAZ_TTL + 2 * 60 * 1000, items: old });
+      return old;
+    });
+  _haz.set(id, { ...(c || { ts: 0, items: [] }), loading });
+  return loading;
+}
+
 function routes(app) {
+  // Road closures & weather hazards in the map view: ?bbox=w,s,e,n
+  app.get('/api/road-hazards', async (req, res) => {
+    const b = String(req.query.bbox || '').split(',').map(Number);
+    if (b.length !== 4 || !b.every(Number.isFinite) || b[2] <= b[0] || b[3] <= b[1]) return res.status(400).json({ error: 'bbox=w,s,e,n' });
+    const hit = (box) => box[0] <= b[2] && box[2] >= b[0] && box[1] <= b[3] && box[3] >= b[1];
+    // Neighbouring states' events can ride along in a feed, so look a little past each state's edge
+    const sts = STATES.filter(s => configured(s) && hit([s.box[0] - 2, s.box[1] - 2, s.box[2] + 2, s.box[3] + 2]));
+    try {
+      const all = (await Promise.all(sts.map(s => hazards(s.id)))).flat();
+      const items = all.filter(h => h.lat >= b[1] && h.lat <= b[3] && h.lng >= b[0] && h.lng <= b[2]).slice(0, 1500);
+      res.set('Cache-Control', 'public, max-age=120');
+      res.json({ items, states: sts.map(s => s.name), covered: STATES.filter(configured).map(s => s.name) });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+
   // Admin: what each CARS state last returned (never shows the login)
   app.get('/api/admin/cars', (req, res) => {
     res.json(STATES.map(s => ({ id: s.id, name: s.name, configured: configured(s), ...(stats[s.id] || {}) })));
   });
 }
 
-module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, routes,
-  _test: { parseCctv, eventToRoad, deg } };
+module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, hazards, routes,
+  _test: { parseCctv, eventToRoad, eventToHazard, deg } };

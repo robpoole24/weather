@@ -7176,6 +7176,7 @@ const WTV_INFO = {
   'snow-prob':     { t:'Chance of Heavy Snow', w:'The chance of at least 4, 8 or 12 inches of snow, for each of the next 3 days.', r:'40%+ is a real possibility worth planning around; 70%+ means it\'s likely.' },
   'ice-prob':      { t:'Chance of Icing', w:'The chance of a quarter inch or more of ice from freezing rain, for each of the next 3 days.', r:'A quarter inch of ice brings down tree limbs and power lines and makes roads glazed.' },
   'snow-depth':    { t:'Snow on the Ground', w:'How deep the snow is right now, from NOAA\'s daily national snow analysis.', r:'Useful for travel and for seeing where a storm has already hit.' },
+  'hazards':       { t:'Road Closures & Hazards', w:'Roads closed right now and weather problems on the road — flooding, snow and ice, downed trees and power lines, slides, fires — from state transportation departments (511). New York so far; more states as they join.', r:'Red ring · the road is closed. Tap a sign for details. Ordinary roadwork, crashes and events are left out.' },
   'roads':         { t:'Winter Road Conditions', w:'Road conditions reported by state transportation departments (511).', r:'Green · good. Blue · wet. Yellow · slippery or partly covered. White · snow covered. Pink · icy. Red · closed or travel not advised.' },
   'fall-now':      { t:'Fall Colors — Now', w:'Where the leaves are changing right now — WeatherTV\'s own estimate.', r:'Green · little color. Yellow → orange → red · building to peak. Brown · past peak. Based on each area\'s usual timing from 11 years of NASA satellite leaf records; updated daily.' },
   'fall-forecast': { t:'Fall Colors — Next 7 Days', w:'Where the color is expected to be a week from now.', r:'Use it to plan a color drive. Updated daily.' },
@@ -8027,6 +8028,7 @@ const EXTENDED_ITEMS=[
 const ALERT_ITEMS=[
   {id:'alerts',ico:'⚠️',name:'NWS Alerts',sub:'Warnings & watches',def:true},
   {id:'banner',ico:'🔔',name:'Warning Banner',sub:'Scroll alert inside polygon',def:true},
+  {id:'hazards',ico:'🚧',name:'Road Closures & Hazards',sub:'Closed roads, flooding, downed lines · state 511 (New York so far)',def:false},
 ];
 const CHASER_ITEMS=[
   {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
@@ -8295,6 +8297,62 @@ function stopPtype() {
 // ── Winter road conditions ──
 const ROAD_COLORS = { good: '#22c55e', wet: '#38bdf8', slippery: '#facc15', snow: '#f8fafc', ice: '#f472b6', closed: '#ef4444' };
 const ROAD_LABELS = { good: 'Good / dry', wet: 'Wet', slippery: 'Slippery / partly covered', snow: 'Snow covered', ice: 'Icy', closed: 'Closed / travel not advised' };
+// ── Road closures & weather hazards (state 511 / CARS feeds) ──
+const HAZ_KINDS = {
+  closure: { ico: '🚧', color: '#f97316', label: 'Road closed' },
+  flood:   { ico: '🌊', color: '#3b82f6', label: 'Flooding' },
+  snow:    { ico: '❄️', color: '#e2e8f0', label: 'Snow & ice' },
+  wind:    { ico: '🌳', color: '#22c55e', label: 'Downed trees / lines · storm damage' },
+  slide:   { ico: '⛰️', color: '#a16207', label: 'Slide / road collapse' },
+  fire:    { ico: '🔥', color: '#ef4444', label: 'Fire' },
+  fog:     { ico: '🌫️', color: '#94a3b8', label: 'Fog' },
+  weather: { ico: '⚠️', color: '#facc15', label: 'Weather hazard' },
+};
+let _hazLayer = null, _hazTimer = null, _hazReq = 0, _hazHinted = false;
+async function refreshHazards() {
+  if (!_hazLayer) return;
+  if (map.getZoom() < 6) {
+    _hazLayer.clearLayers();
+    if (!_hazHinted) { _hazHinted = true; showToast('Zoom in to see road closures and hazards'); }
+    return;
+  }
+  const b = map.getBounds(), req = ++_hazReq;
+  try {
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v => v.toFixed(3)).join(',');
+    const d = await fetch('/api/road-hazards?bbox=' + bbox).then(r => r.json());
+    if (req !== _hazReq || !_hazLayer) return;
+    _hazLayer.clearLayers();
+    const esc = (x) => String(x || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const when = (t) => t ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+    (d.items || []).forEach(h => {
+      const k = HAZ_KINDS[h.kind] || HAZ_KINDS.weather;
+      if (h.line) L.polyline(h.line, { color: h.closed ? '#ef4444' : k.color, weight: 4, opacity: 0.85, dashArray: h.closed ? null : '6 6', interactive: false }).addTo(_hazLayer);
+      const icon = L.divIcon({ className: 'haz-pin', iconSize: [28, 28], iconAnchor: [14, 14],
+        html: `<div style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;background:#0b1220;border:3px solid ${h.closed ? '#ef4444' : k.color};box-shadow:0 1px 4px rgba(0,0,0,.6)">${k.ico}</div>` });
+      L.marker([h.lat, h.lng], { icon, title: (h.road ? h.road + ': ' : '') + h.title, zIndexOffset: h.kind === 'closure' ? 0 : 500 })
+        .bindPopup(`<b>${k.ico} ${esc(h.title)}</b>${h.closed && h.kind !== 'closure' ? ' · <span style="color:#ef4444">road closed</span>' : ''}`
+          + `${h.road ? '<br><b>' + esc(h.road) + '</b>' : ''}<div style="margin-top:4px;max-width:280px;max-height:160px;overflow:auto">${esc(h.text)}</div>`
+          + `<div style="opacity:.7;margin-top:4px;font-size:.85em">${h.start ? 'Since ' + when(h.start) : ''}${h.end ? (h.start ? ' · ' : '') + 'Until ' + when(h.end) : ''}${h.updated ? '<br>Updated ' + when(h.updated) : ''}<br>${esc(h.credit)}</div>`,
+          { maxWidth: 300 })
+        .addTo(_hazLayer);
+    });
+    if (!(d.states || []).length && !_hazHinted) { _hazHinted = true; showToast(`Road closures are available for ${(d.covered || ['New York']).join(', ')} so far`); }
+  } catch (e) { console.warn('[hazards]', e.message); }
+}
+function startHazards() {
+  if (_hazLayer) return;
+  _hazHinted = false;
+  _hazLayer = L.layerGroup().addTo(map);
+  map.on('moveend.hazards', refreshHazards);
+  refreshHazards();
+  _hazTimer = setInterval(refreshHazards, 5 * 60 * 1000);
+}
+function stopHazards() {
+  map.off('moveend.hazards');
+  if (_hazTimer) { clearInterval(_hazTimer); _hazTimer = null; }
+  if (_hazLayer) { map.removeLayer(_hazLayer); _hazLayer = null; }
+}
+
 let _roadLayer = null, _roadTimer = null, _roadReq = 0;
 async function refreshRoads() {
   if (!_roadLayer) return;
@@ -8416,6 +8474,7 @@ function applyOverlay(id,on){
     case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
     case 'hodograph':    if (window.WTV_HODO) WTV_HODO.setMode(on); break;
     case 'live-near':    if (on) startLiveNear(); else stopLiveNear(); break;
+    case 'hazards':      if (on) startHazards(); else stopHazards(); break;
     case 'raw-radar':    setRadarSource(on); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
