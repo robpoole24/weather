@@ -794,6 +794,8 @@
     transition: top 0.1s;
   }
   .skip-link:focus { top: 0; }
+  /* TV/Xbox remotes move focus by arrow keys, so the keyboard skip link would pop up there — hide it */
+  html.tv-mode .skip-link { display: none; }
 
   /* Focus styles — visible keyboard navigation indicators */
   :focus-visible {
