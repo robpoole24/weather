@@ -366,7 +366,7 @@ function routes(app) {
         features.push(f);
         if (features.length >= 4000) break;
       }
-      res.set('Cache-Control', 'public, max-age=300');
+      res.set('Cache-Control', 'private, max-age=300');   // private: no shared caches (data is for our site only)
       res.json({ type: 'FeatureCollection', features, sources: states.map(s => s.id).concat(process.env.ROAD511_API_KEY ? ['road511'] : [], necStates.map(c => 'nec-' + c), carsStates.map(s => 'cars-' + s.id)),
         credits: necStates.length ? [nec.CREDIT] : [] });
     } catch (e) {
@@ -392,7 +392,7 @@ function routes(app) {
         seen.add(h.id); items.push(h);
         if (items.length >= 1500) break;
       }
-      res.set('Cache-Control', 'public, max-age=120');
+      res.set('Cache-Control', 'private, max-age=120');
       res.json({ items, states: parts.length ? covered : [], covered });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });

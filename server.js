@@ -124,6 +124,27 @@ function adminAuth(req, res, next) {
 // and adminAuth would never run, regardless of whether ADMIN_PASSWORD is set.
 app.use('/admin', adminAuth, express.static(path.join(__dirname, 'admin')));
 app.use('/api/admin', adminAuth);
+
+// ── Map data is for our own site and apps, not a public feed ─────────────────
+// Road conditions, road hazards and camera lists come from providers whose
+// terms don't allow passing the data on (Road511, state 511s). The site and
+// every WeatherTV app (Android, Xbox, Samsung) load watchweathertv.com itself,
+// so their requests are same-origin; anything else is refused. Admins can
+// still look with their login. (A determined scraper can fake these headers —
+// this stops casual reuse of our addresses as a free data feed.)
+const _ownHosts = new Set(['watchweathertv.com', 'www.watchweathertv.com', (process.env.RAILWAY_PUBLIC_DOMAIN || '').toLowerCase()].filter(Boolean));
+function ownSiteOnly(req, res, next) {
+  const site = req.headers['sec-fetch-site'];
+  if (site === 'same-origin' || site === 'same-site') return next();
+  let host = '';
+  try { host = new URL(req.headers.origin || req.headers.referer || '').hostname.toLowerCase(); } catch (_) {}
+  if (host && (_ownHosts.has(host) || host.endsWith('.watchweathertv.com'))) return next();   // older TVs send no Sec-Fetch-Site
+  if (!(process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT)) return next();   // local testing
+  if (req.headers.authorization) return adminAuth(req, res, next);
+  res.set('Cache-Control', 'no-store');
+  return res.status(403).json({ error: 'This data is only available on watchweathertv.com' });
+}
+app.use(['/api/roads', '/api/road-hazards', '/api/cameras/state'], ownSiteOnly);
 app.get('/api/admin/cameras/dot-status', (req, res) => res.json({ note: 'Each state camera feed, as of its last load (feeds load when someone views that state, or during a recount).', states: _dotStatus }));
 app.use(express.static(path.join(__dirname, 'public')));
 
