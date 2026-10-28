@@ -146,7 +146,18 @@ function ownSiteOnly(req, res, next) {
 }
 app.use(['/api/roads', '/api/road-hazards', '/api/cameras/state'], ownSiteOnly);
 app.get('/api/admin/cameras/dot-status', (req, res) => res.json({ note: 'Each state camera feed, as of its last load (feeds load when someone views that state, or during a recount).', states: _dotStatus }));
-app.use(express.static(path.join(__dirname, 'public')));
+// Static files: let Cloudflare keep copies so most page loads never wait on Railway.
+// Versioned files (?v=...) never change at that address, so they keep for a year;
+// images/fonts a week; other scripts/styles 5 min; pages and data files always re-check.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, file) {
+    const url = res.req && res.req.originalUrl || '';
+    if (/\.html?$/i.test(file) || /sw\.js$|manifest|camera-count|\.json$/i.test(file)) res.setHeader('Cache-Control', 'no-cache');
+    else if (/[?&]v=/.test(url)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    else if (/\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp3|mp4)$/i.test(file)) res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    else res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
+  },
+}));
 
 // ── Load / Save data ──
 // In-memory data store — loaded from Redis or file on startup
