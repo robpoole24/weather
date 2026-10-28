@@ -2,9 +2,9 @@
 //
 //   Road conditions  /api/roads?bbox=w,s,e,n
 //     State 511 "winter road conditions" (IBI/Skyline platform, the same
-//     {STATE}_511_KEY variables the cameras use) plus Road511's normalised
-//     road_conditions feed (ROAD511_API_KEY). Fetched only for states the map
-//     is looking at, cached 10 min, so the 511 limits (10 calls/min) hold.
+//     {STATE}_511_KEY variables the cameras use), plus Road511 (ROAD511_API_KEY)
+//     for states nothing else covers. Fetched only for states the map is
+//     looking at and cached, so every provider's limits hold.
 //
 //   CARS 511 states (New York…) come from cars.js: their road-condition
 //   segments, with the login in Railway variables.
@@ -140,56 +140,136 @@ async function ibiState(st) {
   return loading;
 }
 
-// Road511 (normalised feed across many states). Cached per 2° cell for 15 min and
-// shared by every viewer, so calls don't grow with traffic. A daily cap keeps us
-// well inside the Starter plan's 50,000 requests/day.
-const _r511Cache = new Map();
-const R511_TTL = 15 * 60 * 1000;
-const R511_DAILY_CAP = Number(process.env.ROAD511_DAILY_CAP || 40000);
-let _r511Day = '', _r511Calls = 0;
-async function road511(bbox) {
+// Road511 — fills the states we don't get road conditions from directly.
+// Shaped for their Free/trial plan (Oct 2026): every request names its states
+// (jurisdiction=XX,YY — at most 2), plain JSON (no GeoJSON), 100 results per
+// page, 20 requests/minute, 1,000 requests/day. So: one call per pair of states
+// per page, each state cached 45 min and shared by every viewer, only states on
+// screen, only states with no other road-condition feed, a daily budget below
+// their limit (ROAD511_DAILY_CAP, default 900) and at most 15 calls a minute.
+// Over budget or refused: keep showing the last data and stop asking for a while.
+const R511_BASE = 'https://api.road511.com/api/v1/features';
+const R511_TTL = Number(process.env.ROAD511_TTL_MIN || 45) * 60 * 1000;
+const R511_DAILY_CAP = Number(process.env.ROAD511_DAILY_CAP || 900);
+const R511_PER_MIN = 15, R511_PAGE = 100, R511_MAX_PAGES = 15;
+// Rough state outlines (w, s, e, n) — to know which states are on screen
+const STATE_BOXES = {
+  AL: [-88.5, 30.1, -84.9, 35.0], AZ: [-114.9, 31.3, -109.0, 37.0], AR: [-94.7, 33.0, -89.6, 36.5], CA: [-124.5, 32.5, -114.1, 42.0],
+  CO: [-109.1, 36.9, -102.0, 41.0], CT: [-73.8, 40.9, -71.8, 42.1], DE: [-75.8, 38.4, -75.0, 39.9], DC: [-77.2, 38.8, -76.9, 39.0],
+  FL: [-87.7, 24.4, -80.0, 31.0], GA: [-85.7, 30.3, -80.8, 35.0], ID: [-117.3, 41.9, -111.0, 49.0], IL: [-91.6, 36.9, -87.0, 42.5],
+  IN: [-88.1, 37.7, -84.8, 41.8], IA: [-96.7, 40.3, -90.1, 43.6], KS: [-102.1, 36.9, -94.6, 40.0], KY: [-89.6, 36.4, -81.9, 39.2],
+  LA: [-94.1, 28.9, -88.8, 33.1], ME: [-71.1, 43.0, -66.9, 47.5], MD: [-79.5, 37.9, -75.0, 39.8], MA: [-73.6, 41.2, -69.9, 42.9],
+  MI: [-90.5, 41.6, -82.1, 48.3], MN: [-97.3, 43.5, -89.5, 49.4], MS: [-91.7, 30.1, -88.1, 35.0], MO: [-95.8, 35.9, -89.1, 40.7],
+  MT: [-116.1, 44.3, -104.0, 49.0], NE: [-104.1, 39.9, -95.3, 43.1], NV: [-120.1, 35.0, -114.0, 42.0], NH: [-72.6, 42.6, -70.6, 45.4],
+  NJ: [-75.6, 38.9, -73.9, 41.4], NM: [-109.1, 31.3, -103.0, 37.0], NY: [-79.8, 40.5, -71.8, 45.1], NC: [-84.4, 33.8, -75.4, 36.6],
+  ND: [-104.1, 45.9, -96.5, 49.0], OH: [-84.9, 38.4, -80.5, 42.0], OK: [-103.1, 33.6, -94.4, 37.0], OR: [-124.6, 41.9, -116.4, 46.3],
+  PA: [-80.6, 39.7, -74.7, 42.3], RI: [-71.9, 41.1, -71.1, 42.1], SC: [-83.4, 32.0, -78.5, 35.3], SD: [-104.1, 42.4, -96.4, 45.95],
+  TN: [-90.4, 34.9, -81.6, 36.7], TX: [-106.7, 25.8, -93.5, 36.5], UT: [-114.1, 36.9, -109.0, 42.0], VT: [-73.5, 42.7, -71.4, 45.1],
+  VA: [-83.7, 36.5, -75.2, 39.5], WA: [-124.8, 45.5, -116.9, 49.0], WV: [-82.7, 37.2, -77.7, 40.7], WI: [-92.9, 42.4, -86.2, 47.1],
+  WY: [-111.1, 40.9, -104.0, 45.0], AK: [-170, 51, -129.9, 71.5], HI: [-160.3, 18.9, -154.8, 22.3],
+};
+const _r511 = new Map();                  // state → { ts, features }
+const _r511Stats = {};                    // state → { count, at, error }
+let _r511Day = '', _r511Calls = 0, _r511Minute = 0, _r511MinuteCalls = 0, _r511PauseUntil = 0, _r511Sample = null, _r511Busy = null;
+function _r511Budget() {
+  const now = Date.now(), today = new Date().toISOString().slice(0, 10), min = Math.floor(now / 60000);
+  if (_r511Day !== today) { _r511Day = today; _r511Calls = 0; }
+  if (_r511Minute !== min) { _r511Minute = min; _r511MinuteCalls = 0; }
+  return now >= _r511PauseUntil && _r511Calls < R511_DAILY_CAP && _r511MinuteCalls < R511_PER_MIN;
+}
+// Their JSON shape isn't documented to us: accept a list, or a list inside data/features/items/results
+function _r511Rows(j) {
+  if (Array.isArray(j)) return j;
+  for (const k of ['data', 'features', 'items', 'results', 'records']) if (j && Array.isArray(j[k])) return j[k];
+  return [];
+}
+function _r511Line(r) {
+  const g = r.geometry || (r.properties && r.properties.geometry) || null;
+  if (g && Array.isArray(g.coordinates)) {
+    if (g.type === 'LineString' && g.coordinates.length > 1) return { type: 'LineString', coordinates: g.coordinates };
+    if (g.type === 'MultiLineString' && g.coordinates.length) return { type: 'MultiLineString', coordinates: g.coordinates };
+  }
+  const enc = r.encoded_polyline || r.polyline || r.EncodedPolyline || (typeof g === 'string' && !/^\s*[A-Z]+\s*\(/.test(g) ? g : null);
+  if (enc) { const c = decodePolyline(enc); if (c.length > 1) return { type: 'LineString', coordinates: c }; }
+  const wkt = typeof g === 'string' ? g.match(/LINESTRING\s*\(([^)]+)\)/i) : null;
+  if (wkt) {
+    const c = wkt[1].split(',').map(p => p.trim().split(/\s+/).map(Number)).filter(p => p.length >= 2 && p.every(Number.isFinite));
+    if (c.length > 1) return { type: 'LineString', coordinates: c };
+  }
+  return null;
+}
+function _r511Feature(r, st) {
+  const p = Object.assign({}, r.properties || {}, r);
+  const geometry = _r511Line(r);
+  if (!geometry) return null;
+  const cond = p.condition || p.road_condition || p.surface_condition || p.status || p.title || p.description || '';
+  return { type: 'Feature', geometry, properties: {
+    cat: roadCategory(cond, p.surface), condition: String(cond).slice(0, 120), surface: p.surface || '',
+    road: p.road_name || p.roadway || p.road || p.name || '', where: p.location || p.description || '',
+    updated: p.updated_at || p.last_updated || p.updated || null, src: 'road511-' + st.toLowerCase() } };
+}
+async function _r511Fetch(pair, key) {
+  const feats = Object.fromEntries(pair.map(s => [s, []]));
+  for (let page = 0; page < R511_MAX_PAGES; page++) {
+    if (!_r511Budget()) throw Object.assign(new Error('over budget'), { budget: true });
+    _r511Calls++; _r511MinuteCalls++;
+    let rows;
+    try {
+      const txt = await getText(`${R511_BASE}?type=road_conditions&jurisdiction=${pair.join(',')}&limit=${R511_PAGE}&offset=${page * R511_PAGE}`,
+        { headers: { 'X-API-Key': key }, timeout: 20000 });
+      const j = JSON.parse(txt);
+      rows = _r511Rows(j);
+      if (!_r511Sample && rows[0]) _r511Sample = { topLevel: Array.isArray(j) ? 'list' : Object.keys(j).slice(0, 12), firstItemKeys: Object.keys(rows[0]).slice(0, 30) };
+    } catch (e) {
+      // Refused (401/403) or throttled (429): stop asking for a while
+      if (e.status === 401 || e.status === 403) _r511PauseUntil = Date.now() + 6 * 3600 * 1000;
+      if (e.status === 429) _r511PauseUntil = Date.now() + 10 * 60 * 1000;
+      throw e;
+    }
+    for (const r of rows) {
+      const p = r.properties || r;
+      const j = String(p.jurisdiction || p.state || p.state_code || '').toUpperCase().slice(-2);
+      const st = pair.includes(j) ? j : pair[0];
+      const f = _r511Feature(r, st);
+      if (f) feats[st].push(f);
+    }
+    if (rows.length < R511_PAGE) break;
+  }
+  return feats;
+}
+async function road511(bbox, coveredStates) {
   const key = process.env.ROAD511_API_KEY;
   if (!key) return [];
-  const [w, s, e, n] = bbox;
-  const cells = [];
-  for (let x = Math.floor(w / 2) * 2; x < e; x += 2) for (let y = Math.floor(s / 2) * 2; y < n; y += 2) cells.push([x, y]);
-  if (cells.length > 30) return [];        // zoomed out too far for this source
-  const out = [];
-  for (const [x, y] of cells) {
-    const ck = x + ',' + y;
-    let c = _r511Cache.get(ck);
-    const today = new Date().toISOString().slice(0, 10);
-    if (_r511Day !== today) { _r511Day = today; _r511Calls = 0; }
-    if ((!c || Date.now() - c.ts > R511_TTL) && _r511Calls >= R511_DAILY_CAP) {
-      if (c) out.push(...c.features);                 // over today's cap: keep serving what we have
-      continue;
+  // Only states on screen that no other source covers
+  const want = Object.entries(STATE_BOXES).filter(([st, box]) => boxHits(box, bbox) && !coveredStates.has(st)).map(([st]) => st);
+  if (want.length > 8) return [];                             // zoomed out too far for this source
+  const stale = want.filter(st => { const c = _r511.get(st); return !c || Date.now() - c.ts > R511_TTL; });
+  if (stale.length) {
+    // One refresh at a time, shared: other viewers wait for it instead of asking again
+    if (!_r511Busy) {
+      _r511Busy = (async () => {
+        for (let i = 0; i < stale.length; i += 2) {
+          const pair = stale.slice(i, i + 2);
+          try {
+            const got = await _r511Fetch(pair, key);
+            for (const st of pair) { _r511.set(st, { ts: Date.now(), features: got[st] }); _r511Stats[st] = { count: got[st].length, at: new Date().toISOString() }; }
+          } catch (e) {
+            for (const st of pair) {
+              const old = _r511.get(st);
+              // Keep what we had; try again after a quarter of the cache time
+              _r511.set(st, { ts: Date.now() - R511_TTL * 0.75, features: old ? old.features : [] });
+              _r511Stats[st] = { ...(_r511Stats[st] || {}), error: e.budget ? 'daily/minute budget reached' : e.message, at: new Date().toISOString() };
+            }
+            if (e.budget) break;
+          }
+        }
+      })().finally(() => { _r511Busy = null; });
     }
-    if (!c || Date.now() - c.ts > R511_TTL) {
-      _r511Calls++;
-      try {
-        const txt = await getText(`https://api.road511.com/api/v1/features/geojson?type=road_conditions&bbox=${x},${y},${x + 2},${y + 2}&limit=1000`,
-          { headers: { 'X-API-Key': key } });
-        const fc = JSON.parse(txt);
-        const feats = (fc.features || []).filter(f => f.geometry && /LineString/.test(f.geometry.type)).map(f => {
-          const p = f.properties || {};
-          const cond = p.condition || p.road_condition || p.surface_condition || p.status || p.title || '';
-          return { type: 'Feature', geometry: f.geometry, properties: {
-            cat: roadCategory(cond, p.surface, p.description), condition: String(cond), surface: p.surface || '',
-            road: p.road_name || p.roadway || p.name || '', where: p.description || p.location || '',
-            updated: p.updated_at || p.last_updated || null, src: 'road511' } };
-        });
-        c = { ts: Date.now(), features: feats };
-        _roadStats.road511 = { count: (_roadStats.road511?.count || 0) + feats.length, at: new Date().toISOString(), callsToday: _r511Calls, cap: R511_DAILY_CAP };
-      } catch (err) {
-        c = { ts: Date.now(), features: [] };
-        _roadStats.road511 = { error: err.message, at: new Date().toISOString(), callsToday: _r511Calls, cap: R511_DAILY_CAP };
-      }
-      _r511Cache.set(ck, c);
-      if (_r511Cache.size > 400) _r511Cache.delete(_r511Cache.keys().next().value);
-    }
-    out.push(...c.features);
+    await _r511Busy;
   }
-  return out;
+  _roadStats.road511 = { callsToday: _r511Calls, cap: R511_DAILY_CAP, perMinute: R511_PER_MIN, cacheMinutes: R511_TTL / 60000,
+    pausedUntil: _r511PauseUntil > Date.now() ? new Date(_r511PauseUntil).toISOString() : null, states: _r511Stats, sample: _r511Sample };
+  return want.flatMap(st => (_r511.get(st) || { features: [] }).features);
 }
 
 // ── Road closures & weather hazards from the same IBI 511 states ─────────────
@@ -271,7 +351,10 @@ function routes(app) {
       const states = ROAD_STATES.filter(st => process.env[st.env] && boxHits(st.box, b) && !carsStates.some(c => c.id === st.id));
       const nec = require('./nec');
       const necStates = Object.entries(nec.BOXES).filter(([, box]) => boxHits(box, b)).map(([code]) => code);
-      const parts = await Promise.all([...states.map(ibiState), road511(b), ...necStates.map(c => nec.roadWeather(c)),
+      // Road511 only fills states no other source covers (their trial allows 1,000 calls a day)
+      const covered = new Set([...ROAD_STATES.filter(st => process.env[st.env]).map(st => st.id === 'ne' ? ['ME', 'NH', 'VT'] : [st.id.toUpperCase()]).flat(),
+        ...cars.STATES.filter(st => cars.configured(st.id)).map(st => st.id.toUpperCase()), ...Object.keys(nec.BOXES).map(c => c.toUpperCase())]);
+      const parts = await Promise.all([...states.map(ibiState), road511(b, covered), ...necStates.map(c => nec.roadWeather(c)),
         ...carsStates.map(st => cars.roads(st.id, roadCategory))]);
       const seen = new Set(), features = [];
       for (const f of parts.flat()) {
