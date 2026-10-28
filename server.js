@@ -144,7 +144,7 @@ function ownSiteOnly(req, res, next) {
   res.set('Cache-Control', 'no-store');
   return res.status(403).json({ error: 'This data is only available on watchweathertv.com' });
 }
-app.use(['/api/roads', '/api/road-hazards', '/api/cameras/state'], ownSiteOnly);
+app.use(['/api/roads', '/api/road-hazards', '/api/cameras/state', '/api/cameras/va'], ownSiteOnly);
 app.get('/api/admin/cameras/dot-status', (req, res) => res.json({ note: 'Each state camera feed, as of its last load (feeds load when someone views that state, or during a recount).', states: _dotStatus }));
 // Static files: let Cloudflare keep copies so most page loads never wait on Railway.
 // Versioned files (?v=...) never change at that address, so they keep for a year;
@@ -1609,18 +1609,13 @@ const STATE_DOTS = [
   // New York — 511NY's CARS-Hub camera inventory (~2,900 NYSDOT + NYC DOT cameras).
   // Login: NY_CARS_USER / NY_CARS_PASSWORD. (Replaces the retired 511ny.org/api/getcameras.)
   { id:'ny', label:'New York 511 (NYSDOT CARS)', envKey:'NY_CARS_USER', cacheTTL:30*60*1000, load: () => cars.loadCameras('ny') },
-  // Virginia — VDOT SmarterRoads. The camera feed address is shown in your
-  // SmarterRoads account once approved: set VA_511_URL to it and VA_511_KEY to
-  // the token (sent as ?token=, change with VA_511_AUTH_PARAM). Fields are
-  // detected automatically.
-  { id:'va', label:'Virginia DOT (SmarterRoads)', cacheTTL:10*60*1000,
-    load: async (dot) => {
-      const key = process.env.VA_511_KEY, url = process.env.VA_511_URL;
-      if (!key || !url) return [];
-      const param = process.env.VA_511_AUTH_PARAM || 'token';
-      const full = url + (url.includes('?') ? '&' : '?') + `${param}=${encodeURIComponent(key)}`;
-      return _parseGenericCameraJSON(JSON.parse(await fetchTextOverHttp(full)), dot);
-    } },
+  // Virginia — VDOT cameras via Iteris/Skyline "Manager API" 2.0 (api.vdotcameras.com).
+  // Key: VA_VDOT_KEY (sent as the x-api-key header). Terms (Iteris agreement +
+  // Attachment A): never crop/cover the VDOT/511 banner on the picture, show the
+  // 511 notice + No Endorsement statement wherever these cameras appear (the
+  // camera viewer does this for attribution:'vdot'), free display only.
+  { id:'va', label:'Virginia DOT (VDOT 511 via Iteris)', envKey:'VA_VDOT_KEY', cacheTTL:30*60*1000,
+    load: async () => process.env.VA_VDOT_KEY ? (await _vdotStreams()).map(_vdotCamera).filter(Boolean) : [] },
 
   // ── ArcGIS open-data layers (no key) ───────────────────────────────────
   // Florida: statewide from FL511 once FL_511_KEY is set (same platform as
@@ -3674,6 +3669,80 @@ function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redi
     req.on('error', reject);
   });
 }
+
+// ── VDOT (Virginia) camera API ────────────────────────────────────────────────
+// https://api.vdotcameras.com/2.0/docs — GeoJSON FeatureCollection of streams.
+// Stream links can carry short-lived tokens, so opening a camera asks
+// /api/cameras/va/stream/:id for a fresh link (cached a minute per camera).
+const VDOT_API = 'https://api.vdotcameras.com/2.0';   // 2.0 per Iteris (JSON by default)
+function _vdotGet(pathAndQuery) {
+  const key = (process.env.VA_VDOT_KEY || '').trim();
+  if (!key) return Promise.reject(new Error('VA_VDOT_KEY not set'));
+  return new Promise((resolve, reject) => {
+    const req = https.get(VDOT_API + pathAndQuery, { headers: { 'x-api-key': key, accept: 'application/json', 'user-agent': 'WeatherTV/1.0 (watchweathertv.com)' }, timeout: 30000 }, (r) => {
+      let d = ''; r.setEncoding('utf8');
+      r.on('data', c => { d += c; if (d.length > 30e6) req.destroy(new Error('too large')); });
+      r.on('end', () => {
+        if (r.statusCode >= 400) return reject(new Error('VDOT ' + r.statusCode + ' ' + d.slice(0, 120)));
+        try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('VDOT bad JSON: ' + d.slice(0, 120))); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('VDOT timeout')));
+    req.on('error', reject);
+  });
+}
+async function _vdotStreams() {
+  const j = await _vdotGet('/streams/getAll?format=json&active=1');
+  return Array.isArray(j && j.features) ? j.features : [];
+}
+// Coordinates come as {latitude, longitude} per the schema, but the examples
+// show arrays in both orders — accept all three, using Virginia's shape to tell.
+function _vdotLatLng(g) {
+  const c = g && g.coordinates; if (!c) return null;
+  let lat, lng;
+  if (Array.isArray(c)) {
+    const [a, b] = c.map(Number);
+    if (a < 0 && b > 0) { lng = a; lat = b; } else { lat = a; lng = b; }
+  } else { lat = Number(c.latitude); lng = Number(c.longitude); }
+  return (isFinite(lat) && isFinite(lng) && lat && lng) ? { lat, lng } : null;
+}
+function _vdotCamera(f) {
+  const p = f && f.properties; if (!p || p.active === false) return null;
+  const md = p.metadata || p.custom_properties || {};    // 2.0 keeps direction/route here
+  const ll = _vdotLatLng(f.geometry); if (!ll) return null;
+  const video = p.https_url || p.ios_url || null;
+  return {
+    id: 'va-' + (p.id || p.name), name: p.description || p.name || 'VDOT camera',
+    lat: ll.lat, lng: ll.lng,
+    imageUrl: p.image_url || null,
+    videoUrl: /^https:/i.test(video || '') ? video : null,
+    direction: md.direction || p.direction || null, route: md.route || p.route || null,
+    source: 'dot', attribution: 'vdot',
+    refreshUrl: '/api/cameras/va/stream/' + encodeURIComponent(p.id || p.name),
+  };
+}
+const _vdotFresh = new Map();   // id → { ts, cam }
+app.get('/api/cameras/va/stream/:id', async (req, res) => {
+  const id = String(req.params.id || '').slice(0, 80);
+  if (!/^[\w.\-]+$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const hit = _vdotFresh.get(id);
+  if (hit && Date.now() - hit.ts < 60 * 1000) return res.json(hit.cam);
+  try {
+    const path = '/streams/getById/' + encodeURIComponent(id) + '?format=json';
+    // tokenExpiration needs a key permission; if ours lacks it, ask without
+    const j = await _vdotGet(path + '&tokenExpiration=1800').catch(() => _vdotGet(path));
+    const f = Array.isArray(j && j.features) ? j.features[0] : (j && j.properties ? j : null);
+    const cam = f && _vdotCamera(f);
+    if (!cam) return res.status(404).json({ error: 'camera not found' });
+    [cam.videoUrl, cam.imageUrl].forEach(u => u && _registerCamHost(u));
+    _vdotFresh.set(id, { ts: Date.now(), cam });
+    if (_vdotFresh.size > 500) _vdotFresh.delete(_vdotFresh.keys().next().value);
+    res.set('Cache-Control', 'private, no-store');
+    res.json(cam);
+  } catch (e) {
+    res.status(502).json({ error: 'VDOT unavailable' });
+  }
+});
 
 // GET /api/camera-hls?url=...
 // HLS stream proxy — routes M3U8 and .ts segment requests through our server
