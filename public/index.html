@@ -793,7 +793,7 @@
     border-radius: 0 0 4px 0;
     transition: top 0.1s;
   }
-  .skip-link:focus { top: 0; }
+  .skip-link:focus-visible { top: 0; }   /* keyboard only — not on clicks or page-focus quirks */
   /* TV/Xbox remotes move focus by arrow keys, so the keyboard skip link would pop up there — hide it */
   html.tv-mode .skip-link { display: none; }
 
