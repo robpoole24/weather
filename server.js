@@ -4736,15 +4736,21 @@ async function websubSubscribe(channelId) {
 // streams WebSub misses and clearing stale lives. Uses getLiveChannels(), so it
 // follows the same hasLive flag and overnight quiet hours as the rest of live
 // detection. Admin page: /admin/live-verifier (behind adminAuth via app.use('/admin')).
-// Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 4).
+// Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 2).
 const liveVerifier = createLiveVerifier({
   // lastLiveDate drives how often each channel is checked (see TIERS in live-verifier.js)
   getChannels: async () => getLiveChannels(true).map(ch => ({ id: ch.id, name: ch.name, lastLiveDate: (cache.channelActivity[ch.id] || {}).lastLiveDate || null })),
-  // Severe weather → check every channel every sweep: any active Tornado or
-  // Extreme Wind Warning, or a named Atlantic storm (from the NHC proxy cache)
+  isWatched: async (channelId) => { for (const u of _upcoming.values()) if (u.channelId === channelId) return true; return false; },
+  extraStats: async () => ({ upcoming: _upcoming.size, websubSilent: _websubSilent.length }),
+  // Weather boost → recently active channels checked every sweep while there's
+  // any Tornado or Severe Thunderstorm Watch, a Tornado / Extreme Wind /
+  // Hurricane Warning, 3+ Severe Thunderstorm Warnings, or a named Atlantic storm
   isSevereActive: async () => {
+    const w = radar.getActiveWatches ? radar.getActiveWatches() : {};
+    if ((w.tornado || 0) + (w.severe || 0) > 0) return true;
     const warnings = (radar.getActiveStormWarnings() || {}).list || [];
-    if (warnings.some(w => w.event === 'Tornado Warning' || w.event === 'Extreme Wind Warning')) return true;
+    if (warnings.some(x => /^(Tornado|Extreme Wind|Hurricane) Warning$/.test(x.event))) return true;
+    if (warnings.filter(x => x.event === 'Severe Thunderstorm Warning').length >= 3) return true;
     const nhc = _nhcCache.data && Date.now() - _nhcCache.ts < 6 * 3600 * 1000 ? _nhcCache.data.activeStorms || [] : [];
     return nhc.some(st => /^al/i.test(st.id || '') && /^(HU|TS)$/i.test(st.classification || ''));
   },
@@ -4789,7 +4795,7 @@ const liveVerifier = createLiveVerifier({
     const d = data.items && data.items[0] && data.items[0].liveStreamingDetails;
     return !!(d && d.actualStartTime && !d.actualEndTime);
   },
-  sweepIntervalMs: (Number(process.env.LIVE_VERIFIER_INTERVAL_MIN) || 4) * 60 * 1000,
+  sweepIntervalMs: (Number(process.env.LIVE_VERIFIER_INTERVAL_MIN) || 2) * 60 * 1000,
 });
 liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data, /run, /check/:channelId
 
@@ -4798,6 +4804,13 @@ liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data
 (async () => {
   await restoreAppDataFromRedis();  // groups, channels, collections
   await restoreCacheFromRedis();    // video cache, live statuses
+  try {   // upcoming-stream watchlist + WebSub health survive restarts
+    const up = await rGet('wt:upcoming');
+    const upObj = typeof up === 'string' ? JSON.parse(up) : up;
+    if (upObj) for (const [v, u] of Object.entries(upObj)) _upcoming.set(v, u);
+    const wp = await rGet('wt:websubPush');
+    Object.assign(_websubPush, (typeof wp === 'string' ? JSON.parse(wp) : wp) || {});
+  } catch (e) { console.warn('[WebSub] Could not restore watchlist:', e.message); }
 
   // Start verifier only after live statuses are restored — otherwise run #1
   // would count every already-live channel as a WebSub miss
@@ -4939,6 +4952,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   // Track that YouTube pushed a notification to us (free, 0 units)
   cache.lastNotificationReceived = Date.now();
   rSet('wt:lastNotification', cache.lastNotificationReceived);
+  if (signed) _noteWebsubPush(channelId);
 
   // Step 1: Parse Atom feed — free, no quota cost
   // Extract video ID and live status directly from the feed XML
@@ -4978,7 +4992,11 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   rDel('wt:recent:' + channelId);
 
   // Step 5: Rate limit — skip confirmation API call if we checked this channel recently
-  const lastCheck = websubLastCheck[channelId] || 0;
+  // Per video, not per channel: a second notice about a DIFFERENT video (e.g. a
+  // stream set up right after a Short was posted) must not be skipped
+  const checkKey = feedVideoId ? 'v:' + feedVideoId : channelId;
+  if (feedVideoId && _upcoming.has(feedVideoId)) return;   // already on the watchlist
+  const lastCheck = websubLastCheck[checkKey] || 0;
   const timeSinceCheck = Date.now() - lastCheck;
   const recentlyChecked = timeSinceCheck < WEBSUB_RATE_LIMIT_MS;
   if (recentlyChecked) {
@@ -4992,7 +5010,7 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   if (!primaryQuotaExceeded && liveChecksToday < DAILY_LIVE_CHECK_LIMIT) {
     const key = getApiKey();
     if (key && key !== 'YOUR_YOUTUBE_API_KEY' && feedVideoId) {
-      websubLastCheck[channelId] = Date.now();
+      websubLastCheck[checkKey] = Date.now();
       recordLiveCheck();
       trackBurn(true, 1); // videos.list costs 1 unit, not 100
       console.log('[WebSub] Live detail check (1 unit) for ' + channelId + ' video: ' + feedVideoId);
@@ -5005,6 +5023,18 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
         // Active live stream: has actualStartTime but no actualEndTime
         const isLive = !!(details && details.actualStartTime && !details.actualEndTime);
         const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+        // Scheduled / set up but not started: YouTube sends no second notice when
+        // it goes live, so watch this video until it starts
+        if (details && !details.actualStartTime && !details.actualEndTime) {
+          _watchUpcoming(channelId, feedVideoId, details.scheduledStartTime);
+          return;
+        }
+        // A finished stream or ordinary upload only turns a channel OFF when it's
+        // the very stream we're showing — a Short posted mid-stream must not
+        if (!isLive && wasLive && cache.liveStatuses[channelId].videoId && cache.liveStatuses[channelId].videoId !== feedVideoId) {
+          console.log('[WebSub] ' + channelId + ' posted ' + feedVideoId + ' while live — keeping the live stream');
+          return;
+        }
         const wsEntry = { isLive, videoId: isLive ? feedVideoId : null, checkedAt: Date.now(), source: 'websub_details' };
         cache.liveStatuses[channelId] = wsEntry;
         cache.lastLiveCheck = Date.now();
@@ -5046,6 +5076,102 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
     console.log('[WebSub] ' + channelId + ' posted — skipping check (daily limit reached or quota exceeded)');
   }
 });
+
+// ── Upcoming-stream watchlist ────────────────────────────────────────────────
+// WebSub notices arrive when a stream is scheduled or set up, not when it goes
+// live. Those videos wait here and are checked from 3 min before their start
+// time, every 2 min, up to 50 per videos.list call (1 unit per call).
+const _upcoming = new Map();   // videoId -> { channelId, scheduledAt, addedAt }
+const UPCOMING_LEAD_MS = 3 * 60 * 1000;
+const UPCOMING_GIVE_UP_MS = 2 * 3600 * 1000;      // not started 2 h after its start time
+const UPCOMING_NO_TIME_MS = 6 * 3600 * 1000;      // no start time given: watch up to 6 h
+function _saveUpcoming() { rSet('wt:upcoming', Object.fromEntries(_upcoming)).catch?.(() => {}); }
+function _watchUpcoming(channelId, videoId, scheduledStartTime) {
+  if (!videoId || _upcoming.has(videoId)) return;
+  const scheduledAt = Date.parse(scheduledStartTime || '') || null;
+  if (scheduledAt && scheduledAt > Date.now() + 14 * 864e5) return;   // weeks away — a later notice will come
+  _upcoming.set(videoId, { channelId, scheduledAt, addedAt: Date.now() });
+  _saveUpcoming();
+  console.log('[WebSub] Upcoming stream on watchlist: ' + channelId + ' video ' + videoId +
+    (scheduledAt ? ' starts ' + new Date(scheduledAt).toISOString() : ' (no start time)'));
+}
+async function _checkUpcoming() {
+  if (!_upcoming.size || primaryQuotaExceeded) return;
+  const now = Date.now();
+  for (const [vid, u] of _upcoming) {   // drop expired entries
+    const deadline = u.scheduledAt ? u.scheduledAt + UPCOMING_GIVE_UP_MS : u.addedAt + UPCOMING_NO_TIME_MS;
+    if (now > deadline) { _upcoming.delete(vid); console.log('[WebSub] Upcoming ' + vid + ' never started — dropped'); }
+  }
+  const due = [..._upcoming].filter(([, u]) => !u.scheduledAt || now >= u.scheduledAt - UPCOMING_LEAD_MS).map(([v]) => v);
+  if (!due.length) { _saveUpcoming(); return; }
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return;
+  for (let i = 0; i < due.length; i += 50) {
+    const ids = due.slice(i, i + 50);
+    trackBurn(true, 1);
+    let data;
+    try {
+      data = await ytFetch('https://www.googleapis.com/youtube/v3/videos?key=' + key + '&id=' + ids.join(',') +
+        '&part=liveStreamingDetails&fields=items(id,liveStreamingDetails)');
+    } catch (e) { console.error('[WebSub] Upcoming check failed:', e.message); return; }
+    if (checkQuotaError(data)) { markQuotaExceeded(true); return; }
+    if (data.error) { console.error('[WebSub] Upcoming check API error: ' + (data.error.message || data.error.code)); return; }
+    const found = new Map((data.items || []).map(it => [it.id, it.liveStreamingDetails || {}]));
+    for (const vid of ids) {
+      const u = _upcoming.get(vid); if (!u) continue;
+      const d = found.get(vid);
+      if (!d || d.actualEndTime) { _upcoming.delete(vid); continue; }          // deleted, private, or already over
+      if (d.scheduledStartTime) u.scheduledAt = Date.parse(d.scheduledStartTime) || u.scheduledAt;   // rescheduled
+      if (d.actualStartTime) {
+        _upcoming.delete(vid);
+        const entry = { isLive: true, videoId: vid, checkedAt: Date.now(), source: 'websub_upcoming' };
+        cache.liveStatuses[u.channelId] = entry;
+        cache.lastLiveCheck = Date.now();
+        rSet('wt:live:' + u.channelId, entry, REDIS_TTL.liveStatus);
+        rSet('wt:lastLive', cache.lastLiveCheck);
+        updateChannelActivity(u.channelId, { lastLiveDate: Date.now() });
+        console.log('[WebSub] LIVE (upcoming stream started): ' + u.channelId + ' video: ' + vid);
+      }
+    }
+  }
+  _saveUpcoming();
+}
+setInterval(() => { _checkUpcoming().catch(e => console.error('[WebSub] Upcoming watch error:', e.message)); }, 2 * 60 * 1000).unref();
+
+// ── WebSub health: which channels actually send us notices ────────────────────
+// A channel that streams often but hasn't sent a notice in 7 days probably has a
+// broken subscription — re-subscribe just that one (at most once a day each).
+const _websubPush = {};        // channelId -> last signed notice (ms)
+const _websubResub = {};       // channelId -> last health re-subscribe (ms)
+let _websubSilent = [];
+let _pushSaveTimer = null;
+function _noteWebsubPush(channelId) {
+  _websubPush[channelId] = Date.now();
+  if (!_pushSaveTimer) _pushSaveTimer = setTimeout(() => { _pushSaveTimer = null; rSet('wt:websubPush', _websubPush); }, 60 * 1000);
+}
+async function _websubHealth() {
+  if (!process.env.APP_URL) return;
+  const counts = await liveVerifier.streamCounts(7);
+  const week = Date.now() - 7 * 864e5;
+  _websubSilent = getLiveChannels(true)
+    .filter(ch => (counts[ch.id] || 0) >= 2 && (_websubPush[ch.id] || 0) < week)
+    .map(ch => ({ id: ch.id, name: ch.name, streams7d: counts[ch.id] }));
+  for (const ch of _websubSilent) {
+    if (Date.now() - (_websubResub[ch.id] || 0) < 864e5) continue;
+    _websubResub[ch.id] = Date.now();
+    console.log('[WebSub] Health: ' + ch.name + ' streamed ' + ch.streams7d + 'x this week with no notices — re-subscribing');
+    await websubSubscribe(ch.id).catch(e => console.error('[WebSub] Health re-subscribe failed for ' + ch.name + ':', e.message));
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+setTimeout(() => {
+  _websubHealth().catch(() => {});
+  setInterval(() => _websubHealth().catch(e => console.error('[WebSub] Health check error:', e.message)), 6 * 3600 * 1000).unref();
+}, 30 * 60 * 1000).unref();   // first run 30 min after start, once notices have had time to arrive
+app.get('/api/admin/websub/health', (req, res) => res.json({
+  silent: _websubSilent, upcoming: [..._upcoming].map(([videoId, u]) => ({ videoId, ...u })),
+  lastPush: _websubPush,
+}));
 
 // Re-subscribe all channels every 8 days (before 9-day lease expires)
 setInterval(() => {

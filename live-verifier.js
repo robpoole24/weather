@@ -170,14 +170,19 @@ function parseStored(v, fallback) {
 // How often each channel is re-checked, by how recently it last went live.
 // Channels WTV currently shows as live, and every channel while severe weather
 // is active, are checked every sweep regardless.
-const TIERS = [
-  { maxDaysSinceLive: 7, everyMin: 0 },         // streamed this week → every sweep
-  { maxDaysSinceLive: 30, everyMin: 30 },       // this month → every 30 min
-  { maxDaysSinceLive: Infinity, everyMin: 120 },// longer ago / never → every 2 h
-];
+// How often each channel is checked. Sweeps run every 2 min (LIVE_VERIFIER_INTERVAL_MIN).
+//   fast   — 2+ streams in the last 7 days, live in the last 24 h, or on the
+//            upcoming-stream watchlist → every sweep (~2 min)
+//   normal — streamed in the last 30 days → every 5 min
+//   slow   — everyone else → every 20 min
+// Severe weather (see isSevereActive) moves every channel that has streamed in
+// the last 90 days to fast; the rest go to normal.
+const FAST_MIN = 0, NORMAL_MIN = 5, SLOW_MIN = 20;
 
 function createLiveVerifier({
   getChannels,          // async () => [channelId] or [{ id, name, lastLiveDate? }]
+  isWatched,            // async (channelId) => bool — has a stream about to start (upcoming watchlist)
+  extraStats,           // async () => object merged into stats() for the admin page
   isSevereActive,       // async () => bool — while true, every channel is checked every sweep
   isKnownLive,          // async (channelId, videoId?) => bool — is WTV already showing THIS stream? REQUIRED for miss tracking.
   isPrimaryLive,        // async (channelId, videoId?) => bool — showing it because the PRIMARY system found it (not this verifier)
@@ -186,7 +191,7 @@ function createLiveVerifier({
   store,                // { get: async key => value, set: async (key, object) => {} } e.g. rGet/rSet
   confirmVideo,         // async (videoId) => true | false | null — cheap API check when YouTube hides the live flag (null = couldn't tell)
   concurrency = 3,
-  sweepIntervalMs = 4 * 60 * 1000,
+  sweepIntervalMs = 2 * 60 * 1000,
   offlineConfirmations = 2,
   backoffMs = 15 * 60 * 1000,
   log = (...a) => console.log('[live-verifier]', ...a),
@@ -196,6 +201,7 @@ function createLiveVerifier({
   let runs = [];
   let streams = {};     // videoId -> { channelId, name, title, firstSeen, lastSeen, caughtByPrimary }
   let names = {};
+  let lastTiers = null;
   let pausedUntil = 0, running = false, timer = null, lastStartedAt = null, loaded = false, started = false;
 
   async function load() {
@@ -233,19 +239,25 @@ function createLiveVerifier({
     const severe = isSevereActive ? !!(await isSevereActive().catch(() => false)) : false;
     const nowMs = Date.now();
     const list = [];
+    // Streams this verifier saw per channel in the last 7 days
+    const weekAgo = nowMs - 7 * 864e5, recentCount = {};
+    for (const st of Object.values(streams)) if (Date.parse(st.firstSeen) >= weekAgo) recentCount[st.channelId] = (recentCount[st.channelId] || 0) + 1;
+    const tierCount = { fast: 0, normal: 0, slow: 0 };
     for (const c of all) {
       const shownLive = isKnownLive ? !!(await isKnownLive(c.id)) : false;
+      const watched = isWatched ? !!(await isWatched(c.id).catch(() => false)) : false;
       const days = c.lastLiveDate ? (nowMs - c.lastLiveDate) / 864e5 : Infinity;
-      const tier = TIERS.find((t) => days <= t.maxDaysSinceLive);
+      let every = (recentCount[c.id] || 0) >= 2 || days <= 1 || watched ? FAST_MIN : days <= 30 ? NORMAL_MIN : SLOW_MIN;
+      if (severe) every = days <= 90 ? FAST_MIN : Math.min(every, NORMAL_MIN);
+      tierCount[every === FAST_MIN ? 'fast' : every === NORMAL_MIN ? 'normal' : 'slow']++;
       const last = lastChecked.get(c.id);
-      // First check after a restart: spread slow-tier channels across their window
-      if (last == null && tier.everyMin > 0 && !shownLive && !severe) {
-        lastChecked.set(c.id, nowMs - Math.random() * tier.everyMin * 60000);
-      }
-      const due = /^manual/.test(trigger) || shownLive || severe || tier.everyMin === 0
-        || nowMs - (lastChecked.get(c.id) ?? 0) >= tier.everyMin * 60000 - 30000;
+      // first sweep after a restart: spread the slower tiers out instead of checking everyone at once
+      if (last == null && every > 0 && !shownLive) lastChecked.set(c.id, nowMs - Math.random() * every * 60000);
+      const due = /^manual/.test(trigger) || shownLive || every === 0
+        || nowMs - (lastChecked.get(c.id) ?? 0) >= every * 60000 - 30000;
       if (due) list.push(c);
     }
+    lastTiers = tierCount;
     list.sort(() => Math.random() - 0.5);
     if (!list.length) { running = false; return { skipped: all.length ? 'nobody due this sweep' : 'no channels in window' }; } // don't log empty runs
 
@@ -291,8 +303,10 @@ function createLiveVerifier({
             }
           } else if (r.status === 'throttled' || r.status === 'blocked') {
             run.throttled = true;
-            pausedUntil = Date.now() + backoffMs;
-            log(`${r.status} by YouTube — pausing ${backoffMs / 60000} min`);
+            // A bot-check page is usually brief; a real 429 means back off properly
+            const pause = r.status === 'blocked' ? Math.min(backoffMs, 5 * 60 * 1000) : backoffMs;
+            pausedUntil = Date.now() + pause;
+            log(`${r.status} by YouTube — pausing ${pause / 60000} min`);
           } else {
             run.errors++;
             run.errorChannels.push({ channelId: id, name, error: r.error || r.code });
@@ -366,6 +380,7 @@ function createLiveVerifier({
     out.graceMin = MISS_GRACE_MS / 60000;
     out.stale24h = recent.reduce((n, r) => n + r.staleCleared.length, 0);
     out.mb24h = +(recent.reduce((n, r) => n + r.bytes, 0) / 1048576).toFixed(1);
+    out.tiers = lastTiers;
     return out;
   }
 
@@ -388,7 +403,12 @@ function createLiveVerifier({
 
   // Mount AFTER your admin auth middleware and BEFORE any /admin wildcard routes.
   function mountAdmin(app, base = '/admin/live-verifier') {
-    app.get(`${base}/data`, async (req, res) => { await load(); res.json(snapshot()); });
+    app.get(`${base}/data`, async (req, res) => {
+      await load();
+      const snap = snapshot();
+      if (extraStats) { try { Object.assign(snap.stats, await extraStats()); } catch (_) {} }
+      res.json(snap);
+    });
     app.post(`${base}/run`, (req, res) => { sweep('manual'); res.json({ started: true }); });
     app.get(`${base}/check/:channelId`, async (req, res) => res.json(await resolveBlocked(await checkChannelLive(req.params.channelId))));
     app.get(`${base}/debug/:channelId`, async (req, res) => {
@@ -425,6 +445,13 @@ function createLiveVerifier({
       sweep('startup'); timer = setInterval(() => sweep('timer'), sweepIntervalMs); },
     stop() { clearInterval(timer); },
     sweep, snapshot, mountAdmin, checkOne: checkChannelLive,
+    // channelId -> streams seen in the last `days` days (for WebSub health)
+    async streamCounts(days = 7) {
+      await load();
+      const cutoff = Date.now() - days * 864e5, out = {};
+      for (const st of Object.values(streams)) if (Date.parse(st.firstSeen) >= cutoff) out[st.channelId] = (out[st.channelId] || 0) + 1;
+      return out;
+    },
   };
 }
 
@@ -456,7 +483,10 @@ async function load(){
   const s=d.stats;
   document.getElementById('cards').innerHTML=['24h','7d','30d'].map(k=>'<div class="card">'+rate(s[k].missRate)+'<div class="l">'+k+' · '+s[k].missed+' of '+s[k].streams+' streams missed</div></div>').join('')+
     '<div class="card"><span class="n">'+s.stale24h+'</span><div class="l">stale lives cleared (24h)</div></div>'+
-    '<div class="card"><span class="n">'+s.mb24h+'</span><div class="l">MB read, uncompressed (24h) · ~1/10 over the wire</div></div>';
+    '<div class="card"><span class="n">'+s.mb24h+'</span><div class="l">MB read, uncompressed (24h) · ~1/10 over the wire</div></div>'+
+    (s.tiers?'<div class="card"><span class="n">'+s.tiers.fast+' · '+s.tiers.normal+' · '+s.tiers.slow+'</span><div class="l">channels checked every 2 · 5 · 20 min</div></div>':'')+
+    (s.upcoming!=null?'<div class="card"><span class="n">'+s.upcoming+'</span><div class="l">upcoming streams on the watchlist</div></div>':'')+
+    (s.websubSilent!=null?'<div class="card"><span class="n">'+s.websubSilent+'</span><div class="l" title="Streamed 2+ times this week but WebSub sent nothing in 7 days — re-subscribed automatically">frequent streamers with silent WebSub</div></div>':'');
   document.getElementById('misses').innerHTML=d.recentMisses.map(m=>'<tr><td>'+t(m.firstSeen)+'</td><td>'+esc(m.name)+'</td><td class="t"><a target="_blank" href="https://youtube.com/watch?v='+m.videoId+'">'+esc(m.title||m.videoId)+'</a></td></tr>').join('')||'<tr><td colspan="3">None yet</td></tr>';
   document.getElementById('runs').innerHTML=d.runs.map(r=>'<tr><td>'+t(r.startedAt)+(r.trigger!=='timer'?' ('+r.trigger+')':'')+'</td><td>'+r.durationSec+'s</td><td>'+r.checked+(r.total?'/'+r.total:'')+(r.severe?' ⚡':'')+'</td><td>'+r.live+'</td><td class="'+(r.missed.length?'bad':'')+'">'+r.missed.length+'</td><td class="'+(r.staleCleared.length?'warn':'')+'">'+r.staleCleared.length+'</td><td'+(r.errors?' class="warn" title="'+esc(r.errorChannels.map(e=>e.name+': '+e.error).join('\\n'))+'"':'')+'>'+r.errors+(r.throttled?' ⚠ throttled':'')+'</td><td>'+(r.bytes/1048576).toFixed(1)+'</td></tr>').join('')||'<tr><td colspan="8">No runs yet</td></tr>';
 }

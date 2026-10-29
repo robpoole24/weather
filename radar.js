@@ -62,6 +62,7 @@ let redisClient = null;
 let pollTimer = null;
 // Latest storm-based warnings with polygons, for "Live near this warning"
 let activeStormWarnings = { updatedAt: null, list: [] };
+let activeWatches = { updatedAt: null, tornado: 0, severe: 0 };
 // Warnings checked for "Live near this warning" (not push alerts — those use classify()).
 // Tropical warnings added so chasers in a landfalling hurricane are counted.
 const STORM_WARNING_EVENTS = new Set(['Tornado Warning', 'Severe Thunderstorm Warning', 'Extreme Wind Warning', 'Flash Flood Warning',
@@ -168,6 +169,10 @@ async function pollAlerts() {
     const res = await fetch('https://api.weather.gov/alerts/active?status=actual&region_type=land', { headers: NWS_HEADERS });
     if (!res.ok) throw new Error('NWS HTTP ' + res.status);
     const features = (await res.json()).features || [];
+    // Watches have no polygon, so they're counted separately (for the live-check weather boost)
+    activeWatches = { updatedAt: new Date().toISOString(),
+      tornado: features.filter(f => f.properties?.event === 'Tornado Watch').length,
+      severe: features.filter(f => f.properties?.event === 'Severe Thunderstorm Watch').length };
     activeStormWarnings = {
       updatedAt: new Date().toISOString(),
       list: features.filter(f => f.geometry && STORM_WARNING_EVENTS.has(f.properties?.event)
@@ -397,5 +402,6 @@ function routes(app) {
 }
 
 function getActiveStormWarnings() { return activeStormWarnings; }
+function getActiveWatches() { return activeWatches; }
 
-module.exports = { init, routes, pollAlerts, getActiveStormWarnings, ALERT_META, DEFAULT_ALERT_TYPES, encodePolygon, classify, vtecKey, TOPIC_RE };
+module.exports = { init, routes, pollAlerts, getActiveStormWarnings, getActiveWatches, ALERT_META, DEFAULT_ALERT_TYPES, encodePolygon, classify, vtecKey, TOPIC_RE };
