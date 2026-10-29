@@ -2576,7 +2576,7 @@ function renderSuggestionsTab() {
     <div class="chaser-row" id="sugg-row-${s.spotterNetworkId}-${s.channelId}">
       <div style="flex:1;min-width:0;">
         <div class="chaser-row-name">${s.spotterName} → ${s.channelName}</div>
-        <div class="chaser-row-sub">Name match · Spotter Network ID ${s.spotterNetworkId}</div>
+        <div class="chaser-row-sub">${s.reason ? s.reason.replace(/[<>&]/g, '') : 'Name match'} · Spotter Network ID ${s.spotterNetworkId}</div>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="dismissSuggestion('${s.spotterNetworkId}','${s.channelId}')">✕ Not a match</button>
       <button class="btn btn-primary btn-sm" onclick="confirmChaserMap('${s.spotterNetworkId}','${s.channelId}')">✓ Confirm</button>

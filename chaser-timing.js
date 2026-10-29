@@ -114,5 +114,12 @@ module.exports = function setupChaserTiming(app, deps) {
   setTimeout(() => record().catch(e => console.warn('[ChaserTiming]', e.message)), 90 * 1000).unref?.();
   setInterval(() => record().catch(e => console.warn('[ChaserTiming]', e.message)), SLOT_MS).unref?.();
   void saveData;
-  return { record, matches, _state: () => st };
+  // How one tracker and one channel line up (for name-based suggestions)
+  function pairStats(snId, chId) {
+    const ch = st.ch[chId] || [], sn = new Set(st.sn[snId] || []);
+    let together = 0, sessions = 0, last = -Infinity;
+    for (const x of ch) if (sn.has(x)) { together++; if (x - last > 24) sessions++; last = x; }
+    return { channelLiveSlots: ch.length, trackerSlots: sn.size, together, sessions, coveragePct: ch.length ? Math.round(together / ch.length * 100) : null };
+  }
+  return { record, matches, pairStats, _state: () => st };
 };

@@ -412,6 +412,13 @@ app.post('/api/admin/restore', async (req, res) => {
   if (!data || !data.groups || !data.config) {
     return res.status(400).json({ error: 'Invalid backup file — must contain groups and config' });
   }
+  // The admin page leaves out the Spotter Network registry and your "not a
+  // match" choices to keep the upload small — keep the server's copies, or
+  // every Save wiped them (and dismissed suggestions came back)
+  const current = loadData() || {};
+  for (const k of ['knownChasers', 'dismissedSuggestions']) {
+    if (data[k] === undefined && current[k] !== undefined) data[k] = current[k];
+  }
   // Update in-memory immediately
   appDataStore = data;
   // Wait for Redis to confirm save before responding
@@ -1171,12 +1178,22 @@ app.get('/api/live-near-warnings', (req, res) => {
 });
 
 // ── Timing-based chaser matching (chaser-timing.js) ─────────────────────────
+// Spotter Network writes "Oct 29 12:39 UTC" — no year. Date.parse() fills in
+// 2001 for that, which made every tracker look 25 years old (never "active").
+const _SN_MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
 function _spotterTimeMs(t) {
   if (!t) return NaN;
+  const m = String(t).trim().match(/^([A-Za-z]{3})\w*\s+(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:UTC|Z)?$/);
+  if (m && _SN_MON[m[1].toLowerCase()] != null) {
+    const now = new Date();
+    let ms = Date.UTC(now.getUTCFullYear(), _SN_MON[m[1].toLowerCase()], +m[2], +m[3], +m[4], +(m[5] || 0));
+    if (ms > Date.now() + 2 * 864e5) ms = Date.UTC(now.getUTCFullYear() - 1, _SN_MON[m[1].toLowerCase()], +m[2], +m[3], +m[4], +(m[5] || 0));   // Dec → Jan
+    return ms;
+  }
   const iso = String(t).trim().replace(' UTC', 'Z').replace(/^(\d{4}-\d{2}-\d{2}) /, '$1T');
   return Date.parse(iso);
 }
-require('./chaser-timing')(app, {
+const chaserTiming = require('./chaser-timing')(app, {
   rGet, rSet, loadData, saveData,
   getLiveChannelIds: () => Object.entries(cache.liveStatuses || {}).filter(([, v]) => v && v.isLive).map(([id]) => id),
   // Active = pinged within the last 30 min (or present in the live feed when its time can't be read)
@@ -4002,49 +4019,46 @@ app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
 // confidence tier: 'exact' (normalized names are identical — safe to
 // auto-map), 'fuzzy' (one contains the other, or they share both first and
 // last token — needs human review), or null (no meaningful match).
+// Brand words that say nothing about WHO someone is ("Daryl Weather" vs
+// "BAM Weather" share only "weather"). They're dropped before comparing.
+const NAME_NOISE = new Set(('weather wx storm storms stormchaser stormchasers chaser chasers chasing chase chases tornado tornadoes twister ' +
+  'live tv media channel official the and of extreme severe radar spotter spotters skywarn team crew productions films video videos ' +
+  'photography photo wxchasing chasetv llc inc network news forecast forecasts forecasting meteorology meteorologist jr sr ii iii').split(' '));
+const NICK = [['mike', 'michael'], ['bill', 'william', 'will', 'billy'], ['bob', 'robert', 'rob', 'bobby'], ['dan', 'daniel', 'danny'],
+  ['chris', 'christopher'], ['matt', 'matthew'], ['nick', 'nicholas', 'nicolas'], ['tom', 'thomas', 'tommy'], ['jim', 'james', 'jimmy', 'jamie'],
+  ['joe', 'joseph', 'joey'], ['jon', 'john', 'jonathan', 'johnny'], ['steve', 'steven', 'stephen'], ['dave', 'david'], ['andy', 'andrew', 'drew'],
+  ['tony', 'anthony'], ['rick', 'richard', 'rich', 'dick'], ['ben', 'benjamin'], ['sam', 'samuel', 'samantha'], ['alex', 'alexander', 'alexandra'],
+  ['zach', 'zachary', 'zack'], ['jake', 'jacob'], ['josh', 'joshua'], ['tim', 'timothy'], ['greg', 'gregory'], ['jeff', 'jeffrey', 'geoff'],
+  ['ken', 'kenneth', 'kenny'], ['ed', 'edward', 'eddie'], ['pat', 'patrick'], ['ron', 'ronald'], ['don', 'donald'], ['nate', 'nathan', 'nathaniel'],
+  ['kate', 'katherine', 'katie', 'kathryn'], ['liz', 'elizabeth', 'beth'], ['jen', 'jennifer', 'jenny'], ['abby', 'abigail'], ['charlie', 'charles', 'chuck']];
+const _nickOf = {}; NICK.forEach(g => g.forEach(n => { _nickOf[n] = g[0]; }));
+const _canonFirst = (w) => _nickOf[w] || w;
+function _nameTokens(name) {
+  return String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(w => w && !NAME_NOISE.has(w) && !/^\d+$/.test(w));
+}
+// Compares a Spotter Network name with a channel name. Returns
+//   'exact' — the same full name (first + last, nicknames allowed, brand words
+//             ignored): "John Mckinney" = "John McKinney", "Bill Kranski" =
+//             "William Kranski", "Brandon Copic" = "Brandon Copic Live"
+//   'fuzzy' — first initial + last name: "D. Shaw" / "Daniel Shaw"
+//   null    — anything else. A shared surname alone ("Mark Hill" / "Andy
+//             Hill") or a shared brand word never counts.
 function matchConfidence(spotterName, channelName) {
-  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const sNorm = norm(spotterName);
-  const cNorm = norm(channelName);
-  if (!sNorm || !cNorm) return null;
-
-  if (sNorm === cNorm) return 'exact';
-
-  const sTokens = spotterName.toLowerCase().split(/\s+/).filter(Boolean);
-  const cTokens = channelName.toLowerCase().split(/\s+/).filter(Boolean);
-
-  // Suffix case: every token of the shorter name appears, in order, at the
-  // start of the longer name's token list — e.g. "Brandon Copic" vs.
-  // "Brandon Copic Live" / "Brandon Copic Archive". This only checks a
-  // leading prefix match (not "any shared tokens"), so it can't be
-  // triggered by two people merely sharing a first name.
-  const [shorter, longer] = sTokens.length <= cTokens.length ? [sTokens, cTokens] : [cTokens, sTokens];
-  if (shorter.length >= 2 && longer.length > shorter.length) {
-    const isPrefixMatch = shorter.every((t, i) => longer[i] === t);
-    if (isPrefixMatch) return 'exact';
-  }
-
-  // Last-name token must match for any further comparison — this is what
-  // prevents "John Brown" from fuzzy-matching "John Smith" just because
-  // they share a common first name. Without this guard, common first names
-  // (John, Mike, etc.) across hundreds of live chasers would flood the
-  // fuzzy review list with false positives.
-  const sLast = sTokens[sTokens.length - 1];
-  const cLast = cTokens[cTokens.length - 1];
-  if (sTokens.length < 2 || cTokens.length < 2 || sLast !== cLast) {
-    // No reliable last-name anchor — only allow a match if one full
-    // normalized name is contained in the other (e.g. single-word channel
-    // brand names that happen to embed the full spotter name).
-    if (cNorm.includes(sNorm) || sNorm.includes(cNorm)) return 'fuzzy';
-    return null;
-  }
-
-  // Last names match — first name token must also match for 'exact',
-  // otherwise fuzzy (covers nicknames/initials on the first name only).
-  const sFirst = sTokens[0];
-  const cFirst = cTokens[0];
-  if (sFirst === cFirst) return 'exact';
-  return 'fuzzy';
+  const a = _nameTokens(spotterName), b = _nameTokens(channelName);
+  if (!a.length || !b.length) return null;
+  const glue = (t) => t.join('');
+  if (glue(a).length >= 6 && glue(a) === glue(b)) return 'exact';        // "ConnorCroff" / "Connor Croff"
+  if (a.length < 2 || b.length < 2) return null;                          // one word left = no full name to compare
+  // Look for the spotter's first+last as consecutive words anywhere in the
+  // channel name (and the other way round), so "Brandon Copic Live" matches
+  const pairsOf = (t) => t.slice(0, -1).map((w, i) => [w, t[i + 1]]);
+  const firstLastA = [a[0], a[a.length - 1]], firstLastB = [b[0], b[b.length - 1]];
+  const same = (x, y) => _canonFirst(x[0]) === _canonFirst(y[0]) && x[1] === y[1];
+  if (same(firstLastA, firstLastB) || pairsOf(b).some(p => same(firstLastA, p)) || pairsOf(a).some(p => same(p, firstLastB))) return 'exact';
+  const initial = (x, y) => x[1] === y[1] && x[1].length >= 3 && (x[0].length === 1 || y[0].length === 1) && x[0][0] === y[0][0];
+  if (initial(firstLastA, firstLastB)) return 'fuzzy';
+  return null;
 }
 
 app.get('/api/admin/chasers/suggestions', (req, res) => {
@@ -4063,14 +4077,21 @@ app.get('/api/admin/chasers/suggestions', (req, res) => {
     if (chaserMap[spotterNetworkId]) return; // already mapped
     allChannels.forEach(ch => {
       if (dismissed.has(spotterNetworkId + '::' + ch.id)) return; // admin already said no
-      const confidence = matchConfidence(c.name, ch.name);
+      let confidence = matchConfidence(c.name, ch.name);
       if (!confidence) return;
+      // Behaviour check: once the channel has streamed 3+ hours while we were
+      // watching, a tracker that was NEVER out during those streams isn't them
+      const t = chaserTiming.pairStats(spotterNetworkId, ch.id);
+      if (t.channelLiveSlots >= 18 && t.together === 0) return;
+      if (confidence === 'fuzzy' && t.sessions >= 2 && t.coveragePct >= 60) confidence = 'exact';   // initials + they chase together
       const entry = {
         spotterNetworkId,
         spotterName: c.name,
         channelId: ch.id,
         channelName: ch.name,
-        lastSeenAt: c.lastSeenAt
+        lastSeenAt: c.lastSeenAt,
+        reason: (confidence === 'exact' ? 'Same full name' : 'Same first initial + last name')
+          + (t.together ? ` · tracker out during ${t.coveragePct}% of their streams (${t.sessions} chase${t.sessions === 1 ? '' : 's'})` : ''),
       };
       if (confidence === 'exact') exact.push(entry); else fuzzy.push(entry);
     });
