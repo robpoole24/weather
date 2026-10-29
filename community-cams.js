@@ -135,7 +135,7 @@ module.exports = function setupCommunityCams(app, deps) {
   const gazetteer = require('./gazetteer');
   // The world place list loads on demand (discover/import call gazetteer.load()).
   const { rGet, rSet, fetchTextOverHttp, youtubeKey, stateFor, upstreamCount = () => {} } = deps;
-  let db = { cams: [], queue: [], rejected: [], lastDiscovery: null, nextPlace: 0, channels: {} };
+  let db = { cams: [], queue: [], rejected: [], lastDiscovery: null, nextPlace: 0, channels: {}, renewals: [] };
   let loaded = false;
 
   async function load() {
@@ -412,14 +412,17 @@ module.exports = function setupCommunityCams(app, deps) {
   const _dupeLog = [];
   function enqueue(item) {
     if (db.rejected.includes(item.ref)) return false;
-    const d = dupeOf(item, db.cams) || dupeOf(item, db.queue);
-    const onMap = d && db.cams.includes(d.other);
-    if (d && onMap && d.why !== 'same link' && item.kind === 'yt-video' && d.other.kind === 'yt-video'
-        && d.other.live === false && ['channel', 'discovery'].includes(item.source)) {
-      swapStream(d.other, item.ref, item.name, 'restarted stream found by ' + item.source);   // scans only list live streams
-      _dupeLog.unshift({ at: Date.now(), name: item.name, ref: item.ref, matches: d.other.name, onMap: true, why: 'swapped in as the new stream' });
-      return false;
+    if (item.source !== 'suggestion' && !known(item.ref)) {   // a restart of an approved camera? swap it in
+      const p = predecessorOf(item);
+      if (p && p.confident) {
+        swapStream(p.cam, item.ref, item.name, `restart found by ${item.source} — ${p.why}`);
+        fillGaps(p.cam, item);
+        _dupeLog.unshift({ at: Date.now(), name: item.name, ref: item.ref, matches: p.cam.name, onMap: true, why: 'swapped in as the new stream' });
+        return false;
+      }
+      if (p) item.replaces = { id: p.cam.id, name: p.cam.name, why: p.why };
     }
+    const d = dupeOf(item, db.cams) || dupeOf(item, db.queue);
     if (d) {
       _dupeLog.unshift({ at: Date.now(), name: item.name, ref: item.ref, matches: d.other.name, onMap: db.cams.includes(d.other), why: d.why });
       _dupeLog.length = Math.min(_dupeLog.length, 200);
@@ -539,7 +542,10 @@ module.exports = function setupCommunityCams(app, deps) {
       .split(/[^a-z0-9]+/).filter(w => w && !TITLE_NOISE.has(w) && !brand.has(w) && !/^\d+$/.test(w)));
   }
   function titleSimilarity(a, b, channelTitle) {
-    const A = titleTokens(a, channelTitle), B = titleTokens(b, channelTitle);
+    let A = titleTokens(a, channelTitle), B = titleTokens(b, channelTitle);
+    // The title IS the channel name ("Mile High Sky Cam" on Mile High Sky Cam):
+    // dropping the brand leaves nothing, so compare the full titles instead
+    if (!A.size || !B.size) { A = titleTokens(a, ''); B = titleTokens(b, ''); }
     if (!A.size || !B.size) return 0;
     let both = 0; A.forEach(w => { if (B.has(w)) both++; });
     return both / (A.size + B.size - both);
@@ -555,37 +561,105 @@ module.exports = function setupCommunityCams(app, deps) {
     c.ref = newRef; if (newTitle) c.streamTitle = newTitle;
     c.live = true; c.ended = false; c.lastLive = Date.now();
     c.lastError = null; c.replacedAt = Date.now(); c.replacements = (c.replacements || 0) + 1;
+    (db.renewals || (db.renewals = [])).unshift({ at: Date.now(), camId: c.id, name: c.name, from: (c.history[c.history.length - 1] || {}).ref, to: newRef, title: newTitle || '', why });
+    db.renewals = db.renewals.slice(0, 150);
+  }
+  // Fill in what the old camera was missing from the new stream's details
+  function fillGaps(c, item) {
+    if (!c.channelId && item.channelId) c.channelId = item.channelId;
+    if (!c.channelTitle && item.channelTitle) c.channelTitle = item.channelTitle;
+    if (!Number.isFinite(c.lat) && Number.isFinite(item.lat)) { c.lat = item.lat; c.lng = item.lng; const st = stateFor(item.lat, item.lng); if (st) c.state = st; }
+  }
+
+  // ── Predecessor: is this new stream a restart of a camera already approved? ──
+  // Only cameras that are DOWN can be replaced (a live one is a different camera).
+  //  • The channel's only camera is down → its new stream is the restart, unless
+  //    both have locations and they're 25+ km apart.
+  //  • Several cameras → the best title match among the down ones, 60%+ and
+  //    clearly ahead of the next best, same camera number, not 25+ km away.
+  //  • A weaker match (35%+) is only a suggestion: "Looks like the new stream for …"
+  // "East View" vs "South View", "Cam Left" vs "Cam Right" → different cameras
+  const DIRS = /\b(north|south|east|west|northeast|northwest|southeast|southwest|left|right|upper|lower|inner|outer|front|back|rear|upstream|downstream|ptz|wide|zoom)\b/gi;
+  const dirsOf = (t) => [...new Set((String(t || '').toLowerCase().match(DIRS) || []))].sort().join(',');
+  const sameDirs = (a, b) => { const x = dirsOf(a), y = dirsOf(b); return !x || !y || x === y; };
+  // First distinctive word — usually the place ("neenah" vs "necedah")
+  const leadWord = (t, ch) => { const ws = [...titleTokens(t, ch)]; return ws.length ? ws[0] : [...titleTokens(t, '')][0] || ''; };
+  const isDown = (c) => c.live === false || c.ended || (c.lastLive && Date.now() - c.lastLive > 30 * 60 * 1000);
+  function predecessorOf(item) {
+    const p = _predecessorOf(item);
+    // A stream you undid is never auto-matched again — at most suggested
+    if (p && p.confident && (db.noAutoRefs || []).includes(item.ref)) return { ...p, confident: false };
+    return p;
+  }
+  function _predecessorOf(item) {
+    if (item.kind !== 'yt-video') return null;
+    const mine = db.cams.filter(c => c.kind === 'yt-video' && c.ref !== item.ref && sameChannel(item, c));
+    if (!mine.length) return null;
+    const far = (c) => Number.isFinite(item.lat) && Number.isFinite(c.lat) && kmApart(item, c) > 25;
+    const down = mine.filter(c => isDown(c) && !far(c) && !(c.notReplacedBy || []).includes(item.ref));
+    if (!down.length) return null;
+    const title = (c) => c.streamTitle || c.name;
+    const scored = down.map(c => ({ cam: c, sim: titleSimilarity(item.name, title(c), item.channelTitle || c.channelTitle),
+                                    nums: camNumbers(item.name) === camNumbers(title(c)) && sameDirs(item.name, title(c)),
+                                    lead: leadWord(item.name, item.channelTitle || c.channelTitle) === leadWord(title(c), item.channelTitle || c.channelTitle) }))
+      .sort((a, b) => b.sim - a.sim);
+    let best = scored[0], next = scored[1];
+    // A tie between copies of the SAME camera (approved twice) isn't ambiguous:
+    // refill the oldest copy — the others are leftovers for the duplicate finder
+    if (next && best.sim - next.sim < 0.15) {
+      const twins = scored.filter(x => best.sim - x.sim < 0.15);
+      if (twins.every(x => x === best || dupeOf(x.cam, [best.cam]) || dupeOf(best.cam, [x.cam]))) {
+        best = twins.sort((a, b) => (a.cam.addedAt || 0) - (b.cam.addedAt || 0))[0];
+        next = scored.find(x => !twins.includes(x));
+      }
+    }
+    if (mine.length === 1 && best.nums && best.sim >= 0.25) return { ...best, confident: true, why: 'the channel\'s only camera, new stream' };
+    if (best.nums && best.lead && best.sim >= 0.6 && (!next || best.sim - next.sim >= 0.15)) return { ...best, confident: true, why: `title match ${Math.round(best.sim * 100)}%` };
+    if (best.nums && (best.sim >= 0.35 || mine.length === 1)) return { ...best, confident: false, why: `title match ${Math.round(best.sim * 100)}%` + (mine.length === 1 ? ', the channel\'s only camera' : '') };
+    return null;
   }
 
   async function replaceEnded() {
     if (!youtubeKey) return 0;
-    const dead = db.cams.filter(c => c.kind === 'yt-video' && c.live === false && c.channelId && (c.streamTitle || c.name)
-      && (c.ended || !c.lastLive || Date.now() - c.lastLive > 30 * 60 * 1000)
-      && (!c.replaceCheckedAt || Date.now() - c.replaceCheckedAt > 2 * 3600 * 1000));   // each camera checked at most every 2 h
+    const now = Date.now();
+    // Just went down → look every run (20 min) for 2 h; after that every 2 h
+    const dueAgain = (c) => !c.replaceCheckedAt
+      || now - c.replaceCheckedAt > ((now - (c.lastLive || 0) < 2 * 3600 * 1000) ? 15 * 60 * 1000 : 2 * 3600 * 1000);
+    const dead = db.cams.filter(c => c.kind === 'yt-video' && c.channelId && isDown(c) && dueAgain(c));
     const byChannel = new Map();
     dead.forEach(c => { if (!byChannel.has(c.channelId)) byChannel.set(c.channelId, []); byChannel.get(c.channelId).push(c); });
     let replaced = 0, channelsChecked = 0;
     const onMap = new Set(db.cams.map(c => c.ref));
     for (const [channelId, cams] of byChannel) {
-      if (channelsChecked++ >= 15) break;                                  // spread big batches over several runs
+      if (channelsChecked++ >= 25) break;                                  // spread big batches over several runs
       let live;
-      try { live = await liveOnChannel(channelId, 2); } catch (e) { cams.forEach(c => { c.replaceCheckedAt = Date.now(); }); continue; }
-      for (const c of cams) {
-        c.replaceCheckedAt = Date.now();
-        let best = null, bestSim = 0;
-        for (const [id, v] of live) {
-          if (onMap.has(id) || db.rejected.includes(id)) continue;
-          const sim = titleSimilarity(c.streamTitle || c.name, v.title, v.channelTitle || c.channelTitle);
-          if (sim > bestSim) { bestSim = sim; best = { id, ...v }; }
-        }
-        if (best && bestSim >= 0.6) {
-          onMap.delete(c.ref); onMap.add(best.id);
-          swapStream(c, best.id, best.title, `ended stream replaced, title match ${Math.round(bestSim * 100)}%`);
+      try { live = await liveOnChannel(channelId, 2); } catch (e) { cams.forEach(c => { c.replaceCheckedAt = now; }); continue; }
+      cams.forEach(c => { c.replaceCheckedAt = now; });
+      for (const [id, v] of live) {
+        if (onMap.has(id) || db.rejected.includes(id)) continue;
+        const p = predecessorOf({ kind: 'yt-video', ref: id, name: v.title, channelId, channelTitle: v.channelTitle });
+        if (p && p.confident) {
+          onMap.delete(p.cam.ref); onMap.add(id);
+          swapStream(p.cam, id, v.title, 'restart found on the channel — ' + p.why);
           replaced++;
         }
       }
     }
     return replaced;
+  }
+
+  // Queue entries that are restarts of approved cameras: swap the confident
+  // ones in, label the rest "Looks like the new stream for …" (no quota)
+  function sweepQueueForRestarts() {
+    let swapped = 0;
+    db.queue = db.queue.filter(q => {
+      if (q.reportOf || q.source === 'suggestion') return true;
+      const p = predecessorOf(q);
+      if (p && p.confident) { swapStream(p.cam, q.ref, q.name, 'restart found in the review queue — ' + p.why); fillGaps(p.cam, q); swapped++; return false; }
+      q.replaces = p ? { id: p.cam.id, name: p.cam.name, why: p.why } : null;
+      return true;
+    });
+    return swapped;
   }
 
   // Watched channels: new live streams since last time → review queue
@@ -599,8 +673,6 @@ module.exports = function setupCommunityCams(app, deps) {
       ch.lastScan = Date.now(); ch.lastError = null; ch.liveCount = live.size;
       for (const [id, v] of live) {
         if (known(id)) continue;
-        // Probably a restarted stream of a camera we already have? Leave it to replaceEnded()
-        if (db.cams.some(c => c.channelId === channelId && titleSimilarity(c.streamTitle, v.title, v.channelTitle) >= 0.6)) continue;
         const place = placeFromTitle(v.title, v.channelTitle);
         const { hit, confident } = await placeIt(place, countryHint(v.title));
         if (enqueue({ id: uid(), kind: 'yt-video', ref: id, name: decodeEntities(v.title).slice(0, 120), channelTitle: decodeEntities(v.channelTitle), channelId, confident,
@@ -623,6 +695,7 @@ module.exports = function setupCommunityCams(app, deps) {
       await checkVideos(db.cams.filter(c => c.kind === 'yt-video'));
       try { const n = await replaceEnded(); if (n) console.log(`[Community] ${n} ended stream(s) replaced with their new live stream`); }
       catch (e) { console.warn('[Community] replacement check:', e.message); }
+      const qs = sweepQueueForRestarts(); if (qs) console.log(`[Community] ${qs} restarted stream(s) taken from the review queue`);
       for (const c of db.cams.filter(c => c.kind !== 'yt-video')) { await checkPage(c); await new Promise(r => setTimeout(r, 1500)); }
       await save();
       const live = db.cams.filter(c => c.live).length, unknown = db.cams.filter(c => c.live == null).length;
@@ -755,11 +828,38 @@ module.exports = function setupCommunityCams(app, deps) {
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
+  // ── Public: "this camera is in the wrong location" ─────────────────────────
+  // One report per camera per visitor per day (in memory only — nothing kept).
+  // The camera stays on the map; it goes back to the review queue with a note.
+  const reported = new Map();   // ip|camId -> day
+  app.post('/api/community/report', async (req, res) => {
+    const ip = (req.headers['cf-connecting-ip'] || req.ip || '').toString();
+    const camId = String((req.body || {}).id || '').replace(/^comm-/, '').slice(0, 40);
+    const day = new Date().toISOString().slice(0, 10);
+    const k = ip + '|' + camId;
+    if (reported.get(k) === day) return res.json({ ok: true, message: 'Thanks — already noted.' });
+    reported.set(k, day);
+    if (reported.size > 20000) reported.clear();
+    await load();
+    const c = db.cams.find(x => x.id === camId);
+    if (!c) return res.status(404).json({ error: 'Camera not found' });
+    c.reports = (c.reports || 0) + 1;
+    const q = db.queue.find(x => x.reportOf === c.id);
+    if (q) { q.reports = c.reports; q.note = `Viewer reported: wrong location (${c.reports} report${c.reports > 1 ? 's' : ''})`; q.foundAt = Date.now(); }
+    else db.queue.push({ id: uid(), reportOf: c.id, kind: c.kind, ref: c.ref, name: c.name, channelTitle: c.channelTitle || '', channelId: c.channelId || null,
+      thumb: c.kind === 'yt-video' ? `https://i.ytimg.com/vi/${c.ref}/mqdefault.jpg` : null, lat: c.lat, lng: c.lng, reports: c.reports,
+      locationGuess: 'Currently placed here — move the pin if it\'s wrong', note: 'Viewer reported: wrong location (1 report)',
+      source: 'report', foundAt: Date.now() });
+    await save();
+    res.json({ ok: true, message: 'Thanks — we\'ll check where this camera is.' });
+  });
+
   // ── Admin API (protected by app.use('/api/admin', adminAuth)) ─────────────
   app.get('/api/admin/community', async (req, res) => {
     await load();
     res.json({
       cams: db.cams.map(c => ({ ...c, visible: visible(c) })), queue: db.queue.slice().reverse(), rejectedCount: db.rejected.length,
+      renewals: (db.renewals || []).slice(0, 40),
       channels: Object.entries(db.channels).map(([id, c]) => ({ id, ...c })),
       discovery: { nightly: /^(1|true|yes)$/i.test(process.env.COMMUNITY_DISCOVERY || ''), perNight: parseInt(process.env.COMMUNITY_DISCOVERY_PER_NIGHT || '10', 10) || 10,
                    lastRun: db.lastDiscovery, places: DISCOVERY_PLACES.length },
@@ -795,6 +895,18 @@ module.exports = function setupCommunityCams(app, deps) {
       await load();
       const q = db.queue.find(x => x.id === (req.body || {}).id);
       if (!q) throw new Error('Not in the queue');
+      if (q.reportOf) {               // viewer said "wrong location" → save the corrected spot
+        const c = db.cams.find(x => x.id === q.reportOf);
+        if (!c) { db.queue = db.queue.filter(x => x.id !== q.id); await save(); throw new Error('That camera is no longer on the map'); }
+        const lat = parseCoord(req.body.lat, 'lat'), lng = parseCoord(req.body.lng, 'lng');
+        const st = Number.isFinite(lat) && Number.isFinite(lng) && stateFor(lat, lng);
+        if (!st) throw new Error('Set a valid latitude and longitude first');
+        Object.assign(c, { lat, lng, state: st, reports: 0, placedBy: 'Set by you (after a viewer report)' });
+        if (req.body.name) c.name = decodeEntities(String(req.body.name)).slice(0, 120);
+        db.queue = db.queue.filter(x => x.id !== q.id);
+        await save();
+        return res.json({ ok: true, cam: c, moved: true });
+      }
       const d = !(req.body || {}).force && dupeOf(q, db.cams);
       if (d) return res.status(409).json({ error: `Already on the map as “${d.other.name}” (${d.why})`, duplicateOf: d.other.id });
       const cam = await approveInto(q, req.body || {});
@@ -808,6 +920,7 @@ module.exports = function setupCommunityCams(app, deps) {
     // Queue entries that repeat a map camera, or an older queue entry
     const queueDupes = [];
     db.queue.forEach((q, i) => {
+      if (q.reportOf) return;          // a viewer report points at its own camera on purpose
       const d = dupeOf(q, db.cams) || dupeOf(q, db.queue.slice(0, i));
       if (d) queueDupes.push({ id: q.id, name: q.name, ref: q.ref, matches: d.other.name, onMap: db.cams.includes(d.other), why: d.why });
     });
@@ -870,9 +983,46 @@ module.exports = function setupCommunityCams(app, deps) {
     res.json({ ok: true, queueRemoved, mapRemoved });
   });
 
+  // "Yes, this is the new stream for …" — one click instead of re-adding it
+  app.post('/api/admin/community/replace', async (req, res) => {
+    await load();
+    const { id, camId } = req.body || {};
+    const q = db.queue.find(x => x.id === id), c = db.cams.find(x => x.id === camId);
+    if (!q || !c) return res.status(400).json({ error: 'Not found — refresh the page' });
+    swapStream(c, q.ref, q.name, 'replaced by you from the queue');
+    fillGaps(c, q);
+    db.queue = db.queue.filter(x => x.id !== q.id);
+    await checkOne(c).catch(() => {});
+    await save();
+    res.json({ ok: true, cam: c });
+  });
+  // Undo an automatic renewal: the camera goes back to its old stream, the new
+  // stream goes to the review queue, and that pairing is never made again
+  app.post('/api/admin/community/renewals/undo', async (req, res) => {
+    await load();
+    const { camId, to } = req.body || {};
+    const c = db.cams.find(x => x.id === camId);
+    const r = (db.renewals || []).find(x => x.camId === camId && x.to === to);
+    if (!c || !r || c.ref !== to || !r.from) return res.status(400).json({ error: 'That camera has changed since — nothing to undo' });
+    c.ref = r.from; c.history = (c.history || []).filter(h => h.ref !== r.from); c.live = null;
+    (c.notReplacedBy || (c.notReplacedBy = [])).push(to);
+    db.noAutoRefs = [...(db.noAutoRefs || []), to].slice(-500);
+    db.renewals = db.renewals.filter(x => x !== r);
+    db.queue.push({ id: uid(), kind: 'yt-video', ref: to, name: r.title || 'New stream', channelTitle: c.channelTitle || '', channelId: c.channelId || null,
+      thumb: `https://i.ytimg.com/vi/${to}/mqdefault.jpg`, lat: null, lng: null, locationGuess: 'Undone from "' + c.name + '" — set its location',
+      source: 'channel', foundAt: Date.now() });
+    await checkOne(c).catch(() => {});
+    await save();
+    res.json({ ok: true });
+  });
+
   app.post('/api/admin/community/reject', async (req, res) => {
     await load();
     const q = db.queue.find(x => x.id === (req.body || {}).id);
+    if (q && q.reportOf) {          // "location is fine" — dismiss the report, keep the camera
+      const c = db.cams.find(x => x.id === q.reportOf); if (c) { c.reports = 0; }
+      db.queue = db.queue.filter(x => x.id !== q.id); await save(); return res.json({ ok: true });
+    }
     if (q) { db.rejected.push(q.ref); db.rejected = db.rejected.slice(-3000); db.queue = db.queue.filter(x => x.id !== q.id); await save(); }
     res.json({ ok: true });
   });
@@ -1468,7 +1618,8 @@ module.exports = function setupCommunityCams(app, deps) {
   app.post('/api/admin/community/approve-located', async (req, res) => {
     await load();
     const onlyConfirmed = !!(req.body || {}).confirmedOnly;
-    const ready = db.queue.filter(q => Number.isFinite(q.lat) && Number.isFinite(q.lng) && (!onlyConfirmed || q.confident));
+    // Viewer reports and "looks like the new stream for …" entries need your eye, not a bulk approve
+    const ready = db.queue.filter(q => !q.reportOf && !q.replaces && Number.isFinite(q.lat) && Number.isFinite(q.lng) && (!onlyConfirmed || q.confident));
     let approved = 0; const failed = [];
     for (const q of ready) {
       try {
@@ -1517,5 +1668,5 @@ module.exports = function setupCommunityCams(app, deps) {
     if (h === 3 && (!db.lastDiscovery || Date.now() - db.lastDiscovery > 20 * 3600 * 1000)) nightly().catch(() => {});
   }, 15 * 60 * 1000);
 
-  return { forState, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll } };
+  return { forState, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll, sweepQueueForRestarts, predecessorOf, load } };
 };

@@ -3723,6 +3723,26 @@ function openCameraOverlay(cam) {
     footer.textContent = cam.name;
   }
   if (cam.attribution === 'vdot') _vdotNotice(footer);
+  if (cam.source === 'community' && /^comm-/.test(cam.id || '')) _camReportLink(cam, footer);
+}
+
+// Community cams: viewers can flag a camera that's placed in the wrong spot.
+// It stays on the map; it goes back to the admin queue for a location check.
+function _camReportLink(cam, footer) {
+  const a = document.createElement('a');
+  a.href = '#'; a.textContent = '📍 Wrong location?';
+  a.style.cssText = 'color:var(--muted);text-decoration:none;margin-left:0.5rem;white-space:nowrap;';
+  a.title = 'Tell us this camera is placed in the wrong spot';
+  a.onclick = async (e) => {
+    e.preventDefault();
+    if (a.dataset.sent) return;
+    a.dataset.sent = '1'; a.textContent = 'Sending…';
+    try {
+      const r = await fetch('/api/community/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: cam.id }) });
+      a.textContent = r.ok ? '✓ Thanks — we’ll check it' : 'Couldn’t send — try later';
+    } catch (_) { a.textContent = 'Couldn’t send — try later'; }
+  };
+  footer.appendChild(a);
 }
 
 // Required wherever VDOT cameras appear (Iteris agreement, Attachment A):

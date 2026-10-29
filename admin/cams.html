@@ -234,6 +234,11 @@
         </div>
         <pre id="cc-fix-result" style="font-size:0.72rem;color:var(--muted);white-space:pre-wrap;margin:0 0 0.5rem"></pre>
         <div id="cc-queue" style="display:flex;flex-direction:column;gap:0.6rem;"></div>
+        <details id="cc-renew-box" style="margin-top:1rem;font-size:0.78rem;">
+          <summary style="cursor:pointer;font-weight:600">🔁 Automatically renewed <span id="cc-renew-count" style="color:var(--muted);font-weight:400"></span></summary>
+          <div style="color:var(--muted);margin:0.35rem 0 0.5rem">Restarted streams swapped into their camera automatically — same name and location. Undo if one got matched to the wrong camera; that pairing won't be made again.</div>
+          <div id="cc-renewals"></div>
+        </details>
       </div>
 
       </div>
@@ -814,7 +819,10 @@ async function loadCommunity() {
   const conf = d.queue.filter(q => q.confident && q.lat != null).length;
   document.getElementById('cc-qconf').textContent = d.queue.length ? `${conf} confirmed · ${d.queue.length - conf} to check` : '';
   const src = { suggestion: '💬 Viewer suggestion', discovery: '🔎 Found by search', admin: 'Added', import: '📋 Imported list', channel: '📺 Channel import' };
-  document.getElementById('cc-queue').innerHTML = d.queue.slice(0, 50).map(q => {
+  // Viewer reports first, then likely restarts, then everything else (newest first)
+  const qRank = (q) => q.reportOf ? 0 : q.replaces ? 1 : 2;
+  const qList = d.queue.map((q, i) => [q, i]).sort((a, b) => qRank(a[0]) - qRank(b[0]) || a[1] - b[1]).map(x => x[0]);
+  document.getElementById('cc-queue').innerHTML = qList.slice(0, 50).map(q => {
     const link = q.kind === 'yt-video' ? 'https://www.youtube.com/watch?v=' + q.ref : q.kind === 'yt-channel' ? 'https://www.youtube.com/channel/' + q.ref + '/live' : q.ref;
     return `<div style="display:flex;gap:0.75rem;align-items:flex-start;padding:0.6rem;border:1px solid var(--border);border-radius:6px;">
       ${q.thumb ? `<img src="${lvEsc(q.thumb)}" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex:0 0 auto;background:#000"
@@ -822,7 +830,10 @@ async function loadCommunity() {
       <div style="flex:1;min-width:0;font-size:0.78rem;">
         <div style="color:var(--muted);font-size:0.7rem">${src[q.source] || q.source}${q.channelTitle ? ' · ' + lvEsc(q.channelTitle) : ''}</div>
         <input id="ccq-name-${q.id}" type="text" value="${lvEsc(q.name)}" style="width:100%;font-size:0.8rem;margin:0.2rem 0;">
-        ${q.note ? `<div style="color:var(--muted)">Note: ${lvEsc(q.note)}</div>` : ''}
+        ${q.reportOf ? `<div style="color:var(--red);font-weight:600">🚩 ${lvEsc(q.note || 'Viewer reported: wrong location')} — move the pin and Save location, or Dismiss if it's right</div>`
+          : q.note ? `<div style="color:var(--muted)">Note: ${lvEsc(q.note)}</div>` : ''}
+        ${q.replaces ? `<div style="color:var(--accent,#f97316);margin:0.2rem 0">🔁 Looks like the new stream for <strong>${lvEsc(q.replaces.name)}</strong> (${lvEsc(q.replaces.why)})
+          <button class="btn btn-primary btn-sm" style="margin-left:0.35rem" onclick="ccReplace('${q.id}','${q.replaces.id}')">Use as its new stream</button></div>` : ''}
         ${q.locationGuess ? `<div style="color:${q.confident ? 'var(--green)' : 'var(--gold)'}">${q.confident ? '✓ confirmed' : (q.lat != null ? '⚠ check location' : '⚠ needs a location')} · 📍 ${lvEsc(q.locationGuess)}</div>` : ''}
         <div style="display:flex;gap:0.35rem;margin-top:0.35rem;flex-wrap:wrap;align-items:center;">
           <input id="ccq-lat-${q.id}" type="text" value="${q.lat ?? ''}" placeholder="Latitude" size="9" style="font-size:0.78rem;margin:0">
@@ -830,8 +841,8 @@ async function loadCommunity() {
           <button class="btn btn-ghost btn-sm" title="Look up the name above" onclick="ccLookup('ccq-name-${q.id}','ccq-lat-${q.id}','ccq-lng-${q.id}',null)">🔎</button>
           <button class="btn btn-ghost btn-sm" title="Pick on map" onclick="ccPickOnMap('ccq-lat-${q.id}','ccq-lng-${q.id}','ccq-name-${q.id}')">🗺</button>
           <a class="btn btn-ghost btn-sm" href="${lvEsc(link)}" target="_blank" rel="noopener">Open ↗</a>
-          <button class="btn btn-primary btn-sm" onclick="ccAct('approve','${q.id}')">Approve</button>
-          <button class="btn btn-ghost btn-sm" onclick="ccAct('reject','${q.id}')">Reject</button>
+          <button class="btn btn-primary btn-sm" onclick="ccAct('approve','${q.id}')">${q.reportOf ? 'Save location' : q.replaces ? 'Approve as a separate camera' : 'Approve'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="ccAct('reject','${q.id}')">${q.reportOf ? 'Dismiss — location is right' : 'Reject'}</button>
         </div>
       </div></div>`;
   }).join('') || '<div style="font-size:0.8rem;color:var(--muted)">Nothing waiting. Search above, or wait for viewer suggestions / nightly discovery.</div>';
@@ -844,8 +855,23 @@ async function loadCommunity() {
        <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('rescan','${c.id}')">Check now</button>
        <button class="btn btn-ghost btn-sm" onclick="ccChannelAct('remove','${c.id}')">Stop watching</button></div>`).join('')
     : '<span style="color:var(--muted)">None yet — channels you import are watched automatically.</span>';
+  const rn = d.renewals || [];
+  document.getElementById('cc-renew-count').textContent = rn.length ? '(' + rn.length + ' recent)' : '';
+  document.getElementById('cc-renewals').innerHTML = rn.length ? rn.map(r =>
+    `<div style="display:flex;gap:0.5rem;align-items:center;padding:0.3rem 0;border-bottom:1px solid var(--border);">
+       <span style="flex:1"><strong>${lvEsc(r.name)}</strong> <span style="color:var(--muted)">· ${fmtTs(new Date(r.at).toISOString())} · ${lvEsc(r.why || '')}
+         · new stream: <a href="https://www.youtube.com/watch?v=${lvEsc(r.to)}" target="_blank" rel="noopener">${lvEsc((r.title || r.to).slice(0, 70))}</a></span></span>
+       ${r.from ? `<button class="btn btn-ghost btn-sm" onclick="ccUndoRenewal('${r.camId}','${r.to}')">Undo</button>` : ''}</div>`).join('')
+    : '<span style="color:var(--muted)">None yet.</span>';
   _ccCams = d.cams;
   ccRenderCams();
+}
+async function ccReplace(id, camId) {
+  try { await ccPost('replace', { id, camId }); loadCommunity(); } catch (e) { alert(e.message); }
+}
+async function ccUndoRenewal(camId, to) {
+  if (!confirm('Put this camera back on its old stream? The new stream goes to the review queue.')) return;
+  try { await ccPost('renewals/undo', { camId, to }); loadCommunity(); } catch (e) { alert(e.message); }
 }
 
 
