@@ -150,8 +150,20 @@ async function ibiState(st) {
 // Over budget or refused: keep showing the last data and stop asking for a while.
 const R511_BASE = 'https://api.road511.com/api/v1/features';
 const R511_TTL = Number(process.env.ROAD511_TTL_MIN || 45) * 60 * 1000;
-const R511_DAILY_CAP = Number(process.env.ROAD511_DAILY_CAP || 900);
-const R511_PER_MIN = 15, R511_PAGE = 100, R511_MAX_PAGES = 15;
+// Plan limits. Trial/Free: 1,000/day, 20/min, 100 per page. Individual
+// ($9/mo): 2,000/day, 30/min, 250 per page → set ROAD511_PLAN=individual.
+// We stay ~10% under each so a burst never trips their limit.
+const R511_INDIVIDUAL = /^individual$/i.test(process.env.ROAD511_PLAN || '');
+const R511_DAILY_CAP = Number(process.env.ROAD511_DAILY_CAP || (R511_INDIVIDUAL ? 1800 : 900));
+const R511_PER_MIN = R511_INDIVIDUAL ? 25 : 15, R511_PAGE = R511_INDIVIDUAL ? 250 : 100, R511_MAX_PAGES = 15;
+// Cameras from Road511, only for states that won't give us their own feed
+// (ROAD511_CAMERA_STATES, e.g. "LA"). Feature type name per Road511's docs.
+// Two ways their docs may name it: type=cameras, or type=features&subtype=cameras.
+// Tried in that order; whichever answers is remembered. ROAD511_CAMERA_QUERY
+// (e.g. "type=features&subtype=cameras") pins it.
+const R511_CAM_QUERIES = process.env.ROAD511_CAMERA_QUERY ? [process.env.ROAD511_CAMERA_QUERY]
+  : ['type=cameras', 'type=features&subtype=cameras'];
+let _r511CamQuery = null;
 // Rough state outlines (w, s, e, n) — to know which states are on screen
 const STATE_BOXES = {
   AL: [-88.5, 30.1, -84.9, 35.0], AZ: [-114.9, 31.3, -109.0, 37.0], AR: [-94.7, 33.0, -89.6, 36.5], CA: [-124.5, 32.5, -114.1, 42.0],
@@ -237,6 +249,83 @@ async function _r511Fetch(pair, key) {
   }
   return feats;
 }
+// ── Road511 cameras ──────────────────────────────────────────────────────────
+// Images come from the state DOT's own servers (they don't count against the
+// Road511 limits); only the camera list costs calls — a few per state, and the
+// caller caches it for hours.
+let _r511CamSample = null;
+const _num = (v) => (v == null || v === '' ? NaN : Number(v));
+function _r511Camera(r, st) {
+  const p = Object.assign({}, r.properties || {}, r);
+  let lat = _num(p.latitude ?? p.lat), lng = _num(p.longitude ?? p.lng ?? p.lon);
+  const g = r.geometry || p.geometry;
+  if ((!Number.isFinite(lat) || !Number.isFinite(lng)) && g && Array.isArray(g.coordinates) && g.coordinates.length >= 2 && !Array.isArray(g.coordinates[0])) {
+    lng = _num(g.coordinates[0]); lat = _num(g.coordinates[1]);
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!lat && !lng)) return null;
+  const view = (Array.isArray(p.views) && p.views[0]) || (Array.isArray(p.images) && p.images[0]) || {};
+  const pick = (...vals) => vals.find(v => typeof v === 'string' && /^https?:\/\//i.test(v)) || null;
+  const img = pick(p.image_url, p.imageUrl, p.snapshot_url, p.snapshotUrl, p.still_url, view.image_url, view.imageUrl, view.url, typeof view === 'string' ? view : null, p.url);
+  const vid = pick(p.video_url, p.videoUrl, p.stream_url, p.streamUrl, p.hls_url, view.video_url, view.videoUrl);
+  const isHls = (u) => !!u && /\.m3u8(\?|$)/i.test(u);
+  const videoUrl = isHls(vid) ? vid : isHls(img) ? img : null;
+  const imageUrl = img && !isHls(img) ? img : null;
+  if (!imageUrl && !videoUrl) return null;
+  if (p.status && /disabled|offline|inactive/i.test(String(p.status))) return null;
+  return {
+    id: 'r511-' + st.toLowerCase() + '-' + String(p.id || p.camera_id || p.uuid || (lat.toFixed(5) + ',' + lng.toFixed(5))),
+    name: String(p.name || p.title || p.location || p.description || 'Traffic camera').slice(0, 120),
+    lat, lng, imageUrl, videoUrl,
+    direction: p.direction && !/unknown/i.test(p.direction) ? p.direction : null,
+    source: 'dot', provider: 'Road511',
+  };
+}
+async function road511Cameras(st) {
+  const key = process.env.ROAD511_API_KEY;
+  const allowed = String(process.env.ROAD511_CAMERA_STATES || '').toUpperCase().split(/[\s,]+/).filter(Boolean);
+  if (!key || !allowed.includes(st)) return [];
+  const fetchPage = async (query, page) => {
+    if (!_r511Budget()) throw Object.assign(new Error('Road511 daily/minute budget reached'), { budget: true });
+    _r511Calls++; _r511MinuteCalls++;
+    try {
+      const txt = await getText(`${R511_BASE}?${query}&jurisdiction=${st}&limit=${R511_PAGE}&offset=${page * R511_PAGE}`,
+        { headers: { 'X-API-Key': key }, timeout: 20000 });
+      const j = JSON.parse(txt);
+      const rows = _r511Rows(j);
+      if (rows[0] && (!_r511CamSample || _r511CamSample.query !== query)) _r511CamSample = { state: st, query, topLevel: Array.isArray(j) ? 'list' : Object.keys(j).slice(0, 12), firstItem: JSON.stringify(rows[0]).slice(0, 1500) };
+      return rows;
+    } catch (e) {
+      if (e.status === 401 || e.status === 403) { _r511PauseUntil = Date.now() + 6 * 3600 * 1000; throw e; }
+      if (e.status === 429) { _r511PauseUntil = Date.now() + 10 * 60 * 1000; throw e; }
+      if (e.budget) throw e;
+      return null;                                   // 400/404/odd reply → try the other wording
+    }
+  };
+  const cams = [];
+  let rows = null, query = _r511CamQuery;
+  try {
+    for (const q of (query ? [query] : R511_CAM_QUERIES)) {
+      rows = await fetchPage(q, 0);
+      if (rows && rows.length) { query = q; break; }
+    }
+  } catch (e) { _r511Stats['cameras-' + st] = { error: e.message, at: new Date().toISOString() }; throw e; }
+  if (!rows || !rows.length) {
+    _r511Stats['cameras-' + st] = { count: 0, at: new Date().toISOString(), note: 'no cameras returned for ' + (query || R511_CAM_QUERIES.join(' or ')) };
+    return [];
+  }
+  _r511CamQuery = query;
+  for (let page = 0; ; ) {
+    for (const r of rows) { const c = _r511Camera(r, st); if (c) cams.push(c); }
+    if (rows.length < R511_PAGE || ++page >= R511_MAX_PAGES) break;
+    rows = await fetchPage(query, page);
+    if (!rows) break;
+  }
+  _r511Stats['cameras-' + st] = { count: cams.length, at: new Date().toISOString(), query };
+  _roadStats.road511 = { ...(_roadStats.road511 || {}), callsToday: _r511Calls, cap: R511_DAILY_CAP, perMinute: R511_PER_MIN,
+    states: _r511Stats, cameraSample: _r511CamSample, plan: R511_INDIVIDUAL ? 'individual' : 'trial' };
+  return cams;
+}
+
 async function road511(bbox, coveredStates) {
   const key = process.env.ROAD511_API_KEY;
   if (!key) return [];
@@ -268,7 +357,7 @@ async function road511(bbox, coveredStates) {
     await _r511Busy;
   }
   _roadStats.road511 = { callsToday: _r511Calls, cap: R511_DAILY_CAP, perMinute: R511_PER_MIN, cacheMinutes: R511_TTL / 60000,
-    pausedUntil: _r511PauseUntil > Date.now() ? new Date(_r511PauseUntil).toISOString() : null, states: _r511Stats, sample: _r511Sample };
+    pausedUntil: _r511PauseUntil > Date.now() ? new Date(_r511PauseUntil).toISOString() : null, states: _r511Stats, sample: _r511Sample, cameraSample: _r511CamSample, plan: R511_INDIVIDUAL ? 'individual' : 'trial' };
   return want.flatMap(st => (_r511.get(st) || { features: [] }).features);
 }
 
@@ -413,4 +502,4 @@ async function init(redisClient) {
   if (redis) redis.del('wt:foliage:v1', 'wt:foliage:v2', 'wt:flag:foliage').catch(() => {});
 }
 
-module.exports = { routes, init, _test: { decodePolyline, roadCategory } };
+module.exports = { routes, init, road511Cameras, _test: { decodePolyline, roadCategory, _r511Camera } };

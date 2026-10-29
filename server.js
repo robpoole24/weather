@@ -633,6 +633,10 @@ app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
   group.channels[idx] = { ...group.channels[idx], ...req.body };
   saveData(data);
+  if ('weatherOnly' in (req.body || {})) {            // refetch their recent videos with the new rule
+    delete cache.recentVideos[req.params.channelId];
+    rDel('wt:recent:' + req.params.channelId);
+  }
   res.json({ ok: true });
 });
 
@@ -1593,13 +1597,21 @@ const STATE_DOTS = [
     cacheTTL: 10 * 60 * 1000,
     parse: _parseIBI511,
   },
+  // Louisiana: 511LA declined a developer key, so its cameras come through
+  // Road511 (ROAD511_CAMERA_STATES includes LA). If 511LA ever issues a key
+  // (LA_511_KEY), their own feed is used instead. The list is cached 6 h;
+  // images load straight from Louisiana's servers.
   {
     id: 'la',
-    label: 'Louisiana DOTD',
-    url: 'https://www.511la.org/api/v2/get/cameras?format=json',
-    envKey: 'LA_511_KEY',
-    cacheTTL: 10 * 60 * 1000,
-    parse: _parseIBI511,
+    label: 'Louisiana DOTD (via Road511)',
+    cacheTTL: 6 * 3600 * 1000,
+    load: async () => {
+      if (process.env.LA_511_KEY) {
+        const txt = await fetchTextOverHttp('https://www.511la.org/api/v2/get/cameras?format=json&key=' + encodeURIComponent(process.env.LA_511_KEY.trim()));
+        return _parseIBI511(JSON.parse(txt), 'la', { url: 'https://www.511la.org/api/v2/get/cameras' });
+      }
+      return winter.road511Cameras('LA');
+    },
   },
   {
     id: 'az',
@@ -5268,6 +5280,36 @@ setInterval(() => {
 // Derive a channel's uploads playlist ID from its channel ID.
 // YouTube uploads playlist is always 'UU' + channelId.slice(2)
 // e.g. UCxxxxxx → UUxxxxxx — no extra API call required.
+// Channels marked "Weather videos only" (mixed channels: chasing plus fishing,
+// vlogs, gaming…) fetch their newest 50 uploads (still 1 quota unit) and show
+// only the weather ones, newest 10. Everyone else: their newest 10 as before.
+const WEATHER_VIDEO = /\b(tornado(e?s)?|tornadic|storms?|stormy|severe|weather|forecasts?|forecasting|hurricanes?|tropic(s|al)|cyclones?|typhoons?|hail(storm)?|supercells?|chas(e|es|ing|er|ers)|intercept(ed)?|radar|blizzards?|snow(storm|fall)?|winter storm|ice storm|flood(s|ing|ed)?|flash flood|derecho|lightning|thunder(storms?)?|wind ?storm|damaging winds?|heat ?wave|outlook|spc|nws|el ni[ñn]o|la ni[ñn]a|meteorolog\w*|wx|funnel|wall cloud|shelf cloud|dryline|squall|monsoon|nor'?easter|atmospheric river|polar vortex|aurora|wildfire|dust storm|haboob|waterspout)\b|tormenta|tempestad|unwetter|gewitter|orage/i;
+function _isWeatherOnly(channelId) {
+  for (const g of (loadData().groups || [])) for (const c of g.channels) if (c.id === channelId) return !!c.weatherOnly;
+  return false;
+}
+function _recentMax(channelId) { return _isWeatherOnly(channelId) ? 50 : 10; }
+// Big named events people title videos by, with no weather word in the title
+const WEATHER_EVENT = /\b(joplin|el reno|greensburg|tuscaloosa|hackleburg|mayfield|rolling fork|vilonia|pilger|bassfield|jarrell|bridge creek|super outbreak|xenia|picher|parkersburg|katrina|helene|milton|camille|galveston 1900|labor day hurricane|palm sunday outbreak|april 27(th)?,? 2011|may 3(rd)?,? 1999)\b/i;   // only names that aren't also everyday first names or towns (Moore, Ian, Michael, Laura… need a weather word too)
+const _isWxText = (t) => WEATHER_VIDEO.test(t) || WEATHER_EVENT.test(t);
+function _filterRecent(items, channelId) {
+  if (!_isWeatherOnly(channelId)) return items;
+  // Lines a channel pastes under every video (links, "I'm a storm chaser and
+  // fisherman…") would make every upload look like weather — skip lines that
+  // appear in half or more of this batch's descriptions
+  const lineCount = new Map();
+  const linesOf = (d) => [...new Set(String(d || '').split(/\n+/).map(l => l.trim()).filter(l => l.length > 3))];
+  items.forEach(it => linesOf(it.snippet && it.snippet.description).forEach(l => lineCount.set(l, (lineCount.get(l) || 0) + 1)));
+  const boiler = Math.max(3, Math.ceil(items.length / 2));
+  return items.filter(it => {
+    const sn = it.snippet || {};
+    if (sn.liveBroadcastContent === 'live') return true;
+    if (_isWxText(sn.title || '')) return true;
+    const body = linesOf(sn.description).filter(l => (lineCount.get(l) || 0) < boiler).join('\n');
+    return _isWxText(body);
+  }).slice(0, 10);
+}
+
 function getUploadsPlaylistId(channelId) {
   if (!channelId || !channelId.startsWith('UC')) return null;
   return 'UU' + channelId.slice(2);
@@ -5361,7 +5403,7 @@ async function fetchAllRecentVideos() {
 
     try {
       const url = 'https://www.googleapis.com/youtube/v3/playlistItems?key=' + useKey +
-        '&playlistId=' + playlistId + '&part=snippet&maxResults=10';
+        '&playlistId=' + playlistId + '&part=snippet&maxResults=' + _recentMax(ch.id);
       const data = await ytFetch(url);
 
       if (checkQuotaError(data)) {
@@ -5411,8 +5453,9 @@ async function fetchAllRecentVideos() {
       const tier = getChannelTier(ch);
       const ttl = tier === 1 ? REDIS_TTL.recentVideos : REDIS_TTL.recentVideosInactive;
 
-      if (newItems.length > 0) {
-        cache.recentVideos[ch.id] = { items: newItems, cachedAt: Date.now() };
+      const shown = _filterRecent(newItems, ch.id);   // weather-only channels: just their weather videos
+      if (shown.length > 0) {
+        cache.recentVideos[ch.id] = { items: shown, cachedAt: Date.now() };
         await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], ttl);
         if (tier !== 1) await updateChannelActivity(ch.id, { nextFetchDue: Date.now() + 14 * 86400000 });
         fetched++;
@@ -5574,7 +5617,7 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
   try {
     // playlistItems.list on the uploads playlist: 1 unit (search.list was 100),
     // the same call the scheduled fetch uses
-    const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=10`;
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=${_recentMax(channelId)}`;
     const raw = await ytFetch(url);
     if (!checkQuotaError(raw)) trackBurn(usingPrimary, 1);
     // Same shape search.list returned, so the app's Recent panel is unchanged
@@ -5590,6 +5633,7 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
         thumbnails: item.snippet?.thumbnails || {},
       },
     })).filter(it => it.id.videoId) };
+    if (data.items) data.items = _filterRecent(data.items, channelId);
     if (checkQuotaError(data)) {
       markQuotaExceeded(usingPrimary);
       // Serve stale cache if available rather than returning an error

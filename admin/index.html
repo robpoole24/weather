@@ -1240,6 +1240,9 @@ function renderChannelRow(groupId, ch) {
       '<input type="checkbox" ' + (ch.hasLive ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{hasLive:this.checked})" />' +
       '<span class="toggle-slider"></span>' +
     '</label>' +
+    '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;' + (ch.weatherOnly ? 'border-color:var(--gold);color:var(--gold);' : 'opacity:0.55;') + '"' +
+      ' title="Weather videos only: for mixed channels, show just their weather / storm videos (newest 10) instead of every upload. Click to ' + (ch.weatherOnly ? 'turn off' : 'turn on') + '."' +
+      ' onclick="toggleWeatherOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">🌪 ' + (ch.weatherOnly ? 'Weather only' : 'All videos') + '</button>' +
     '<label class="toggle" title="Enabled">' +
       '<input type="checkbox" ' + (ch.enabled !== false ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{enabled:this.checked})" />' +
       '<span class="toggle-slider"></span>' +
@@ -1480,6 +1483,16 @@ async function addChannel(groupId) {
   }
 }
 
+async function toggleWeatherOnly(btn, groupId, channelId) {
+  const g = (appData.groups || []).find(x => x.id === groupId);
+  const ch = g && g.channels.find(c => c.id === channelId);
+  if (!ch) return;
+  ch.weatherOnly = !ch.weatherOnly;            // keep the page's copy in step, so Save all doesn't undo it
+  await updateChannel(groupId, channelId, { weatherOnly: ch.weatherOnly });
+  btn.textContent = '🌪 ' + (ch.weatherOnly ? 'Weather only' : 'All videos');
+  btn.style.borderColor = ch.weatherOnly ? 'var(--gold)' : ''; btn.style.color = ch.weatherOnly ? 'var(--gold)' : ''; btn.style.opacity = ch.weatherOnly ? '' : '0.55';
+  showToast(ch.weatherOnly ? 'Only weather videos will show for this channel' : 'All recent videos will show for this channel');
+}
 async function updateChannel(groupId, channelId, fields) {
   await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId, {
     method:'PUT', headers:{'Content-Type':'application/json'},

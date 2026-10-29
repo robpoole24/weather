@@ -100,6 +100,8 @@ function render() {
         <div class="samples">${(c.samples || []).map(v => `<a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">▸ ${esc(v.title)}</a>`).join('')}</div>
         <div class="act">
           <select id="g-${esc(c.id)}">${groupOpts(c.suggestedGroup)}</select>
+          <label style="font-size:0.78rem;color:var(--muted);display:flex;gap:0.25rem;align-items:center" title="Show only their weather / storm videos (newest 10), not every upload">
+            <input type="checkbox" id="w-${esc(c.id)}" ${c.weather < 60 ? 'checked' : ''}> 🌪 Weather videos only</label>
           <button class="btn btn-primary" onclick="approve('${esc(c.id)}')">Add to WeatherTV</button>
           <button class="btn btn-ghost" onclick="act('snooze','${esc(c.id)}')" title="Hide for 30 days">Not now</button>
           <button class="btn btn-red" onclick="act('reject','${esc(c.id)}')" title="Never suggest again">Reject</button>
@@ -112,7 +114,8 @@ function render() {
 async function approve(id) {
   const group = document.getElementById('g-' + id).value, name = document.getElementById('n-' + id).value.trim();
   const collectionIds = [...document.querySelectorAll(`input[name="col-${CSS.escape(id)}"]:checked`)].map(i => i.value);
-  try { await post('approve', { id, group, collectionIds, name }); gone(id, '✓ Added ' + name + ' — if the main admin page is open in another tab, reload it before pressing Save there'); } catch (e) { alert(e.message); }
+  const weatherOnly = !!(document.getElementById('w-' + id) || {}).checked;
+  try { await post('approve', { id, group, collectionIds, name, weatherOnly }); gone(id, '✓ Added ' + name + ' — if the main admin page is open in another tab, reload it before pressing Save there'); } catch (e) { alert(e.message); }
 }
 async function act(kind, id) {
   try { await post(kind, { id }); gone(id, kind === 'reject' ? 'Rejected — won’t be suggested again' : 'Hidden for 30 days'); } catch (e) { alert(e.message); }

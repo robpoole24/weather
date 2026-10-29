@@ -218,14 +218,14 @@ function createChannelDiscovery(app, deps) {
   app.post('/api/admin/discovery/run', async (req, res) => res.json(await run((req.body || {}).kind === 'network' ? 'network' : 'search')));
   app.post('/api/admin/discovery/approve', async (req, res) => {
     await load();
-    const { id, group, collectionIds = [], name } = req.body || {};
+    const { id, group, collectionIds = [], name, weatherOnly } = req.body || {};
     const c = db.candidates[id];
     const data = loadData();
     const g = (data.groups || []).find(x => x.id === group);
     if (!c || !g) return res.status(400).json({ error: 'Pick a group first (or refresh the page)' });
     if (carried().has(id)) { delete db.candidates[id]; await save(); return res.status(409).json({ error: 'Already on WeatherTV' }); }
     const cols = (Array.isArray(collectionIds) ? collectionIds : [collectionIds]).filter(Boolean);
-    g.channels.push({ id, name: String(name || c.name).slice(0, 80), hasLive: true, enabled: true,
+    g.channels.push({ id, name: String(name || c.name).slice(0, 80), hasLive: true, enabled: true, ...(weatherOnly ? { weatherOnly: true } : {}),
       ...(cols.length ? { collectionIds: cols, collectionId: cols[0] } : {}) });
     saveData(data);
     delete db.candidates[id];
