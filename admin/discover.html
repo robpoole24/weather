@@ -1,0 +1,134 @@
+<!-- WeatherTV Admin — Channel discovery -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WeatherTV Admin — Find Channels</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --bg:#0a0e14; --surface:#111820; --surface2:#1a2433; --accent:#00b4d8; --gold:#f4a261; --text:#e8f4fd; --muted:#7a9bb5;
+          --border:rgba(0,180,216,0.2); --red:#e63946; --green:#52b788; }
+  body { background:var(--bg); color:var(--text); font-family:'Barlow',sans-serif; min-height:100vh; }
+  header { background:var(--surface); border-bottom:1px solid var(--border); padding:1rem 2rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .logo { font-family:'Barlow Condensed',sans-serif; font-size:1.5rem; font-weight:700; color:var(--accent); letter-spacing:0.05em; }
+  .logo span { color:var(--gold); }
+  header a { margin-left:auto; font-family:'Barlow Condensed',sans-serif; font-weight:600; color:var(--accent); text-decoration:none; }
+  .wrap { max-width:1060px; margin:1.5rem auto; padding:0 1.25rem; display:flex; flex-direction:column; gap:1rem; }
+  .bar { display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; font-size:0.85rem; color:var(--muted); }
+  .btn { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.78rem; letter-spacing:0.08em; text-transform:uppercase; padding:0.35rem 0.8rem;
+         border-radius:4px; cursor:pointer; border:none; }
+  .btn-primary { background:var(--accent); color:#000; } .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--text); }
+  .btn-red { background:transparent; border:1px solid var(--red); color:var(--red); }
+  select, input[type=text] { background:var(--surface2); border:1px solid var(--border); color:var(--text); font:inherit; font-size:0.85rem; padding:0.3rem 0.5rem; border-radius:4px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:0.85rem; display:grid; grid-template-columns:72px 1fr; gap:0.85rem; }
+  .card img.av { width:72px; height:72px; border-radius:50%; object-fit:cover; background:#000; }
+  .name { font-size:1.05rem; font-weight:600; width:100%; max-width:360px; }
+  .meta { font-size:0.8rem; color:var(--muted); margin:0.25rem 0; display:flex; gap:0.75rem; flex-wrap:wrap; }
+  .tag { display:inline-block; padding:0.1rem 0.45rem; border-radius:3px; font-size:0.72rem; font-weight:700; font-family:'Barlow Condensed',sans-serif; letter-spacing:0.06em; text-transform:uppercase; }
+  .t-Chaser { background:rgba(230,57,70,.18); color:#ff8a93; } .t-Forecaster { background:rgba(0,180,216,.18); color:#7fdcf0; }
+  .t-Weather.creator, .t-creator { background:rgba(82,183,136,.18); color:#8fe0b8; } .t-React { background:rgba(244,162,97,.2); color:var(--gold); }
+  .t-Mixed { background:rgba(122,155,181,.2); color:var(--muted); }
+  .wx { font-weight:700; } .wx.hi { color:var(--green); } .wx.mid { color:var(--gold); } .wx.lo { color:var(--red); }
+  .samples { font-size:0.78rem; margin:0.35rem 0; columns:2; column-gap:1rem; } .samples a { color:var(--text); text-decoration:none; display:block; break-inside:avoid; opacity:.85; }
+  .samples a:hover { color:var(--accent); }
+  .act { display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center; margin-top:0.4rem; }
+  .cols { display:flex; flex-wrap:wrap; gap:0.25rem 0.75rem; font-size:0.78rem; color:var(--muted); margin-top:0.35rem; }
+  .cols label { display:flex; gap:0.25rem; align-items:center; cursor:pointer; }
+  .runs { font-size:0.78rem; color:var(--muted); } .runs div { padding:0.15rem 0; border-bottom:1px solid var(--border); }
+  @media (max-width:640px) { .card { grid-template-columns:48px 1fr; } .card img.av { width:48px; height:48px; } .samples { columns:1; } }
+</style>
+</head>
+<body>
+<header><div class="logo">Weather<span>TV</span> · Find Channels</div><a href="/admin/">← Admin</a></header>
+<div class="wrap">
+  <div class="bar" id="stats">Loading…</div>
+  <div class="bar">
+    <button class="btn btn-primary" onclick="runNow('search')">🔎 Run a search now</button>
+    <button class="btn btn-ghost" onclick="runNow('network')">🕸 Check who your channels feature</button>
+    <span style="margin-left:auto">Show</span>
+    <select id="f-type" onchange="render()"><option value="">All types</option><option>Chaser</option><option>Forecaster</option><option>Weather creator</option><option>React channel</option><option>Mixed</option></select>
+    <select id="f-live" onchange="render()"><option value="">Live or not</option><option value="1">Streamed live (60 days)</option><option value="0">Videos only</option></select>
+    <select id="f-sort" onchange="render()"><option value="score">Best match first</option><option value="new">Newest found</option><option value="subs">Most subscribers</option><option value="active">Most active</option></select>
+  </div>
+  <div id="msg" class="bar"></div>
+  <div id="list" style="display:flex;flex-direction:column;gap:0.75rem"></div>
+  <details><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Recent discovery runs</summary><div class="runs" id="runs"></div></details>
+</div>
+<script>
+let D = null;
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ago = (t) => { if (!t) return 'never'; const d = (Date.now() - t) / 864e5; return d < 1 ? 'today' : d < 2 ? 'yesterday' : Math.round(d) + ' days ago'; };
+const fmtN = (n) => n == null ? 'hidden' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(n);
+async function post(path, body) {
+  const r = await fetch('/api/admin/discovery/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status); return j;
+}
+async function load() {
+  try { D = await (await fetch('/api/admin/discovery')).json(); } catch (e) { document.getElementById('stats').textContent = '✗ Could not load — is the new server deployed?'; return; }
+  document.getElementById('stats').innerHTML = `<strong style="color:var(--text)">${D.candidates.length}</strong> channels to review ·
+    today: ${D.today.searches}/${D.today.of} searches, ~${D.today.units} quota units · ${D.rejected} rejected · ${D.snoozed} snoozed` +
+    (D.enabled ? '' : ' · <span style="color:var(--gold)">automatic discovery is OFF (CHANNEL_DISCOVERY=false)</span>');
+  document.getElementById('runs').innerHTML = (D.runs || []).map(r => `<div>${new Date(r.at).toLocaleString()} · ${esc(r.source)}${r.q ? ' “' + esc(r.q) + '”' : ''}${r.live ? ' (live)' : ''} · ` +
+    (r.error ? '<span style="color:var(--red)">' + esc(r.error) + '</span>' : `${r.newChannels ?? 0} new channels seen, ${r.added ?? 0} added for review`) + '</div>').join('') || 'None yet.';
+  render();
+}
+function score(c) { return (c.lives60d > 0 ? 50 : 0) + c.weather + Math.min(c.postsPerWeek, 7) * 3; }
+function render() {
+  if (!D) return;
+  const t = document.getElementById('f-type').value, l = document.getElementById('f-live').value, so = document.getElementById('f-sort').value;
+  let L = D.candidates.filter(c => (!t || c.type === t) && (l === '' || (l === '1' ? c.lives60d > 0 : !c.lives60d)));
+  L.sort(so === 'new' ? (a, b) => b.foundAt - a.foundAt : so === 'subs' ? (a, b) => (b.subs || 0) - (a.subs || 0)
+    : so === 'active' ? (a, b) => b.postsPerWeek - a.postsPerWeek : (a, b) => score(b) - score(a));
+  const groupOpts = (sel) => D.groups.map(g => `<option value="${esc(g.id)}"${g.id === sel ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
+  const allCols = D.groups.flatMap(g => g.collections);
+  document.getElementById('list').innerHTML = L.slice(0, 100).map(c => {
+    const wx = c.weather >= 60 ? 'hi' : c.weather >= 35 ? 'mid' : 'lo';
+    return `<div class="card" id="c-${esc(c.id)}">
+      <img class="av" src="${esc(c.thumb || '')}" alt="" loading="lazy">
+      <div>
+        <input class="name" type="text" id="n-${esc(c.id)}" value="${esc(c.name)}" title="Name shown on WeatherTV — you can shorten it to the person's name">
+        <div class="meta">
+          <span class="tag t-${esc(c.type.split(' ')[0])}">${esc(c.type)}</span>
+          <span>Weather: <span class="wx ${wx}">${c.weather}%</span>${c.react >= 20 ? ' · reacts ' + c.react + '%' : ''}</span>
+          <span>${c.postsPerWeek}×/week · last post ${ago(c.lastPost)}</span>
+          <span>${c.lives60d ? '🔴 ' + c.lives60d + ' live streams (60 days), last ' + ago(c.lastLive) : 'no live streams lately'}</span>
+          <span>${fmtN(c.subs)} subscribers</span>${c.country ? `<span>${esc(c.country)}</span>` : ''}
+        </div>
+        <div class="meta"><span>Found: ${esc(c.foundVia)}</span><a href="https://www.youtube.com/channel/${esc(c.id)}" target="_blank" rel="noopener" style="color:var(--accent)">Open channel ↗</a></div>
+        <div class="samples">${(c.samples || []).map(v => `<a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">▸ ${esc(v.title)}</a>`).join('')}</div>
+        <div class="act">
+          <select id="g-${esc(c.id)}">${groupOpts(c.suggestedGroup)}</select>
+          <button class="btn btn-primary" onclick="approve('${esc(c.id)}')">Add to WeatherTV</button>
+          <button class="btn btn-ghost" onclick="act('snooze','${esc(c.id)}')" title="Hide for 30 days">Not now</button>
+          <button class="btn btn-red" onclick="act('reject','${esc(c.id)}')" title="Never suggest again">Reject</button>
+        </div>
+        ${allCols.length ? `<details class="cols"><summary style="cursor:pointer">Subgroups (optional)</summary>${allCols.map(k =>
+          `<label><input type="checkbox" name="col-${esc(c.id)}" value="${esc(k.id)}"> ${esc(k.label)} <span style="opacity:.6">(${esc(k.owner)})</span></label>`).join('')}</details>` : ''}
+      </div></div>`;
+  }).join('') || '<div class="bar">Nothing to review right now. Discovery runs through the day, or press “Run a search now”.</div>';
+}
+async function approve(id) {
+  const group = document.getElementById('g-' + id).value, name = document.getElementById('n-' + id).value.trim();
+  const collectionIds = [...document.querySelectorAll(`input[name="col-${CSS.escape(id)}"]:checked`)].map(i => i.value);
+  try { await post('approve', { id, group, collectionIds, name }); gone(id, '✓ Added ' + name + ' — if the main admin page is open in another tab, reload it before pressing Save there'); } catch (e) { alert(e.message); }
+}
+async function act(kind, id) {
+  try { await post(kind, { id }); gone(id, kind === 'reject' ? 'Rejected — won’t be suggested again' : 'Hidden for 30 days'); } catch (e) { alert(e.message); }
+}
+function gone(id, text) {
+  D.candidates = D.candidates.filter(c => c.id !== id);
+  document.getElementById('msg').textContent = text;
+  render();
+}
+async function runNow(kind) {
+  const m = document.getElementById('msg'); m.textContent = kind === 'network' ? 'Checking featured channels… (a minute or two)' : 'Searching YouTube…';
+  try { const r = await post('run', { kind }); m.textContent = r.error ? '✗ ' + r.error : r.skipped ? r.skipped : `Done — ${r.newChannels ?? 0} new channels seen, ${r.added ?? 0} added for review`; }
+  catch (e) { m.textContent = '✗ ' + e.message; }
+  load();
+}
+load();
+</script>
+</body>
+</html>

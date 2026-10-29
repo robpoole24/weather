@@ -4737,6 +4737,17 @@ async function websubSubscribe(channelId) {
 // follows the same hasLive flag and overnight quiet hours as the rest of live
 // detection. Admin page: /admin/live-verifier (behind adminAuth via app.use('/admin')).
 // Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 2).
+// Weather boost: is there active severe weather right now? (live checks + discovery)
+async function _severeWeatherActive() {
+  const w = radar.getActiveWatches ? radar.getActiveWatches() : {};
+  if ((w.tornado || 0) + (w.severe || 0) > 0) return true;
+  const warnings = (radar.getActiveStormWarnings() || {}).list || [];
+  if (warnings.some(x => /^(Tornado|Extreme Wind|Hurricane) Warning$/.test(x.event))) return true;
+  if (warnings.filter(x => x.event === 'Severe Thunderstorm Warning').length >= 3) return true;
+  const nhc = _nhcCache.data && Date.now() - _nhcCache.ts < 6 * 3600 * 1000 ? _nhcCache.data.activeStorms || [] : [];
+  return nhc.some(st => /^al/i.test(st.id || '') && /^(HU|TS)$/i.test(st.classification || ''));
+}
+
 const liveVerifier = createLiveVerifier({
   // lastLiveDate drives how often each channel is checked (see TIERS in live-verifier.js)
   getChannels: async () => getLiveChannels(true).map(ch => ({ id: ch.id, name: ch.name, lastLiveDate: (cache.channelActivity[ch.id] || {}).lastLiveDate || null })),
@@ -4745,15 +4756,8 @@ const liveVerifier = createLiveVerifier({
   // Weather boost → recently active channels checked every sweep while there's
   // any Tornado or Severe Thunderstorm Watch, a Tornado / Extreme Wind /
   // Hurricane Warning, 3+ Severe Thunderstorm Warnings, or a named Atlantic storm
-  isSevereActive: async () => {
-    const w = radar.getActiveWatches ? radar.getActiveWatches() : {};
-    if ((w.tornado || 0) + (w.severe || 0) > 0) return true;
-    const warnings = (radar.getActiveStormWarnings() || {}).list || [];
-    if (warnings.some(x => /^(Tornado|Extreme Wind|Hurricane) Warning$/.test(x.event))) return true;
-    if (warnings.filter(x => x.event === 'Severe Thunderstorm Warning').length >= 3) return true;
-    const nhc = _nhcCache.data && Date.now() - _nhcCache.ts < 6 * 3600 * 1000 ? _nhcCache.data.activeStorms || [] : [];
-    return nhc.some(st => /^al/i.test(st.id || '') && /^(HU|TS)$/i.test(st.classification || ''));
-  },
+  isSevereActive: _severeWeatherActive,
+
   // "Known" = WTV is already showing THIS stream (same videoId when both are known)
   isKnownLive: async (channelId, videoId) => {
     const s = cache.liveStatuses[channelId];
@@ -4798,6 +4802,12 @@ const liveVerifier = createLiveVerifier({
   sweepIntervalMs: (Number(process.env.LIVE_VERIFIER_INTERVAL_MIN) || 2) * 60 * 1000,
 });
 liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data, /run, /check/:channelId
+// ── Channel discovery (admin: /admin/discover.html) ──
+const channelDiscovery = require('./channel-discovery').createChannelDiscovery(app, {
+  rGet, rSet, ytFetch, getApiKey, isQuotaExceeded: () => primaryQuotaExceeded, markQuotaExceeded, checkQuotaError, trackBurn,
+  loadData, saveData, subscribe: (id) => process.env.APP_URL ? websubSubscribe(id) : Promise.resolve(), isSevereActive: _severeWeatherActive,
+});
+channelDiscovery.start();
 
 // ── Startup sequence ──
 // Restore app data and cache from Redis first

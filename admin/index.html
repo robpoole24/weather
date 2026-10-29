@@ -634,6 +634,25 @@
     </div>
   </div>
 
+  <!-- Channel discovery — its own page: /admin/discover.html -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">🔭 Find New Channels</div>
+      <a class="btn btn-primary btn-sm" href="/admin/discover.html" style="text-decoration:none">Review suggestions →</a>
+    </div>
+    <div class="section-body">
+      <div id="disc-summary" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
+    </div>
+  </div>
+  <script>
+  fetch('/api/admin/discovery').then(r => r.json()).then(d => {
+    const n = d.candidates.length, live = d.candidates.filter(c => c.lives60d > 0).length;
+    document.getElementById('disc-summary').innerHTML = n
+      ? `<strong style="color:var(--gold)">${n}</strong> weather channels waiting for review (${live} stream live) · ${d.today.searches}/${d.today.of} searches today`
+      : `Nothing waiting · ${d.today.searches}/${d.today.of} searches today`;
+  }).catch(() => { document.getElementById('disc-summary').textContent = 'Not available yet — deploy the new server.'; });
+  </script>
+
   <!-- Community Cams — managed on its own page: /admin/cams.html -->
   <div class="section">
     <div class="section-header">
