@@ -1610,7 +1610,9 @@ const STATE_DOTS = [
         const txt = await fetchTextOverHttp('https://www.511la.org/api/v2/get/cameras?format=json&key=' + encodeURIComponent(process.env.LA_511_KEY.trim()));
         return _parseIBI511(JSON.parse(txt), 'la', { url: 'https://www.511la.org/api/v2/get/cameras' });
       }
-      return winter.road511Cameras('LA');
+      const cams = await winter.road511Cameras('LA');
+      _laImageSweep(cams);                                      // background: find cameras showing 511LA's "unavailable" card
+      return cams.filter(c => !_laOffline.has(c.imageUrl));
     },
   },
   {
@@ -3698,6 +3700,58 @@ function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redi
     req.on('error', reject);
   });
 }
+
+// ── Louisiana: hide cameras showing 511LA's "image unavailable" card ─────────
+// 511LA serves the same gray placeholder for every camera that's down. Every
+// few hours each Louisiana camera's picture is loaded (from 511LA itself — not
+// Road511, so no API calls), the placeholder is recognized as the picture many
+// cameras share byte-for-byte, and those cameras are left off the map until
+// they send a real picture again. A short history shows WHEN cameras go dark.
+const _laOffline = new Set();               // imageUrl
+let _laSweep = { running: false, lastAt: 0, history: [], placeholder: null };
+async function _laImageSweep(cams) {
+  if (_laSweep.running || Date.now() - _laSweep.lastAt < 3 * 3600 * 1000) return;
+  _laSweep.running = true; _laSweep.lastAt = Date.now();
+  try {
+    const hashes = new Map(), byCam = [];
+    let i = 0;
+    const worker = async () => {
+      while (i < cams.length) {
+        const c = cams[i++];
+        if (!c.imageUrl) continue;
+        try {
+          const { buf, status } = await _fetchBinary(c.imageUrl, { maxBytes: 2 * 1024 * 1024, timeoutMs: 15000 });
+          if (status && status >= 400) { byCam.push([c, null]); continue; }
+          const h = crypto.createHash('sha1').update(buf).digest('hex');
+          hashes.set(h, (hashes.get(h) || 0) + 1);
+          byCam.push([c, h]);
+        } catch (_) { byCam.push([c, null]); }
+        await new Promise(r => setTimeout(r, 900));
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    // The placeholder = the one picture shared by 5+ cameras (real cameras never match byte-for-byte)
+    const [ph, n] = [...hashes].sort((a, b) => b[1] - a[1])[0] || [];
+    const placeholder = n >= 5 ? ph : null;
+    _laSweep.placeholder = placeholder;
+    _laOffline.clear();
+    const down = [];
+    for (const [c, h] of byCam) if (placeholder && h === placeholder) { _laOffline.add(c.imageUrl); down.push(c.name); }
+    const now = new Date();
+    _laSweep.history.unshift({ at: now.toISOString(), hourCentral: +now.toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false }),
+      checked: byCam.length, unavailable: down.length, names: down.slice(0, 80) });
+    _laSweep.history = _laSweep.history.slice(0, 60);
+    _stateDOTCache.delete('la');           // next request rebuilds the list without the dark ones
+    console.log(`[Cameras] Louisiana image check: ${down.length}/${byCam.length} showing 511LA's unavailable card — hidden`);
+  } catch (e) {
+    console.warn('[Cameras] Louisiana image check failed:', e.message);
+  } finally { _laSweep.running = false; }
+}
+app.get('/api/admin/cameras/la-offline', (req, res) => res.json({
+  hiddenNow: _laOffline.size, lastCheck: _laSweep.lastAt ? new Date(_laSweep.lastAt).toISOString() : null,
+  note: 'Each check loads every Louisiana camera picture from 511LA; "unavailable" = showing 511LA\'s gray placeholder.',
+  history: _laSweep.history,
+}));
 
 // ── VDOT (Virginia) camera API ────────────────────────────────────────────────
 // https://api.vdotcameras.com/2.0/docs — GeoJSON FeatureCollection of streams.
