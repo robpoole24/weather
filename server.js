@@ -711,6 +711,75 @@ app.put('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', (re
   res.json({ ok: true });
 });
 
+// ── Standalone collections (folders owned by a GROUP, not a channel) ────────
+// Shown on the site as their own card titled with the collection's name, after
+// the group's channels. Members point at them as "group:<groupId>::<colId>".
+const _groupColKey = (gid, cid) => 'group:' + gid + '::' + cid;
+function _rekeyMembers(data, fromKey, toKey) {
+  for (const g of data.groups || []) for (const c of g.channels || []) {
+    const ids = Array.isArray(c.collectionIds) ? c.collectionIds : (c.collectionId ? [c.collectionId] : []);
+    if (!ids.includes(fromKey)) continue;
+    const next = [...new Set(ids.map(k => k === fromKey ? toKey : k).filter(Boolean))];
+    c.collectionIds = next; c.collectionId = next[0] || null;
+  }
+}
+app.post('/api/admin/groups/:groupId/collections', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const label = String((req.body || {}).label || '').trim().slice(0, 60);
+  if (!label) return res.status(400).json({ error: 'Give the collection a name' });
+  const col = { id: 'col-' + Date.now(), label, enabled: true };
+  (group.collections || (group.collections = [])).push(col);
+  saveData(data);
+  res.json({ ok: true, collection: col });
+});
+app.put('/api/admin/groups/:groupId/collections/order', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group || !Array.isArray((req.body || {}).orderedIds)) return res.status(400).json({ error: 'Bad request' });
+  const byId = Object.fromEntries((group.collections || []).map(c => [c.id, c]));
+  const ordered = req.body.orderedIds.map(id => byId[id]).filter(Boolean);
+  group.collections = [...ordered, ...(group.collections || []).filter(c => !ordered.includes(c))];
+  saveData(data);
+  res.json({ ok: true });
+});
+app.put('/api/admin/groups/:groupId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  const col = group && (group.collections || []).find(c => c.id === req.params.colId);
+  if (!col) return res.status(404).json({ error: 'Collection not found' });
+  const { label, enabled } = req.body || {};
+  if (label !== undefined && String(label).trim()) col.label = String(label).trim().slice(0, 60);
+  if (enabled !== undefined) col.enabled = !!enabled;
+  saveData(data);
+  res.json({ ok: true });
+});
+app.delete('/api/admin/groups/:groupId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  group.collections = (group.collections || []).filter(c => c.id !== req.params.colId);
+  _rekeyMembers(data, _groupColKey(group.id, req.params.colId), null);   // members just leave it
+  saveData(data);
+  res.json({ ok: true });
+});
+// Move a channel's collection to its group: same name, same members, no host channel
+app.post('/api/admin/groups/:groupId/channels/:channelId/collections/:colId/standalone', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  const host = group && group.channels.find(c => c.id === req.params.channelId);
+  const col = host && (host.collections || []).find(c => c.id === req.params.colId);
+  if (!col) return res.status(404).json({ error: 'Collection not found' });
+  let id = col.id;
+  while ((group.collections || []).some(c => c.id === id)) id = col.id + '-' + Math.random().toString(36).slice(2, 5);
+  host.collections = host.collections.filter(c => c !== col);
+  (group.collections || (group.collections = [])).push({ ...col, id });
+  _rekeyMembers(data, host.id + '::' + col.id, _groupColKey(group.id, id));
+  saveData(data);
+  res.json({ ok: true, hostHidden: !!host.hiddenInGroup, host: host.name });
+});
+
 // Update a channel's collection memberships (supports multiple)
 app.put('/api/admin/groups/:groupId/channels/:channelId/collection-membership', (req, res) => {
   const data = loadData();

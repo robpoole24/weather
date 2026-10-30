@@ -1121,6 +1121,7 @@ function renderGroupCard(group, gi) {
       <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','down')">▼</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();sortGroupAlpha('${group.id}')" title="Sort channels A–Z">A-Z</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleAddChannelForm('${group.id}')">+ Channel</button>
+      <button class="btn btn-gold btn-sm" title="A standalone collection: its own card on the site, titled with its name, shown after the channels" onclick="event.stopPropagation();addGroupCollection('${group.id}')">+ 📁 Collection</button>
       <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGroup('${group.id}','${group.label}')">Delete</button>
     </div>
   `;
@@ -1137,6 +1138,28 @@ function renderGroupCard(group, gi) {
     channelList.appendChild(renderChannelRow(group.id, ch));
   });
   body.appendChild(channelList);
+
+  // Standalone collections — shown on the site after the channels, in this order
+  const cols = group.collections || [];
+  if (cols.length) {
+    const colBox = document.createElement('div');
+    colBox.style.cssText = 'margin:0.6rem 0;padding:0.5rem 0.75rem;border:1px dashed rgba(244,162,97,0.4);border-radius:6px;font-size:0.78rem;';
+    colBox.innerHTML = '<div style="color:var(--gold);font-weight:600;margin-bottom:0.3rem">📁 Standalone collections <span style="color:var(--muted);font-weight:400">— shown after the channels, in this order</span></div>' +
+      cols.map((col, i) => {
+        const key = 'group:' + group.id + '::' + col.id;
+        const n = (appData.groups || []).reduce((sum, g) => sum + (g.channels || []).filter(c =>
+          Array.isArray(c.collectionIds) ? c.collectionIds.includes(key) : c.collectionId === key).length, 0);
+        return '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.2rem 0;">' +
+          '<span style="flex:1;opacity:' + (col.enabled !== false ? 1 : 0.45) + '">' + (col.enabled !== false ? '●' : '○') + ' ' + lvEscHtml(col.label) +
+          ' <span style="color:var(--muted)">(' + n + ' channel' + (n === 1 ? '' : 's') + ')</span></span>' +
+          '<button class="order-btn" ' + (i ? '' : 'disabled') + ' onclick="moveGroupCollection(\'' + group.id + '\',' + i + ',-1)">▲</button>' +
+          '<button class="order-btn" ' + (i < cols.length - 1 ? '' : 'disabled') + ' onclick="moveGroupCollection(\'' + group.id + '\',' + i + ',1)">▼</button>' +
+          '<button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="renameGroupCollection(\'' + group.id + '\',\'' + col.id + '\')">Rename</button>' +
+          '<button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="toggleGroupCollection(\'' + group.id + '\',\'' + col.id + '\')">' + (col.enabled !== false ? 'Hide' : 'Show') + '</button>' +
+          '<button class="btn btn-danger btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="deleteGroupCollection(\'' + group.id + '\',\'' + col.id + '\')">✕</button></div>';
+      }).join('');
+    body.appendChild(colBox);
+  }
 
   // Add channel form
   const addForm = document.createElement('div');
@@ -1178,6 +1201,7 @@ function renderChannelRow(groupId, ch) {
         });
       });
     });
+    (g.collections || []).forEach(col => allCollections.push({ value: 'group:' + g.id + '::' + col.id, label: '📁 ' + col.label }));
   });
 
   // Current memberships — support both array and legacy single
@@ -1274,6 +1298,7 @@ function renderChannelRow(groupId, ch) {
         '<span style="opacity:' + (col.enabled ? 1 : 0.4) + '">' + (col.enabled ? '●' : '○') + ' ' + col.label + '</span>' +
         '<span style="color:var(--muted)">(' + memberCount + ' channel' + (memberCount !== 1 ? 's' : '') + ')</span>' +
         '<button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="editCollection(\'' + groupId + '\',\'' + ch.id + '\',\'' + col.id + '\')">Edit</button>' +
+        '<button class="btn btn-ghost btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" title="Move this collection to the group as its own card, titled with its own name — members stay in it" onclick="makeStandalone(\'' + groupId + '\',\'' + ch.id + '\',\'' + col.id + '\')">📁 Make standalone</button>' +
         '<button class="btn btn-danger btn-sm" style="font-size:0.65rem;padding:0.15rem 0.5rem" onclick="deleteCollection(\'' + groupId + '\',\'' + ch.id + '\',\'' + col.id + '\')">✕</button>';
       colSection.appendChild(colRow);
     });
@@ -1538,6 +1563,7 @@ function openMembershipEditor(groupId, channelId) {
         allCollections.push({ value: c.id + '::' + col.id, label: c.name + ' → ' + col.label });
       });
     });
+    (g.collections || []).forEach(col => allCollections.push({ value: 'group:' + g.id + '::' + col.id, label: '📁 ' + col.label + ' (standalone)' }));
   });
 
   if (allCollections.length === 0) {
@@ -1622,6 +1648,51 @@ async function reorderChannel(groupId, channelId, direction) {
 }
 
 // ── Collections ──
+// ── Standalone collections (owned by the group) ──
+function lvEscHtml(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+async function groupColApi(method, path, body) {
+  const r = await fetch('/api/admin/groups/' + path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+async function addGroupCollection(groupId) {
+  const label = (prompt('Name for the new collection (e.g. Regional Forecasts: Asia):') || '').trim();
+  if (!label) return;
+  try { await groupColApi('POST', groupId + '/collections', { label }); showToast('Collection created — add channels with their 📋 button'); await loadData(); }
+  catch (e) { alert(e.message); }
+}
+async function renameGroupCollection(groupId, colId) {
+  const g = appData.groups.find(x => x.id === groupId), col = g && (g.collections || []).find(c => c.id === colId);
+  const label = (prompt('Rename collection:', col ? col.label : '') || '').trim();
+  if (!label) return;
+  try { await groupColApi('PUT', groupId + '/collections/' + colId, { label }); showToast('Renamed'); await loadData(); } catch (e) { alert(e.message); }
+}
+async function toggleGroupCollection(groupId, colId) {
+  const g = appData.groups.find(x => x.id === groupId), col = g && (g.collections || []).find(c => c.id === colId);
+  if (!col) return;
+  try { await groupColApi('PUT', groupId + '/collections/' + colId, { enabled: col.enabled === false }); await loadData(); } catch (e) { alert(e.message); }
+}
+async function deleteGroupCollection(groupId, colId) {
+  if (!confirm('Delete this collection? Its channels stay on WeatherTV; they just leave this collection.')) return;
+  try { await groupColApi('DELETE', groupId + '/collections/' + colId); showToast('Collection deleted'); await loadData(); } catch (e) { alert(e.message); }
+}
+async function moveGroupCollection(groupId, i, dir) {
+  const g = appData.groups.find(x => x.id === groupId);
+  const ids = (g.collections || []).map(c => c.id);
+  const j = i + dir; if (j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  try { await groupColApi('PUT', groupId + '/collections/order', { orderedIds: ids }); await loadData(); } catch (e) { alert(e.message); }
+}
+async function makeStandalone(groupId, channelId, colId) {
+  if (!confirm('Make this a standalone collection? It gets its own card on the site, titled with its own name, after the channels. Its members stay in it.')) return;
+  try {
+    const r = await groupColApi('POST', groupId + '/channels/' + channelId + '/collections/' + colId + '/standalone');
+    showToast(r.hostHidden ? 'Done — ' + r.host + ' stays hidden (it was only holding this collection)' : 'Done — moved to the group');
+    await loadData();
+  } catch (e) { alert(e.message); }
+}
+
 function openColManager(groupId, channelId) {
   colModalContext = { groupId, channelId, colId: null };
   document.getElementById('col-modal-name').value = '';

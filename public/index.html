@@ -1989,7 +1989,46 @@ function buildChannelLists() {
     channels.forEach(ch => {
       list.appendChild(buildChannelCard(ch, group.id));
     });
+    // Standalone collections (folders) come after the group's channels
+    (group.collections || []).forEach(col => {
+      const card = buildFolderCard(group, col);
+      if (card) list.appendChild(card);
+    });
   });
+}
+
+// Members of a collection, by its key ("channelId::colId" or "group:<groupId>::colId")
+function collectionMembers(collectionKey) {
+  return GROUPS.flatMap(g => g.channels || []).filter(c => {
+    if (c.enabled === false) return false;
+    if (Array.isArray(c.collectionIds)) return c.collectionIds.includes(collectionKey);
+    return c.collectionId === collectionKey;
+  });
+}
+
+// A standalone collection's card: titled with the collection's own name
+function buildFolderCard(group, col) {
+  if (!col || col.enabled === false) return null;
+  const parent = { id: 'group:' + group.id, name: col.label, folder: true };
+  const n = collectionMembers(parent.id + '::' + col.id).length;
+  if (!n) return null;
+  const card = document.createElement('div');
+  card.className = 'channel-card folder-card';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'channel-name';
+  nameEl.textContent = '📁 ' + col.label;
+  card.appendChild(nameEl);
+  const btns = document.createElement('div');
+  btns.className = 'channel-btns';
+  const open = document.createElement('button');
+  open.className = 'ch-btn collection';
+  open.style.cssText = 'background:var(--gold);color:#000;font-size:0.65rem;display:inline-flex;align-items:center;gap:4px;padding:0.25rem 0.5rem;';
+  open.textContent = n + ' channel' + (n === 1 ? '' : 's') + ' ▸';
+  open.setAttribute('aria-label', 'Open ' + col.label + ' (' + n + ' channels)');
+  open.onclick = () => showCollection(parent, col);
+  btns.appendChild(open);
+  card.appendChild(btns);
+  return card;
 }
 
 // Build a single channel card — used by the main group lists, the Live Now
@@ -2343,8 +2382,8 @@ function showCollection(parentCh, collection) {
   const header = document.createElement('div');
   header.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;gap:0.4rem;min-width:130px;';
   header.innerHTML =
-    '<div style="font-family:&quot;Barlow Condensed&quot;,sans-serif;font-weight:700;font-size:0.85rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.06em">' + parentCh.name + '</div>' +
-    '<div style="font-family:&quot;Barlow Condensed&quot;,sans-serif;font-size:0.75rem;color:var(--muted)">' + collection.label + '</div>';
+    '<div style="font-family:&quot;Barlow Condensed&quot;,sans-serif;font-weight:700;font-size:0.85rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.06em">' + (parentCh.folder ? '📁 ' + collection.label : parentCh.name) + '</div>' +
+    (parentCh.folder ? '' : '<div style="font-family:&quot;Barlow Condensed&quot;,sans-serif;font-size:0.75rem;color:var(--muted)">' + collection.label + '</div>');
   const backBtn = document.createElement('button');
   backBtn.className = 'return-btn';
   backBtn.textContent = '← Back';
@@ -2517,6 +2556,11 @@ function findCollectionByRef(ref) {
   const parts = ref.split('::');
   if (parts.length !== 2) return null;
   const [channelId, collectionId] = parts;
+  if (channelId.startsWith('group:')) {           // standalone collection
+    const group = GROUPS.find(g => 'group:' + g.id === channelId);
+    const col = group && (group.collections || []).find(c => c.id === collectionId);
+    return col ? { ch: { id: channelId, name: col.label, folder: true }, col } : null;
+  }
   for (const group of GROUPS) {
     if (!group.channels) continue;
     const ch = group.channels.find(c => c.id === channelId);

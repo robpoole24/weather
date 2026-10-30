@@ -257,7 +257,8 @@ function createChannelDiscovery(app, deps) {
   app.get('/api/admin/discovery', async (req, res) => {
     await load(); rollDay();
     const groups = (loadData().groups || []).map(g => ({ id: g.id, label: g.label,
-      collections: g.channels.flatMap(c => (c.collections || []).map(k => ({ id: c.id + '::' + k.id, label: k.label, owner: c.name }))) }));
+      collections: g.channels.flatMap(c => (c.collections || []).map(k => ({ id: c.id + '::' + k.id, label: k.label, owner: c.name })))
+        .concat((g.collections || []).map(k => ({ id: 'group:' + g.id + '::' + k.id, label: '📁 ' + k.label, owner: 'standalone' }))) }));
     const list = Object.values(db.candidates).sort((a, b) => (b.lives60d > 0) - (a.lives60d > 0) || b.weather - a.weather || (b.lastPost || 0) - (a.lastPost || 0));
     res.json({ candidates: list, groups, rejected: db.rejected.length, snoozed: Object.keys(db.snoozed).length,
       today: { searches: db.searchesToday, of: perDay(), units: db.unitsToday }, runs: db.runs.slice(0, 20), enabled: enabled() });
