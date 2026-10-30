@@ -93,15 +93,16 @@ function render() {
           <span class="tag t-${esc(c.type.split(' ')[0])}">${esc(c.type)}</span>
           <span>Weather: <span class="wx ${wx}">${c.weather}%</span>${c.react >= 20 ? ' · reacts ' + c.react + '%' : ''}</span>
           <span>${c.postsPerWeek}×/week · last post ${ago(c.lastPost)}</span>
-          <span>${c.lives60d ? '🔴 ' + c.lives60d + ' live streams (60 days), last ' + ago(c.lastLive) : 'no live streams lately'}</span>
+          <span>${c.lives60d ? '🔴 ' + c.lives60d + ' live streams (60 days), last ' + ago(c.lastLive) : c.livesSeason ? '🔴 ' + c.livesSeason + ' live streams this season, last ' + ago(c.lastLive) : 'no live streams lately'}</span>
+          ${c.longWx != null ? `<span>${c.longWx} long weather videos${c.shortsPct >= 30 ? ' · ' + c.shortsPct + '% Shorts' : ''}</span>` : ''}
           <span>${fmtN(c.subs)} subscribers</span>${c.country ? `<span>${esc(c.country)}</span>` : ''}
         </div>
         <div class="meta"><span>Found: ${esc(c.foundVia)}</span><a href="https://www.youtube.com/channel/${esc(c.id)}" target="_blank" rel="noopener" style="color:var(--accent)">Open channel ↗</a></div>
         <div class="samples">${(c.samples || []).map(v => `<a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">▸ ${esc(v.title)}</a>`).join('')}</div>
         <div class="act">
           <select id="g-${esc(c.id)}">${groupOpts(c.suggestedGroup)}</select>
-          <label style="font-size:0.78rem;color:var(--muted);display:flex;gap:0.25rem;align-items:center" title="Show only their weather / storm videos (newest 10), not every upload">
-            <input type="checkbox" id="w-${esc(c.id)}" ${c.weather < 60 ? 'checked' : ''}> 🌪 Weather videos only</label>
+          <label style="font-size:0.78rem;color:var(--muted);display:flex;gap:0.25rem;align-items:center" title="Mixed channel: show only their weather videos (newest 10) and don't follow their live streams">
+            <input type="checkbox" id="w-${esc(c.id)}" ${c.weather < 60 ? 'checked' : ''}> 🌪 Mixed — filter to weather only</label>
           <button class="btn btn-primary" onclick="approve('${esc(c.id)}')">Add to WeatherTV</button>
           <button class="btn btn-ghost" onclick="act('snooze','${esc(c.id)}')" title="Hide for 30 days">Not now</button>
           <button class="btn btn-red" onclick="act('reject','${esc(c.id)}')" title="Never suggest again">Reject</button>

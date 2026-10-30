@@ -1241,8 +1241,8 @@ function renderChannelRow(groupId, ch) {
       '<span class="toggle-slider"></span>' +
     '</label>' +
     '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;' + (ch.weatherOnly ? 'border-color:var(--gold);color:var(--gold);' : 'opacity:0.55;') + '"' +
-      ' title="Weather videos only: for mixed channels, show just their weather / storm videos (newest 10) instead of every upload. Click to ' + (ch.weatherOnly ? 'turn off' : 'turn on') + '."' +
-      ' onclick="toggleWeatherOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">🌪 ' + (ch.weatherOnly ? 'Weather only' : 'All videos') + '</button>' +
+      ' title="For MIXED channels only (chasing + fishing, vlogs, gaming…): hide their non-weather uploads and show just their weather videos, newest 10. Turning it on also turns Has Live off, since we can\'t tell what they\'ll stream. Leave all-weather channels (even ones with vague titles) on All videos."' +
+      ' onclick="toggleWeatherOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.weatherOnly ? '🌪 Filter: weather only' : '🎞 All videos') + '</button>' +
     '<label class="toggle" title="Enabled">' +
       '<input type="checkbox" ' + (ch.enabled !== false ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{enabled:this.checked})" />' +
       '<span class="toggle-slider"></span>' +
@@ -1488,10 +1488,16 @@ async function toggleWeatherOnly(btn, groupId, channelId) {
   const ch = g && g.channels.find(c => c.id === channelId);
   if (!ch) return;
   ch.weatherOnly = !ch.weatherOnly;            // keep the page's copy in step, so Save all doesn't undo it
-  await updateChannel(groupId, channelId, { weatherOnly: ch.weatherOnly });
-  btn.textContent = '🌪 ' + (ch.weatherOnly ? 'Weather only' : 'All videos');
+  const fields = { weatherOnly: ch.weatherOnly };
+  if (ch.weatherOnly && ch.hasLive) { ch.hasLive = false; fields.hasLive = false; }   // mixed channel: we can't vouch for its lives
+  await updateChannel(groupId, channelId, fields);
+  if (fields.hasLive === false) {                // reflect it in the row's Has Live switch
+    const live = btn.parentElement && btn.parentElement.querySelector('label[title="Has Live Stream"] input');
+    if (live) live.checked = false;
+  }
+  btn.textContent = ch.weatherOnly ? '🌪 Filter: weather only' : '🎞 All videos';
   btn.style.borderColor = ch.weatherOnly ? 'var(--gold)' : ''; btn.style.color = ch.weatherOnly ? 'var(--gold)' : ''; btn.style.opacity = ch.weatherOnly ? '' : '0.55';
-  showToast(ch.weatherOnly ? 'Only weather videos will show for this channel' : 'All recent videos will show for this channel');
+  showToast(ch.weatherOnly ? 'Filtering to weather videos — Has Live turned off' : 'Showing all videos (turn Has Live back on if you want their streams)');
 }
 async function updateChannel(groupId, channelId, fields) {
   await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId, {

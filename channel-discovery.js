@@ -21,18 +21,37 @@
 const STORE_KEY = 'wt:discovery:v1';
 const DAY = 864e5;
 
-// Search terms: [query, extra params]. Rotated in order, one per search.
-const TERMS = [
-  ['storm chase', {}], ['tornado', {}], ['severe weather forecast', {}], ['weather forecast update', {}],
-  ['hurricane update', {}], ['storm chasing vlog', {}], ['supercell', {}], ['tropical storm forecast', {}],
-  ['winter storm forecast', {}], ['severe weather outlook', {}], ['storm chaser', { regionCode: 'AU' }],
-  ['severe thunderstorm', { regionCode: 'AU' }], ['cyclone update', { regionCode: 'AU' }], ['storm reaction', { regionCode: 'GB' }],
-  ['tornado reaction', {}], ['weather explained', {}], ['lightning storm', {}], ['hail storm', {}],
-  ['caza de tormentas', { relevanceLanguage: 'es' }], ['tornado en vivo', { relevanceLanguage: 'es' }],
-  ['caçador de tempestades', { relevanceLanguage: 'pt' }], ['Sturmjäger', { relevanceLanguage: 'de' }],
-  ['chasseur d\'orages', { relevanceLanguage: 'fr' }], ['typhoon update', {}], ['flash flooding', {}],
-  ['weather radar live', {}], ['blizzard', {}], ['derecho', {}],
+// Search plans: [query, extra params, kind]. kind 'recent' = most relevant
+// uploads of the last 45 days; 'season' = completed LIVE STREAMS since the start
+// of the most recent chase season (real chasers stream; fans and model-builders
+// don't). In chase season (Mar–Jul) chase plans lead; off-season, forecasters,
+// creators and last season's streams lead.
+const CHASE_PLANS = [
+  ['storm chase', {}, 'season'], ['tornado intercept', {}, 'season'], ['storm chasing', {}, 'season'], ['severe weather live', {}, 'season'],
+  ['supercell', {}, 'season'], ['storm chaser', { regionCode: 'AU' }, 'season'], ['tornado', {}, 'season'], ['hail storm chase', {}, 'season'],
+  ['caza de tormentas', { relevanceLanguage: 'es' }, 'season'], ['caçador de tempestades', { relevanceLanguage: 'pt' }, 'season'],
 ];
+const FORECAST_PLANS = [
+  ['weather forecast', {}, 'recent'], ['severe weather outlook', {}, 'recent'], ['winter storm forecast', {}, 'recent'],
+  ['hurricane update', {}, 'recent'], ['tropical update', {}, 'recent'], ['long range forecast', {}, 'recent'],
+  ['weather explained', {}, 'recent'], ['meteorologist', {}, 'recent'], ['weather history', {}, 'recent'],
+  ['tornado documentary', {}, 'recent'], ['cyclone update', { regionCode: 'AU' }, 'recent'], ['severe thunderstorm', { regionCode: 'AU' }, 'recent'],
+  ['storm reaction', { regionCode: 'GB' }, 'recent'], ['weather live stream', {}, 'season'], ['Unwetter', { relevanceLanguage: 'de' }, 'recent'],
+];
+function inChaseSeason(d = new Date()) {
+  const m = +d.toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'numeric' });
+  return m >= 3 && m <= 7;
+}
+// In season: 3 chase plans for every forecast plan. Off-season: the reverse.
+function planAt(idx) {
+  const [major, minor] = inChaseSeason() ? [CHASE_PLANS, FORECAST_PLANS] : [FORECAST_PLANS, CHASE_PLANS];
+  const k = Math.floor(idx / 4);
+  return idx % 4 === 3 ? minor[k % minor.length] : major[(k * 3 + idx % 4) % major.length];
+}
+function seasonStart(d = new Date()) {   // March 1 of the latest chase season that has begun
+  const y = d.getUTCFullYear();
+  return new Date(Date.UTC(d.getUTCMonth() >= 2 ? y : y - 1, 2, 1));
+}
 const LIVE_TERMS = ['tornado live', 'storm chase live', 'severe weather live', 'hurricane live', 'live storm chasing'];
 
 const WEATHER = /\b(tornado(e?s)?|tornadic|storms?|stormy|severe|weather|forecasts?|forecasting|hurricanes?|tropic(s|al)|cyclones?|typhoons?|hail|supercells?|chas(e|es|ing|er|ers)|radar|blizzards?|snow(storm|fall)?|winter storm|flood(s|ing)?|derecho|lightning|thunder(storms?)?|wind ?storm|heat ?wave|outlook|spc|nws|el ni[ñn]o|la ni[ñn]a|meteorolog\w*|meteorologist|wx|tormentas?|tempestades?|clima|unwetter|gewitter|m[ée]t[ée]o|orages?|funnel|wall cloud|dryline|squall|monsoon|drought|nor'?easter|atmospheric river|polar vortex|aurora)\b/i;
@@ -40,6 +59,9 @@ const CHASE = /\b(chas(e|es|ing|er|ers)|intercept(ed)?|on the ground|caught|wall
 const FORECAST = /\b(forecasts?|outlooks?|update|briefing|discussion|models?|tropics|threat|risk|timeline|what to expect|this week|weekend|next week|maps?|explained|analysis)\b/i;
 const REACT = /\breact(s|ing|ion|ions)?\b|\breacting to\b/i;
 const LIVE_T = /\blive\b|🔴/i;
+// Fans, models and games: weather words, not weather
+const FAKE = /\b(models?|3d|blender|renders?|rendering|roblox|minecraft|lego|toys?|simulator|sim|gameplay|gaming|game|twisted|fortnite|diecast|die-cast|hot wheels|beamng|gta|animation|animated|fan ?made|edits?|speed ?art|drawing|plushie?s?|unboxing|asmr)\b/i;
+const isoSec = (d) => { const m = String(d || '').match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/); return m ? ((+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0)) : 0; };
 
 function createChannelDiscovery(app, deps) {
   const { rGet, rSet, ytFetch, getApiKey, isQuotaExceeded, markQuotaExceeded, checkQuotaError, trackBurn = () => {},
@@ -53,6 +75,17 @@ function createChannelDiscovery(app, deps) {
     const v = typeof s === 'string' ? JSON.parse(s) : s;
     if (v && v.candidates) db = { ...db, ...v };
     loaded = true;
+    if ((db.v || 1) < 2) {            // v2 rules: drop waiting candidates that are models / games / fan edits
+      let dropped = 0;
+      for (const [id, c] of Object.entries(db.candidates)) {
+        const titles = (c.samples || []).map(x => x.title).concat(c.name);
+        const fakeShare = titles.filter(t => FAKE.test(t)).length / Math.max(1, titles.length);
+        if (!/^featured by/.test(c.foundVia || '') && fakeShare >= 0.2) { delete db.candidates[id]; db.skipped[id] = Date.now(); dropped++; }
+      }
+      db.v = 2;
+      if (dropped) console.log(`[Discovery] Removed ${dropped} waiting candidates that look like models / games / fan edits`);
+      await save();
+    }
   }
   const save = () => rSet(STORE_KEY, db);
   const enabled = () => !/^(false|0|no|off)$/i.test(process.env.CHANNEL_DISCOVERY || '');
@@ -98,18 +131,26 @@ function createChannelDiscovery(app, deps) {
           const pl = await yt('playlistItems?part=snippet,contentDetails&maxResults=50&playlistId=' + uploads, 1);
           const vids = (pl.items || []).map(it => ({ id: it.contentDetails?.videoId, title: it.snippet?.title || '', at: Date.parse(it.contentDetails?.videoPublishedAt || it.snippet?.publishedAt || '') || 0 }))
             .filter(v => v.id);
-          let lives = 0, lastLive = null;
+          let lives = 0, livesSeason = 0, lastLive = null;
+          const dur = new Map();
           if (vids.length) {
-            const vd = await yt('videos?part=liveStreamingDetails&fields=items(id,liveStreamingDetails(actualStartTime))&id=' + vids.map(v => v.id).join(','), 1);
+            const vd = await yt('videos?part=liveStreamingDetails,contentDetails&fields=items(id,contentDetails(duration),liveStreamingDetails(actualStartTime))&id=' + vids.map(v => v.id).join(','), 1);
+            const since = seasonStart().getTime();
             for (const v of vd.items || []) {
+              dur.set(v.id, isoSec(v.contentDetails?.duration));
               const t = Date.parse(v.liveStreamingDetails?.actualStartTime || '');
-              if (t && Date.now() - t < 60 * DAY) { lives++; if (!lastLive || t > lastLive) lastLive = t; }
+              if (t && Date.now() - t < 60 * DAY) lives++;
+              if (t && t >= since) livesSeason++;
+              if (t && (!lastLive || t > lastLive)) lastLive = t;
             }
           }
           const n = vids.length || 1, share = (re) => vids.filter(v => re.test(v.title)).length / n;
           const descr = c.snippet?.description || '';
           const weather = share(WEATHER), react = share(REACT), chase = share(CHASE), forecast = share(FORECAST);
           const recent = vids.filter(v => Date.now() - v.at < 30 * DAY).length;
+          const fake = share(FAKE);
+          const shorts = vids.filter(v => (dur.get(v.id) || 0) > 0 && dur.get(v.id) <= 60).length / n;
+          const longWx = vids.filter(v => (dur.get(v.id) || 0) >= 240 && WEATHER.test(v.title)).length;
           const lastPost = vids.reduce((m, v) => Math.max(m, v.at), 0) || null;
           const type = react >= 0.3 && weather >= 0.3 ? 'React channel'
             : weather < 0.4 ? 'Mixed'
@@ -120,13 +161,17 @@ function createChannelDiscovery(app, deps) {
             thumb: c.snippet?.thumbnails?.medium?.url || c.snippet?.thumbnails?.default?.url || null,
             subs: c.statistics?.hiddenSubscriberCount ? null : +c.statistics?.subscriberCount || 0, videos: +c.statistics?.videoCount || 0,
             weather: Math.round(weather * 100), react: Math.round(react * 100), type,
-            postsPerWeek: +(recent / 4.3).toFixed(1), lastPost, lives60d: lives, lastLive,
+            postsPerWeek: +(recent / 4.3).toFixed(1), lastPost, lives60d: lives, livesSeason, lastLive, longWx, shortsPct: Math.round(shorts * 100),
             samples: vids.slice(0, 6).map(v => ({ id: v.id, title: v.title })),
             suggestedGroup: type === 'Chaser' ? 'chasers' : type === 'Forecaster' ? 'forecasters' : 'creators',
             foundVia, foundAt: Date.now(),
           };
-          // Barely weather and not vouched for by a channel you carry → skip quietly
-          if (row.weather < 15 && !/^featured by/.test(foundVia)) { db.skipped[c.id] = Date.now(); continue; }
+          // Not vouched for by a channel you carry → it has to look like the real thing:
+          //  • enough weather, and not mostly models / games / fan edits
+          //  • real content: long-form weather videos (4+ min) or live streams, not just Shorts
+          const vouched = /^featured by/.test(foundVia);
+          if (!vouched && (row.weather < 15 || fake >= 0.2)) { db.skipped[c.id] = Date.now(); continue; }
+          if (!vouched && longWx < 2 && !livesSeason && !lives) { db.skipped[c.id] = Date.now(); continue; }
           if (!lastPost || Date.now() - lastPost > 180 * DAY) { db.skipped[c.id] = Date.now(); continue; }   // dormant
           out.push(row);
         } catch (e) { if (/quota/.test(e.message)) throw e; }
@@ -140,21 +185,23 @@ function createChannelDiscovery(app, deps) {
   // ── Source 1: fresh-upload (or live) searches ───────────────────────────────
   async function runSearch() {
     const severe = await isSevereActive().catch(() => false);
-    let q, extra = {}, live = false;
-    if (severe && db.searchesToday % 2 === 0) { q = LIVE_TERMS[db.searchesToday / 2 % LIVE_TERMS.length]; live = true; }
-    else { [q, extra] = TERMS[db.termIdx % TERMS.length]; db.termIdx++; }
-    const p = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '50', q, ...extra,
-      ...(live ? { eventType: 'live' } : { order: 'date', publishedAfter: new Date(Date.now() - DAY).toISOString() }) });
+    let q, extra = {}, kind = 'recent', live = false;
+    if (severe && db.searchesToday % 2 === 0) { q = LIVE_TERMS[db.searchesToday / 2 % LIVE_TERMS.length]; live = true; kind = 'live'; }
+    else { [q, extra, kind] = planAt(db.termIdx); db.termIdx++; }
+    const when = kind === 'live' ? { eventType: 'live' }
+      : kind === 'season' ? { eventType: 'completed', order: 'relevance', publishedAfter: seasonStart().toISOString() }
+      : { order: 'relevance', publishedAfter: new Date(Date.now() - 45 * DAY).toISOString() };
+    const p = new URLSearchParams({ part: 'snippet', type: 'video', maxResults: '50', q, ...extra, ...when });
     const r = await yt('search?' + p.toString(), 100);
     db.searchesToday++;
     const have = carried();
     const ids = [...new Set((r.items || []).map(it => it.snippet?.channelId).filter(Boolean))].filter(id => isNew(id, have));
-    const rows = await vet(ids, `search: “${q}”${live ? ' (live now)' : ''}${extra.regionCode ? ' · ' + extra.regionCode : ''}`);
-    return { source: 'search', q, live, results: (r.items || []).length, newChannels: ids.length, added: addCandidates(rows) };
+    const rows = await vet(ids, `search: “${q}”${live ? ' (live now)' : kind === 'season' ? ' (past live streams this season)' : ''}${extra.regionCode ? ' · ' + extra.regionCode : ''}`);
+    return { source: 'search', q, live, kind, results: (r.items || []).length, newChannels: ids.length, added: addCandidates(rows) };
   }
 
   // ── Source 2: channels your channels feature ────────────────────────────────
-  async function runNetwork(count = 30) {
+  async function runNetwork(count = 60) {
     const all = [];
     for (const g of (loadData().groups || [])) for (const c of g.channels) if (c.enabled !== false) all.push(c);
     if (!all.length) return { source: 'network', checked: 0, added: 0 };
@@ -225,7 +272,7 @@ function createChannelDiscovery(app, deps) {
     if (!c || !g) return res.status(400).json({ error: 'Pick a group first (or refresh the page)' });
     if (carried().has(id)) { delete db.candidates[id]; await save(); return res.status(409).json({ error: 'Already on WeatherTV' }); }
     const cols = (Array.isArray(collectionIds) ? collectionIds : [collectionIds]).filter(Boolean);
-    g.channels.push({ id, name: String(name || c.name).slice(0, 80), hasLive: true, enabled: true, ...(weatherOnly ? { weatherOnly: true } : {}),
+    g.channels.push({ id, name: String(name || c.name).slice(0, 80), hasLive: !weatherOnly, enabled: true, ...(weatherOnly ? { weatherOnly: true } : {}),
       ...(cols.length ? { collectionIds: cols, collectionId: cols[0] } : {}) });
     saveData(data);
     delete db.candidates[id];
