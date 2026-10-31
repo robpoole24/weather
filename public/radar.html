@@ -8759,6 +8759,19 @@ async function searchLocation(e) {
     document.getElementById('zip-input').value = '';
     return;
   }
+  // County names repeat across states (there are 30 Washington Counties), so a
+  // county search needs its state: "Marion County, IL" or "Marion County Illinois"
+  const COUNTY_RE = /\b(county|parish|borough|census area)\b/i;
+  const ST_ABBR = /(^|[\s,])(A[LKZR]|C[AOT]|D[EC]|FL|GA|HI|I[DLNA]|K[SY]|LA|M[EDAINSOT]|N[EVHJMYCD]|O[HKR]|PA|PR|RI|S[CD]|T[NX]|UT|V[TA]|W[AVIY])\.?$/i;
+  const ST_NAME = /(alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming|puerto rico)$/i;
+  const countyQuery = COUNTY_RE.test(q);
+  if (countyQuery) {
+    const rest = q.replace(/^.*?\b(county|parish|borough|census area)\b/i, '');   // text after "County"
+    if (!(ST_ABBR.test(rest.trim()) || ST_NAME.test(rest.trim().replace(/[.,]/g, '')))) {
+      document.getElementById('alerts-status').textContent = 'Add the state, e.g. ' + q.replace(/[\s,]+$/, '') + ', IL';
+      return;
+    }
+  }
   document.getElementById('alerts-status').textContent = 'Searching...';
   try {
     const res = await fetch(
@@ -8770,7 +8783,20 @@ async function searchLocation(e) {
     // should be the city of Marion, not Marion County (whose centre is Salem).
     const TOWN = /^(city|town|village|hamlet|suburb|neighbourhood|quarter|borough|municipality|locality|postcode)$/;
     const rank = (r) => (TOWN.test(r.addresstype || r.type || '') ? 0 : /^(county|state|region|administrative)$/.test(r.addresstype || r.type || '') ? 2 : 1);
-    const data = Array.isArray(all) ? all.slice().sort((a, b) => rank(a) - rank(b) || (b.importance || 0) - (a.importance || 0)) : [];
+    let data = Array.isArray(all) ? all.slice().sort((a, b) => rank(a) - rank(b) || (b.importance || 0) - (a.importance || 0)) : [];
+    // Typing just a state's name ("Colorado", "New York state") means the state itself
+    const STATES = ['alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware','florida','georgia','hawaii','idaho','illinois','indiana','iowa','kansas','kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi','missouri','montana','nebraska','nevada','new hampshire','new jersey','new mexico','new york','north carolina','north dakota','ohio','oklahoma','oregon','pennsylvania','rhode island','south carolina','south dakota','tennessee','texas','utah','vermont','virginia','washington','west virginia','wisconsin','wyoming','district of columbia','puerto rico'];
+    const qState = q.toLowerCase().replace(/[.,]/g, ' ').replace(/^(the\s+)?state\s+of\s+/, '').replace(/\s+(state|usa|us)$/, '').replace(/\s+/g, ' ').trim();
+    if (STATES.includes(qState)) {
+      const st = data.find(r => (r.addresstype || r.type) === 'state' || r.type === 'administrative' && /state/i.test(r.category + r.addresstype));
+      if (st) data = [st].concat(data.filter(r => r !== st));
+    }
+    // "Marion County, IL" means the county, not a town in it
+    if (countyQuery) {
+      const co = data.find(r => (r.addresstype || r.type) === 'county');
+      if (co) data = [co].concat(data.filter(r => r !== co));
+    }
+    const wholeArea = data[0] && /^(state|county|region)$/.test(data[0].addresstype || '') && Array.isArray(data[0].boundingbox);
     if (data && data.length > 0) {
       userLat = parseFloat(data[0].lat); userLng = parseFloat(data[0].lon);
       const placeName = _osmLabel(data[0]);
@@ -8797,7 +8823,11 @@ async function searchLocation(e) {
       searchMarker.bindPopup(`<div style="font-family:'Barlow Condensed',sans-serif;font-size:0.9rem;color:#e8f4fd">${placeName}</div>`).openPopup();
 
       // Zoom to zoom level 10 for city/zip — tight enough to see local area
-      map.setView([userLat, userLng], 10);
+      // A state or county: fit the whole area on screen instead of zooming to its centre
+      if (wholeArea) {
+        const [s1, n1, w1, e1] = data[0].boundingbox.map(Number);
+        map.fitBounds([[s1, w1], [n1, e1]], { padding: [20, 20], maxZoom: 9 });
+      } else map.setView([userLat, userLng], 10);
       document.getElementById('alerts-status').textContent = placeName;
       setPlace({ lat: userLat, lon: userLng, label: placeName, query: q, source: 'search' });   // text stays; forecast follows
       updateViewButtons('local');

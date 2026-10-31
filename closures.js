@@ -137,7 +137,9 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
       out.push({
         id: 'wz-' + src.id + '-' + (f.id || core.data_source_id || out.length), kind: kind || 'closure', closed: true,
         cause: kind ? 'weather' : 'construction', title: 'Road closed · work zone',
-        road: (roads || []).filter(Boolean).join(' / '), text: desc.slice(0, 600),
+        // Some feeds (Colorado) pack a whole route list into one name: "(F) - I-76 | FT MORGAN | …" → "I-76"
+        road: [...new Set((roads || []).filter(Boolean).map(r => String(r).split(' | ')[0].replace(/^\([A-Z]\)\s*-\s*/, '').trim()))].join(' / ').slice(0, 80),
+        text: desc.slice(0, 600),
         lat: +(+pp[0][1]).toFixed(5), lng: +(+pp[0][0]).toFixed(5), line: thin(pp),
         start: Number.isFinite(start) ? new Date(start).toISOString() : null, end: Number.isFinite(end) ? new Date(end).toISOString() : null,
         updated: Number.isFinite(upd) ? new Date(upd).toISOString() : null, priority: null, src: 'wzdx-' + src.id, credit: src.name + ' · work zones (WZDx)',

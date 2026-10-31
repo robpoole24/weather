@@ -608,10 +608,10 @@ function routes(app) {
       // closure another feed already shows is the same closure, so it's skipped
       const extra = await closures.forView(b).catch(() => []);
       const seen = new Set(), items = [], closedPts = [];
-      const near = (h) => closedPts.some(([la, lo]) => Math.abs(la - h.lat) < 0.0025 && Math.abs(lo - h.lng) < 0.0032);
+      const nearClosed = (h) => closedPts.some(([la, lo]) => Math.abs(la - h.lat) < 0.0025 && Math.abs(lo - h.lng) < 0.0032);
       for (const h of parts.flat().concat(extra)) {
         if (h.lat < b[1] || h.lat > b[3] || h.lng < b[0] || h.lng > b[2] || seen.has(h.id)) continue;
-        if (/^(wz-|ct-|sfwz-)/.test(h.id) && near(h)) continue;
+        if (/^(wz-|ct-|sfwz-)/.test(h.id) && nearClosed(h)) continue;
         seen.add(h.id); items.push(h);
         if (h.closed) closedPts.push([h.lat, h.lng]);
         if (items.length >= 2000) break;
