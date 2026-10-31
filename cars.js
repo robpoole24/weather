@@ -27,7 +27,8 @@ const STATES = [
   // CARS Hub states: one FEU-g XML file (events + winter road conditions) and a
   // CCTV inventory each, one shared login (CARS_HUB_USER / CARS_HUB_PASSWORD).
   ...[
-    ['in', 'Indiana', 'https://inhub.carsprogram.org/hub/data/', [-88.1, 37.7, -84.7, 41.8], 'INDOT 511', 'https://511in.org'],
+    // Indiana's hub has no /hub/ in its paths
+    ['in', 'Indiana', 'https://inhub.carsprogram.org/data/', [-88.1, 37.7, -84.7, 41.8], 'INDOT 511', 'https://511in.org'],
     ['ia', 'Iowa', 'https://ia.carsprogram.org/hub/data/', [-96.7, 40.3, -90.1, 43.6], '511 Iowa · Iowa DOT', 'https://www.511ia.org'],
     ['ks', 'Kansas', 'https://ks.carsprogram.org/hub/data/', [-102.1, 36.9, -94.6, 40.1], 'KanDrive · Kansas DOT', 'https://kandrive.org'],
     ['mn', 'Minnesota', 'https://mn.carsprogram.org/hub/data/', [-97.3, 43.4, -89.4, 49.4], '511MN · MnDOT', 'https://511mn.org'],
@@ -303,12 +304,36 @@ function weatherKind(text) {
 }
 const ms = (t) => (t && Number.isFinite(t.time) ? t.time : null);
 
+// ONE meaning of "closed" for every feed: the road, bridge, ramp or crossing is
+// shut to traffic — whatever the cause. Lane-only closures don't count (the
+// road is still passable); "all lanes closed" does.
+function isFullClosure(text) {
+  const t = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  if (/\ball lanes (are )?(closed|blocked)\b|\bfull(y)? clos|\broad closure\b|\bclosed to (all )?traffic\b|\bclosed in both directions\b|\bdetour in effect\b/.test(t)) return true;
+  if (/^(road |roadway |highway |bridge |ramp |exit |entrance )?(closed|closure)$/.test(t)) return true;
+  // "right lane closed", "two lanes closed", "lane closure", "shoulder closed" → passable
+  if (/\b(lane|lanes|shoulder|shoulders|sidewalk|bike lane|turn lane)\b[^.,;]{0,12}\b(closed|closure|blocked)\b/.test(t)) return false;
+  return /\b(road|roadway|highway|interstate|freeway|expressway|bridge|ramp|on-?ramp|off-?ramp|exit|entrance|crossing|street|route|tunnel|overpass|underpass|both directions)\b[^.;]{0,40}\b(closed|closure)\b/.test(t)
+    || /\bclosed\b[^.;]{0,30}\b(both directions|eastbound|westbound|northbound|southbound|to traffic|between|from)\b/.test(t)
+    || /\b(eb|wb|nb|sb|eastbound|westbound|northbound|southbound|[a-z]{1,3}-?\d{1,4})\b[^.;]{0,15}\bclosed\b/.test(t);
+}
+// Why a road is closed / what the hazard is: weather, construction, crash, event or other
+function causeOf(kind, ...texts) {
+  if (kind) return 'weather';
+  const t = texts.filter(Boolean).join(' ').toLowerCase();
+  if (/roadwork|construction|maintenance|repair|resurfac|paving|milling|bridge (work|repair|demolition|construction)|utility|striping|phrases|work zone|improvement|project/.test(t)) return 'construction';
+  if (/incident|crash|accident|collision|disabled|stall|overturn|jackknif|fatal|police|emergency|fire department|vehicle fire|spill|debris/.test(t)) return 'crash';
+  if (/special|sporting|event|parade|concert|festival|marathon|race|game/.test(t)) return 'event';
+  return 'other';
+}
+
 function eventToHazard(e, st, now) {
   const det = (e.details || [])[0] || {};
   const head = e.headline || {}, code = String(head.code || ''), cat = String(head.category || '');
   // "This work is weather permitting" is in lots of roadwork notes: not a hazard
   const kind = weatherKind(PLANNED.test(cat) ? code : code + ' ' + String(e.description || ''));
-  const closed = /closure/i.test(cat) || /^(road )?closed$/i.test(code);
+  const closed = isFullClosure(code) || isFullClosure(e.description);
   if (!kind && !closed) return null;
   if (st.roadCategory.test(cat)) return null;            // road-condition segments live on the roads layer
   const start = ms(det['start-time']), end = ms(det['end-time']);
@@ -326,7 +351,7 @@ function eventToHazard(e, st, now) {
   const line = g.type === 'LineString' && Array.isArray(g.coordinates) && g.coordinates.length > 1
     ? g.coordinates.filter((_, i, a) => a.length < 400 || i % Math.ceil(a.length / 400) === 0).map(([x, y]) => [+(+y).toFixed(5), +(+x).toFixed(5)]) : null;
   return {
-    id: e['event-id'], kind: kind || 'closure', closed,
+    id: e['event-id'], kind: kind || 'closure', closed, cause: causeOf(kind, cat, code, e.description),
     title: code ? code.charAt(0).toUpperCase() + code.slice(1) : (closed ? 'Road closed' : 'Hazard'),
     road: loc['route-designator'] || '', text: String(e.description || '').slice(0, 600),
     lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
@@ -370,5 +395,5 @@ function routes(app) {
   });
 }
 
-module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, hazards, routes, weatherKind, PLANNED,
+module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, hazards, routes, weatherKind, PLANNED, isFullClosure, causeOf,
   _test: { parseCctv, eventToRoad, eventToHazard, deg, parseFeu, feuTime } };

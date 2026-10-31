@@ -370,7 +370,7 @@ const _ibiHaz = new Map();      // state id → { ts, items, loading, miss }
 function ibiEventToHazard(ev, st, now) {
   const type = String(ev.EventType || ''), sub = String(ev.EventSubType || ''), desc = String(ev.Description || '');
   const kind = cars.weatherKind(/roadwork|special/i.test(type) ? sub : sub + ' ' + desc + ' ' + String(ev.Comment || ''));
-  const closed = ev.IsFullClosure === true || (/closure/i.test(type) && /\b(road|roadway|highway|bridge|ramp|all lanes)\b[^.]{0,40}\bclosed\b|\bclosed\b[^.]{0,20}\b(both directions|to (all )?traffic)\b/i.test(desc));
+  const closed = ev.IsFullClosure === true || cars.isFullClosure(sub) || cars.isFullClosure(desc);
   if (!kind && !closed) return null;
   const sec = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) * 1000 : null);
   const start = sec(ev.StartDate), end = sec(ev.PlannedEndDate);
@@ -385,7 +385,7 @@ function ibiEventToHazard(ev, st, now) {
   }
   const title = sub && !/^(roadwork|closures|accidentsAndIncidents)$/i.test(sub) ? sub : (closed ? 'Road closed' : (kind ? 'Weather hazard' : 'Hazard'));
   return {
-    id: st.id + '-' + ev.ID, kind: kind || 'closure', closed,
+    id: st.id + '-' + ev.ID, kind: kind || 'closure', closed, cause: cars.causeOf(kind, type, sub, desc),
     title: title.charAt(0).toUpperCase() + title.slice(1),
     road: ev.RoadwayName || '', text: [desc, ev.Comment].filter(Boolean).join(' ').slice(0, 600),
     lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
@@ -405,7 +405,7 @@ function sf511EventToHazard(ev, now) {
   const head = String(ev.headline || ''), desc = String(ev.description || '');
   const roads = Array.isArray(ev.roads) ? ev.roads : [];
   const kind = cars.weatherKind(/construction|special/i.test(type) ? subs : `${type.replace(/_/g, ' ')} ${subs} ${head} ${desc}`);
-  const closed = roads.some(r => /^(closed|all_lanes_closed)$/i.test(String(r.state || ''))) || /\b(road|highway|ramp|bridge)\b[^.]{0,30}\bclosed\b/i.test(head);
+  const closed = roads.some(r => /^(closed|all_lanes_closed)$/i.test(String(r.state || ''))) || cars.isFullClosure(head) || cars.isFullClosure(desc);
   if (!kind && !closed) return null;
   const g = ev.geography || {};
   let lat, lng, line = null;
@@ -419,7 +419,7 @@ function sf511EventToHazard(ev, now) {
   const upd = Date.parse(ev.updated || ev.created || '');
   const r0 = roads[0] || {};
   return {
-    id: 'sf511-' + ev.id, kind: kind || 'closure', closed,
+    id: 'sf511-' + ev.id, kind: kind || 'closure', closed, cause: cars.causeOf(kind, type, subs, head),
     title: (head || (closed ? 'Road closed' : 'Hazard')).slice(0, 120),
     road: r0.name || '', text: [desc && desc !== head ? desc : '', r0.from && r0.to ? `${r0.from} to ${r0.to}` : ''].filter(Boolean).join(' · ').slice(0, 600),
     lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
@@ -432,14 +432,27 @@ function sf511Hazards() {
   if (!key) return Promise.resolve([]);
   if (Date.now() - _sf511.ts < 5 * 60 * 1000) return Promise.resolve(_sf511.items);
   if (_sf511.loading) return _sf511.loading;
-  _sf511.loading = getText(`https://api.511.org/traffic/events?api_key=${encodeURIComponent(key)}&format=json&status=ACTIVE&limit=500`, { timeout: 30000 })
-    .then(txt => {
-      const j = JSON.parse(String(txt).replace(/^﻿/, ''));   // 511.org starts its JSON with a byte-order mark
-      const evs = Array.isArray(j.events) ? j.events : [];
+  // Every page (Open511 pagination), at most 4 calls per refresh
+  const fetchAll = async () => {
+    let url = `https://api.511.org/traffic/events?api_key=${encodeURIComponent(key)}&format=json&status=ACTIVE&limit=500`, evs = [];
+    for (let page = 0; url && page < 4; page++) {
+      const j = JSON.parse(String(await getText(url, { timeout: 30000 })).replace(/^\uFEFF/, ''));   // 511.org starts its JSON with a byte-order mark
+      evs = evs.concat(Array.isArray(j.events) ? j.events : []);
+      const next = j.pagination && j.pagination.next_url;
+      url = next ? (next.includes('api_key=') ? next : next + (next.includes('?') ? '&' : '?') + 'api_key=' + encodeURIComponent(key)) : null;
+    }
+    return evs;
+  };
+  _sf511.loading = fetchAll()
+    .then(evs => {
       const now = Date.now();
       _sf511.items = evs.map(e => sf511EventToHazard(e, now)).filter(Boolean);
       _sf511.ts = Date.now();
-      _roadStats['events-sf511'] = { events: evs.length, shown: _sf511.items.length, at: new Date().toISOString() };
+      // What the feed held, so it's easy to judge what the map leaves out (lane closures, roadwork, crashes)
+      const count = (f) => evs.reduce((m, e) => { const k = f(e) || '—'; m[k] = (m[k] || 0) + 1; return m; }, {});
+      _roadStats['events-sf511'] = { events: evs.length, shown: _sf511.items.length, at: new Date().toISOString(),
+        types: count(e => e.event_type), roadStates: count(e => ((e.roads || [])[0] || {}).state),
+        sample: evs.slice(0, 25).map(e => `${e.event_type || ''} · ${((e.roads || [])[0] || {}).state || ''} · ${String(e.headline || '').slice(0, 90)}`) };
       return _sf511.items;
     })
     .catch(e => {
