@@ -84,7 +84,9 @@ async function allEvents(st, query) {
 const FEU_TTL = 5 * 60 * 1000;
 const _feu = new Map();    // id → { ts, rows, loading }
 const _t = (xml, name) => { const m = xml.match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`)); return m ? m[1] : ''; };
-const _deg = (v) => { const n = Number(v); return Number.isFinite(n) ? (Math.abs(n) > 1000 ? n / 1e6 : n) : NaN; };
+// Empty means missing — Number('') is 0, which drew lines to 0°N 0°E off Africa
+const _deg = (v) => { if (v == null || String(v).trim() === '') return NaN; const n = Number(v); return Number.isFinite(n) ? (Math.abs(n) > 1000 ? n / 1e6 : n) : NaN; };
+const _okPt = (p) => p.every(Number.isFinite) && !(Math.abs(p[0]) < 1 && Math.abs(p[1]) < 1) && Math.abs(p[1]) <= 90 && Math.abs(p[0]) <= 180;
 // <date>20261030</date><time>134249</time><utc-offset>-0600</utc-offset> → ms
 function feuTime(x) {
   const d = _t(x, 'date'), t = _t(x, 'time') || '000000', o = _t(x, 'utc-offset') || '+0000';
@@ -115,8 +117,10 @@ function parseFeu(xml) {
     const link = _t(det, 'location-on-link');
     const p1 = _t(_t(link, 'primary-location'), 'geo-location'), p2 = _t(_t(link, 'secondary-location'), 'geo-location');
     const a = [_deg(_t(p1, 'longitude')), _deg(_t(p1, 'latitude'))], b = [_deg(_t(p2, 'longitude')), _deg(_t(p2, 'latitude'))];
-    if (!a.every(Number.isFinite)) continue;
-    const geometry = b.every(Number.isFinite) && (a[0] !== b[0] || a[1] !== b[1]) ? { type: 'LineString', coordinates: [a, b] } : { type: 'Point', coordinates: a };
+    if (!_okPt(a)) continue;
+    // A segment needs a real second point, and a road segment is never hundreds of miles long
+    const geometry = _okPt(b) && (a[0] !== b[0] || a[1] !== b[1]) && Math.abs(a[0] - b[0]) < 3 && Math.abs(a[1] - b[1]) < 3
+      ? { type: 'LineString', coordinates: [a, b] } : { type: 'Point', coordinates: a };
     const times = _t(det, 'times');
     const start = feuTime(_t(times, 'start-time')), end = feuTime(_t(times, 'end-time')), upd = feuTime(_t(times, 'update-time'));
     const route = unesc(_t(link, 'route-designator'));
