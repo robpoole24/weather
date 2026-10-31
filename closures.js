@@ -68,8 +68,8 @@ const HEADER_KEYED = [
 ];
 function wzdxSources() {
   const urlFor = (env) => {
-    const direct = (process.env[env] || '').trim();
-    if (/^https?:\/\//i.test(direct)) return direct;
+    const direct = (process.env[env] || '').trim().replace(/^['"<\s]+|['">\s]+$/g, '');
+    if (/^https?:\/\//i.test(direct)) return direct.replace(/\s+/g, '');
     // A bare key in the variable: build the feed address around it.
     if (direct && KEY_ONLY[env]) return KEY_ONLY[env](direct);
     if (direct) return null;
@@ -213,5 +213,18 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
     return Promise.all(jobs).then(r => r.flat());
   }
   const coveredNames = () => [...new Set(wzdxSources().map(s => s.name))].concat('California (Caltrans)');
-  return { forView, stats: () => stats, coveredNames, _test: { wzdxItems, caltransItems, CALTRANS } };
+  // Admin check: fetch one feed now (skipping the cache) and report what came back
+  async function probe(id) {
+    const all = wzdxSources().map(x => ({ ...x, kind: 'wz' })).concat(CALTRANS.map(x => ({ ...x, kind: 'ct' })));
+    const configured = all.map(x => x.id);
+    const src = all.find(x => x.id === id);
+    if (!src) return { id, configured: false, note: 'Not configured. Check the Railway variable name, then redeploy.', feedsConfigured: configured };
+    cache.delete(src.id);
+    const t0 = Date.now();
+    const items = await load(src, src.kind);
+    return { id, configured: true, host: (() => { try { return new URL(src.url).host; } catch { return null; } })(),
+      seconds: +((Date.now() - t0) / 1000).toFixed(1), stats: stats[src.id] || null, closedNow: items.length,
+      sample: items.slice(0, 3).map(h => ({ title: h.title, road: h.road, cause: h.cause, lat: h.lat, lng: h.lng })), feedsConfigured: configured };
+  }
+  return { forView, probe, stats: () => stats, coveredNames, _test: { wzdxItems, caltransItems, CALTRANS } };
 };

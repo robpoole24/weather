@@ -620,6 +620,11 @@ function routes(app) {
       res.json({ items, states: parts.length ? covered : [], covered });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
+  // /api/admin/closures/test?id=co : fetch one work-zone feed right now and show the result
+  app.get('/api/admin/closures/test', async (req, res) => {
+    try { res.json(await closures.probe(String(req.query.id || '').toLowerCase())); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
   app.get('/api/admin/roads', (req, res) => {
     // roads / events: what each feed returned the last time someone looked (nothing yet = not used since the last restart)
     const none = 'not checked since restart';
