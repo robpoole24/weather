@@ -394,6 +394,63 @@ function ibiEventToHazard(ev, st, now) {
     priority: ev.Severity || null, src: st.id, credit: (new URL(st.base).host.replace(/^www\./, '')) + ' · ' + st.name + ' 511',
   };
 }
+// ── SF Bay Area: 511.org traffic events (Open511 JSON) ─────────────────────────
+// Token SF511_API_KEY; their limit is 60 calls an hour, so the list is cached
+// 5 minutes and fetched only while someone is looking at the Bay Area (≤ 12/h).
+const SF511_BOX = [-123.2, 36.8, -121.1, 38.9];
+const _sf511 = { ts: 0, items: [], loading: null };
+function sf511EventToHazard(ev, now) {
+  if (ev.status && !/active/i.test(ev.status)) return null;
+  const type = String(ev.event_type || ''), subs = (ev.event_subtypes || []).join(' ').replace(/_/g, ' ');
+  const head = String(ev.headline || ''), desc = String(ev.description || '');
+  const roads = Array.isArray(ev.roads) ? ev.roads : [];
+  const kind = cars.weatherKind(/construction|special/i.test(type) ? subs : `${type.replace(/_/g, ' ')} ${subs} ${head} ${desc}`);
+  const closed = roads.some(r => /^(closed|all_lanes_closed)$/i.test(String(r.state || ''))) || /\b(road|highway|ramp|bridge)\b[^.]{0,30}\bclosed\b/i.test(head);
+  if (!kind && !closed) return null;
+  const g = ev.geography || {};
+  let lat, lng, line = null;
+  if (g.type === 'Point' && Array.isArray(g.coordinates)) { [lng, lat] = g.coordinates.map(Number); }
+  else if (/LineString/.test(g.type || '') && Array.isArray(g.coordinates)) {
+    const pts = g.type === 'MultiLineString' ? g.coordinates.flat() : g.coordinates;
+    if (pts.length) { [lng, lat] = pts[0].map(Number); }
+    if (pts.length > 1) line = pts.filter((_, i, a) => a.length < 400 || i % Math.ceil(a.length / 400) === 0).map(([x, y]) => [+(+y).toFixed(5), +(+x).toFixed(5)]);
+  }
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const upd = Date.parse(ev.updated || ev.created || '');
+  const r0 = roads[0] || {};
+  return {
+    id: 'sf511-' + ev.id, kind: kind || 'closure', closed,
+    title: (head || (closed ? 'Road closed' : 'Hazard')).slice(0, 120),
+    road: r0.name || '', text: [desc && desc !== head ? desc : '', r0.from && r0.to ? `${r0.from} to ${r0.to}` : ''].filter(Boolean).join(' · ').slice(0, 600),
+    lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
+    start: null, end: null, updated: Number.isFinite(upd) ? new Date(upd).toISOString() : null,
+    priority: ev.severity || null, src: 'sf511', credit: '511.org · Bay Area',
+  };
+}
+function sf511Hazards() {
+  const key = (process.env.SF511_API_KEY || '').trim();
+  if (!key) return Promise.resolve([]);
+  if (Date.now() - _sf511.ts < 5 * 60 * 1000) return Promise.resolve(_sf511.items);
+  if (_sf511.loading) return _sf511.loading;
+  _sf511.loading = getText(`https://api.511.org/traffic/events?api_key=${encodeURIComponent(key)}&format=json&status=ACTIVE&limit=500`, { timeout: 30000 })
+    .then(txt => {
+      const j = JSON.parse(String(txt).replace(/^﻿/, ''));   // 511.org starts its JSON with a byte-order mark
+      const evs = Array.isArray(j.events) ? j.events : [];
+      const now = Date.now();
+      _sf511.items = evs.map(e => sf511EventToHazard(e, now)).filter(Boolean);
+      _sf511.ts = Date.now();
+      _roadStats['events-sf511'] = { events: evs.length, shown: _sf511.items.length, at: new Date().toISOString() };
+      return _sf511.items;
+    })
+    .catch(e => {
+      _roadStats['events-sf511'] = { error: e.message, at: new Date().toISOString() };
+      _sf511.ts = Date.now() - 3 * 60 * 1000;            // retry in 2 min
+      return _sf511.items;
+    })
+    .finally(() => { _sf511.loading = null; });
+  return _sf511.loading;
+}
+
 async function loadIbiHazards(st) {
   const key = (process.env[st.env] || '').trim();
   let lastErr = null;
@@ -471,10 +528,11 @@ function routes(app) {
     const near = (box) => boxHits([box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2], b);
     const carsStates = cars.STATES.filter(st => cars.configured(st.id));
     const ibiStates = ROAD_STATES.filter(st => process.env[st.env] && !carsStates.some(c => c.id === st.id));
-    const covered = carsStates.map(s => s.name).concat(ibiStates.map(s => s.name));
+    const covered = carsStates.map(s => s.name).concat(ibiStates.map(s => s.name), process.env.SF511_API_KEY ? ['SF Bay Area'] : []);
     try {
       const parts = await Promise.all([...carsStates.filter(st => near(st.box)).map(st => cars.hazards(st.id)),
-        ...ibiStates.filter(st => near(st.box)).map(ibiHazards)]);
+        ...ibiStates.filter(st => near(st.box)).map(ibiHazards),
+        ...(process.env.SF511_API_KEY && boxHits(SF511_BOX, b) ? [sf511Hazards()] : [])]);
       const seen = new Set(), items = [];
       for (const h of parts.flat()) {
         if (h.lat < b[1] || h.lat > b[3] || h.lng < b[0] || h.lng > b[2] || seen.has(h.id)) continue;
@@ -491,8 +549,9 @@ function routes(app) {
     res.json({ states: ROAD_STATES.map(s => ({ id: s.id, name: s.name, key: !!process.env[s.env],
         roads: _roadStats[s.id] || none, events: _roadStats['events-' + s.id] || none })),
       road511: { key: !!process.env.ROAD511_API_KEY, ...(_roadStats.road511 || {}) },
+      sf511: { key: !!process.env.SF511_API_KEY, events: _roadStats['events-sf511'] || none },
       cars: cars.STATES.map(s => ({ id: s.id, name: s.name, configured: cars.configured(s.id) })),
-      note: 'Feeds are only fetched while someone has the layer on. Open the map with Winter Road Conditions or Road Closures & Hazards on over a state, then reload this page. New York (CARS) details: /api/admin/cars' });
+      note: 'Feeds are only fetched while someone has the layer on. Open the map with Winter Road Conditions or Road Closures & Hazards on over a state, then reload this page. CARS states (New York, Indiana, Iowa, Kansas, Minnesota, Nebraska, San Diego) details: /api/admin/cars' });
   });
 }
 

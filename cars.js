@@ -24,6 +24,23 @@ const STATES = [
     roadCategory: /road-conditions|winter/i,
     box: [-79.8, 40.5, -71.8, 45.1],
     credit: '511NY · New York State DOT', page: 'https://511ny.org' },
+  // CARS Hub states: one FEU-g XML file (events + winter road conditions) and a
+  // CCTV inventory each, one shared login (CARS_HUB_USER / CARS_HUB_PASSWORD).
+  ...[
+    ['in', 'Indiana', 'https://inhub.carsprogram.org/hub/data/', [-88.1, 37.7, -84.7, 41.8], 'INDOT 511', 'https://511in.org'],
+    ['ia', 'Iowa', 'https://ia.carsprogram.org/hub/data/', [-96.7, 40.3, -90.1, 43.6], '511 Iowa · Iowa DOT', 'https://www.511ia.org'],
+    ['ks', 'Kansas', 'https://ks.carsprogram.org/hub/data/', [-102.1, 36.9, -94.6, 40.1], 'KanDrive · Kansas DOT', 'https://kandrive.org'],
+    ['mn', 'Minnesota', 'https://mn.carsprogram.org/hub/data/', [-97.3, 43.4, -89.4, 49.4], '511MN · MnDOT', 'https://511mn.org'],
+    ['ne', 'Nebraska', 'https://ne.carsprogram.org/hub/data/', [-104.1, 39.9, -95.3, 43.1], 'Nebraska 511 · NDOT', 'https://new.511.nebraska.gov'],
+    // San Diego region (SANDAG), not a state: its cameras join California's list
+    ['sandag', 'San Diego (SANDAG)', 'https://sd.carsprogram.org/hub/data/', [-117.7, 32.5, -116.0, 33.6], '511SD · SANDAG', 'https://511sd.com', 'CA'],
+  ].map(([id, name, base, box, credit, page, partOf]) => ({
+    id, name, hub: true, feu: base + 'feu-g.xml', cctv: base + 'cctv.xml',
+    user: 'CARS_HUB_USER', pass: 'CARS_HUB_PASSWORD',
+    // Road-condition segments (the seasonal / winter segment events)
+    roadCategory: /segment|pavement|winter|road-?condition|surface/i,
+    box, credit, page, partOf: partOf || null,
+  })),
 ];
 const byId = Object.fromEntries(STATES.map(s => [s.id, s]));
 
@@ -60,6 +77,88 @@ async function allEvents(st, query) {
   return out;
 }
 
+// ── CARS Hub FEU-g (XML) → the same event shape the events API gives ───────────
+// One file per state with every event and winter road-condition segment,
+// refreshed by the Hub every 30–60 s; we fetch it at most every 5 minutes, only
+// while someone is looking, and keep just the fields we use.
+const FEU_TTL = 5 * 60 * 1000;
+const _feu = new Map();    // id → { ts, rows, loading }
+const _t = (xml, name) => { const m = xml.match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`)); return m ? m[1] : ''; };
+const _deg = (v) => { const n = Number(v); return Number.isFinite(n) ? (Math.abs(n) > 1000 ? n / 1e6 : n) : NaN; };
+// <date>20261030</date><time>134249</time><utc-offset>-0600</utc-offset> → ms
+function feuTime(x) {
+  const d = _t(x, 'date'), t = _t(x, 'time') || '000000', o = _t(x, 'utc-offset') || '+0000';
+  if (!/^\d{8}$/.test(d)) return null;
+  const iso = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${t.padEnd(6, '0').slice(0, 2)}:${t.padEnd(6, '0').slice(2, 4)}:${t.padEnd(6, '0').slice(4, 6)}${o.slice(0, 3)}:${o.slice(3, 5)}`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+function parseFeu(xml) {
+  const out = [];
+  const re = /<(?:feu:)?full-event-update\b[^>]*>([\s\S]*?)<\/(?:feu:)?full-event-update>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const e = m[1];
+    const status = (e.match(/<status>([^<]*)<\/status>/) || [])[1] || '';
+    if (/ended|cancel/i.test(status)) continue;
+    const expiry = feuTime(_t(_t(e, 'message-header'), 'message-expiry-time'));
+    if (expiry && expiry < Date.now()) continue;
+    const head = (_t(e, 'headline').match(/<headline>\s*<([\w-]+)>([^<]*)<\//) || []);
+    let category = head[1] || '', code = (head[2] || '').trim();
+    // A lane or ramp "closure" isn't the road closed
+    if (/closure/i.test(category) && !/\bclosed\b/i.test(code)) category = 'lane-restriction';
+    if (/closure/i.test(category) && /\blane|shoulder\b/i.test(code)) category = 'lane-restriction';
+    const det = _t(e, 'detail');
+    const texts = [...det.matchAll(/<additional-text>\s*<description>([\s\S]*?)<\/description>/g)].map(x => unesc(x[1]).replace(/^audio text:\s*/i, '').trim()).filter(Boolean);
+    const phrases = [...det.matchAll(/<phrase>\s*<[\w-]+>([^<]*)</g)].map(x => x[1].trim());
+    const cause = (_t(det, 'cause').match(/<[\w-]+>([^<]*)</) || [])[1] || '';
+    const link = _t(det, 'location-on-link');
+    const p1 = _t(_t(link, 'primary-location'), 'geo-location'), p2 = _t(_t(link, 'secondary-location'), 'geo-location');
+    const a = [_deg(_t(p1, 'longitude')), _deg(_t(p1, 'latitude'))], b = [_deg(_t(p2, 'longitude')), _deg(_t(p2, 'latitude'))];
+    if (!a.every(Number.isFinite)) continue;
+    const geometry = b.every(Number.isFinite) && (a[0] !== b[0] || a[1] !== b[1]) ? { type: 'LineString', coordinates: [a, b] } : { type: 'Point', coordinates: a };
+    const times = _t(det, 'times');
+    const start = feuTime(_t(times, 'start-time')), end = feuTime(_t(times, 'end-time')), upd = feuTime(_t(times, 'update-time'));
+    const route = unesc(_t(link, 'route-designator'));
+    const cross = unesc(_t(link, 'cross-street-name-item'));
+    const extra = phrases.filter(x => x && x !== code).join(', ');
+    out.push({
+      'event-id': _t(_t(e, 'event-reference'), 'event-id'),
+      headline: { category, code },
+      priority: Number((e.match(/<priority>(\d+)<\/priority>/) || [])[1]) || null,
+      description: [extra && extra.charAt(0).toUpperCase() + extra.slice(1), cause && 'Cause: ' + cause, ...texts, cross && 'Near ' + cross].filter(Boolean).join('. ').slice(0, 600),
+      'update-time': upd ? { time: upd } : null,
+      details: [{ locations: [{ 'route-designator': route, 'primary-location': { 'geo-location': { latitude: a[1], longitude: a[0] } },
+        'segment-names': texts.filter(x => /^segment name/i.test(x)).map(x => x.replace(/^segment name:\s*/i, '')) }],
+        'start-time': start ? { time: start } : null, 'end-time': end ? { time: end } : null,
+        'update-time': upd ? { time: upd } : null }],
+      geometry,
+    });
+  }
+  return out;
+}
+function feuEvents(st) {
+  const c = _feu.get(st.id);
+  if (c && Date.now() - c.ts < FEU_TTL) return Promise.resolve(c.rows);
+  if (c && c.loading) return c.loading;
+  const loading = get(st, st.feu, { accept: 'application/xml, text/xml, */*', timeout: 90000 })
+    .then(({ text }) => {
+      const rows = parseFeu(text);
+      stat(st.id, 'feed', { bytes: text.length, events: rows.length,
+        categories: rows.reduce((m, r) => (m[r.headline.category] = (m[r.headline.category] || 0) + 1, m), {}) });
+      _feu.set(st.id, { ts: Date.now(), rows });
+      return rows;
+    })
+    .catch(e => {
+      stat(st.id, 'feed', { error: e.message });
+      const old = (c && c.rows) || [];
+      _feu.set(st.id, { ts: Date.now() - FEU_TTL + 2 * 60 * 1000, rows: old });   // retry in 2 min
+      throw e;
+    });
+  _feu.set(st.id, { ...(c || { ts: 0, rows: [] }), loading });
+  return loading;
+}
+
 const stats = {};    // state → { roads: {...}, cameras: {...} }
 const stat = (id, kind, v) => { (stats[id] = stats[id] || {})[kind] = { ...v, at: new Date().toISOString() }; };
 
@@ -92,7 +191,7 @@ function eventToRoad(e, st, roadCategory) {
 async function loadRoads(st, roadCategory) {
   // eventClassifications=winterDriving (from NYSDOT's migration guide) keeps the
   // download small; if it's ever ignored we still keep only road conditions
-  const rows = await allEvents(st, 'eventClassifications=winterDriving&limit=500');
+  const rows = st.hub ? await feuEvents(st) : await allEvents(st, 'eventClassifications=winterDriving&limit=500');
   const features = [];
   for (const e of rows) {
     if (!st.roadCategory.test((e.headline && e.headline.category) || '')) continue;
@@ -234,7 +333,7 @@ function eventToHazard(e, st, now) {
 }
 
 async function loadHazards(st) {
-  const rows = await allEvents(st, 'limit=500');
+  const rows = st.hub ? await feuEvents(st) : await allEvents(st, 'limit=500');
   const now = Date.now(), items = [];
   for (const e of rows) { const h = eventToHazard(e, st, now); if (h) items.push(h); }
   stat(st.id, 'hazards', { events: rows.length, shown: items.length,
@@ -268,4 +367,4 @@ function routes(app) {
 }
 
 module.exports = { STATES, configured: (id) => !!byId[id] && configured(byId[id]), roads, loadCameras, hazards, routes, weatherKind, PLANNED,
-  _test: { parseCctv, eventToRoad, eventToHazard, deg } };
+  _test: { parseCctv, eventToRoad, eventToHazard, deg, parseFeu, feuTime } };

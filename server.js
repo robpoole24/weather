@@ -1709,6 +1709,13 @@ const STATE_DOTS = [
   // New York — 511NY's CARS-Hub camera inventory (~2,900 NYSDOT + NYC DOT cameras).
   // Login: NY_CARS_USER / NY_CARS_PASSWORD. (Replaces the retired 511ny.org/api/getcameras.)
   { id:'ny', label:'New York 511 (NYSDOT CARS)', envKey:'NY_CARS_USER', cacheTTL:30*60*1000, load: () => cars.loadCameras('ny') },
+  // CARS Hub states (login CARS_HUB_USER / CARS_HUB_PASSWORD)
+  { id:'in', label:'Indiana (INDOT 511 CARS)',  cacheTTL:30*60*1000, load: () => _carsHubCams('in') },
+  { id:'ks', label:'Kansas (KanDrive CARS)',    cacheTTL:30*60*1000, load: () => _carsHubCams('ks') },
+  { id:'ne', label:'Nebraska (Nebraska 511 CARS)', cacheTTL:30*60*1000, load: () => _carsHubCams('ne') },
+  // California: San Diego's SANDAG cameras on top of the open traffic feeds;
+  // the 100 m merge keeps one copy where both have the same camera
+  { id:'ca', label:'California — San Diego (511SD SANDAG CARS)', cacheTTL:30*60*1000, load: () => _sandagCams() },
   // Virginia — VDOT cameras via Iteris/Skyline "Manager API" 2.0 (api.vdotcameras.com).
   // Key: VA_VDOT_KEY (sent as the x-api-key header). Terms (Iteris agreement +
   // Attachment A): never crop/cover the VDOT/511 banner on the picture, show the
@@ -1732,7 +1739,9 @@ const STATE_DOTS = [
   // Illinois: IDOT Open Data "Gateway Traffic Camera Locations" (SnapShot = public image; TooOld skipped)
   { id:'il', label:'Illinois DOT', cacheTTL:15*60*1000, arcgisItem:'8a885da23dfb46caaa1827ad920fb5b1', load: _loadArcGISLayer },
   // Iowa: Iowa DOT Open Data "Traffic Cameras" (static image + video where available; list updated daily)
-  { id:'ia', label:'Iowa DOT', cacheTTL:60*60*1000, arcgisItem:'c4063f200a7b4da5826e2ac86c677cf5', load: _loadArcGISLayer },
+  // Iowa: the CARS Hub camera list when it answers, else Iowa DOT's open-data layer
+  { id:'ia', label:'Iowa DOT (511 Iowa CARS / open data)', cacheTTL:60*60*1000, arcgisItem:'c4063f200a7b4da5826e2ac86c677cf5',
+    load: async (dot) => { const c = await _carsHubCams('ia'); return c.length ? c : _loadArcGISLayer(dot); } },
 
   // ── Pennsylvania ─────────────────────────────────────────────────────────
   // PA uses ASP.NET map layer markers per Road511's article — non-standard
@@ -1772,11 +1781,16 @@ const STATE_DOTS = [
   // Schema verified defensively — see _parseMnDOT below.
   {
     id: 'mn',
-    label: 'Minnesota DOT',
+    label: 'Minnesota DOT (511MN CARS / MnDOT)',
     url: 'https://tr.511mn.org/tgcameras/api/cameras',
     envKey: null,
     cacheTTL: 10 * 60 * 1000,
-    parse: _parseMnDOT,
+    // The CARS Hub camera list when it answers, else MnDOT's own camera API
+    load: async (dot) => {
+      const c = await _carsHubCams('mn');
+      if (c.length) return c;
+      return _parseMnDOT(JSON.parse(await fetchTextOverHttp(dot.url)), 'mn');
+    },
   },
 
   // ── Illinois DOT (Gateway system) ────────────────────────────────────────
@@ -3769,6 +3783,28 @@ function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redi
     req.on('error', reject);
   });
 }
+
+// CARS Hub camera lists (cars.js). A state without a camera file (404) just
+// returns none, and the admin CARS page says so.
+async function _carsHubCams(id) {
+  if (!cars.configured(id)) return [];
+  try { return await cars.loadCameras(id); }
+  catch (e) { console.warn(`[Cameras] CARS ${id}: ${e.message}`); return []; }
+}
+// San Diego: how many SANDAG cameras are NEW versus ones the open traffic
+// feeds already have (within 100 m) — tells us whether regional feeds are worth it
+let _sandagStats = null;
+async function _sandagCams() {
+  const cams = await _carsHubCams('sandag');
+  try {
+    const otcCA = (await _loadOTC().catch(() => [])).filter(c => c.state === 'CA');
+    const dup = cams.filter(s => otcCA.some(o => _haversineM(s.lat, s.lng, o.lat, o.lng) < 100)).length;
+    _sandagStats = { at: new Date().toISOString(), sandag: cams.length, alreadyHad: dup, new: cams.length - dup };
+    if (cams.length) console.log(`[Cameras] SANDAG: ${cams.length} cameras — ${cams.length - dup} new, ${dup} already in the California feeds`);
+  } catch (_) {}
+  return cams;
+}
+app.get('/api/admin/cameras/sandag', (req, res) => res.json(_sandagStats || { note: 'Not loaded yet — open the radar on San Diego with cameras on' }));
 
 // ── Louisiana: hide cameras showing 511LA's "image unavailable" card ─────────
 // 511LA serves the same gray placeholder for every camera that's down. Every
