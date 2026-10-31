@@ -49,12 +49,37 @@ const OPTIONAL = [
   ['co', 'Colorado DOT', 'CO_WZDX_URL', ['CO']],
   ['tx', 'Texas DOT', 'TX_WZDX_URL', ['TX']],
   ['oh', 'Ohio DOT', 'OH_WZDX_URL', ['OH']],
-  ['or', 'Oregon DOT', 'OR_WZDX_URL', ['OR']],
+
   ['nc', 'North Carolina DOT', 'NC_WZDX_URL', ['NC']],
 ];
+// Same platform as a 511 key we already hold: build the address from that key
+// For these, the *_WZDX_URL variable may hold just the key instead of the full address.
+const KEY_ONLY = {
+  CO_WZDX_URL: (k) => 'https://data.cotrip.org/api/v1/wzdx?apiKey=' + encodeURIComponent(k),
+  TX_WZDX_URL: (k) => 'https://api.drivetexas.org/api/conditions.wzdx.geojson?key=' + encodeURIComponent(k),
+};
+const FROM_511_KEY = {
+  NC_WZDX_URL: ['NC_511_KEY', (k) => 'https://www.drivenc.gov/api/wzdx?key=' + encodeURIComponent(k)],
+  OH_WZDX_URL: ['OH_DOT_KEY', (k) => 'https://publicapi.ohgo.com/api/work-zones/wzdx/4.2?api-key=' + encodeURIComponent(k)],
+};
+// Feeds whose key goes in a request header: [id, name, url, key variable, header, states]
+const HEADER_KEYED = [
+  ['or', 'Oregon DOT', 'https://api.odot.state.or.us/WZDx/v4.0/Workzones', 'ODOT_API_KEY', 'Ocp-Apim-Subscription-Key', ['OR']],
+];
 function wzdxSources() {
+  const urlFor = (env) => {
+    const direct = (process.env[env] || '').trim();
+    if (/^https?:\/\//i.test(direct)) return direct;
+    // A bare key in the variable: build the feed address around it.
+    if (direct && KEY_ONLY[env]) return KEY_ONLY[env](direct);
+    if (direct) return null;
+    const alt = FROM_511_KEY[env], key = alt && (process.env[alt[0]] || '').trim();
+    return key ? alt[1](key) : null;
+  };
   return PUBLIC.map(([id, name, url, states]) => ({ id, name, url, states }))
-    .concat(OPTIONAL.filter(([, , env]) => (process.env[env] || '').trim()).map(([id, name, env, states]) => ({ id, name, url: process.env[env].trim(), states })));
+    .concat(OPTIONAL.map(([id, name, env, states]) => ({ id, name, url: urlFor(env), states })).filter(s => s.url))
+    .concat(HEADER_KEYED.filter(([, , , env]) => (process.env[env] || '').trim())
+      .map(([id, name, url, env, header, states]) => ({ id, name, url, states, headers: { [header]: process.env[env].trim() } })));
 }
 
 // Caltrans districts and rough boxes [w, s, e, n]
@@ -68,11 +93,11 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
   const cache = new Map();     // source id → { ts, items, loading }
   const stats = {};
 
-  async function getJSON(url) {
+  async function getJSON(url, extraHeaders) {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 60000);
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json, application/geo+json, */*' }, signal: ctl.signal });
+      const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json, application/geo+json, */*', ...(extraHeaders || {}) }, signal: ctl.signal });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const len = Number(r.headers.get('content-length') || 0);
       if (len > MAX_BYTES) throw new Error('feed too large (' + Math.round(len / 1e6) + ' MB)');
@@ -166,7 +191,7 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
     const c = cache.get(src.id);
     if (c && Date.now() - c.ts < TTL) return Promise.resolve(c.items);
     if (c && c.loading) return c.loading;
-    const loading = getJSON(src.url)
+    const loading = getJSON(src.url, src.headers)
       .then(j => { const items = kind === 'ct' ? caltransItems(src, j) : wzdxItems(src, j); cache.set(src.id, { ts: Date.now(), items }); return items; })
       .catch(e => {
         stats[src.id] = { ...(stats[src.id] || {}), name: src.name || src.id, error: e.message, at: new Date().toISOString() };

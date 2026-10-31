@@ -1712,6 +1712,11 @@ const STATE_DOTS = [
   // CARS Hub states (login CARS_HUB_USER / CARS_HUB_PASSWORD)
   { id:'in', label:'Indiana (INDOT 511 CARS)',  cacheTTL:30*60*1000, load: () => _carsHubCams('in') },
   { id:'ks', label:'Kansas (KanDrive CARS)',    cacheTTL:30*60*1000, load: () => _carsHubCams('ks') },
+  // Ohio: OHGO public API. Key in OH_DOT_KEY (the variable Ohio cameras used
+  // before) or OHGO_API_KEY — the same key also unlocks Ohio's work zones
+  { id:'oh', label:'Ohio (OHGO · ODOT)', envKey:'OH_DOT_KEY', cacheTTL:30*60*1000, load: () => _ohgoCams() },
+  // Oregon: ODOT TripCheck API (subscription key ODOT_API_KEY, sent as a header)
+  { id:'or', label:'Oregon (ODOT TripCheck)', envKey:'ODOT_API_KEY', cacheTTL:30*60*1000, load: () => _tripcheckCams() },
   { id:'ne', label:'Nebraska (Nebraska 511 CARS)', cacheTTL:30*60*1000, load: () => _carsHubCams('ne') },
   // California: San Diego's SANDAG cameras on top of the open traffic feeds;
   // the 100 m merge keeps one copy where both have the same camera
@@ -3782,6 +3787,62 @@ function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redi
     req.on('timeout', () => req.destroy(new Error('upstream timeout')));
     req.on('error', reject);
   });
+}
+
+// Ohio OHGO cameras: one site can hold several views (directions) — each view
+// becomes its own camera. Field names are read case-insensitively.
+async function _ohgoCams() {
+  const key = (process.env.OHGO_API_KEY || process.env.OH_DOT_KEY || '').trim();
+  if (!key) return [];
+  const j = JSON.parse(await fetchTextOverHttp('https://publicapi.ohgo.com/api/v1/cameras?page-all=true&api-key=' + encodeURIComponent(key)));
+  const rows = Array.isArray(j) ? j : (j.results || j.Results || j.data || []);
+  const g = (o, k) => o == null ? undefined : (o[k] ?? o[k.charAt(0).toUpperCase() + k.slice(1)]);
+  const out = [];
+  for (const r of rows) {
+    const lat = Number(g(r, 'latitude')), lng = Number(g(r, 'longitude'));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (Math.abs(lat) < 1 && Math.abs(lng) < 1)) continue;
+    const views = g(r, 'cameraViews') || [];
+    views.forEach((v, i) => {
+      const img = g(v, 'largeUrl') || g(v, 'smallUrl');
+      if (!img || !/^https?:/i.test(img)) return;
+      const dir = g(v, 'direction');
+      out.push({
+        id: 'oh-' + g(r, 'id') + '-' + i,
+        name: (g(r, 'location') || g(v, 'mainRoute') || g(r, 'description') || 'Ohio camera') + (dir && views.length > 1 && !/ptz/i.test(dir) ? ' (' + dir + ')' : ''),
+        lat, lng, imageUrl: img, videoUrl: null,
+        direction: dir && !/ptz/i.test(dir) ? dir : null, source: 'dot', provider: 'OHGO · Ohio DOT', pageUrl: 'https://www.ohgo.com',
+      });
+    });
+  }
+  return out;
+}
+
+// Oregon TripCheck camera inventory. The key goes in the subscription header,
+// never in the address. Images come straight from TripCheck's servers.
+async function _tripcheckCams() {
+  const key = (process.env.ODOT_API_KEY || '').trim();
+  if (!key) return [];
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 30000);
+  let j;
+  try {
+    const r = await fetch('https://api.odot.state.or.us/tripcheck/Cctv/Inventory', {
+      headers: { 'Ocp-Apim-Subscription-Key': key, Accept: 'application/json', 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)' }, signal: ctl.signal });
+    if (!r.ok) throw new Error('TripCheck HTTP ' + r.status + (r.status === 401 ? ' — key refused (check ODOT_API_KEY and that it is subscribed to the TripCheck product)' : ''));
+    j = await r.json();
+  } finally { clearTimeout(t); }
+  const rows = j.CCTVInventoryRequest || j.cctvInventoryRequest || j['CCTV-inventory'] || [];
+  const out = [];
+  for (const c of rows) {
+    const lat = Number(c.latitude), lng = Number(c.longitude), img = c['cctv-url'];
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (Math.abs(lat) < 1 && Math.abs(lng) < 1) || !/^https?:/i.test(img || '')) continue;
+    out.push({
+      id: 'or-' + c['device-id'], name: c['device-name'] || c['cctv-other'] || 'Oregon camera',
+      lat, lng, imageUrl: img.replace(/^http:/i, 'https:'), videoUrl: null, direction: null,
+      source: 'dot', provider: 'TripCheck · Oregon DOT', pageUrl: 'https://www.tripcheck.com',
+    });
+  }
+  return out;
 }
 
 // CARS Hub camera lists (cars.js). A state without a camera file (404) just
