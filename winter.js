@@ -180,6 +180,8 @@ const STATE_BOXES = {
   VA: [-83.7, 36.5, -75.2, 39.5], WA: [-124.8, 45.5, -116.9, 49.0], WV: [-82.7, 37.2, -77.7, 40.7], WI: [-92.9, 42.4, -86.2, 47.1],
   WY: [-111.1, 40.9, -104.0, 45.0], AK: [-170, 51, -129.9, 71.5], HI: [-160.3, 18.9, -154.8, 22.3],
 };
+// WZDx work-zone feeds + Caltrans lane closures (closures.js)
+const closures = require('./closures')({ cars, stateBoxes: STATE_BOXES });
 const _r511 = new Map();                  // state → { ts, features }
 const _r511Stats = {};                    // state → { count, at, error }
 let _r511Day = '', _r511Calls = 0, _r511Minute = 0, _r511MinuteCalls = 0, _r511PauseUntil = 0, _r511Sample = null, _r511Busy = null;
@@ -464,6 +466,62 @@ function sf511Hazards() {
   return _sf511.loading;
 }
 
+// Bay Area closures: 511.org's WZDx feed (work zones on local streets,
+// freeways and highways). The events feed above has crashes and lane closures
+// but almost no full closures; this one marks each zone "all-lanes-closed".
+const _sfwz = { ts: 0, items: [], loading: null };
+function sfWzdxHazards() {
+  const key = (process.env.SF511_API_KEY || '').trim();
+  if (!key) return Promise.resolve([]);
+  if (Date.now() - _sfwz.ts < 5 * 60 * 1000) return Promise.resolve(_sfwz.items);
+  if (_sfwz.loading) return _sfwz.loading;
+  _sfwz.loading = getText(`https://api.511.org/traffic/wzdx?api_key=${encodeURIComponent(key)}`, { timeout: 45000 })
+    .then(txt => {
+      const j = JSON.parse(String(txt).replace(/^﻿/, ''));
+      const feats = Array.isArray(j.features) ? j.features : [];
+      const now = Date.now(), items = [], impacts = {};
+      for (const f of feats) {
+        const p = f.properties || {}, core = p.core_details || p;           // WZDx 4.x keeps the basics in core_details
+        const impact = String(p.vehicle_impact || '').toLowerCase();
+        impacts[impact || '—'] = (impacts[impact || '—'] || 0) + 1;
+        const desc = String(core.description || p.description || '');
+        const closed = impact === 'all-lanes-closed' || cars.isFullClosure(desc);
+        if (!closed) continue;
+        const start = Date.parse(p.start_date || ''), end = Date.parse(p.end_date || '');
+        if (Number.isFinite(start) && start > now + 15 * 60 * 1000) continue;   // planned, not started
+        if (Number.isFinite(end) && end < now) continue;                        // over
+        const g = f.geometry || {};
+        let pts = g.type === 'LineString' || g.type === 'MultiPoint' ? g.coordinates : g.type === 'Point' ? [g.coordinates]
+          : g.type === 'MultiLineString' ? (g.coordinates || []).flat() : [];
+        pts = (pts || []).filter(c => Array.isArray(c) && c.length >= 2 && Number.isFinite(+c[0]) && Number.isFinite(+c[1]));
+        if (!pts.length) continue;
+        const [lng, lat] = pts[0].map(Number);
+        const line = pts.length > 1 ? pts.filter((_, i, a) => a.length < 400 || i % Math.ceil(a.length / 400) === 0).map(([x, y]) => [+(+y).toFixed(5), +(+x).toFixed(5)]) : null;
+        const roads = core.road_names || (p.road_name ? [p.road_name] : []);
+        const upd = Date.parse(core.update_date || p.update_date || '');
+        items.push({
+          id: 'sfwz-' + (f.id || core.data_source_id + '-' + items.length), kind: 'closure', closed: true,
+          cause: String(core.event_type || '').toLowerCase() === 'detour' ? 'other' : 'construction',
+          title: (String(core.event_type || '').toLowerCase() === 'detour' ? 'Detour' : 'Road closed · work zone'),
+          road: (roads || []).join(' / '), text: desc.slice(0, 600),
+          lat: +lat.toFixed(5), lng: +lng.toFixed(5), line,
+          start: Number.isFinite(start) ? new Date(start).toISOString() : null, end: Number.isFinite(end) ? new Date(end).toISOString() : null,
+          updated: Number.isFinite(upd) ? new Date(upd).toISOString() : null, priority: null, src: 'sf511', credit: '511.org · Bay Area work zones',
+        });
+      }
+      _sfwz.items = items; _sfwz.ts = Date.now();
+      _roadStats['wzdx-sf511'] = { zones: feats.length, closedNow: items.length, impacts, at: new Date().toISOString() };
+      return items;
+    })
+    .catch(e => {
+      _roadStats['wzdx-sf511'] = { error: e.message, at: new Date().toISOString() };
+      _sfwz.ts = Date.now() - 3 * 60 * 1000;
+      return _sfwz.items;
+    })
+    .finally(() => { _sfwz.loading = null; });
+  return _sfwz.loading;
+}
+
 async function loadIbiHazards(st) {
   const key = (process.env[st.env] || '').trim();
   let lastErr = null;
@@ -541,16 +599,22 @@ function routes(app) {
     const near = (box) => boxHits([box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2], b);
     const carsStates = cars.STATES.filter(st => cars.configured(st.id));
     const ibiStates = ROAD_STATES.filter(st => process.env[st.env] && !carsStates.some(c => c.id === st.id));
-    const covered = carsStates.map(s => s.name).concat(ibiStates.map(s => s.name), process.env.SF511_API_KEY ? ['SF Bay Area'] : []);
+    const covered = [...new Set(carsStates.map(s => s.name).concat(ibiStates.map(s => s.name), process.env.SF511_API_KEY ? ['SF Bay Area'] : [], closures.coveredNames()))];
     try {
       const parts = await Promise.all([...carsStates.filter(st => near(st.box)).map(st => cars.hazards(st.id)),
         ...ibiStates.filter(st => near(st.box)).map(ibiHazards),
-        ...(process.env.SF511_API_KEY && boxHits(SF511_BOX, b) ? [sf511Hazards()] : [])]);
-      const seen = new Set(), items = [];
-      for (const h of parts.flat()) {
+        ...(process.env.SF511_API_KEY && boxHits(SF511_BOX, b) ? [sf511Hazards(), sfWzdxHazards()] : [])]);
+      // Work-zone and Caltrans closures fill gaps: one that sits within ~250 m of a
+      // closure another feed already shows is the same closure, so it's skipped
+      const extra = await closures.forView(b).catch(() => []);
+      const seen = new Set(), items = [], closedPts = [];
+      const near = (h) => closedPts.some(([la, lo]) => Math.abs(la - h.lat) < 0.0025 && Math.abs(lo - h.lng) < 0.0032);
+      for (const h of parts.flat().concat(extra)) {
         if (h.lat < b[1] || h.lat > b[3] || h.lng < b[0] || h.lng > b[2] || seen.has(h.id)) continue;
+        if (/^(wz-|ct-|sfwz-)/.test(h.id) && near(h)) continue;
         seen.add(h.id); items.push(h);
-        if (items.length >= 1500) break;
+        if (h.closed) closedPts.push([h.lat, h.lng]);
+        if (items.length >= 2000) break;
       }
       res.set('Cache-Control', 'private, max-age=120');
       res.json({ items, states: parts.length ? covered : [], covered });
@@ -562,7 +626,8 @@ function routes(app) {
     res.json({ states: ROAD_STATES.map(s => ({ id: s.id, name: s.name, key: !!process.env[s.env],
         roads: _roadStats[s.id] || none, events: _roadStats['events-' + s.id] || none })),
       road511: { key: !!process.env.ROAD511_API_KEY, ...(_roadStats.road511 || {}) },
-      sf511: { key: !!process.env.SF511_API_KEY, events: _roadStats['events-sf511'] || none },
+      sf511: { key: !!process.env.SF511_API_KEY, events: _roadStats['events-sf511'] || none, workZones: _roadStats['wzdx-sf511'] || none },
+      closures: closures.stats(),
       cars: cars.STATES.map(s => ({ id: s.id, name: s.name, configured: cars.configured(s.id) })),
       note: 'Feeds are only fetched while someone has the layer on. Open the map with Winter Road Conditions or Road Closures & Hazards on over a state, then reload this page. CARS states (New York, Indiana, Iowa, Kansas, Minnesota, Nebraska, San Diego) details: /api/admin/cars' });
   });
