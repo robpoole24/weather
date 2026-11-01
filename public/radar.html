@@ -8402,7 +8402,9 @@ async function refreshHazards() {
       const weatherish = h.cause ? h.cause === 'weather' : h.kind !== 'closure';
       if (_hazWeatherOnly && !weatherish) return;
       const k = h.kind === 'closure' && h.cause && h.cause !== 'weather' ? (HAZ_CAUSES[h.cause] || HAZ_CAUSES.other) : (HAZ_KINDS[h.kind] || HAZ_KINDS.weather);
-      if (h.line) L.polyline(h.line, { color: h.closed ? '#ef4444' : k.color, weight: 4, opacity: 0.85, dashArray: h.closed ? null : '6 6', interactive: false }).addTo(_hazLayer);
+      // Only draw a line when it follows the road (3+ points). A feed that gives just a start and
+      // end point would draw a straight line cutting across the map, which isn't where the road goes.
+      if (h.line && h.line.length > 2) L.polyline(h.line, { color: h.closed ? '#ef4444' : k.color, weight: 4, opacity: 0.85, dashArray: h.closed ? null : '6 6', interactive: false }).addTo(_hazLayer);
       const icon = L.divIcon({ className: 'haz-pin', iconSize: [28, 28], iconAnchor: [14, 14],
         html: `<div style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;background:#0b1220;border:3px solid ${h.closed ? '#ef4444' : k.color};box-shadow:0 1px 4px rgba(0,0,0,.6)">${k.ico}</div>` });
       L.marker([h.lat, h.lng], { icon, title: (h.road ? h.road + ': ' : '') + h.title, zIndexOffset: h.kind === 'closure' ? 0 : 500 })

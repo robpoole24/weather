@@ -169,7 +169,9 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
       const type = String(p.type || ''), cat = String(p.category || ''), msg = String(p.travelerInformationMessage || p.description || '');
       types[type || '—'] = (types[type || '—'] || 0) + 1;
       if (/^(inactive|cleared|closed out|ended)$/i.test(String(p.status || ''))) continue;
-      const closed = cars.isFullClosure(type) || cars.isFullClosure(msg) || /\b(full|road|highway|pass) clos/i.test(type + ' ' + cat);
+      // CDOT's "Safety Closure" is a full closure (I-70, passes in snow) even when the message doesn't say "closed"
+      const closed = /^(safety closure|road closure|road closed|full closure|closure)$/i.test(type.trim())
+        || cars.isFullClosure(type) || cars.isFullClosure(msg) || /\b(full|road|highway|pass) clos/i.test(type + ' ' + cat);
       if (!closed) continue;
       const pp = pts(f.geometry);
       if (!pp.length) continue;
