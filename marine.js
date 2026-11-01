@@ -71,6 +71,84 @@ async function tidePredictions(id) {
   });
 }
 
+// ── Buoys (NDBC) ────────────────────────────────────────────────────────────
+// One file has the latest reading from every NDBC buoy and coastal station; station names come
+// from NDBC's station list (kept a day). Shared by all viewers, refreshed every 15 minutes.
+const _num = (v) => (v == null || v === 'MM' || v === '' ? null : (Number.isFinite(+v) ? +v : null));
+async function ndbcNames() {
+  return cached('ndbc:names', 24 * 3600 * 1000, async () => {
+    const r = await fetch('https://www.ndbc.noaa.gov/activestations.xml', { headers: UA });
+    if (!r.ok) throw new Error('NDBC stations ' + r.status);
+    const xml = await r.text(), out = {};
+    for (const m of xml.matchAll(/<station\s+([^>]+?)\/?>/g)) {
+      const a = {}; for (const kv of m[1].matchAll(/(\w+)="([^"]*)"/g)) a[kv[1]] = kv[2];
+      if (a.id) out[a.id.toUpperCase()] = { name: (a.name || '').replace(/&amp;/g, '&').replace(/&apos;/g, "'"), type: a.type || '', owner: a.owner || '' };
+    }
+    return out;
+  });
+}
+async function ndbcLatest() {
+  return cached('ndbc:latest', 15 * 60 * 1000, async () => {
+    const r = await fetch('https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt', { headers: UA });
+    if (!r.ok) throw new Error('NDBC latest ' + r.status);
+    const txt = await r.text();
+    const names = await ndbcNames().catch(() => ({}));
+    const lines = txt.split('\n');
+    const head = (lines.find((l) => l.startsWith('#STN')) || '').replace(/^#/, '').trim().split(/\s+/);
+    const col = (k) => head.indexOf(k);
+    const C = { stn: col('STN'), lat: col('LAT'), lon: col('LON'), yy: col('YYYY'), mo: col('MM'), dd: col('DD'), hh: col('hh'), mn: col('mm'),
+      wdir: col('WDIR'), wspd: col('WSPD'), gst: col('GST'), wvht: col('WVHT'), dpd: col('DPD'), mwd: col('MWD'), pres: col('PRES'), ptdy: col('PTDY'),
+      atmp: col('ATMP'), wtmp: col('WTMP'), vis: col('VIS'), tide: col('TIDE') };
+    const MS_MPH = 2.23694, M_FT = 3.28084, cToF = (c) => Math.round((c * 9 / 5 + 32) * 10) / 10;
+    const out = [];
+    for (const line of lines) {
+      if (!line.trim() || line.startsWith('#')) continue;
+      const f = line.trim().split(/\s+/), g = (i) => (i >= 0 ? f[i] : null);
+      const lat = _num(g(C.lat)), lon = _num(g(C.lon)); if (lat == null || lon == null) continue;
+      const t = Date.UTC(+g(C.yy), +g(C.mo) - 1, +g(C.dd), +g(C.hh), +g(C.mn));
+      if (!Number.isFinite(t) || Date.now() - t > 6 * 3600 * 1000) continue;          // skip stale reports
+      const id = String(g(C.stn)).toUpperCase(), n = names[id] || {};
+      const wspd = _num(g(C.wspd)), gst = _num(g(C.gst)), wvht = _num(g(C.wvht)), atmp = _num(g(C.atmp)), wtmp = _num(g(C.wtmp));
+      out.push({ id, name: n.name || id, type: n.type || '', lat, lon, t,
+        wdir: _num(g(C.wdir)), wind: wspd == null ? null : Math.round(wspd * MS_MPH), gust: gst == null ? null : Math.round(gst * MS_MPH),
+        wave: wvht == null ? null : Math.round(wvht * M_FT * 10) / 10, period: _num(g(C.dpd)), wavedir: _num(g(C.mwd)),
+        pres: _num(g(C.pres)), ptdy: _num(g(C.ptdy)), air: atmp == null ? null : cToF(atmp), water: wtmp == null ? null : cToF(wtmp), vis: _num(g(C.vis)) });
+    }
+    return out;
+  });
+}
+
+// ── Real-time water levels (NOAA CO-OPS) ───────────────────────────────────
+async function waterLevelStations() {
+  return cached('coops:wl', 24 * 3600 * 1000, async () => {
+    const r = await fetch('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=waterlevels', { headers: UA });
+    if (!r.ok) throw new Error('CO-OPS stations ' + r.status);
+    const j = await r.json();
+    return (j.stations || []).filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+      .map((s) => ({ id: s.id, name: s.name, st: s.state || '', lat: s.lat, lon: s.lng, tidal: !!s.tidal, lakes: !!s.greatlakes }));
+  });
+}
+async function waterLevelNow(st) {
+  return cached('coops:now:' + st.id, 6 * 60 * 1000, async () => {
+    const datum = st.lakes ? 'IGLD' : 'MLLW';
+    const base = 'https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?format=json&application=WeatherTV&units=english&time_zone=gmt';
+    const get = (dt) => fetch(`${base}&product=water_level&date=latest&datum=${dt}&station=${st.id}`, { headers: UA }).then((r) => r.json()).catch(() => null);
+    // Shown level: feet above mean lower low water (tidal) or lake level (IGLD, Great Lakes).
+    // NOAA's flood thresholds are on the station's own datum (STND), so the flood check uses that.
+    const [wl, wlStnd, fl] = await Promise.all([get(datum), st.lakes ? null : get('STND'),
+      fetch(`https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/${st.id}/floodlevels.json`, { headers: UA }).then((r) => r.json()).catch(() => null)]);
+    const d = wl && wl.data && wl.data[0], ds = st.lakes ? d : (wlStnd && wlStnd.data && wlStnd.data[0]);
+    const level = d ? _num(d.v) : null, t = d ? Date.parse(d.t.replace(' ', 'T') + ':00Z') : null, cmp = ds ? _num(ds.v) : null;
+    const fx = fl && (fl.nos_minor != null || fl.nws_minor != null) ? fl : null;
+    const th = fx ? { minor: _num(fx.nos_minor ?? fx.nws_minor), moderate: _num(fx.nos_moderate ?? fx.nws_moderate), major: _num(fx.nos_major ?? fx.nws_major) } : null;
+    let flooding = null;
+    if (th && cmp != null) flooding = th.major != null && cmp >= th.major ? 'major' : th.moderate != null && cmp >= th.moderate ? 'moderate' : th.minor != null && cmp >= th.minor ? 'minor' : 'none';
+    // How far below minor flooding, in feet (same datum on both sides)
+    const toMinor = th && th.minor != null && cmp != null ? Math.round((th.minor - cmp) * 10) / 10 : null;
+    return { level, t, datum, flooding, toMinor };
+  });
+}
+
 // ── Marine forecast text → wind / seas ──────────────────────────────────────
 const DIRS = { north: 'N', northeast: 'NE', east: 'E', southeast: 'SE', south: 'S', southwest: 'SW', west: 'W', northwest: 'NW',
   n: 'N', ne: 'NE', e: 'E', se: 'SE', s: 'S', sw: 'SW', w: 'W', nw: 'NW', variable: 'VRB' };
@@ -200,6 +278,28 @@ module.exports = function attachMarine(app) {
     const lat = parseFloat(req.query.lat), lon = parseFloat(req.query.lon ?? req.query.lng);
     return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
   };
+
+  // All buoys and coastal stations reporting in the last 6 hours (for the radar map)
+  app.get('/api/marine/buoys', async (req, res) => {
+    try { res.set('Cache-Control', 'public, max-age=300'); res.json({ buoys: await ndbcLatest(), source: 'NOAA National Data Buoy Center' }); }
+    catch (e) { res.status(502).json({ buoys: [], error: 'buoys unavailable: ' + e.message }); }
+  });
+  // Real-time water-level / tide gauges (list), and one gauge's latest level + coming high/low tides
+  app.get('/api/marine/water-levels', async (req, res) => {
+    try { res.set('Cache-Control', 'public, max-age=3600'); res.json({ stations: await waterLevelStations(), source: 'NOAA Tides & Currents' }); }
+    catch (e) { res.status(502).json({ stations: [], error: 'water levels unavailable' }); }
+  });
+  app.get('/api/marine/water-level', async (req, res) => {
+    try {
+      const id = String(req.query.id || '').replace(/\D/g, '');
+      const st = (await waterLevelStations()).find((s) => s.id === id);
+      if (!st) return res.status(404).json({ error: 'unknown station' });
+      const [now, tides] = await Promise.all([waterLevelNow(st), st.tidal ? tidePredictions(id).catch(() => null) : null]);
+      res.set('Cache-Control', 'public, max-age=300');
+      res.json({ station: st, ...now, tides: (tides || []).filter((e) => e.t > Date.now() - 3600 * 1000).slice(0, 4),
+        url: `https://tidesandcurrents.noaa.gov/stationhome.html?id=${id}` });
+    } catch (e) { res.status(502).json({ error: 'water level unavailable' }); }
+  });
 
   app.get('/api/marine/tides', async (req, res) => {
     const p = point(req);

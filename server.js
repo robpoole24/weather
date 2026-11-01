@@ -1433,6 +1433,46 @@ app.get('/api/river-gauges', async (req, res) => {
   }
 });
 
+// GET /api/river-gauge?lid=XXXX1  — one gauge's recent stage, its official forecast (where the
+// River Forecast Center issues one) and its flood stages, for the gauge popup's chart.
+const _gaugeDetail = new Map();
+app.get('/api/river-gauge', async (req, res) => {
+  const lid = String(req.query.lid || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!/^[A-Z0-9]{4,6}$/.test(lid)) return res.status(400).json({ error: 'lid required' });
+  const hit = _gaugeDetail.get(lid);
+  if (hit && Date.now() - hit.ts < 15 * 60 * 1000) { res.set('Cache-Control', 'public, max-age=300'); return res.json(hit.data); }
+  try {
+    const base = 'https://api.water.noaa.gov/nwps/v1/gauges/' + lid;
+    const [sfTxt, gTxt] = await Promise.all([fetchTextOverHttp(base + '/stageflow').catch(() => null), fetchTextOverHttp(base).catch(() => null)]);
+    const sf = sfTxt ? JSON.parse(sfTxt) : {}, g = gTxt ? JSON.parse(gTxt) : {};
+    const series = (blk) => {
+      const b = blk || {}; const rows = b.data || [];
+      return {
+        units: b.primaryUnits || b.primary_units || 'ft', issued: b.issuedTime || b.issued_time || null,
+        pts: rows.map(r => [Date.parse(r.validTime || r.valid_time), Number(r.primary)])
+          .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v) && v > -900).sort((a, b) => a[0] - b[0]),
+      };
+    };
+    const obs = series(sf.observed), fc = series(sf.forecast);
+    const cut = Date.now() - 3 * 86400000;
+    const stage = (c) => { if (c == null) return null; const v = typeof c === 'object' ? (c.stage ?? c.value) : c; const n = Number(v); return Number.isFinite(n) && n > -900 ? n : null; };
+    const cats = (g.flood && g.flood.categories) || {};
+    const flood = { action: stage(cats.action), minor: stage(cats.minor), moderate: stage(cats.moderate), major: stage(cats.major) };
+    const crest = fc.pts.length ? fc.pts.reduce((m, p) => (p[1] > m[1] ? p : m), fc.pts[0]) : null;
+    const data = { lid, name: g.name || null, units: obs.units || fc.units, flood,
+      observed: obs.pts.filter(p => p[0] >= cut), forecast: fc.pts, forecastIssued: fc.issued,
+      crest: crest ? { t: crest[0], stage: crest[1] } : null,
+      url: `https://water.noaa.gov/gauges/${lid.toLowerCase()}` };
+    _gaugeDetail.set(lid, { data, ts: Date.now() });
+    if (_gaugeDetail.size > 500) _gaugeDetail.delete(_gaugeDetail.keys().next().value);
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(data);
+  } catch (e) {
+    if (hit) return res.json(hit.data);
+    res.status(502).json({ error: 'gauge forecast unavailable' });
+  }
+});
+
 // GET /api/canada-alerts
 // Proxies Environment Canada's national weather alert ATOM feed and returns
 // structured JSON. EC's ATOM feed gives us event type, headline, province/
@@ -3505,6 +3545,75 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
     nws: nwsNarrative, grid: null, source: 'open-meteo', generated_at: Date.now(),
   };
 }
+
+// ═══ Marine alerts (Great Lakes & coastal/offshore waters) ═══
+// The map fetches land alerts from NWS itself. Marine alerts are mostly issued for whole marine
+// zones without their own outline, so the server attaches each zone's outline (zones don't change:
+// kept a day, lightly simplified) and serves everything as one GeoJSON file, cached 3 minutes.
+const _marineZoneGeo = new Map();          // zone URL -> { geom, ts }
+const NWS_UA = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com, contact@altruisticapps.com)', Accept: 'application/geo+json' } };
+const _r2 = (n) => Math.round(n * 100) / 100;
+function _simplifyRing(ring, tol) {
+  const rnd = tol >= 0.01 ? _r2 : _r3;                       // ~1 km for zone outlines, ~100 m for warning polygons
+  if (ring.length < 8) return ring.map(([x, y]) => [rnd(x), rnd(y)]);
+  const out = [ring[0]];
+  for (let i = 1; i < ring.length - 1; i++) { const [x, y] = ring[i], [px, py] = out[out.length - 1]; if (Math.abs(x - px) > tol || Math.abs(y - py) > tol) out.push(ring[i]); }
+  out.push(ring[ring.length - 1]);
+  return out.map(([x, y]) => [rnd(x), rnd(y)]).filter((p, i, a) => i === 0 || p[0] !== a[i - 1][0] || p[1] !== a[i - 1][1]);
+}
+function _simplifyGeom(g, tol = 0.02) {
+  if (!g) return null;
+  if (g.type === 'Polygon') return { type: 'Polygon', coordinates: g.coordinates.map(r => _simplifyRing(r, tol)) };
+  if (g.type === 'MultiPolygon') return { type: 'MultiPolygon', coordinates: g.coordinates.map(p => p.map(r => _simplifyRing(r, tol))) };
+  return g;
+}
+async function _marineZone(url) {
+  const c = _marineZoneGeo.get(url);
+  if (c && Date.now() - c.ts < 24 * 3600 * 1000) return c.geom;
+  try {
+    const j = await (await fetch(url, NWS_UA)).json();
+    const geom = _simplifyGeom(j.geometry);
+    _marineZoneGeo.set(url, { geom, ts: Date.now() });
+    return geom;
+  } catch (_) { return c ? c.geom : null; }
+}
+function _mergeGeoms(geoms) {
+  const polys = [];
+  for (const g of geoms) { if (!g) continue; if (g.type === 'Polygon') polys.push(g.coordinates); else if (g.type === 'MultiPolygon') polys.push(...g.coordinates); }
+  return polys.length ? { type: 'MultiPolygon', coordinates: polys } : null;
+}
+const _marineAlerts = _sharedCache(3 * 60 * 1000, async () => {
+  const j = await (await fetch('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=marine', NWS_UA)).json();
+  const feats = j.features || [];
+  const need = [...new Set(feats.filter(f => !f.geometry).flatMap(f => f.properties.affectedZones || []))];
+  // Zone outlines, 6 at a time
+  for (let i = 0; i < need.length; i += 6) await Promise.all(need.slice(i, i + 6).map(_marineZone));
+  // Each zone outline is sent once (in "zones"); alerts list the zones they cover and the map
+  // assembles them. Many alerts share zones, so this keeps the file small.
+  const out = [], zones = {};
+  const zid = (u) => String(u).split('/').pop();
+  for (const f of feats) {
+    let geometry = null, zl = null;
+    if (f.geometry) geometry = _simplifyGeom(f.geometry, 0.002);
+    else {
+      zl = (f.properties.affectedZones || []).filter(u => (_marineZoneGeo.get(u) || {}).geom);
+      if (!zl.length) continue;
+      for (const u of zl) zones[zid(u)] = _marineZoneGeo.get(u).geom;
+      zl = zl.map(zid);
+    }
+    const p = f.properties;
+    out.push({ type: 'Feature', id: f.id, geometry, zones: zl, properties: {
+      id: p.id, event: p.event, headline: p.headline, description: p.description, instruction: p.instruction,
+      areaDesc: p.areaDesc, severity: p.severity, certainty: p.certainty, urgency: p.urgency,
+      sent: p.sent, effective: p.effective, onset: p.onset, expires: p.expires, ends: p.ends,
+      senderName: p.senderName, parameters: p.parameters, marine: true } });
+  }
+  return { type: 'FeatureCollection', features: out, zones, at: new Date().toISOString() };
+});
+app.get('/api/alerts/marine', async (req, res) => {
+  try { res.set('Cache-Control', 'no-store'); res.json(await _marineAlerts()); }
+  catch (e) { res.status(502).json({ error: 'Marine alerts unavailable: ' + e.message }); }
+});
 
 // ═══ Local NWS office text: Area Forecast Discussion + Hazardous Weather Outlook ═══
 // Newest product from the office via the NWS API, parsed into sections, cached 10 min per office.

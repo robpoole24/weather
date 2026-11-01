@@ -201,6 +201,7 @@
     font-family:'Barlow Condensed',sans-serif; font-size:0.7rem;
     letter-spacing:0.04em; color:var(--muted);
     /* Long legends (alerts + Canadian radar + layers) scroll instead of running off the top */
+    max-width:min(300px, calc(100vw - 32px));
     max-height:calc(100% - 210px); overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent;
   }
   .leg-row { display:flex; align-items:center; gap:0.4rem; margin-bottom:0.18rem; }
@@ -859,7 +860,7 @@
     #radar-minimize-btn { cursor: default !important; }
   }
 </style>
-<script src="/js/wtv-alert-catalog.js?v=1792800000"></script>
+<script src="/js/wtv-alert-catalog.js?v=1793530700"></script>
 <script src="/js/wtv-alerts-core.js"></script>
 <script src="/js/wtv-alerts.js?v=1792600000"></script>
 <style>
@@ -1368,7 +1369,7 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Tropical</div>
+    <div class="lp-section-label">Tropical &amp; Coast</div>
     <div id="lp-tropical"></div>
   </div>
 
@@ -1559,8 +1560,10 @@ const ALERT_GROUP_OF = {};
 _CAT.ALERT_CATALOG.forEach(t => {
   ALERT_GROUP_OF[t.event] = t.group;
   if (ALERT_STYLE[t.event]) return;
-  const kind = /Warning|Emergency|Immediate/.test(t.event) ? [0.32, 2] : /Watch/.test(t.event) ? [0.18, 1.5]
+  let kind = /Warning|Emergency|Immediate/.test(t.event) ? [0.32, 2] : /Watch/.test(t.event) ? [0.18, 1.5]
              : /Advisory|Alert|Danger/.test(t.event) ? [0.15, 1] : [0.08, 0.75];
+  // Marine zones sit over open water with nothing else around them: fuller fills so they read clearly
+  if (/^Marine/.test(t.group || '')) kind = /Warning/.test(t.event) ? [0.42, 2.25] : /Watch/.test(t.event) ? [0.32, 2] : [0.32, 1.75];
   ALERT_STYLE[t.event] = { color: t.color, fill: t.color, fillOpacity: kind[0], weight: kind[1] };
 });
 
@@ -1572,7 +1575,10 @@ _CAT.ALERT_CATALOG.forEach(t => {
 // The Alert Types list follows the catalog: sections in order, worst first in each
 const ALERT_EXCLUDED = new Set(_CAT.ALERT_EXCLUDED || []);
 const ALERT_TYPE_KEYS = _CAT.ALERT_CATALOG.length ? _CAT.ALERT_CATALOG.map(t => t.event) : Object.keys(ALERT_STYLE);
-let enabledAlertTypes = new Set(ALERT_TYPE_KEYS); // default: everything on
+// Default: everything on, except types marked mapOff (e.g. Small Craft Advisories, which cover
+// huge stretches of coastline and lakes) — those start hidden until turned on in Alert Types.
+const ALERT_MAP_OFF = new Set(_CAT.ALERT_CATALOG.filter(t => t.mapOff).map(t => t.event));
+let enabledAlertTypes = new Set(ALERT_TYPE_KEYS.filter(t => !ALERT_MAP_OFF.has(t)));
 
 (function loadAlertTypePrefs() {
   try {
@@ -1580,7 +1586,7 @@ let enabledAlertTypes = new Set(ALERT_TYPE_KEYS); // default: everything on
     if (Array.isArray(saved) && saved.length) {
       // Types added since the filter was saved start out shown
       const known = JSON.parse(localStorage.getItem('wtv-alert-types-known') || 'null') || _FIRST_STYLE_KEYS;
-      enabledAlertTypes = new Set([...saved.filter(t => ALERT_TYPE_KEYS.includes(t)), ...ALERT_TYPE_KEYS.filter(t => !known.includes(t))]);
+      enabledAlertTypes = new Set([...saved.filter(t => ALERT_TYPE_KEYS.includes(t)), ...ALERT_TYPE_KEYS.filter(t => !known.includes(t) && !ALERT_MAP_OFF.has(t))]);
     }
   } catch(_) {}
 })();
@@ -2219,7 +2225,7 @@ let spcVisible = false;   // legacy flag; SPC now runs through the Outlooks modu
 // our own solid colors (NOAA's ready-made images are pale gray for winter and vanish on the
 // map). Tapping an area shows everything the outlook says about it.
 const OL_UI_KEY = 'wtv-outlook-ui';
-let olUI = { spcDay: '1', spcHaz: 'cat', wssiDay: '1', wssiComp: 'overall', snowDay: '1', snowIn: '4', iceDay: '1', eroDay: '1' };
+let olUI = { spcDay: '1', spcHaz: 'cat', wssiDay: '1', wssiComp: 'overall', snowDay: '1', snowIn: '4', iceDay: '1', eroDay: '1', windKt: '34', surgeCat: '3' };
 try { Object.assign(olUI, JSON.parse(localStorage.getItem(OL_UI_KEY) || '{}')); } catch (_) {}
 const _olSave = () => { try { localStorage.setItem(OL_UI_KEY, JSON.stringify(olUI)); } catch (_) {} };
 const OL_NOAA = 'https://mapservices.weather.noaa.gov';
@@ -2251,6 +2257,14 @@ const ERO_CAT = { 1: ['Marginal', '#5fd35f', 'At least a 5% chance of rain heavy
   3: ['Moderate', '#ff4040', 'At least a 40% chance. Numerous flash floods possible; dangerous, life-threatening flooding can occur.'],
   4: ['High', '#ff3dff', 'At least a 70% chance. Widespread severe flash flooding expected; dangerous to life and property.'] };
 const _olDayPills = (key, days) => days.map(([v, l]) => [key, v, l]);
+const OL_NHC = 'tropical/rest/services/tropical/NHC_tropical_weather';
+const OL_RISK = 'tropical/rest/services/tropical/StormSurgeRisk';
+const WSP_BANDS = ['<5%', '5-10%', '10-20%', '20-30%', '30-40%', '40-50%', '50-60%', '60-70%', '70-80%', '80-90%', '>90%'];
+const WSP_COLORS = ['#d9f99d', '#a3e635', '#4ade80', '#16a34a', '#facc15', '#fb923c', '#f97316', '#ef4444', '#dc2626', '#be185d', '#7e22ce'];
+const _wspIdx = (p) => { const v = String(p.percentage || '').replace(/\s/g, ''); const i = WSP_BANDS.indexOf(v); return i >= 0 ? i : 0; };
+const WSP_SPEED = { 34: ['39+ mph', 'tropical-storm-force winds (39 mph or more)'], 50: ['58+ mph', 'damaging winds of 58 mph or more'], 64: ['74+ mph', 'hurricane-force winds (74 mph or more)'] };
+// Storm surge risk image layers per category, for every region NHC maps (Hawaii stops at Cat 4, S. California at Cat 2)
+const SURGE_RISK_IDS = { 1: [5, 26, 47, 68, 90, 107, 116, 137], 2: [9, 30, 51, 72, 94, 111, 120, 141], 3: [13, 34, 55, 76, 98, 124, 145], 4: [17, 38, 59, 80, 102, 128, 149], 5: [21, 42, 63, 84, 132, 153] };
 const OUTLOOKS = {
   'spc': {
     title: 'SPC Severe Outlook', ico: '🗺',
@@ -2312,6 +2326,37 @@ const OUTLOOKS = {
     swatch: (p) => (ICE_BAND[p.dn] || [0, '#ffb3de'])[1],
     popup: (p) => _olProbPopup(p, 'ice'),
     credit: 'NOAA/NWS Weather Prediction Center',
+  },
+  'nhc-wind': {
+    title: 'Hurricane Wind Chances', ico: '🌀',
+    days: () => [],
+    opts: () => [['windKt', '34', '39+ mph'], ['windKt', '50', '58+ mph'], ['windKt', '64', '74+ mph']],
+    layers: () => ({ rest: OL_NHC, main: ({ 34: 395, 50: 396, 64: 397 })[olUI.windKt] || 395 }),
+    rank: (p) => _wspIdx(p),
+    style: (p) => { const c = WSP_COLORS[_wspIdx(p)]; return { color: c, fillColor: c, weight: 1.5, fillOpacity: 0.45, opacity: 1 }; },
+    label: (p) => (p.percentage || '') + ' chance',
+    swatch: (p) => WSP_COLORS[_wspIdx(p)],
+    popup: (p) => _olBox(`${_olEsc(p.percentage)} chance of ${WSP_SPEED[olUI.windKt][0]} winds`, WSP_COLORS[_wspIdx(p)],
+      _olP(`A <b>${_olEsc(p.percentage)} chance</b> of ${WSP_SPEED[olUI.windKt][1]} at this spot during the next 5 days, from any active tropical storm or hurricane.`)
+      + _olP('<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener" style="color:var(--accent)">National Hurricane Center →</a>'), 'NOAA/NWS National Hurricane Center'),
+    none: 'No active tropical storms or hurricanes right now.',
+    credit: 'NOAA/NWS National Hurricane Center · next 5 days',
+  },
+  'surge-now': {
+    title: 'Storm Surge Flooding', ico: '🌊',
+    days: () => [], opts: () => [],
+    // NHC's potential storm surge flooding maps for active storms (Atlantic + Central Pacific slots)
+    wms: () => ({ rest: OL_NHC, layers: '22,48,74,100,126,282,308,334,360,386', legendRest: OL_NHC, legendId: 22, opacity: 0.8 }),
+    note: 'Shown only while the National Hurricane Center has a storm surge forecast out for an active storm. Height is water above normally dry ground.',
+    credit: 'NOAA/NWS National Hurricane Center',
+  },
+  'surge-risk': {
+    title: 'Storm Surge Risk', ico: '🏝',
+    days: () => [],
+    opts: () => [1, 2, 3, 4, 5].map(c => ['surgeCat', String(c), 'Cat ' + c]),
+    wms: () => ({ rest: OL_RISK, layers: (SURGE_RISK_IDS[olUI.surgeCat] || SURGE_RISK_IDS[3]).join(','), legendRest: OL_RISK, legendId: 5, opacity: 0.8 }),
+    note: () => `The worst storm surge flooding possible in a Category ${olUI.surgeCat} hurricane, combining many possible storm tracks. Not a forecast: a picture of risk, useful for knowing your area before a storm.`,
+    credit: 'NOAA/NWS National Hurricane Center · National Storm Surge Risk Maps',
   },
   'ero': {
     title: 'Excessive Rainfall Outlook', ico: '🌧',
@@ -2443,8 +2488,10 @@ async function drawOutlook() {
   const id = _olActive, cfg = OUTLOOKS[id]; if (!cfg) return;
   if (cfg.fixUI) cfg.fixUI();
   renderOutlookBar();
-  const req = ++_olReq, lyr = cfg.layers();
+  const req = ++_olReq;
   const legend = _seasonLegendBox('outlook');
+  if (cfg.wms) return _olDrawWms(cfg, req, legend);
+  const lyr = cfg.layers();
   if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title) + '<div class="leg-row" style="color:var(--muted)">Loading…</div>';
   let main, hatch = null;
   try {
@@ -2484,9 +2531,37 @@ async function drawOutlook() {
   if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title)
     + [...seen].map(([l, c]) => `<div class="leg-row"><div class="leg-sw" style="background:${c}"></div>${_olEsc(l)}</div>`).join('')
     + (hatchFeats.length ? `<div class="leg-row"><div class="leg-sw" style="background:repeating-linear-gradient(45deg,#111 0 2px,#cbd5e1 2px 5px)"></div>Significant severe possible</div>` : '')
-    + (feats.length ? '' : _legNote('✓ Nothing outlooked for this day.'))
+    + (feats.length ? '' : _legNote('✓ ' + (cfg.none || 'Nothing outlooked for this day.')))
     + (valid ? _legNote('Valid ' + valid) : '') + _legNote('Tap an area for details · ' + cfg.credit);
-  const vb = document.getElementById('ol-valid'); if (vb) vb.textContent = valid ? 'Valid ' + valid : (feats.length ? '' : 'Nothing outlooked for this day');
+  const vb = document.getElementById('ol-valid'); if (vb) vb.textContent = valid ? 'Valid ' + valid : (feats.length ? '' : (cfg.none || 'Nothing outlooked for this day'));
+}
+// Map tiles from an ArcGIS MapServer "export" call (one 256-px image per tile)
+const _ArcExportTiles = L.TileLayer.extend({
+  getTileUrl(c) {
+    const R = 20037508.342789244, size = 2 * R / Math.pow(2, c.z);
+    const xmin = -R + c.x * size, xmax = xmin + size, ymax = R - c.y * size, ymin = ymax - size;
+    return `${this._url}?bbox=${xmin},${ymin},${xmax},${ymax}&bboxSR=3857&imageSR=3857&size=256,256&dpi=96&format=png32&transparent=true&layers=show:${this.options.arcLayers}&f=image`;
+  },
+});
+// Image-based outlooks (storm surge maps): NOAA draws these itself in strong colors
+const _olLegendJson = {};
+async function _olDrawWms(cfg, req, legend) {
+  const w = cfg.wms();
+  if (_olLayer) { map.removeLayer(_olLayer); _olLayer = null; }
+  _olLayer = L.layerGroup().addTo(map);
+  // NOAA's raster layers come back blank through WMS, so tiles are drawn with ArcGIS "export"
+  new _ArcExportTiles(`${OL_NOAA}/${w.rest}/MapServer/export`, { arcLayers: w.layers, opacity: w.opacity || 0.8, zIndex: 405, attribution: cfg.credit }).addTo(_olLayer);
+  const note = typeof cfg.note === 'function' ? cfg.note() : cfg.note;
+  let rows = '';
+  try {
+    if (!_olLegendJson[w.legendRest]) _olLegendJson[w.legendRest] = fetch(`${OL_NOAA}/${w.legendRest}/MapServer/legend?f=json`).then(r => r.json());
+    const lg = await _olLegendJson[w.legendRest];
+    const l = (lg.layers || []).find(x => x.layerId === w.legendId);
+    rows = ((l && l.legend) || []).filter(x => x.label).map(x => `<div class="leg-row"><img alt="" src="data:${x.contentType || 'image/png'};base64,${x.imageData}" style="width:16px;height:12px;border-radius:2px;flex-shrink:0">${_olEsc(x.label)}</div>`).join('');
+  } catch (_) {}
+  if (req !== _olReq) return;
+  if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title) + rows + (note ? _legNote(note) : '') + _legNote(cfg.credit);
+  const vb = document.getElementById('ol-valid'); if (vb) vb.textContent = '';
 }
 
 // ── the bar ──
@@ -2899,10 +2974,31 @@ async function loadAlerts() {
     );
     lastAlertsData = await res.json();
     injectTestAlert(lastAlertsData);
+    if (_marineFeatures.length) lastAlertsData.features = (lastAlertsData.features || []).concat(_marineFeatures);
     renderAlertLayers();
   } catch(e) {
     status.textContent = 'Alerts unavailable';
   }
+  loadMarineAlerts();
+}
+// Marine alerts (Great Lakes & coastal waters) come from our server with zone outlines attached,
+// then merge into the same list. Land alerts never wait for them.
+let _marineFeatures = [];
+async function loadMarineAlerts() {
+  try {
+    const j = await fetch('/api/alerts/marine').then(r => r.ok ? r.json() : Promise.reject());
+    // Zone outlines arrive once each; build every alert's shape from the zones it covers
+    const Z = j.zones || {};
+    _marineFeatures = (j.features || []).map(f => {
+      if (f.geometry || !Array.isArray(f.zones)) return f;
+      const polys = [];
+      for (const id of f.zones) { const g = Z[id]; if (!g) continue; if (g.type === 'Polygon') polys.push(g.coordinates); else if (g.type === 'MultiPolygon') polys.push(...g.coordinates); }
+      return polys.length ? Object.assign({}, f, { geometry: { type: 'MultiPolygon', coordinates: polys } }) : f;
+    }).filter(f => f.geometry);
+    if (!lastAlertsData) return;
+    lastAlertsData.features = (lastAlertsData.features || []).filter(f => !(f.properties && f.properties.marine)).concat(_marineFeatures);
+    renderAlertLayers();
+  } catch (_) { /* marine alerts are optional; land alerts are already on the map */ }
 }
 
 // Returns the priority index for an event type — lower = more severe/shown first.
@@ -2962,16 +3058,14 @@ function buildGeomFromZones(affectedZoneUrls) {
   return { type: 'MultiPolygon', coordinates: polygonRings };
 }
 
+let _alertRenderSeq = 0;
 async function renderAlertLayers() {
   if (!lastAlertsData) return;
+  // Only the newest redraw finishes: two overlapping redraws (e.g. land alerts, then marine
+  // alerts arriving a moment later) would otherwise both draw and double every polygon.
+  const seq = ++_alertRenderSeq;
   const status = document.getElementById('alerts-status');
   const data = lastAlertsData;
-
-  alertsLayer.clearLayers();
-  activeAlertFeatures = [];
-  activeBannerAlerts = [];
-  let count = 0;
-  let shownCount = 0;
 
   // Pre-populate zone geometry cache for all zone-based alerts in this batch.
   // This is a single await before any rendering — the batch NWS zones API call
@@ -2985,6 +3079,13 @@ async function renderAlertLayers() {
     )];
     await prefetchZoneGeoms(allZoneUrls);
   }
+  if (seq !== _alertRenderSeq) return;            // a newer redraw has started
+
+  alertsLayer.clearLayers();
+  activeAlertFeatures = [];
+  activeBannerAlerts = [];
+  let count = 0;
+  let shownCount = 0;
 
   (data.features || []).forEach(feature => {
     // Use polygon from alert directly, or build one from NWS zone boundaries
@@ -3031,8 +3132,8 @@ async function renderAlertLayers() {
       geometry: geom,
     });
 
-    // Check if user is inside this alert polygon
-    if (typeof userLat === 'number' && typeof userLng === 'number') {
+    // Check if user is inside this alert polygon (land alerts only: marine zones are for boaters)
+    if (!props.marine && typeof userLat === 'number' && typeof userLng === 'number') {
       const inPoly = geom ? pointInPolygon(userLat, userLng, geom) : false;
       // Zone-based check: if user's NWS forecast zone or county code appears
       // in the alert's UGC geocode list, they're in the warned area regardless
@@ -5862,9 +5963,10 @@ async function refreshRiverGauges() {
         `<div class="alert-popup"><div class="ev" style="color:${color}">📏 ${g.name || g.nwsId}</div>` +
         `<div style="margin-top:4px">Status: <strong>${label}</strong></div>` +
         `${g.observed?.primary?.value != null ? `<div>Stage: <strong>${g.observed.primary.value} ${g.observed.primary.unit || 'ft'}</strong></div>` : ''}` +
-        `${g.flood?.categories?.minor != null ? `<div style="font-size:0.73rem;color:var(--muted)">Minor flood: ${g.flood.categories.minor} ft</div>` : ''}` +
-        `<div class="exp">NWS NWPS · NWS ID: ${g.nwsId || '—'}</div></div>`, { maxWidth: 260 }
+        `${g.lid || g.nwsId ? `<div class="rg-chart" data-lid="${g.lid || g.nwsId}" style="font-size:0.74rem;color:var(--muted);margin-top:4px">Loading the river forecast…</div>` : ''}` +
+        `<div class="exp">NWS NWPS · NWS ID: ${g.nwsId || g.lid || '—'}</div></div>`, { maxWidth: 290, minWidth: 250 }
       );
+      mk.on('popupopen', (e) => fillGaugeChart(e.popup.getElement().querySelector('.rg-chart')));
       _gaugeLayer.addLayer(mk);
     });
   } catch(e) { console.warn('[River Gauges]', e.message); }
@@ -5883,6 +5985,132 @@ function stopRiverGauges() {
   if (_gaugeLayer) { _gaugeLayer.clearLayers(); map.removeLayer(_gaugeLayer); _gaugeLayer = null; }
   const _gleg2 = document.getElementById('river-gauge-legend'); if (_gleg2) _gleg2.style.display = 'none';
 }
+
+// ═══ COAST & WATER: river forecast charts, buoys, tide / water-level gauges ═══
+const _cEsc = (x) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const _cWhen = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+const _cAgo = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} hr ago`; };
+const _cCompass = (deg) => deg == null ? '' : ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+
+// ── River gauge popup: recent stage + official forecast, with flood stages ──
+async function fillGaugeChart(el) {
+  if (!el || el.dataset.done) return;
+  el.dataset.done = '1';
+  try {
+    const j = await fetch('/api/river-gauge?lid=' + encodeURIComponent(el.dataset.lid)).then(r => r.ok ? r.json() : Promise.reject());
+    const obs = j.observed || [], fc = j.forecast || [], all = obs.concat(fc);
+    if (!all.length) { el.innerHTML = '<div style="color:var(--muted)">No recent readings for this gauge.</div>'; return; }
+    const u = j.units || 'ft', F = j.flood || {};
+    const W = 250, H = 120, P = { l: 30, r: 8, t: 8, b: 18 };
+    const t0 = all[0][0], t1 = Math.max(all[all.length - 1][0], Date.now() + 3600e3);
+    const vals = all.map(p => p[1]);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    // Keep the next flood stage in view so "how close" is visible
+    const nextFlood = [F.action, F.minor, F.moderate, F.major].filter(v => v != null).find(v => v > hi);
+    if (nextFlood != null && nextFlood - hi < Math.max(3, (hi - lo) * 1.5)) hi = nextFlood;
+    const pad = Math.max(0.5, (hi - lo) * 0.12); lo -= pad; hi += pad;
+    const X = (t) => P.l + (t - t0) / (t1 - t0) * (W - P.l - P.r), Y = (v) => P.t + (hi - v) / (hi - lo) * (H - P.t - P.b);
+    const path = (pts) => pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+    let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;margin-top:6px;background:rgba(255,255,255,0.03);border-radius:4px">`;
+    [['action', '#facc15', 'Action'], ['minor', '#ff8c00', 'Minor'], ['moderate', '#ff0000', 'Moderate'], ['major', '#c026d3', 'Major']].forEach(([k, c, l]) => {
+      const v = F[k]; if (v == null || v < lo || v > hi) return;
+      svg += `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${c}" stroke-width="1" stroke-dasharray="3 3" opacity="0.9"/><text x="${W - P.r - 2}" y="${Y(v) - 2}" fill="${c}" font-size="8" text-anchor="end">${l} ${v}</text>`;
+    });
+    const nx = X(Date.now());
+    svg += `<line x1="${nx}" x2="${nx}" y1="${P.t}" y2="${H - P.b}" stroke="#94a3b8" stroke-width="0.8"/><text x="${nx + 2}" y="${H - P.b + 11}" fill="#94a3b8" font-size="8">now</text>`;
+    for (const v of [lo + pad, hi - pad]) svg += `<text x="${P.l - 3}" y="${Y(v) + 3}" fill="#94a3b8" font-size="8" text-anchor="end">${v.toFixed(1)}</text>`;
+    if (obs.length > 1) svg += `<path d="${path(obs)}" fill="none" stroke="#38bdf8" stroke-width="2"/>`;
+    if (fc.length > 1) svg += `<path d="${path(obs.length ? [obs[obs.length - 1]].concat(fc) : fc)}" fill="none" stroke="#fb923c" stroke-width="2" stroke-dasharray="5 3"/>`;
+    svg += '</svg>';
+    const cat = (v) => v == null ? '' : F.major != null && v >= F.major ? 'major flooding' : F.moderate != null && v >= F.moderate ? 'moderate flooding' : F.minor != null && v >= F.minor ? 'minor flooding' : F.action != null && v >= F.action ? 'action stage (near flooding)' : 'below flood stage';
+    let line = '';
+    if (fc.length && j.crest) {
+      const last = obs.length ? obs[obs.length - 1][1] : fc[0][1];
+      const rising = j.crest.stage > last + 0.2 && j.crest.t > Date.now();
+      line = rising ? `<b>Forecast to crest at ${j.crest.stage.toFixed(1)} ${u}</b> ${_cWhen(j.crest.t)} · ${cat(j.crest.stage)}`
+        : `<b>Forecast:</b> ${fc[fc.length - 1][1].toFixed(1)} ${u} by ${_cWhen(fc[fc.length - 1][0])} · ${cat(fc[fc.length - 1][1])}`;
+    } else line = '<span style="color:var(--muted)">No official forecast for this gauge, readings only.</span>';
+    el.innerHTML = `<div style="font-size:0.76rem;color:#c8ddf0;margin-top:4px">${line}</div>${svg}`
+      + `<div style="display:flex;gap:10px;font-size:0.66rem;color:#9fb3c8;margin-top:3px"><span><span style="color:#38bdf8">━</span> Observed</span>${fc.length ? '<span><span style="color:#fb923c">┅</span> Forecast</span>' : ''}</div>`
+      + `<div style="margin-top:4px"><a href="${_cEsc(j.url)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.72rem">Full gauge page →</a></div>`;
+    const pp = map._popup; if (pp && pp.getElement() && pp.getElement().contains(el)) pp.update && pp.setContent(pp.getElement().querySelector('.leaflet-popup-content').innerHTML);
+  } catch (_) { el.innerHTML = '<div style="color:var(--muted)">The river forecast is unavailable right now.</div>'; }
+}
+
+// ── Buoys (NDBC) ──
+let _buoyLayer = null, _buoyTimer = null;
+const BUOY_WAVE = (ft) => ft == null ? '#94a3b8' : ft < 3 ? '#22c55e' : ft < 6 ? '#facc15' : ft < 10 ? '#fb923c' : ft < 15 ? '#ef4444' : '#a855f7';
+async function loadBuoys() {
+  try {
+    const j = await fetch('/api/marine/buoys').then(r => r.ok ? r.json() : Promise.reject());
+    if (!_buoyLayer) return;
+    _buoyLayer.clearLayers();
+    for (const b of j.buoys || []) {
+      const mk = L.circleMarker([b.lat, b.lon], { radius: 6, color: '#0b1220', weight: 1.5, fillColor: BUOY_WAVE(b.wave), fillOpacity: 0.95 });
+      const row = (k, v) => v ? `<div style="display:flex;justify-content:space-between;gap:12px;font-size:0.76rem;margin-top:2px"><span style="color:#9fb3c8">${k}</span><b style="color:#e2e8f0">${v}</b></div>` : '';
+      mk.bindPopup(() => `<div class="alert-popup" style="min-width:210px"><div class="ev" style="color:${BUOY_WAVE(b.wave)}">🛟 ${_cEsc(b.name)}</div>`
+        + `<div style="font-size:0.68rem;color:#9fb3c8;margin-bottom:3px">Station ${_cEsc(b.id)} · ${_cAgo(b.t)}</div>`
+        + row('Wind', b.wind != null ? `${_cCompass(b.wdir)} ${b.wind} mph${b.gust != null ? `, gusts ${b.gust}` : ''}` : '')
+        + row('Waves', b.wave != null ? `${b.wave} ft${b.period ? ` every ${b.period} s` : ''}${b.wavedir != null ? ` from ${_cCompass(b.wavedir)}` : ''}` : '')
+        + row('Water temp', b.water != null ? `${Math.round(b.water)}°F` : '') + row('Air temp', b.air != null ? `${Math.round(b.air)}°F` : '')
+        + row('Pressure', b.pres != null ? `${(b.pres * 0.02953).toFixed(2)} inHg${b.ptdy != null ? (b.ptdy > 0.3 ? ' ↑' : b.ptdy < -0.3 ? ' ↓' : ' →') : ''}` : '')
+        + `<div style="margin-top:5px"><a href="https://www.ndbc.noaa.gov/station_page.php?station=${encodeURIComponent(b.id.toLowerCase())}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.72rem">Station page →</a></div>`
+        + `<div class="exp">NOAA National Data Buoy Center</div></div>`, { maxWidth: 280 });
+      _buoyLayer.addLayer(mk);
+    }
+    const el = _seasonLegendBox('buoys');
+    if (el) el.innerHTML = _legTitle('🛟 Buoys · wave height')
+      + [['#22c55e', 'Under 3 ft'], ['#facc15', '3–6 ft'], ['#fb923c', '6–10 ft'], ['#ef4444', '10–15 ft'], ['#a855f7', '15 ft +'], ['#94a3b8', 'No wave sensor']]
+        .map(([c, l]) => `<div class="leg-row"><div class="leg-sw" style="background:${c};border-radius:50%"></div>${l}</div>`).join('')
+      + _legNote(`${(j.buoys || []).length} stations reporting · tap one for wind, waves and water temp`);
+  } catch (_) {
+    const el = _seasonLegendBox('buoys'); if (el) el.innerHTML = _legTitle('🛟 Buoys') + _legNote('Buoy reports are unavailable right now. We\'ll keep trying.');
+  }
+}
+function startBuoys() { if (!_buoyLayer) _buoyLayer = L.layerGroup().addTo(map); loadBuoys(); clearInterval(_buoyTimer); _buoyTimer = setInterval(loadBuoys, 15 * 60 * 1000); }
+function stopBuoys() { clearInterval(_buoyTimer); _buoyTimer = null; if (_buoyLayer) { map.removeLayer(_buoyLayer); _buoyLayer = null; } document.getElementById('sl-buoys')?.remove(); _seasonLegendVisibility(); }
+
+// ── Tide & water-level gauges (NOAA CO-OPS) ──
+let _tideLayer = null;
+async function fillTidePopup(el) {
+  if (!el || el.dataset.done) return;
+  el.dataset.done = '1';
+  try {
+    const j = await fetch('/api/marine/water-level?id=' + encodeURIComponent(el.dataset.id)).then(r => r.ok ? r.json() : Promise.reject());
+    const st = j.station || {};
+    const FL = { none: ['Below flood level', '#22c55e'], minor: ['Minor coastal flooding', '#ff8c00'], moderate: ['Moderate coastal flooding', '#ff0000'], major: ['Major coastal flooding', '#c026d3'] };
+    const f = FL[j.flooding];
+    let h = '';
+    if (j.level != null) h += `<div style="font-size:0.8rem;margin-top:3px"><b style="color:#e2e8f0">${j.level.toFixed(2)} ft</b> <span style="color:#9fb3c8">${st.lakes ? 'lake level (IGLD 1985)' : 'above mean lower low water'} · ${_cAgo(j.t)}</span></div>`;
+    if (f) h += `<div style="font-size:0.76rem;margin-top:3px;color:${f[1]}"><b>${f[0]}</b>${j.flooding === 'none' && j.toMinor != null ? ` · ${j.toMinor.toFixed(1)} ft below minor flooding` : ''}</div>`;
+    if ((j.tides || []).length) h += `<div style="font-size:0.72rem;color:#9fb3c8;margin-top:6px">Coming tides</div>` + j.tides.map(e => `<div style="display:flex;justify-content:space-between;gap:12px;font-size:0.76rem"><span>${e.hi ? '▲ High' : '▼ Low'} · ${_cWhen(e.t)}</span><b>${e.ft.toFixed(1)} ft</b></div>`).join('');
+    else if (st.lakes) h += `<div style="font-size:0.72rem;color:#9fb3c8;margin-top:4px">The Great Lakes have no real tides; levels change with wind (seiches) and seasons.</div>`;
+    h += `<div style="margin-top:5px"><a href="${_cEsc(j.url)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.72rem">Station page →</a></div>`;
+    el.innerHTML = h || '<div style="color:var(--muted)">No recent reading.</div>';
+    const pp = map._popup; if (pp && pp.getElement() && pp.getElement().contains(el)) pp.setContent(pp.getElement().querySelector('.leaflet-popup-content').innerHTML);
+  } catch (_) { el.innerHTML = '<div style="color:var(--muted)">This gauge is unavailable right now.</div>'; }
+}
+async function startTideGauges() {
+  if (!_tideLayer) _tideLayer = L.layerGroup().addTo(map);
+  try {
+    const j = await fetch('/api/marine/water-levels').then(r => r.ok ? r.json() : Promise.reject());
+    if (!_tideLayer) return;
+    _tideLayer.clearLayers();
+    for (const s of j.stations || []) {
+      const mk = L.circleMarker([s.lat, s.lon], { radius: 6, color: '#0b1220', weight: 1.5, fillColor: s.lakes ? '#38bdf8' : '#14b8a6', fillOpacity: 0.95 });
+      mk.bindPopup(`<div class="alert-popup" style="min-width:210px"><div class="ev" style="color:#5eead4">🌊 ${_cEsc(s.name)}${s.st ? ', ' + _cEsc(s.st) : ''}</div><div class="tide-detail" data-id="${_cEsc(s.id)}" style="font-size:0.75rem;color:#9fb3c8">Loading…</div><div class="exp">NOAA Tides &amp; Currents</div></div>`, { maxWidth: 280 });
+      mk.on('popupopen', (e) => fillTidePopup(e.popup.getElement().querySelector('.tide-detail')));
+      _tideLayer.addLayer(mk);
+    }
+    const el = _seasonLegendBox('tide-gauges');
+    if (el) el.innerHTML = _legTitle('🌊 Tide & water-level gauges')
+      + `<div class="leg-row"><div class="leg-sw" style="background:#14b8a6;border-radius:50%"></div>Ocean tide gauge</div><div class="leg-row"><div class="leg-sw" style="background:#38bdf8;border-radius:50%"></div>Great Lakes level gauge</div>`
+      + _legNote('Tap a gauge for the water level now, coastal flood status and coming tides');
+  } catch (_) {
+    const el = _seasonLegendBox('tide-gauges'); if (el) el.innerHTML = _legTitle('🌊 Tide gauges') + _legNote('Unavailable right now.');
+  }
+}
+function stopTideGauges() { if (_tideLayer) { map.removeLayer(_tideLayer); _tideLayer = null; } document.getElementById('sl-tide-gauges')?.remove(); _seasonLegendVisibility(); }
 
 // ── GLOBAL RADAR (LibreWXR) ───────────────────────────────────────────────────
 // LibreWXR is a drop-in RainViewer replacement with no rate limits.
@@ -7774,7 +8002,12 @@ const WTV_INFO = {
   'ero':           { t:'Excessive Rainfall Outlook', w:'Today\'s flash flood risk from heavy rain.', r:'Marginal → Slight → Moderate → High. Moderate or High means dangerous flooding is possible.' },
   'qpe-1h':        { t:'1-Hour Rainfall', w:'How much rain fell in the last hour, estimated by radar.', r:'Over 1 inch in an hour can cause street flooding.' },
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
-  'river-gauges':  { t:'River & Flood Gauges', w:'Live river levels from NWS gauges.', r:'Green · normal. Yellow · near flood stage. Orange/red/purple · minor, moderate, major flooding.' },
+  'river-gauges':  { t:'River & Flood Gauges', w:'Live river levels from NWS gauges. Tap one for a chart of the last 3 days and the official forecast, where the River Forecast Center issues one.', r:'Green · normal. Yellow · near flood stage. Orange/red/purple · minor, moderate, major flooding. The forecast line shows where the river is headed and when it should crest.' },
+  'buoys':         { t:'Buoys', w:'Live reports from NOAA buoys and coastal stations on the oceans and Great Lakes: wind, waves, water temperature and pressure.', r:'Dot color is wave height: green under 3 ft up to purple over 15 ft. Many Great Lakes buoys are pulled for the winter.' },
+  'tide-gauges':   { t:'Tides & Water Levels', w:'NOAA\'s real-time water-level gauges along the coasts and Great Lakes. Tap one for the level now, coastal flood status and the next high and low tides.', r:'During a storm, a level well above the predicted tide is storm surge.' },
+  'nhc-wind':      { t:'Hurricane Wind Chances', w:'The National Hurricane Center\'s chance of strong winds reaching each spot over the next 5 days, from any active storm.', r:'Choose 39+ mph (tropical-storm force), 58+ mph or 74+ mph (hurricane force). Even 10–20% is worth preparing for.' },
+  'surge-now':     { t:'Storm Surge Flooding', w:'How deep storm surge water could get above normally dry ground, when the National Hurricane Center has a surge forecast out for an active storm.', r:'Blue: up to 3 ft · yellow: over 3 ft · orange: over 6 ft · red: over 9 ft. Surge is the deadliest part of most hurricanes; follow evacuation orders.' },
+  'surge-risk':    { t:'Storm Surge Risk', w:'The worst storm surge flooding possible for a Category 1 to 5 hurricane, from the National Hurricane Center\'s national risk maps.', r:'Not a forecast. Use it to learn whether your home or a place you visit could flood in a hurricane, before one comes.' },
   'nhc-tropical':  { t:'Tropical Weather', w:'Active hurricanes and tropical storms, their forecast tracks, and areas being watched.', r:'The cone is where the center may go. Wind, surge and flooding reach far outside it.' },
   'hms-smoke':     { t:'Smoke Plumes', w:'Wildfire smoke seen by satellites.', r:'Light, medium and heavy show how thick the smoke is overhead. It may or may not reach the ground — check air quality.' },
   'fire-perimeters':{ t:'Active Fire Perimeters', w:'Mapped boundaries of active wildfires.', r:'Follow local evacuation orders. Fires can grow fast in wind.' },
@@ -8775,10 +9008,15 @@ const SURFACE_ITEMS=[
 const PRECIP_ITEMS=[
   {id:'qpe-1h',  ico:'💧', name:'1-Hour Rainfall (MRMS)',   sub:'Radar-estimated accumulation · past 1h', def:false},
   {id:'qpe-24h', ico:'🌊', name:'24-Hour Rainfall (MRMS)',  sub:'Radar-estimated accumulation · past 24h',def:false},
-  {id:'river-gauges',ico:'📏',name:'River & Flood Gauges', sub:'NWS NWPS · flood stage status',          def:false},
+  {id:'river-gauges',ico:'📏',name:'River & Flood Gauges', sub:'NWS NWPS · flood status · tap for the river forecast', def:false},
 ];
 const TROPICAL_ITEMS=[
   {id:'nhc-tropical', ico:'🌀', name:'Tropical Weather', sub:'NHC · global · storms + invests + tracks · formation probability', def:false},
+  {id:'nhc-wind',     ico:'💨', name:'Hurricane Wind Chances', sub:'NHC · chance of 39 / 58 / 74+ mph winds · next 5 days', def:false},
+  {id:'surge-now',    ico:'🌊', name:'Storm Surge Flooding',   sub:'NHC · how deep surge could get · active storms only', def:false},
+  {id:'surge-risk',   ico:'🏝', name:'Storm Surge Risk',       sub:'NHC · worst case for a Category 1–5 hurricane · any time', def:false},
+  {id:'buoys',        ico:'🛟', name:'Buoys',                  sub:'NDBC · wind, waves & water temperature · oceans & Great Lakes', def:false},
+  {id:'tide-gauges',  ico:'🌊', name:'Tides & Water Levels',   sub:'NOAA · level now, coastal flooding & coming tides', def:false},
 ];
 const FIRE_ITEMS=[
   {id:'hms-smoke',        ico:'💨',name:'Smoke Plumes',         sub:'NOAA HMS · light / medium / heavy density',   def:false},
@@ -9263,6 +9501,8 @@ function applyOverlay(id,on){
     case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); updateQPELegend(); break;
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
+    case 'buoys':          if (on) startBuoys(); else stopBuoys(); break;
+    case 'tide-gauges':    if (on) startTideGauges(); else stopTideGauges(); break;
     case 'nhc-tropical':   if (on) startTropical(); else stopTropical(); break;
     case 'hms-smoke':      if (on) startHMSSmoke(); else clearHMSSmoke(); break;
     case 'fire-perimeters': if (on) startFirePerimeters(); else clearFirePerimeters(); break;

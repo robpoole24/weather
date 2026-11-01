@@ -15,12 +15,14 @@
 //   defaultOn on for new users (can be turned off)
 //   mapOnly   shown on the map but not offered for push (see MAP below)
 //
-// Marine-only alerts (Small Craft, Gale, Special Marine…) aren't listed: they're
-// issued for offshore zones, which neither the map nor push notifications use.
+// Marine alerts (Gale, Storm, Small Craft…) cover the Great Lakes and coastal/offshore
+// waters. They're shown on the map only (the server attaches the marine zone outlines,
+// /api/alerts/marine) and aren't offered for push. mapOff ones start hidden on the map
+// because they cover huge areas; anyone can turn them on in Alert Types.
 (function (root) {
   // Sections, in the order people look for them (map's Alert Types list and phone settings)
   const G = {
-    severe: 'Tornadoes & thunderstorms', flood: 'Flooding', tropical: 'Tropical & coastal', winter: 'Winter & cold',
+    severe: 'Tornadoes & thunderstorms', flood: 'Flooding', tropical: 'Tropical & coastal', marine: 'Marine (lakes & coastal waters)', winter: 'Winter & cold',
     wind: 'Wind, fog & dust', heat: 'Heat, fire & air quality', mountain: 'Mountains & volcanoes',
     emergency: 'Non-weather emergencies', statement: 'Statements & other warnings',
   };
@@ -30,6 +32,7 @@
   // Emergency arrives as a Flash Flood Warning; Special Marine Warnings cover
   // offshore zones), so they never appear in the phone settings.
   const MAP = { mapOnly: true };
+  const MAP_OFF = { mapOnly: true, mapOff: true };       // map only, and hidden until turned on
 
   // Within each section: worst first — emergencies, warnings, watches,
   // advisories, then statements and outlooks.
@@ -72,6 +75,23 @@
     T('Tropical Cyclone Local Statement', 'HLS', 'tropical', '🌀', '#ffe4b5'),
     T('Coastal Flood Statement',      'CFS', 'tropical',  '🌊', '#6b8e23'),
     T('Rip Current Statement',        'RPS', 'tropical',  '🌊', '#40e0d0'),
+    // ── Marine (Great Lakes & coastal waters) ── NWS hues, made stronger to stand out on the map
+    T('Special Marine Warning',       'SMW', 'marine',    '⛈️', '#ff8c00', 'chime', MAP),
+    T('Hurricane Force Wind Warning', 'HFW', 'marine',    '⚓', '#dc2626', 'quiet', MAP),
+    T('Storm Warning',                'SRW', 'marine',    '⚓', '#9400d3', 'quiet', MAP),
+    T('Gale Warning',                 'GLW', 'marine',    '⚓', '#d946ef', 'quiet', MAP),
+    T('Hazardous Seas Warning',       'SEW', 'marine',    '⚓', '#7c3aed', 'quiet', MAP),
+    T('Heavy Freezing Spray Warning', 'UPW', 'marine',    '🧊', '#0284c7', 'quiet', MAP),
+    T('Hurricane Force Wind Watch',   'HFA', 'marine',    '⚓', '#f87171', 'quiet', MAP),
+    T('Storm Watch',                  'SRA', 'marine',    '⚓', '#c084fc', 'quiet', MAP),
+    T('Gale Watch',                   'GLA', 'marine',    '⚓', '#f0abfc', 'quiet', MAP),
+    T('Hazardous Seas Watch',         'SEA', 'marine',    '⚓', '#a78bfa', 'quiet', MAP),
+    T('Heavy Freezing Spray Watch',   'UPA', 'marine',    '🧊', '#7dd3fc', 'quiet', MAP),
+    T('Small Craft Advisory',         'SCY', 'marine',    '⛵', '#e879f9', 'quiet', MAP_OFF),
+    T('Brisk Wind Advisory',          'BWY', 'marine',    '⛵', '#f5d0fe', 'quiet', MAP_OFF),
+    T('Freezing Spray Advisory',      'UPY', 'marine',    '🧊', '#38bdf8', 'quiet', MAP_OFF),
+    T('Low Water Advisory',           'LOY', 'marine',    '⚓', '#a16207', 'quiet', MAP_OFF),
+    T('Marine Weather Statement',     'MWS', 'marine',    '⚓', '#fdba74', 'quiet', MAP_OFF),
     // ── Winter & cold ──
     T('Blizzard Warning',             'BZW', 'winter',    '❄️', '#ff69b4', 'chime', ON),
     T('Ice Storm Warning',            'ISW', 'winter',    '🧊', '#8b008b', 'chime', ON),
@@ -122,7 +142,7 @@
     // ── Non-weather emergencies ──
     T('Earthquake Warning',           'EQW', 'emergency', '🫨', '#8b4513', 'chime', ON),
     // ── Statements & other warnings ──
-    T('Special Marine Warning',       'SMW', 'statement', '⚓', '#ffa500', 'chime', MAP),
+
     T('Severe Weather Statement',     'SVS', 'statement', '⛈️', '#00ffff'),
     T('Special Weather Statement',    'SPS', 'statement', '⚠️', '#a0a0a0'),
     T('Beach Hazards Statement',      'BHS', 'statement', '🏖️', '#40e0d0'),
