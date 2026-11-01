@@ -3427,11 +3427,11 @@ function _mergeObservation(fc, ob) {
 // NWS is down, the full Open-Meteo forecast is used.
 async function _fetchForecastCell(gLat, gLon, cellKey) {
   const NWS_HEADERS = { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' };
-  let forecastUrl = null, gridUrl = null, tz = null, stationsUrl = null;
+  let forecastUrl = null, gridUrl = null, tz = null, stationsUrl = null, zone = null, county = null;
   try {
     const pc = _nwsPointsCache.get(cellKey);
-    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL && pc.stationsUrl !== undefined) {
-      ({ forecastUrl, gridUrl, tz, stationsUrl } = pc);
+    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL && pc.stationsUrl !== undefined && pc.zone !== undefined) {
+      ({ forecastUrl, gridUrl, tz, stationsUrl, zone, county } = pc);
     } else {
       upstreamCount('nwsPoints');
       const pts = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS), 8000, 'NWS points'));
@@ -3439,7 +3439,9 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
       gridUrl = pts?.properties?.forecastGridData || null;
       tz = pts?.properties?.timeZone || null;
       stationsUrl = pts?.properties?.observationStations || null;
-      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, tz, stationsUrl, ts: Date.now() }, 5000);
+      zone = String(pts?.properties?.forecastZone || '').split('/').pop() || null;      // e.g. WIZ066
+      county = String(pts?.properties?.county || '').split('/').pop() || null;          // e.g. WIC079
+      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, tz, stationsUrl, zone, county, ts: Date.now() }, 5000);
     }
   } catch (e) { /* outside the US — Open-Meteo below */ }
 
@@ -3464,7 +3466,8 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
       if (G && G.temp && G.temp.some(v => v != null)) {
         const fc = _mergeObservation(_mergeExtras(_forecastFromNws(G, props, tz || 'America/Chicago', gLat, gLon), await extrasP), await obsP);
         upstreamCount('forecastFromNws');
-        return { ...fc, nws: await narrativeP, grid: _gridClient(G), source: 'nws', generated_at: Date.now() };
+        const office = (String(gridUrl).match(/\/gridpoints\/([A-Z]{3})\//) || [])[1] || null;
+        return { ...fc, nws: await narrativeP, grid: _gridClient(G), source: 'nws', office: office ? { id: office, zone, county } : null, generated_at: Date.now() };
       }
       throw new Error('NWS grid had no temperatures');
     } catch (e) {
@@ -3502,6 +3505,82 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
     nws: nwsNarrative, grid: null, source: 'open-meteo', generated_at: Date.now(),
   };
 }
+
+// ═══ Local NWS office text: Area Forecast Discussion + Hazardous Weather Outlook ═══
+// Newest product from the office via the NWS API, parsed into sections, cached 10 min per office.
+const _officeText = {};
+async function _nwsLatestProduct(type, office) {
+  const H = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com, contact@altruisticapps.com)', Accept: 'application/ld+json' } };
+  const list = await (await fetch(`https://api.weather.gov/products/types/${type}/locations/${office}`, H)).json();
+  const item = (list['@graph'] || [])[0];
+  if (!item) return null;
+  const prod = await (await fetch('https://api.weather.gov/products/' + item.id, H)).json();
+  return { issued: item.issuanceTime, text: String(prod.productText || '').replace(/\r/g, '') };
+}
+const _nwsFlat = (t) => t.split(/\n\s*\n/).map(p => p.replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim()).filter(Boolean).join('\n\n');
+const _niceTitle = (t) => t.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\b(And|Through|Of|The|To)\b/g, w => w.toLowerCase());
+function _parseAfd(text) {
+  const office = ((text.match(/National Weather Service ([^\n]+)/) || [])[1] || '').trim();
+  const sections = [];
+  // Sections start with ".TITLE..." at the start of a line and end at "&&" or "$$"
+  // Titles may carry a note: ".DISCUSSION /Through Saturday/..." or ".AVIATION /06Z TAFS/..."
+  const H = String.raw`\n\.([A-Z0-9][A-Z0-9 &\-/]*?[A-Z0-9])(?:\s+\/([^\n]*?)\/)?\.\.\.`;
+  for (const m of text.matchAll(new RegExp(H + String.raw`[ \t]*([^\n]*)\n([\s\S]*?)(?=\n&&|\n\$\$|` + H + ')', 'g'))) {
+    const name = m[1].trim(); let body = (m[3] ? m[3] + '\n' : '') + m[4];
+    const issued = (body.match(/^\s*(?:Issued|Updated) at ([^\n]+)|^\s*Issued ([^\n]+)/m) || []);
+    body = body.replace(/^\s*(?:Issued|Updated) (?:at )?[^\n]+\n/gm, '');
+    if (/PRELIMINARY POINT|TEMPS\/POPS/.test(name)) continue;    // a table of numbers
+    const isKey = /KEY MESSAGES/.test(name);
+    const txt = isKey ? body.split(/\n\s*-\s+/).map(x => x.replace(/^\s*-\s*/, '').replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean) : _nwsFlat(body);
+    if (/WATCHES\/WARNINGS/.test(name)) continue;            // shown elsewhere on the map
+    if ((isKey && txt.length) || (!isKey && txt)) sections.push({ name: _niceTitle(name), note: m[2] ? m[2].trim() : null, key: isKey, text: txt, issued: issued[1] || issued[2] || null });
+  }
+  return { office, sections };
+}
+// UGC line "WIZ046-047-056>060-020600-" -> Set of codes (WIZ046, WIZ047, WIZ056 ... WIZ060)
+function _ugcCodes(line) {
+  const out = new Set(); let prefix = '';
+  for (const tok of line.replace(/\s+/g, '').split('-').filter(Boolean)) {
+    if (/^\d{6}$/.test(tok)) continue;                        // expiry time
+    const m = tok.match(/^([A-Z]{2}[CZ])?(\d{3})(?:>(\d{3}))?$/); if (!m) continue;
+    if (m[1]) prefix = m[1];
+    const a = +m[2], b = m[3] ? +m[3] : a;
+    for (let n = a; n <= b; n++) out.add(prefix + String(n).padStart(3, '0'));
+  }
+  return out;
+}
+function _parseHwo(text, zone, county) {
+  const office = ((text.match(/National Weather Service ([^\n]+)/) || [])[1] || '').trim();
+  const segs = text.split(/\n\$\$/).map(seg => {
+    const ugcLines = (seg.match(/\n((?:[A-Z]{2}[CZ]\d{3}[\d>\-\s]*?)+-\d{6}-)/) || [])[1] || '';
+    return { seg, codes: _ugcCodes(ugcLines) };
+  }).filter(x => x.codes.size);
+  const hit = segs.find(x => (zone && x.codes.has(zone)) || (county && x.codes.has(county)));
+  if (!hit) return { office, found: false };
+  const parts = [];
+  for (const m of hit.seg.matchAll(/\n\.([A-Z][A-Z \-]+?)\.\.\.([^\n]*)\n([\s\S]*?)(?=\n\.[A-Z][A-Z \-]+?\.\.\.|$)/g)) {
+    parts.push({ name: _niceTitle(m[1].trim()), when: m[2].trim(), text: _nwsFlat(m[3]) });
+  }
+  const area = _nwsFlat(((hit.seg.match(/\n(This Hazardous Weather Outlook is for[\s\S]*?)\n\s*\n/) || [])[1]) || '');
+  return { office, found: true, area, parts };
+}
+app.get('/api/nws/office-text', async (req, res) => {
+  const office = String(req.query.office || '').toUpperCase(), type = String(req.query.type || '').toUpperCase();
+  const zone = String(req.query.zone || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+  const county = String(req.query.county || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+  if (!/^[A-Z]{3}$/.test(office) || !['AFD', 'HWO'].includes(type)) return res.status(400).json({ error: 'office=XXX&type=AFD|HWO' });
+  const key = type + ':' + office;
+  _officeText[key] = _officeText[key] || _sharedCache(10 * 60 * 1000, () => _nwsLatestProduct(type, office));
+  try {
+    const p = await _officeText[key]();
+    res.set('Cache-Control', 'no-store');
+    if (!p) return res.json({ office, type, found: false });
+    const parsed = type === 'AFD' ? _parseAfd(p.text) : _parseHwo(p.text, zone, county);
+    res.json({ office, type, issued: p.issued, ...parsed,
+      url: type === 'AFD' ? `https://forecast.weather.gov/product.php?site=${office}&issuedby=${office}&product=AFD&format=txt&version=1&glossary=1`
+                         : `https://forecast.weather.gov/product.php?site=${office}&issuedby=${office}&product=HWO&format=txt&version=1&glossary=1` });
+  } catch (e) { res.status(502).json({ error: 'NWS office text unavailable: ' + e.message }); }
+});
 
 app.get('/api/forecast', async (req, res) => {
   let lat = parseFloat(req.query.lat);
