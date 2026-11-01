@@ -1936,10 +1936,10 @@ const STATE_DOTS = [
   { id:'ut', label:'Utah DOT',    url:'https://prod-ut.ibi511.com/api/v2/get/cameras?format=json', envKey:'UT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
   // Same IBI/Skyline platform — keys: AK_511_KEY, CT_511_KEY
   { id:'ak', label:'Alaska DOT&PF', url:'https://511.alaska.gov/api/v2/get/cameras?format=json',   envKey:'AK_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
-  // Connecticut: CTroads' developer API only offers message signs, events and
-  // advisories — no cameras (the camera address answers 404). Off until CTDOT
-  // offers a camera feed.
-  // { id:'ct', label:'Connecticut DOT', url:'https://ctroads.org/api/v2/get/cameras?format=json',    envKey:'CT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Connecticut: CTroads' docs only list event feeds, but its camera address now
+  // answers (400 "Invalid Key" without a key, instead of the 404 it gave before),
+  // so try it with CT_511_KEY. Off until that variable is set.
+  { id:'ct', label:'Connecticut DOT', url:'https://ctroads.org/api/v2/get/cameras?format=json',    envKey:'CT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
   // Maine, New Hampshire, Vermont — New England Compass developer portal (no key; credit the Tri-State DOTs)
   { id:'me', label:'Maine DOT (New England Compass)',         cacheTTL:30*60*1000, load: () => nec.loadCameras('me') },
   { id:'nh', label:'New Hampshire DOT (New England Compass)', cacheTTL:30*60*1000, load: () => nec.loadCameras('nh') },
