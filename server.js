@@ -1999,6 +1999,7 @@ const STATE_DOTS = [
 
 // Cache for state DOT data: id -> { cameras, ts }
 const _stateDOTCache = new Map();
+const _stateDOTLoading = new Map();   // feed id → load in progress
 
 // Standard IBI Group / Skyline 511 platform parser.
 // Used by WI and confirmed identical on AZ, GA, LA, and most US state DOTs.
@@ -2226,11 +2227,26 @@ async function _loadStateDOT(dot) {
 
   // Custom loaders (ArcGIS layers, key-or-fallback states)
   if (dot.load) {
-    let cameras = [];
-    try { cameras = await dot.load(dot); console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`); }
-    catch (e) { console.warn(`[Cameras] ${dot.label} failed:`, e.message); }
-    _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
-    return cameras;
+    // One load at a time per feed: after a restart, several visitors opening the
+    // same state used to each start their own (slow) download.
+    if (_stateDOTLoading.has(dot.id)) return _stateDOTLoading.get(dot.id);
+    const job = (async () => {
+      let cameras = [];
+      try { cameras = (await dot.load(dot)) || []; console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`); }
+      catch (e) { console.warn(`[Cameras] ${dot.label} failed:`, e.message); }
+      if (!cameras.length) {
+        // A failed or empty load used to leave the state with no DOT cameras for
+        // the whole cache time (30 min for Virginia). Keep the last good list and
+        // try again in 2 minutes.
+        const prev = (cached && cached.cameras) || [];
+        _stateDOTCache.set(dot.id, { cameras: prev, ts: Date.now() - dot.cacheTTL + 2 * 60 * 1000 });
+        return prev;
+      }
+      _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
+      return cameras;
+    })().finally(() => _stateDOTLoading.delete(dot.id));
+    _stateDOTLoading.set(dot.id, job);
+    return job;
   }
 
   // Skip if this DOT requires a key and it's not configured
@@ -2302,7 +2318,7 @@ const OTC_STATE_CODES = {
   'North Dakota':'ND','Ohio':'OH','Oklahoma':'OK','Oregon':'OR','Pennsylvania':'PA',
   'Rhode Island':'RI','South Carolina':'SC','South Dakota':'SD','Tennessee':'TN',
   'Texas':'TX','Utah':'UT','Vermont':'VT','Virginia':'VA','Washington':'WA',
-  'West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY',
+  'West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY','District of Columbia':'DC',
 };
 
 async function _loadOTC() {
@@ -2421,7 +2437,7 @@ const STATE_BBOX = {
   VT:[45.0,-73.4,42.7,-71.5],  VA:[39.5,-83.7,36.5,-75.2],
   WA:[49.0,-124.7,45.5,-116.9],WV:[40.6,-82.6,37.2,-77.7],
   WI:[47.1,-92.9,42.5,-86.8],  WY:[45.0,-111.1,40.9,-104.0],
-  DC:[39.0,-77.1,38.8,-77.0],
+  DC:[39.0,-77.12,38.79,-76.91],
   // Territories — Caribbean coverage for tropical storms
   PR:[18.6,-67.95,17.85,-65.2], VI:[18.45,-65.1,17.65,-64.55],
   // Camera-only regions outside the US (Community Cams) — the whole world is covered
@@ -2897,10 +2913,15 @@ async function _camerasFor(code) {
   const REGION = CAMERA_REGIONS.has(code);   // world regions — Community Cams only
   // Find the STATE_DOTS entry for this state, if we have one
   const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
+  // DC has no camera feed of its own: borrow the neighbours' DOT and open-feed
+  // cameras that sit in DC or within a few miles of it (Arlington, Alexandria…).
+  const NEAR = { DC: ['va', 'md'] }[code];
+  const dots = NEAR ? STATE_DOTS.filter(d => NEAR.includes(d.id)) : (dot ? [dot] : []);
+  const edgeMi = NEAR ? 3 : 25;
 
   const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams, calOesCams] = await Promise.all([
     _loadOTC().catch(() => []),
-    dot ? _loadStateDOT(dot).catch(() => []) : Promise.resolve([]),
+    Promise.all(dots.map(d => _loadStateDOT(d).catch(() => []))).then(a => a.flat()),
     REGION ? Promise.resolve([]) : _loadWindy(code).catch(() => []),   // too large to grid-search
     REGION ? Promise.resolve([]) : _loadNPS(code).catch(() => []),
     code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
@@ -2912,13 +2933,14 @@ async function _camerasFor(code) {
   // Georgia camera made the map zoom out to the whole world. DOT cameras may
   // sit just over a border, so they get ~25 miles of slack.
   const stateDOT = [...stateDOTraw, ...(code === 'PA' ? _loadPennDOT() : [])]
-    .filter(c => _inState(code, c.lat, c.lng, 25, true));
+    .filter(c => _inState(code, c.lat, c.lng, edgeMi, true));
   if (stateDOTraw.length && stateDOT.length < stateDOTraw.length) {
     console.log(`[Cameras] ${code}: dropped ${stateDOTraw.length - stateDOT.length} DOT cameras with coordinates outside the state`);
   }
 
   // Filter OTC to this state
-  const otcForState = otcAll.filter(c => c.state === code);
+  const otcForState = otcAll.filter(c => c.state === code ||
+    (NEAR && NEAR.includes(String(c.state || '').toLowerCase()) && _inState(code, c.lat, c.lng, edgeMi, true)));
 
   // Merge priority: STATE_DOTS (traffic) → OTC → Windy (scenic/weather).
   // Deduplicate at 100m so we don't show two cameras from different sources

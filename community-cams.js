@@ -144,6 +144,7 @@ module.exports = function setupCommunityCams(app, deps) {
     if (saved && Array.isArray(saved.cams)) db = { ...db, ...saved };
     if (!db.channels) db.channels = {};
     loaded = true;
+    setTimeout(() => repairEarthcam().catch(e => console.warn('[Community] EarthCam repair failed:', e.message)), 5000);
     // One-time: fix escaped characters ("&#39;", "&amp;") in names already saved
     if (!db.namesDecoded) {
       let fixed = 0;
@@ -158,6 +159,25 @@ module.exports = function setupCommunityCams(app, deps) {
     }
   }
   async function save() { await rSet(STORE_KEY, db); }
+  async function repairEarthcam() {
+    if (db.earthcamRepaired) return;
+    const bad = [...db.cams, ...db.queue].filter(c => c.kind && c.kind.startsWith('yt-') && /(^|\.)earthcam\.com$/i.test((() => { try { return new URL(c.page || '').hostname; } catch { return ''; } })()));
+    const report = [];
+    for (const c of bad) {
+      try {
+        const u = new URL(c.page);
+        const it = earthcamPick(await fetchTextOverHttp(u.href), u);
+        if (!it) { report.push(`${c.name}: no camera found on ${c.page}`); continue; }
+        const was = c.ref;
+        Object.assign(c, { kind: 'link', ref: it.ref, page: it.page, preview: it.preview, provider: 'EarthCam', live: null });
+        if (c.thumb !== undefined) c.thumb = it.preview;
+        report.push(`${c.name}: was YouTube ${was}, now ${it.ref}`);
+      } catch (e) { report.push(`${c.name}: ${e.message}`); }
+    }
+    db.earthcamRepaired = { at: new Date().toISOString(), report };
+    await save();
+    if (bad.length) console.log('[Community] Repaired EarthCam cameras:', report.join(' | '));
+  }
 
   // ── Understand a pasted URL ────────────────────────────────────────────────
   async function parseUrl(raw) {
@@ -200,16 +220,19 @@ module.exports = function setupCommunityCams(app, deps) {
     if (/\.m3u8$/i.test(u.pathname)) return { kind: 'hls', ref: u.href, provider: u.hostname.replace(/^www\./, '') };
     // HDOnTap doesn't allow embedding (token-secured): show its published
     // preview picture, with a button to watch live on HDOnTap
-    if ((host === 'hdontap.com' && /^\/stream\//.test(u.pathname)) || host === 'earthcam.com') {
+    if (host === 'earthcam.com') {
+      const html = await fetchTextOverHttp(u.href);
+      const one = earthcamPick(html, u);
+      if (one) return one;
+      throw new Error("Couldn't find the camera on that EarthCam page — open the camera on earthcam.com and paste the address from the address bar (it ends in ?cam=…)");
+    }
+    if (host === 'hdontap.com' && /^\/stream\//.test(u.pathname)) {
       const html = await fetchTextOverHttp(u.href);
       const img = (html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i) || [])[1];
       const title = decodeEntities((html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i) || [])[1] || '').replace(/\s*-\s*HDOnTap$/i, '');
-      const provider = host === 'earthcam.com' ? 'EarthCam' : 'HDOnTap';
-      // EarthCam pages often carry a YouTube stream too — use it when present
-      if (provider === 'EarthCam') { const yt = findAllPlayersInPage(html, u.href).find(p => /^yt-/.test(p.kind)); if (yt) return yt; }
+      const provider = 'HDOnTap';
       if (!img) throw new Error(`Could not find a preview picture on that ${provider} page`);
-      return { kind: 'link', ref: provider === 'EarthCam' ? u.href : u.href.split('?')[0], preview: img, provider,
-               suggestedName: title.replace(/\s*[|-]\s*EarthCam.*$/i, '') };
+      return { kind: 'link', ref: u.href.split('?')[0], preview: img, provider, suggestedName: title };
     }
     // A camera host's own player/embed link pasted directly
     const direct = findPlayerInPage(u.href, u.href);
@@ -222,6 +245,55 @@ module.exports = function setupCommunityCams(app, deps) {
     throw new Error("Couldn't find a camera on that page we're allowed to show (YouTube, Nest, Brownrice, IPCamLive, RTSP.me, Angelcam or a live video stream). "
       + "If the page has a Share or Embed option, paste that link instead");
   }
+  // ── EarthCam ─────────────────────────────────────────────────────────────
+  // An EarthCam page holds a "cam" list with every camera in its group (the
+  // Cherry Blossoms page has the Bloom Cam, Bud Cam and MLK Memorial cam), each
+  // with its own title, coordinates, live state and preview picture. The page
+  // also links YouTube time-lapses in its site menu (9/11, WTC) — those are NOT
+  // the camera; taking the first YouTube link used to turn every EarthCam into
+  // the same recorded 9/11 video, which was then dropped or called a duplicate.
+  // EarthCam's video is token-secured, so we show its picture and link to the
+  // camera's own page, as with HDOnTap.
+  function earthcamCams(html) {
+    const out = [];
+    for (const m of String(html).matchAll(/"cam_name":"([A-Za-z0-9_-]+)"/g)) {
+      const key = '"' + m[1] + '":{';
+      const s0 = html.lastIndexOf(key, m.index);
+      if (s0 < 0 || m.index - s0 > 20000) continue;
+      const j = s0 + key.length - 1; let d = 0, inStr = false, esc = false, end = -1;
+      for (let k = j; k < html.length && k < j + 60000; k++) {
+        const ch = html[k];
+        if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true; else if (ch === '{') d++; else if (ch === '}') { d--; if (!d) { end = k; break; } }
+      }
+      if (end < 0) continue;
+      let o; try { o = JSON.parse(html.slice(j, end + 1)); } catch { continue; }
+      if (o && o.cam_name && !out.some(x => x.cam_name === o.cam_name)) out.push(o);
+    }
+    return out;
+  }
+  function earthcamItem(o, u) {
+    const page = new URL(u.href); page.hash = ''; page.search = ''; page.searchParams.set('cam', o.cam_name);
+    const lat = parseFloat(o.map_lat), lng = parseFloat(o.map_long);
+    const place = [o.city, o.state].filter(Boolean).join(', ');
+    const title = decodeEntities(o.long_title || o.title || o.cam_name);
+    return { kind: 'link', ref: page.href, page: page.href, provider: 'EarthCam',
+             preview: o.thumbnail_512 || o.thumbnail_256 || null,
+             suggestedName: (place && !title.toLowerCase().includes(String(o.city || '').toLowerCase()) ? `${title} — ${place}` : title).slice(0, 120),
+             lat: Number.isFinite(lat) && lat ? lat : null, lng: Number.isFinite(lng) && lng ? lng : null,
+             earthcamLive: o.cam_state === '1' && o.liveon !== 'false' };
+  }
+  // The camera the address points to (?cam=…), else the page's own camera
+  function earthcamPick(html, u) {
+    const cams = earthcamCams(html);
+    if (!cams.length) return null;
+    const want = u.searchParams.get('cam');
+    const ogUrl = (String(html).match(/<meta[^>]+property="og:url"[^>]+content="([^"]+)"/i) || [])[1] || '';
+    const ogCam = (ogUrl.match(/[?&]cam=([A-Za-z0-9_-]+)/) || [])[1];
+    const o = cams.find(c => c.cam_name === want) || cams.find(c => c.cam_name === ogCam) || cams.find(c => c.cam_state === '1') || cams[0];
+    return { ...earthcamItem(o, u), more: cams.length - 1 };
+  }
+
   // EVERY camera we can recognize inside a page (some pages have several).
   // Hosts' own embed players, YouTube, live streams, and refreshing still
   // images (many town/museum/mountain cams update a .jpg every few seconds).
@@ -238,7 +310,7 @@ module.exports = function setupCommunityCams(app, deps) {
     all(/ipcamlive\.com\/player\/player\.php\?[^"'<>\s]*?\balias=([A-Za-z0-9_-]+)/gi).forEach(m => add({ kind: 'embed', ref: `https://ipcamlive.com/player/player.php?alias=${m[1]}&autoplay=1`, provider: 'IPCamLive' }));
     all(/rtsp\.me\/embed\/([A-Za-z0-9_-]+)/gi).forEach(m => add({ kind: 'embed', ref: `https://rtsp.me/embed/${m[1]}/`, provider: 'RTSP.me' }));
     all(/v\.angelcam\.com\/iframe\?[^"'<>\s]*?\bv=([A-Za-z0-9_-]+)/gi).forEach(m => add({ kind: 'embed', ref: `https://v.angelcam.com/iframe?v=${m[1]}&autoplay=1`, provider: 'Angelcam' }));
-    all(/https:\/\/[^"'\s<>\\]+?\.m3u8(?:\?[^"'\s<>\\]*)?/gi).forEach(m => { if (!/hdontap/i.test(m[0])) add({ kind: 'hls', ref: m[0], provider: hostOf(base) }); });
+    all(/https:\/\/[^"'\s<>\\]+?\.m3u8(?:\?[^"'\s<>\\]*)?/gi).forEach(m => { if (!/hdontap|earthcam/i.test(m[0])) add({ kind: 'hls', ref: m[0], provider: hostOf(base) }); });
     // Refreshing still images: <img> whose address or label says webcam/snapshot/latest…
     const BAD = /logo|icon|sprite|banner|avatar|placeholder|social|footer|header|button|badge|\/ads?[\/_-]|emoji|spinner|loading/i;
     const CAMURL = /webcam|[\/_-]cam[s\d_.-]|camera|snapshot|latest|current\.(jpe?g|png)|live\.(jpe?g|png)|stillimage|frame\.(jpe?g|png)/i;
@@ -866,7 +938,8 @@ module.exports = function setupCommunityCams(app, deps) {
     });
   });
   const approveInto = async (base, body) => {
-    const lat = parseCoord(body.lat, 'lat'), lng = parseCoord(body.lng, 'lng');
+    const typed = (v) => v != null && String(v).trim() !== '';
+    const lat = parseCoord(typed(body.lat) ? body.lat : base.lat, 'lat'), lng = parseCoord(typed(body.lng) ? body.lng : base.lng, 'lng');
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('Set a latitude and longitude first (e.g. 42.9375 and -87.9969, or 42.9375° N and 87.9969° W)');
     if (Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Those coordinates are out of range');
     const state = stateFor(lat, lng);
@@ -1225,6 +1298,25 @@ module.exports = function setupCommunityCams(app, deps) {
       const job = req._job || {};
       const importId = job.id || uid();
       const clean = (t) => decodeEntities(String(t || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+
+      // EarthCam: the page's own camera list is the directory (see earthcamCams)
+      if (start.hostname.replace(/^www\./, '') === 'earthcam.com') {
+        const html0 = await fetchTextOverHttp(start.href);
+        const cams = earthcamCams(html0);
+        if (!cams.length) throw new Error("Couldn't find any cameras on that EarthCam page");
+        const report = []; let queued = 0, skipped = 0;
+        for (const o of cams) {
+          const it = earthcamItem(o, start);
+          if (!it.earthcamLive) { skipped++; report.push(`– offline on EarthCam right now: ${it.suggestedName}`); continue; }
+          if (known(it.ref)) { skipped++; report.push(`– already on the map or in the queue: ${it.suggestedName}`); continue; }
+          const ok = enqueue({ id: uid(), importId, ...it, name: it.suggestedName, confident: it.lat != null,
+            thumb: it.preview, locationGuess: it.lat != null ? 'From the EarthCam page' : `Couldn't place "${it.suggestedName}" — set it on the map`,
+            source: 'import', foundAt: Date.now() });
+          if (ok) { queued++; report.push(`✓ ${it.suggestedName}`); } else { skipped++; report.push(`– looks like a camera already listed: ${it.suggestedName}`); }
+        }
+        await save();
+        return res.json({ ok: true, importId, found: cams.length, queued, skipped, noPlayer: 0, report });
+      }
 
       // 1) Read the listing pages, following the site's own "Next" link
       //    (falls back to ?page=N when a site has no Next link)
