@@ -274,6 +274,10 @@ function _r511Camera(r, st) {
   const imageUrl = img && !isHls(img) ? img : null;
   if (!imageUrl && !videoUrl) return null;
   if (p.status && /disabled|offline|inactive/i.test(String(p.status))) return null;
+  // Road511 marks dark cameras itself (refreshed every poll): skip them right away instead of
+  // waiting for our picture check. They come back on their own once the source re-enables them.
+  if (/offline|disabled|inactive/i.test(String(p.camera_status || '')) || p.is_active === false) return null;
+  if (view && /disabled|offline/i.test(String(view.status || ''))) return null;
   return {
     id: 'r511-' + st.toLowerCase() + '-' + String(p.id || p.camera_id || p.uuid || (lat.toFixed(5) + ',' + lng.toFixed(5))),
     name: String(p.name || p.title || p.location || p.description || 'Traffic camera').slice(0, 120),
