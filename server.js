@@ -1893,6 +1893,8 @@ const STATE_DOTS = [
   // camera viewer does this for attribution:'vdot'), free display only.
   { id:'va', label:'Virginia DOT (VDOT 511 via Iteris)', envKey:'VA_VDOT_KEY', cacheTTL:30*60*1000,
     load: async () => process.env.VA_VDOT_KEY ? (await _vdotStreams()).map(_vdotCamera).filter(Boolean) : [] },
+  // Maryland — MDOT SHA CHART public data feed (no key). Also fills in DC (see _camerasFor).
+  { id:'md', label:'Maryland (MDOT SHA CHART)', cacheTTL:15*60*1000, load: () => _chartMdCams() },
 
   // ── ArcGIS open-data layers (no key) ───────────────────────────────────
   // Florida: statewide from FL511 once FL_511_KEY is set (same platform as
@@ -4301,6 +4303,38 @@ app.get('/api/admin/cameras/la-offline', (req, res) => res.json({
   note: 'Each check loads every Louisiana camera picture from 511LA; "unavailable" = showing 511LA\'s gray placeholder.',
   history: _laSweep.history,
 }));
+
+// ── Maryland: MDOT SHA CHART camera feed ──────────────────────────────────────
+// Public, no key: chart.maryland.gov/DataFeeds/GetDataFeeds → "Live Traffic
+// Cameras". Each camera's live video is https://<cctvIp>/rtplive/<id>/playlist.m3u8
+// — the same stream CHART's own video page plays. No still pictures in the feed.
+// Cameras CHART marks offline (commMode OFFLINE / COMM_FAILURE) are left out.
+const CHART_MD_CAMERAS = 'https://chartexp1.sha.maryland.gov/CHARTExportClientService/getCameraMapDataJSON.do';
+async function _chartMdCams() {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
+  let j;
+  try {
+    const r = await fetch(CHART_MD_CAMERAS, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: 'application/json' }, signal: ctl.signal });
+    if (!r.ok) throw new Error('CHART HTTP ' + r.status);
+    j = await r.json();
+  } finally { clearTimeout(t); }
+  const list = Array.isArray(j && j.data) ? j.data : [];
+  const ROUTE = { IS: 'I-', US: 'US ', MD: 'MD ' };
+  return list
+    .filter(c => c && c.commMode === 'ONLINE' && c.opStatus !== 'COMM_FAILURE'
+      && /^[\w.-]+\.sha\.maryland\.gov$/i.test(c.cctvIp || '') && /^[a-f0-9]{16,64}$/i.test(c.id || ''))
+    .map(c => ({
+      id: 'md-' + c.id,
+      name: String(c.description || c.name || 'Maryland camera').replace(/\s*\(CAM \d+\)\s*$/i, ''),
+      lat: Number(c.lat), lng: Number(c.lon),
+      imageUrl: null,
+      videoUrl: `https://${c.cctvIp}/rtplive/${c.id}/playlist.m3u8`,
+      direction: null,
+      route: c.routeNumber ? (ROUTE[c.routePrefix] || '') + c.routeNumber : null,
+      source: 'dot',
+    }))
+    .filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lng) && c.lat && c.lng);
+}
 
 // ── VDOT (Virginia) camera API ────────────────────────────────────────────────
 // https://api.vdotcameras.com/2.0/docs — GeoJSON FeatureCollection of streams.
