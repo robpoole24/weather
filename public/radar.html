@@ -1989,7 +1989,7 @@ function updateFrameLabel() {
 
 function stepFrame(dir) {
   if (activePaint === 'global-radar') { rvStepFrame(dir); return; }
-  if (typeof canadaShowing === 'function' && canadaShowing()) { if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; } canadaShowFrame(canadaFrameIdx + dir); return; }
+  if (typeof canadaShowing === 'function' && canadaShowing()) { if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; } canadaShowFrame(canadaFrameIdx + dir); }
   if (activePaint === 'goes') { goesStepFrame(dir); return; }
   let next = currentFrame + dir;
   if (next < 0) next = FRAMES.length - 1;
@@ -1999,13 +1999,8 @@ function stepFrame(dir) {
 
 function togglePlay() {
   if (activePaint === 'global-radar') { rvTogglePlay(); return; }
-  if (typeof canadaShowing === 'function' && canadaShowing()) {
-    isPlaying = !isPlaying;
-    const b = document.getElementById('btn-play');
-    b.textContent = isPlaying ? '⏸ Pause' : '▶ Play'; b.classList.toggle('on', isPlaying);
-    if (isPlaying) canadaStartAnim(); else canadaStopAnim();
-    return;
-  }
+  // Canada (if on) plays and pauses along with the US radar
+  if (typeof canadaShowing === 'function' && canadaShowing()) { if (!isPlaying) canadaStartAnim(); else canadaStopAnim(); }
   if (activePaint === 'goes') { goesTogglePlay(); return; }
   isPlaying = !isPlaying;
   const btn = document.getElementById('btn-play');
@@ -3100,19 +3095,13 @@ async function getCanadaTimestamps() {
 // exactly the "Canadian radar moves while NWS radar sits still, both show
 // the US" symptom.
 //
-// Fix: stop treating this as a parallel always-on overlay. At zoom 6 or
-// lower (continental view), GeoMet's single unified North American mosaic
-// REPLACES the US reflectivity layer — one radar source, one image, no
-// duplicate coverage, no unsynced double-animation. Zoomed in past that
-// (a single state/region), the IEM US-only loop is plenty + higher detail
-// for that view, so Canadian radar yields back to it automatically.
-const CANADA_ZOOM_THRESHOLD = 6; // continental view and lower → show GeoMet; closer → US-only IEM
+// Fix (Oct 2026): it's drawn in a pane cut along the border — see CANADA_CLIP below.
 
 let canadaToggleOn = false;
 let canadaZoomListenerAttached = false;
 
 // Canadian (North American) radar follows the same Play / step buttons as the US radar
-function canadaShowing() { return canadaToggleOn && canadaFrameLayers.length && map.getZoom() <= CANADA_ZOOM_THRESHOLD; }
+function canadaShowing() { return canadaToggleOn && canadaFrameLayers.length > 0; }
 function canadaShowFrame(i) {
   if (!canadaFrameLayers.length) return;
   canadaFrameLayers[canadaFrameIdx].setOpacity(0);
@@ -3142,6 +3131,7 @@ function clearCanada() {
 }
 
 async function loadCanadaFrames() {
+  _canadaPane(); _canadaClip();
   setStatus('Loading Canadian radar…');
   const times = await getCanadaTimestamps();
   if (!times.length) { setStatus('Canadian radar unavailable'); return; }
@@ -3158,8 +3148,8 @@ async function loadCanadaFrames() {
       version: '1.3.0',
       time: time,
       opacity: 0,
-      zIndex: 195,
-      attribution: i === 0 ? 'Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a> (North American composite)' : '',
+      zIndex: 195, pane: 'canadaRadar',
+      attribution: i === 0 ? 'Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a>' : '',
     });
     layer.addTo(map);
     canadaFrameLayers.push(layer);
@@ -3173,42 +3163,45 @@ async function loadCanadaFrames() {
   if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; }
   if (isPlaying) canadaStartAnim();
 
-  setStatus(`North American radar (incl. Canada) — ${times.length} frames (last 3 hrs)`);
+  setStatus(`Canadian radar on — ${times.length} frames`);
 }
 
 // Applies the correct radar source for the current zoom level while the
 // Canadian Radar toggle is on. Called on toggle-on and on every zoomend.
+// Canada's radar is a North American composite that also covers the US. Instead of
+// swapping it in for the US radar (which hid our sharper US radar at wide zooms),
+// it's drawn in its own map pane cut along the US–Canada border: Canada's radar
+// north of the line, ours south of it, at every zoom.
+const CANADA_CLIP = [   // [lng, lat], clockwise around Canada + its waters
+  [-141, 85], [-50, 85], [-50, 40], [-66.0, 43.0], [-67.0, 44.8], [-67.8, 45.7], [-67.8, 47.1], [-69.2, 47.4],
+  [-70.7, 45.4], [-71.5, 45.0], [-74.7, 45.0], [-76.3, 44.2], [-79.0, 43.4], [-79.0, 42.8], [-83.1, 42.0],
+  [-82.5, 42.6], [-82.4, 45.3], [-84.8, 46.5], [-89.6, 48.0], [-95.15, 49.38], [-95.15, 49.0], [-123.0, 49.0],
+  [-123.2, 48.3], [-125.0, 48.4], [-128, 50], [-130.6, 54.7], [-130.0, 55.9], [-133.4, 58.4], [-137.5, 59.0],
+  [-141, 60.3],
+];
+function _canadaPane() {
+  let pane = map.getPane('canadaRadar');
+  if (!pane) {
+    pane = map.createPane('canadaRadar');
+    pane.style.zIndex = 201; pane.style.pointerEvents = 'none';
+    map.on('zoomstart', () => { pane.style.visibility = 'hidden'; });   // the cut is redrawn for the new zoom
+    map.on('zoomend viewreset', _canadaClip);
+  }
+  return pane;
+}
+function _canadaClip() {
+  const pane = map.getPane('canadaRadar');
+  if (!pane) return;
+  const pts = CANADA_CLIP.map(([lng, lat]) => map.latLngToLayerPoint([lat, lng]));
+  pane.style.clipPath = 'polygon(' + pts.map(p => `${Math.round(p.x)}px ${Math.round(p.y)}px`).join(',') + ')';
+  pane.style.visibility = '';
+}
 function applyCanadaZoomState() {
   if (!canadaToggleOn) return;
-  const zoomedOut = map.getZoom() <= CANADA_ZOOM_THRESHOLD;
-  if (zoomedOut) {
-    // Hide US-only reflectivity so we're not showing two overlapping
-    // copies of the same US coverage at once.
-    frameLayers.forEach(l => l.setOpacity(0));
-    if (!canadaFrameLayers.length) {
-      loadCanadaFrames();
-    } else {
-      canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
-      if (!canadaAnimTimer && isPlaying) canadaStartAnim();
-      setStatus(`North American radar (incl. Canada) — ${canadaFrameLayers.length} frames (last 3 hrs)`);
-    }
-  } else {
-    // Zoomed in past the continental view — hand back to the higher-detail
-    // US-only IEM loop (which CC/Velocity site selection already depends
-    // on) and pause the GeoMet animation rather than tearing it down, so
-    // zooming back out is instant instead of re-fetching.
-    if (canadaAnimTimer) {
-      clearInterval(canadaAnimTimer); canadaAnimTimer = null;
-      // Canada was the one playing: reset the button so the US loop doesn't look "playing" while still
-      isPlaying = false; const b = document.getElementById('btn-play'); b.textContent = '▶ Play'; b.classList.remove('on');
-    }
-    canadaFrameLayers.forEach(l => l.setOpacity(0));
-    if (activePaint === 'reflectivity' && radarMode === 'past') {
-      ensureAttached(frameLayers[currentFrame]);
-      frameLayers[currentFrame].setOpacity(0.72);
-    }
-    setStatus('Zoom out to continental view (≤ zoom 6) to see Canadian radar coverage');
-  }
+  _canadaClip();
+  if (!canadaFrameLayers.length) { loadCanadaFrames(); return; }
+  canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+  if (!canadaAnimTimer && isPlaying) canadaStartAnim();
 }
 
 // ── Environment Canada Weather Alerts ────────────────────────────────────────
