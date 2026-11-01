@@ -4532,14 +4532,17 @@ async function _tdotCams() {
   st.received = list.length; st.sampleFields = list[0] ? Object.keys(list[0]).slice(0, 30) : [];
   const pick = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(k) && o[k] != null && o[k] !== ''); return k ? o[k] : undefined; };
   const out = list.map((c, i) => {
-    const loc = c.location || c.Location || {};
+    // TDOT's reply (seen in public copies of it): location.coordinates.{lat,lng},
+    // title, httpsVideoUrl, thumbnailUrl, active, route, jurisdiction, id
+    const loc0 = c.location || c.Location || {};
+    const loc = loc0.coordinates && !Array.isArray(loc0.coordinates) ? loc0.coordinates : loc0;
     const lat = Number(pick(c, /^lat(itude)?$/i) ?? pick(loc, /^lat(itude)?$/i));
     const lng = Number(pick(c, /^(lng|lon|long|longitude)$/i) ?? pick(loc, /^(lng|lon|long|longitude)$/i));
     const urls = Object.values(c).filter(v => typeof v === 'string' && /^https?:\/\//i.test(v)).map(v => v.replace(/^http:/i, 'https:'));
-    const video = urls.find(u => /\.m3u8(\?|$)/i.test(u)) || null;
+    const video = (/^https:\/\//i.test(c.httpsVideoUrl || '') ? c.httpsVideoUrl.replace(/:443\//, '/') : null) || urls.find(u => /\.m3u8(\?|$)/i.test(u) && !/:1935\//.test(u)) || null;
     const image = urls.find(u => /\.(jpe?g|png)(\?|$)/i.test(u) || /snapshot|thumbnail|image/i.test(u)) || null;
     const active = pick(c, /^(active|isactive|enabled|status)$/i);
-    if (active === false || /offline|inactive|disabled/i.test(String(active || ''))) return null;
+    if (active === false || /^(false|0)$|offline|inactive|disabled/i.test(String(active ?? ''))) return null;
     return { id: 'tn-' + (pick(c, /^(id|cameraid|camera_id)$/i) ?? i), name: String(pick(c, /^(title|name|description|location|locationdescription)$/i) || 'TDOT camera').trim(),
              lat, lng, imageUrl: image, videoUrl: video, direction: pick(c, /direction/i) || null, route: pick(c, /^(route|roadway|road)$/i) || null, source: 'dot' };
   }).filter(c => c && (c.imageUrl || c.videoUrl) && _okLatLng(c));
