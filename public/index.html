@@ -156,6 +156,13 @@
     #status-bar .about-btn { padding: 0.3rem 0.55rem; font-size: 0.66rem; }
     .video-thumb { width: 132px; }
   }
+  /* Narrow phones: drop the version/clock text and shorten Fullscreen to its icon so
+     Fullscreen, Support, Help and About all fit without sideways scrolling */
+  @media (max-width: 479px) {
+    #status-bar > .status-item:not(#notification-status), #status-bar > .status-divider { display: none !important; }
+    #fullscreen-btn .fs-label { display: none; }
+    #status-bar .about-btn { padding: 0.3rem 0.45rem; }
+  }
   /* Phones (landscape): very little height — keep rows compact */
   @media (orientation: landscape) and (max-height: 500px) {
     body { height: 100dvh; }
@@ -1486,8 +1493,9 @@
     <span class="status-item" id="time-display"></span>
     <!-- Live Chat button injected here by showChatButton() — sits left of About -->
     <span id="chat-btn-slot" style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;flex-shrink:0;"></span>
-    <button type="button" class="about-btn" id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen">⛶ Fullscreen</button>
+    <button type="button" class="about-btn" id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen" aria-label="Fullscreen">⛶<span class="fs-label"> Fullscreen</span></button>
     <a class="about-btn" href="/shop.html" title="Every dollar goes to servers & new features" style="text-decoration:none">👕 Support</a>
+    <button type="button" class="about-btn" onclick="showHelp()">Help</button>
     <button type="button" class="about-btn" onclick="showAbout()">About</button>
   </div>
 
@@ -1637,10 +1645,10 @@
       </div>
 
       <div style="border-top:1px solid var(--border);padding-top:1rem">
-        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Contact</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">Help &amp; Contact</div>
         <div style="font-size:0.85rem;color:var(--muted);line-height:1.6;">
-          We do our best to align creators with their app sponsors, but sponsorships change and we can get things wrong. If you spot something that needs updating, let us know.<br><br>
-          Something broken or a channel to suggest?<br>
+          Something not loading, a camera not working, or a channel to suggest?
+          <a href="#" onclick="hideAbout();showHelp();return false;" style="color:var(--accent);font-weight:600;">Open Help →</a><br>
           <a href="mailto:contact@altruisticapps.com" style="color:var(--accent)">contact@altruisticapps.com</a>
         </div>
       </div>
@@ -1655,13 +1663,6 @@
       </div>
     </div>
 
-      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1rem">
-        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">📺 Viewing on Xbox or a Smart TV?</div>
-        <div style="font-size:0.82rem;color:var(--muted);line-height:1.6;">
-          On Xbox, get the free <a class="wtv-store-link" href="https://apps.microsoft.com/detail/9N8Q8NJCNHJG" target="_blank" rel="noopener" style="color:var(--accent)">Weather TV app</a> from the Microsoft Store for full controller support. Weather TV also works in Xbox Edge and most smart TV browsers. For the best experience, zoom your browser out to around <strong style="color:var(--text)">67%</strong> — press <strong style="color:var(--text)">Ctrl + −</strong> a few times until the channel bar and cards look right.
-        </div>
-      </div>
-
     <div style="text-align:center;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)">
       <a href="/shop.html" style="font-size:0.78rem;color:var(--accent);text-decoration:none;letter-spacing:0.05em;font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;margin-right:1.2rem;">👕 Support WeatherTV — Shop</a>
       <a href="/privacy.html" target="_blank" style="font-size:0.78rem;color:var(--muted);text-decoration:none;letter-spacing:0.05em;font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;">Privacy Policy</a>
@@ -1674,6 +1675,114 @@
         padding:0.5rem 2rem;background:var(--accent);
         border:none;color:#000;border-radius:4px;cursor:pointer;
       ">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     HELP MODAL — common issues & troubleshooting
+════════════════════════════════════════════ -->
+<style>
+  #help-overlay .help-sec { border-top:1px solid var(--border); padding-top:0.9rem; margin-top:0.9rem; }
+  #help-overlay .help-h { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.85rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); margin-bottom:0.4rem; }
+  #help-overlay .help-p { font-size:0.84rem; color:var(--muted); line-height:1.6; }
+  #help-overlay .help-p b, #help-overlay .help-p kbd { color:var(--text); }
+  #help-overlay kbd { font-family:inherit; font-size:0.8rem; border:1px solid var(--border); border-radius:3px; padding:0 0.3rem; background:rgba(255,255,255,0.04); }
+  #help-overlay ul { margin:0.3rem 0 0 1.1rem; padding:0; }
+  #help-overlay li { margin-bottom:0.2rem; }
+</style>
+<div id="help-overlay" onclick="hideHelp()" role="dialog" aria-modal="true" aria-labelledby="help-title" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;align-items:center;justify-content:center;">
+  <div onclick="event.stopPropagation()" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;max-width:560px;width:90%;max-height:85vh;overflow-y:auto;padding:2rem;position:relative;box-shadow:0 8px 40px rgba(0,0,0,0.6);scrollbar-width:thin;scrollbar-color:var(--border) transparent;">
+    <button type="button" onclick="hideHelp()" aria-label="Close help" style="position:absolute;top:1rem;right:1rem;background:transparent;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer;line-height:1;">✕</button>
+
+    <div id="help-title" style="font-family:'Barlow Condensed',sans-serif;font-size:1.6rem;font-weight:700;color:var(--accent);letter-spacing:0.05em;margin-bottom:0.25rem">Help</div>
+    <div class="help-p">Common questions and quick fixes. Most hiccups clear up on their own within a minute.</div>
+
+    <div class="help-sec">
+      <div class="help-h">Radar is slow, or a square is missing</div>
+      <div class="help-p">
+        Radar comes straight from NOAA (and Environment Canada for Canada) and arrives in square tiles, piece by piece.
+        Their servers are busy, especially during big storms, so tiles can take a few seconds, and now and then one fails.
+        We retry missing squares automatically. If one stays blank, wait a moment or nudge the map slightly.<br>
+        The loop's older frames load in the background (you'll see "Caching…"). Press Play once that finishes for the smoothest animation.
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">Something isn't loading at all</div>
+      <div class="help-p">
+        First try a normal refresh. If that doesn't fix it, a <b>hard refresh</b> makes your browser fetch a fresh copy of the page:
+        <ul>
+          <li><b>Windows / Linux:</b> <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> (or <kbd>Ctrl</kbd> + <kbd>F5</kbd>)</li>
+          <li><b>Mac:</b> <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd></li>
+          <li><b>Phone or tablet:</b> close the browser tab completely and open the site again</li>
+          <li><b>Weather TV app (Windows, Xbox, Android):</b> close the app fully and reopen it</li>
+        </ul>
+        Ad blockers and privacy extensions can also block radar, maps or videos. If something's missing, try turning them off for this site.
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">Traffic cameras</div>
+      <div class="help-p">
+        Cameras are run by state transportation departments and cities, not by us. A camera may be:
+        <ul>
+          <li><b>Offline or under maintenance.</b> We hide cameras automatically when they show their state's "unavailable" picture.</li>
+          <li><b>Dark or frozen.</b> Many cameras can't see much at night, and some only update every minute or two.</li>
+          <li><b>A still picture instead of video.</b> Some states only share snapshots.</li>
+        </ul>
+        If a community camera is on the wrong spot, tap <b>📍 Wrong location?</b> in its camera window. For any other camera problem, email us (below).
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">Videos and live streams</div>
+      <div class="help-p">
+        Every video plays through YouTube's official player. If a stream won't play, the creator may have just ended it,
+        or YouTube may be blocked by an extension or network filter. New live streams can take a couple of minutes to appear.
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">Radar and map layers</div>
+      <div class="help-p">
+        <ul>
+          <li><b>Road Closures</b> show full closures only (not lane closures), and appear once you zoom in to about state level.</li>
+          <li><b>Canadian radar</b> uses Environment Canada's own colors (rain and snow rate), so it looks different from US radar. Its scale appears in the Legend.</li>
+          <li><b>Rings around radar sites at night</b> are birds and insects. US radar shows "weather only" by default; turn on <b>Birds &amp; Bugs (Raw Radar)</b> in Layers to see them.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">📺 Xbox and smart TVs</div>
+      <div class="help-p">
+        On Xbox, get the free <a class="wtv-store-link" href="https://apps.microsoft.com/detail/9N8Q8NJCNHJG" target="_blank" rel="noopener" style="color:var(--accent)">Weather TV app</a> from the Microsoft Store for full controller support.
+        Weather TV also works in Xbox Edge and most smart TV browsers. For the best fit, zoom the browser out to around <b>67%</b>
+        (press <kbd>Ctrl</kbd> + <kbd>−</kbd> a few times).
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">Severe weather</div>
+      <div class="help-p">
+        Weather TV isn't an official warning service, and data or streams can be delayed. When severe weather threatens, rely on the
+        National Weather Service (<a href="https://www.weather.gov" target="_blank" rel="noopener" style="color:var(--accent)">weather.gov</a>),
+        NOAA Weather Radio, Wireless Emergency Alerts on your phone, and local officials.
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">Still stuck? Report a problem</div>
+      <div class="help-p">
+        Email <a href="mailto:contact@altruisticapps.com?subject=Weather%20TV%20problem" style="color:var(--accent);font-weight:600">contact@altruisticapps.com</a>.
+        It helps to include your device and browser (or app), what you were looking at, and a screenshot if you can.<br>
+        Channel suggestions are welcome too, and so are corrections: we do our best to match creators with their app sponsors, but sponsorships change and we can get things wrong.
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:1.5rem">
+      <button type="button" onclick="hideHelp()" style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.85rem;letter-spacing:0.1em;text-transform:uppercase;padding:0.5rem 2rem;background:var(--accent);border:none;color:#000;border-radius:4px;cursor:pointer;">Close</button>
     </div>
   </div>
 </div>
@@ -5206,7 +5315,7 @@ function createScrollArrows(scrollEl) {
 function setPlayerFullscreen(on) {
   document.body.classList.toggle('player-max', on);
   const btn = document.getElementById('fullscreen-btn');
-  if (btn) btn.textContent = on ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
+  if (btn) btn.innerHTML = on ? '✕<span class="fs-label"> Exit Fullscreen</span>' : '⛶<span class="fs-label"> Fullscreen</span>';
   const ex = document.getElementById('exit-max-btn');
   if (ex) ex.hidden = !on;
   if (on) showExitPill();
@@ -5262,9 +5371,19 @@ function hideAbout() {
   overlay.style.display = 'none';
 }
 
+// HELP MODAL
+function showHelp() {
+  const overlay = document.getElementById('help-overlay');
+  overlay.style.display = 'flex';
+  const first = overlay.querySelector('button'); if (first) first.focus({ preventScroll: true });   // TV remotes / keyboards start inside
+}
+function hideHelp() {
+  document.getElementById('help-overlay').style.display = 'none';
+}
+
 // Close on Escape key
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') hideAbout();
+  if (e.key === 'Escape') { hideAbout(); hideHelp(); }
 });
 
 // ═══════════════════════════════════════════
