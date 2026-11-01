@@ -2249,7 +2249,10 @@ const OUTLOOKS = {
     },
     fixUI: () => { if (olUI.spcDay === '3' && !['cat', 'any'].includes(olUI.spcHaz)) olUI.spcHaz = 'any'; if (olUI.spcDay !== '3' && olUI.spcHaz === 'any') olUI.spcHaz = 'tor'; },
     rank: (p) => Number(p.dn) || 0,
-    style: (p) => ({ color: p.stroke || '#666', fillColor: p.fill || '#999', weight: 2, fillOpacity: 0.45, opacity: 1 }),
+    // Solid fills: SPC's own colors. General thunder (TSTM) is SPC's palest color, so it gets a
+    // stronger fill and outline to stay clearly visible on the map.
+    style: (p) => { const tstm = String(p.label || '').toUpperCase() === 'TSTM';
+      return { color: p.stroke || '#666', fillColor: p.fill || '#999', weight: tstm ? 2.5 : 2, fillOpacity: tstm ? 0.6 : 0.5, opacity: 1 }; },
     label: (p) => p.label2 || p.label || '',
     swatch: (p) => p.fill || '#999',
     popup: (p, hatched) => _olSpcPopup(p, hatched),
