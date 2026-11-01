@@ -3875,7 +3875,23 @@ app.get('/api/admin/cameras/sandag', (req, res) => res.json(_sandagStats || { no
 // they send a real picture again. A short history shows WHEN cameras go dark.
 const _laOffline = new Set();               // imageUrl
 let _laSweep = { running: false, lastAt: 0, history: [], placeholder: null };
+// The check history (and which cameras are dark) is kept in Redis so a redeploy doesn't wipe it
+let _laSweepLoaded = false;
+async function _laSweepLoad() {
+  if (_laSweepLoaded) return; _laSweepLoaded = true;
+  try {
+    const saved = await rGet('wt:la-sweep');
+    if (!saved) return;
+    _laSweep.history = Array.isArray(saved.history) ? saved.history : [];
+    if (saved.lastAt && Date.now() - saved.lastAt < 3 * 3600 * 1000) {      // last check is recent: reuse its result
+      _laSweep.lastAt = saved.lastAt; _laSweep.placeholder = saved.placeholder || null;
+      for (const u of saved.offline || []) _laOffline.add(u);
+      _stateDOTCache.delete('la');
+    }
+  } catch (_) {}
+}
 async function _laImageSweep(cams) {
+  await _laSweepLoad();
   if (_laSweep.running || Date.now() - _laSweep.lastAt < 3 * 3600 * 1000) return;
   _laSweep.running = true; _laSweep.lastAt = Date.now();
   try {
@@ -3907,6 +3923,7 @@ async function _laImageSweep(cams) {
     _laSweep.history.unshift({ at: now.toISOString(), hourCentral: +now.toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false }),
       checked: byCam.length, unavailable: down.length, names: down.slice(0, 80) });
     _laSweep.history = _laSweep.history.slice(0, 60);
+    rSet('wt:la-sweep', { history: _laSweep.history, offline: [..._laOffline], placeholder, lastAt: _laSweep.lastAt }, 30 * 86400);
     _stateDOTCache.delete('la');           // next request rebuilds the list without the dark ones
     console.log(`[Cameras] Louisiana image check: ${down.length}/${byCam.length} showing 511LA's unavailable card — hidden`);
   } catch (e) {
@@ -3915,6 +3932,7 @@ async function _laImageSweep(cams) {
 }
 app.get('/api/admin/cameras/la-offline', (req, res) => res.json({
   hiddenNow: _laOffline.size, lastCheck: _laSweep.lastAt ? new Date(_laSweep.lastAt).toISOString() : null,
+  checkRunning: _laSweep.running,
   note: 'Each check loads every Louisiana camera picture from 511LA; "unavailable" = showing 511LA\'s gray placeholder.',
   history: _laSweep.history,
 }));
