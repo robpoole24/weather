@@ -611,7 +611,7 @@ function routes(app) {
       const nearClosed = (h) => closedPts.some(([la, lo]) => Math.abs(la - h.lat) < 0.0025 && Math.abs(lo - h.lng) < 0.0032);
       for (const h of parts.flat().concat(extra)) {
         if (h.lat < b[1] || h.lat > b[3] || h.lng < b[0] || h.lng > b[2] || seen.has(h.id)) continue;
-        if (/^(wz-|ct-|sfwz-)/.test(h.id) && nearClosed(h)) continue;
+        if (/^(wz-|ct-|sfwz-|coi-)/.test(h.id) && nearClosed(h)) continue;
         seen.add(h.id); items.push(h);
         if (h.closed) closedPts.push([h.lat, h.lng]);
         if (items.length >= 2000) break;

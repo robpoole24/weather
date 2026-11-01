@@ -66,6 +66,17 @@ const FROM_511_KEY = {
 const HEADER_KEYED = [
   ['or', 'Oregon DOT', 'https://api.odot.state.or.us/WZDx/v4.0/Workzones', 'ODOT_API_KEY', 'Ocp-Apim-Subscription-Key', ['OR']],
 ];
+// COtrip incidents (crashes, weather and pass closures) use the same key as Colorado's work-zone feed
+function coKey() {
+  const v = (process.env.CO_WZDX_URL || '').trim().replace(/^['"<\s]+|['">\s]+$/g, '');
+  if (!v) return null;
+  if (!/^https?:/i.test(v)) return v;
+  try { return new URL(v).searchParams.get('apiKey'); } catch { return null; }
+}
+function incidentSources() {
+  const k = coKey();
+  return k ? [{ id: 'co-inc', name: 'Colorado DOT · incidents', url: 'https://data.cotrip.org/api/v1/incidents?apiKey=' + encodeURIComponent(k), states: ['CO'], kind: 'coinc' }] : [];
+}
 function wzdxSources() {
   const urlFor = (env) => {
     const direct = (process.env[env] || '').trim().replace(/^['"<\s]+|['">\s]+$/g, '');
@@ -149,6 +160,37 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
     return out;
   }
 
+  // ── COtrip incidents ──
+  function cotripItems(src, j) {
+    const feats = Array.isArray(j.features) ? j.features : Array.isArray(j) ? j : Array.isArray(j.incidents) ? j.incidents : [];
+    const now = Date.now(), out = [], types = {};
+    for (const f of feats) {
+      const p = f.properties || f;
+      const type = String(p.type || ''), cat = String(p.category || ''), msg = String(p.travelerInformationMessage || p.description || '');
+      types[type || '—'] = (types[type || '—'] || 0) + 1;
+      if (/^(inactive|cleared|closed out|ended)$/i.test(String(p.status || ''))) continue;
+      const closed = cars.isFullClosure(type) || cars.isFullClosure(msg) || /\b(full|road|highway|pass) clos/i.test(type + ' ' + cat);
+      if (!closed) continue;
+      const pp = pts(f.geometry);
+      if (!pp.length) continue;
+      const kind = cars.weatherKind(type + ' ' + cat + ' ' + msg);
+      const cause = cars.causeOf(kind, type, cat, msg);
+      const start = Date.parse(p.startTime || ''), upd = Date.parse(p.lastUpdated || '');
+      if (Number.isFinite(start) && start > now + 15 * 60 * 1000) continue;
+      out.push({
+        id: 'coi-' + (p.id || f.id || out.length), kind: kind || 'closure', closed: true, cause,
+        title: 'Road closed' + (type && !/clos/i.test(type) ? ' · ' + type : ''),
+        road: [p.routeName, p.direction].filter(Boolean).join(' ').slice(0, 80),
+        text: [msg, p.startMarker != null && p.endMarker != null ? `Mile ${p.startMarker} to ${p.endMarker}` : ''].filter(Boolean).join(' · ').slice(0, 600),
+        lat: +(+pp[0][1]).toFixed(5), lng: +(+pp[0][0]).toFixed(5), line: thin(pp),
+        start: Number.isFinite(start) ? new Date(start).toISOString() : null, end: null,
+        updated: Number.isFinite(upd) ? new Date(upd).toISOString() : null, priority: null, src: 'co-inc', credit: 'COtrip · Colorado DOT incidents',
+      });
+    }
+    stats[src.id] = { name: src.name, incidents: feats.length, closedNow: out.length, types, at: new Date().toISOString() };
+    return out;
+  }
+
   // ── Caltrans Lane Closure System ──
   const ON = (o, k) => String(((o || {})[k] || '')).toLowerCase() === 'true';
   function caltransItems(src, j) {
@@ -194,7 +236,7 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
     if (c && Date.now() - c.ts < TTL) return Promise.resolve(c.items);
     if (c && c.loading) return c.loading;
     const loading = getJSON(src.url, src.headers)
-      .then(j => { const items = kind === 'ct' ? caltransItems(src, j) : wzdxItems(src, j); cache.set(src.id, { ts: Date.now(), items }); return items; })
+      .then(j => { const items = kind === 'ct' ? caltransItems(src, j) : kind === 'coinc' ? cotripItems(src, j) : wzdxItems(src, j); cache.set(src.id, { ts: Date.now(), items }); return items; })
       .catch(e => {
         stats[src.id] = { ...(stats[src.id] || {}), name: src.name || src.id, error: e.message, at: new Date().toISOString() };
         const old = (c && c.items) || [];
@@ -212,12 +254,13 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
     const jobs = [];
     for (const src of wzdxSources()) if (src.states.some(st => hits(grow(stateBoxes[st]), b))) jobs.push(load(src, 'wz'));
     for (const src of CALTRANS) if (hits(grow(src.box), b)) jobs.push(load(src, 'ct'));
+    for (const src of incidentSources()) if (src.states.some(st => hits(grow(stateBoxes[st]), b))) jobs.push(load(src, src.kind));
     return Promise.all(jobs).then(r => r.flat());
   }
   const coveredNames = () => [...new Set(wzdxSources().map(s => s.name))].concat('California (Caltrans)');
   // Admin check: fetch one feed now (skipping the cache) and report what came back
   async function probe(id) {
-    const all = wzdxSources().map(x => ({ ...x, kind: 'wz' })).concat(CALTRANS.map(x => ({ ...x, kind: 'ct' })));
+    const all = wzdxSources().map(x => ({ ...x, kind: 'wz' })).concat(CALTRANS.map(x => ({ ...x, kind: 'ct' })), incidentSources());
     const configured = all.map(x => x.id);
     const src = all.find(x => x.id === id);
     if (!src) return { id, configured: false, note: 'Not configured. Check the Railway variable name, then redeploy.', feedsConfigured: configured };
@@ -228,5 +271,5 @@ module.exports = function setupClosures({ cars, stateBoxes }) {
       seconds: +((Date.now() - t0) / 1000).toFixed(1), stats: stats[src.id] || null, closedNow: items.length,
       sample: items.slice(0, 3).map(h => ({ title: h.title, road: h.road, cause: h.cause, lat: h.lat, lng: h.lng })), feedsConfigured: configured };
   }
-  return { forView, probe, stats: () => stats, coveredNames, _test: { wzdxItems, caltransItems, CALTRANS } };
+  return { forView, probe, stats: () => stats, coveredNames, _test: { wzdxItems, caltransItems, cotripItems, CALTRANS } };
 };
