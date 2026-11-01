@@ -708,6 +708,13 @@
   .wo-impact { font-size:0.7rem; margin-top:0.1rem; }
   .wo-sentence { font-size:0.82rem; color:var(--text); line-height:1.45; margin-bottom:0.45rem; }
   .wo-src { font-size:0.62rem; color:var(--muted); margin-top:0.35rem; }
+  .xo-row { display:grid; grid-template-columns:5.6rem 1fr 1fr; gap:0.4rem; align-items:center; padding:0.4rem 0; border-top:1px solid var(--border); }
+  .xo-row:first-child { border-top:none; }
+  .xo-when { font-weight:600; color:var(--text); font-size:0.8rem; line-height:1.2; }
+  .xo-when span { display:block; font-weight:400; color:var(--muted); font-size:0.66rem; }
+  .xo-cell { border-radius:6px; padding:0.32rem 0.45rem; font-size:0.74rem; line-height:1.25; color:#0b1220; font-weight:600; }
+  .xo-cell small { display:block; font-weight:500; font-size:0.64rem; opacity:0.85; }
+  .xo-cell.flat { background:rgba(255,255,255,0.06); color:var(--muted); font-weight:500; }
   .of-card { border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.6rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.02); }
   .of-card.hwo { border-color:rgba(250,204,21,0.45); }
   .of-h { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.74rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); margin-bottom:0.3rem; }
@@ -776,6 +783,15 @@
   .fp-apptemp-toggle button { flex:1; font-family:'Barlow Condensed',sans-serif; font-size:0.72rem; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); color:#64748b; border-radius:6px; padding:0.4rem 0.3rem; cursor:pointer; transition:all 0.15s; }
   .fp-apptemp-toggle button.active { background:rgba(0,180,216,0.15); border-color:var(--accent); color:var(--accent); }
 
+  /* ══ GOES CLOUD FLASHES (GLM): soft glow sized to the area the flash lit up ══ */
+  .glm-glow { border-radius:50%; pointer-events:none;
+    background:radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(214,226,255,0.75) 22%, rgba(160,190,255,0.35) 55%, rgba(140,170,255,0) 72%); }
+  .glm-glow.fresh { animation:glmBloom 0.9s ease-out; }
+  @keyframes glmBloom {
+    0%   { transform:scale(0.2); filter:brightness(3); opacity:1; }
+    25%  { transform:scale(1.45); filter:brightness(2.2); opacity:1; }
+    100% { transform:scale(1); filter:brightness(1); }
+  }
   /* ══ LIGHTNING STRIKE FLASH ══ */
   .ltg-strike { width:10px; height:10px; margin-top:-5px; margin-left:-5px; border-radius:50%; background:#fff4c2; box-shadow:0 0 6px 2px rgba(255,238,140,0.9); pointer-events:none; }
   .ltg-strike.fresh { animation:ltgBloom 0.6s ease-out; }
@@ -1163,6 +1179,12 @@
       <div id="fp-daily" class="fp-daily-list"></div>
     </div>
 
+    <!-- ── Days 6–14: CPC outlooks for this spot (US only) ── -->
+    <div id="fp-extended" style="display:none;">
+      <div class="fp-section-label">Next Two Weeks · Outlook</div>
+      <div id="fp-extended-body"></div>
+    </div>
+
     <!-- ── Model comparison (loads only when asked) ── -->
     <div id="fp-models-wrap" style="display:none;">
       <div class="fp-section-label">Model Comparison</div>
@@ -1476,6 +1498,7 @@
     <div class="leg-row"><div class="leg-sw" style="background:#ff8c00;border-radius:50%"></div>30s – 2 min</div>
     <div class="leg-row"><div class="leg-sw" style="background:#facc15;border-radius:50%"></div>2 – 5 min</div>
     <div class="leg-row"><div class="leg-sw" style="background:#a3a300;border-radius:50%"></div>5 – 10 min</div>
+    <div class="leg-row"><div class="leg-sw" style="background:radial-gradient(circle,#fff 0%,#c9d8ff 45%,rgba(160,190,255,0.2) 80%);border-radius:50%"></div>Cloud flash (GOES satellite)</div>
   </div>
   <div id="spc-legend" style="display:none;margin-top:0.4rem;border-top:1px solid var(--border);padding-top:0.35rem">
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;color:var(--gold);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:0.3rem">SPC Outlook</div>
@@ -5759,8 +5782,53 @@ function renderLtgStrikes(features, radarTime) {
   }
 }
 
+// ── GOES GLM cloud flashes (Radar Sidecar /meta/glm) ──
+// Every flash seen from orbit, including in-cloud lightning. Drawn as glows under the ground-strike
+// bolts: a flash both systems saw reads as a bolt with a halo. Synced to the radar time like strikes.
+let _glmLayer = null, _glmData = [], _glmSeen = new Map();     // flash key -> when it first bloomed
+async function refreshGlm() {
+  if (!_ltgLayer) return;
+  try {
+    const b = map.getBounds().pad(0.15);
+    const w = Math.max(-180, b.getWest()), e = Math.min(180, b.getEast()), s = Math.max(-80, b.getSouth()), n = Math.min(80, b.getNorth());
+    if (e <= w || n <= s) return;
+    const j = await fetch(`${WXTILES_BASE}/meta/glm?b=${w.toFixed(2)},${s.toFixed(2)},${e.toFixed(2)},${n.toFixed(2)}`).then(r => r.ok ? r.json() : null);
+    if (!j || !_ltgLayer) return;
+    _glmData = j.flashes || [];
+    renderGlm(getLtgRadarTime());
+  } catch (_) { /* satellite lightning is extra; ground strikes keep working */ }
+}
+function renderGlm(radarTime) {
+  if (!_ltgLayer) return;
+  if (!_glmLayer) _glmLayer = L.layerGroup().addTo(map);
+  _glmLayer.clearLayers();
+  if (!radarTime || !_glmData.length) return;
+  const rt = radarTime, minTs = rt - 10 * 60 * 1000, z = map.getZoom();
+  const isLive = currentFrame === FRAMES.length - 1 && radarMode === 'past';
+  const rows = _glmData.filter(f => f[2] <= rt + 30000 && f[2] >= minTs).slice(0, 500);
+  for (const [lon, lat, t, area] of rows) {
+    // Glow radius from the flash footprint (km²), shown at the current zoom; at least ~4 km
+    const rKm = Math.max(4, Math.sqrt((area || 50) / Math.PI));
+    const mpp = 156543.03 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);
+    const px = Math.round(Math.max(8, Math.min(70, (rKm * 1000 / mpp) * 2)));
+    const age = Math.max(0, rt - t), key = lon + ',' + lat + ',' + t;
+    // A new flash blooms once; a redraw within its first second keeps the bloom going
+    let fresh = false;
+    if (isLive && age < 45000) {
+      const at = _glmSeen.get(key), nowMs = Date.now();
+      if (at == null) { _glmSeen.set(key, nowMs); fresh = true; } else fresh = nowMs - at < 1000;
+    } else if (!_glmSeen.has(key)) _glmSeen.set(key, 0);
+    const op = Math.max(0.15, 0.9 - (age / (10 * 60 * 1000)) * 0.75);
+    L.marker([lat, lon], { interactive: false, keyboard: false, zIndexOffset: -1000,
+      icon: L.divIcon({ className: '', iconSize: [px, px], iconAnchor: [px / 2, px / 2],
+        html: `<div class="glm-glow${fresh ? ' fresh' : ''}" style="width:${px}px;height:${px}px;opacity:${op.toFixed(2)}"></div>` }) }).addTo(_glmLayer);
+  }
+  if (_glmSeen.size > 20000) _glmSeen = new Map([..._glmSeen].slice(-5000));
+}
+
 async function refreshLightning() {
   if (!_ltgLayer) return;
+  refreshGlm();
   try {
     const res = await fetch('/api/lightning');
     const data = await res.json();
@@ -5797,14 +5865,19 @@ async function startLightning() {
     if (!rt) {
       // Forecast mode — no historical lightning data, clear the layer
       _ltgLayer.clearLayers();
+      if (_glmLayer) _glmLayer.clearLayers();
     } else {
       renderLtgStrikes(_ltgLastPollData, rt);
+      renderGlm(rt);
     }
   }, 200);
 
   // Also re-render on map move (viewport filter changes)
+  let _glmMoveT = null;
   map.on('moveend.lightning', () => {
     if (_ltgLayer && _ltgLastPollData) renderLtgStrikes(_ltgLastPollData, getLtgRadarTime());
+    renderGlm(getLtgRadarTime());                                   // resize glows for the new zoom now
+    clearTimeout(_glmMoveT); _glmMoveT = setTimeout(refreshGlm, 600);  // then fetch the new area
   });
 
   const leg = document.getElementById('lightning-legend');
@@ -5818,6 +5891,8 @@ function stopLightning() {
   if (_ltgFrameTimer) { clearInterval(_ltgFrameTimer); _ltgFrameTimer = null; }
   map.off('moveend.lightning');
   if (_ltgLayer) { _ltgLayer.clearLayers(); map.removeLayer(_ltgLayer); _ltgLayer = null; }
+  if (_glmLayer) { map.removeLayer(_glmLayer); _glmLayer = null; }
+  _glmData = []; _glmSeen.clear();
   _ltgLastPollData = null; _ltgSeenIds.clear(); _ltgLastFrame = -1;
   const leg = document.getElementById('lightning-legend');
   if (leg) leg.style.display = 'none';
@@ -8419,6 +8494,54 @@ async function renderOfficeText(o, source) {
   box.style.display = 'block';
 }
 
+// ── Next two weeks: CPC 6–10 and 8–14 day outlooks for one spot ───────────────
+// Same NOAA map services as the map's Extended Outlook, asked "what covers this point?".
+// Four small requests (temperature + precipitation, two periods), cached 30 min per spot.
+const _xoCache = new Map();
+const XO_SVC = { '610': 'vector/rest/services/outlooks/cpc_6_10_day_outlk', '814': 'vector/rest/services/outlooks/cpc_8_14_day_outlk' };
+async function renderExtendedOutlook(lat, lon) {
+  const box = document.getElementById('fp-extended'), body = document.getElementById('fp-extended-body');
+  if (!box || !body) return;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < 18 || lat > 72 || lon < -170 || lon > -60) { box.style.display = 'none'; return; }
+  const key = lat.toFixed(2) + ',' + lon.toFixed(2), token = (renderExtendedOutlook._n = (renderExtendedOutlook._n || 0) + 1);
+  let hit = _xoCache.get(key);
+  if (!hit || Date.now() - hit.ts > 30 * 60 * 1000) {
+    try {
+      const ask = (r, layer) => _woIdentify(XO_SVC[r], String(layer), lat, lon).then(rs => (rs[0] || {}).attributes || null).catch(() => undefined);
+      const [t610, p610, t814, p814] = await Promise.all([ask('610', 0), ask('610', 1), ask('814', 0), ask('814', 1)]);
+      hit = { t610, p610, t814, p814, ts: Date.now() }; _xoCache.set(key, hit);
+    } catch (_) { box.style.display = 'none'; return; }
+  }
+  if (token !== renderExtendedOutlook._n) return;
+  // The point lookup returns display names ("Probability", "Start Date"); match ignoring case, spaces and underscores
+  const norm = (x) => String(x).toLowerCase().replace(/[\s_]/g, '');
+  const pick = (a, ...ks) => { if (!a) return undefined; for (const k of ks) { const f = Object.keys(a).find(x => norm(x) === norm(k)); if (f != null && a[f] !== 'Null') return a[f]; } return undefined; };
+  const num = (v) => { const n = Number(String(v ?? '').replace(/[^\d.]/g, '')); return Number.isFinite(n) ? n : null; };
+  const RAMP = { tempAbove: CPC_RAMPS.tempAbove, tempBelow: CPC_RAMPS.tempBelow, precipAbove: CPC_RAMPS.precipAbove, precipBelow: CPC_RAMPS.precipBelow };
+  const cell = (a, kind) => {
+    if (a === undefined) return '<div class="xo-cell flat">Unavailable</div>';
+    if (!a) return `<div class="xo-cell flat">No strong signal<small>equal chances</small></div>`;
+    const cat = String(pick(a, 'cat', 'category') || ''), prob = num(pick(a, 'prob', 'probability'));
+    if (/normal/i.test(cat) && !/above|below/i.test(cat)) return `<div class="xo-cell" style="background:#d4d4d4">Near normal${prob ? `<small>${Math.round(prob)}% chance</small>` : ''}</div>`;
+    const below = /below/i.test(cat);
+    const word = kind === 'temp' ? (below ? 'Colder than normal' : 'Warmer than normal') : (below ? 'Drier than normal' : 'Wetter than normal');
+    const idx = prob == null ? 0 : prob < 40 ? 0 : prob < 50 ? 1 : prob < 60 ? 2 : prob < 70 ? 3 : prob < 80 ? 4 : prob < 90 ? 5 : 6;
+    const bg = RAMP[kind + (below ? 'Below' : 'Above')][idx], dark = idx >= 3;
+    const lean = prob == null ? '' : prob >= 60 ? 'likely' : prob >= 50 ? 'favored' : prob >= 40 ? 'leaning' : 'slight lean';
+    return `<div class="xo-cell" style="background:${bg};color:${dark ? '#fff' : '#0b1220'}">${word}${prob != null ? `<small>${Math.round(prob)}% chance · ${lean}</small>` : ''}</div>`;
+  };
+  const range = (a) => {
+    const d = (v) => { if (v == null) return null; const n = Number(v); const x = Number.isFinite(n) && n > 1e11 ? new Date(n) : new Date(String(v)); return isNaN(x) ? null : x; };
+    const s0 = d(pick(a, 'start_date', 'start date')), e0 = d(pick(a, 'end_date', 'end date')); if (!s0 || !e0) return '';
+    const f = (t) => t.toLocaleDateString([], { month: 'short', day: 'numeric' }); return `${f(s0)} – ${f(e0)}`; };
+  const rows = [['610', 'Days 6–10', hit.t610, hit.p610], ['814', 'Days 8–14', hit.t814, hit.p814]];
+  if (rows.every(r => r[2] === undefined && r[3] === undefined)) { box.style.display = 'none'; return; }
+  body.innerHTML = `<div style="display:grid;grid-template-columns:5.6rem 1fr 1fr;gap:0.4rem;font-family:'Barlow Condensed',sans-serif;font-size:0.64rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);margin-bottom:0.15rem"><span></span><span>Temperature</span><span>Precipitation</span></div>`
+    + rows.map(([, label, t, p]) => `<div class="xo-row"><div class="xo-when">${label}<span>${range(t) || range(p)}</span></div>${cell(t, 'temp')}${cell(p, 'precip')}</div>`).join('')
+    + '<div class="wo-src">Compared with normal for this time of year · NOAA Climate Prediction Center · <button type="button" class="rx-src-link" onclick="overlayState.cpc=true;applyOverlay(\'cpc\',true);if(typeof toggleForecastPanel===\'function\')toggleForecastPanel(false)">See it on the map</button></div>';
+  box.style.display = 'block';
+}
+
 function renderForecast(data) {
   if (!data) return;
   const c  = data.current        || {};
@@ -8669,6 +8792,8 @@ function renderForecast(data) {
 
   // ── Local NWS office text (US only) ─────────────────────────────────────────
   renderOfficeText(data.office, data.source);
+  // ── Days 6–14 outlook (CPC, US only) ───────────────────────────────────────
+  renderExtendedOutlook(data.latitude ?? (_place && _place.lat), data.longitude ?? (_place && _place.lon));
 
   // ── 7-Day ─────────────────────────────────────────────────────────────────
   const dailyEl = document.getElementById('fp-daily');
@@ -9080,7 +9205,7 @@ const CHASER_ITEMS=[
   {id:'live-near',  ico:'🔴', name:'Live Near Warnings',     sub:'Chasers streaming inside or near a warning', def:true},
   {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
   {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
-  {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
+  {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Ground strikes (Blitzortung) + cloud flashes (GOES) · last 10 min',def:false},
   {id:'storm-cells',ico:'🎯',name:'Storm Cell Vectors',     sub:'IEM · movement direction & speed',def:false},
   {id:'probsevere', ico:'🧭', name:'Storm Threat (ProbSevere)', sub:'Each storm\'s chance of severe, tornado, hail & wind · next hour', def:false},
   {id:'watches',    ico:'🟥', name:'Watch Boxes',            sub:'SPC tornado & severe thunderstorm watches', def:false},
