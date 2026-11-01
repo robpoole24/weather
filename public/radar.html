@@ -8060,10 +8060,15 @@ async function _ofGet(o, type) {
   _ofCache.set(k, { j, ts: Date.now() });
   return j;
 }
-async function renderOfficeText(o) {
+async function renderOfficeText(o, source) {
   const box = document.getElementById('fp-office'), body = document.getElementById('fp-office-body');
   if (!box || !body) return;
-  if (!o || !o.id) { box.style.display = 'none'; return; }
+  if (!o || !o.id) {
+    // A US forecast without office info is an older saved copy (from before this feature, or a
+    // browser cache): keep what's already on screen instead of making it vanish.
+    if (source === 'nws' && box.style.display === 'block') return;
+    box.style.display = 'none'; box.dataset.sig = ''; return;
+  }
   const want = o.id, token = (renderOfficeText._n = (renderOfficeText._n || 0) + 1);
   const [hwo, afd] = await Promise.all([_ofGet(o, 'HWO'), _ofGet(o, 'AFD')]);
   if (token !== renderOfficeText._n) return;          // a newer location was picked meanwhile
@@ -8084,7 +8089,11 @@ async function renderOfficeText(o) {
       + (rest.length ? `<details><summary>${keys ? 'Read the full discussion' : 'Read the forecasters\' discussion'}</summary>${rest.map(s => `<div class="of-sec"><b>${esc(s.name)}</b>${s.note ? ` <span class="of-note">· ${esc(s.note)}</span>` : ''}<div class="of-txt">${esc(s.text)}</div></div>`).join('')}</details>` : '')
       + `<div class="of-meta">Written by the forecasters at NWS ${esc(afd.office || want)} · issued ${esc(when(afd.issued))} · <a href="${esc(afd.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Original text</a></div></div>`;
   }
-  if (!html) { box.style.display = 'none'; return; }
+  if (!html) { box.style.display = 'none'; box.dataset.sig = ''; return; }
+  // Same text as what's showing: leave it alone (no flicker, an opened discussion stays open)
+  const sig = want + '|' + (hwo && hwo.issued || '') + '|' + (afd && afd.issued || '');
+  if (box.dataset.sig === sig && box.style.display === 'block') return;
+  box.dataset.sig = sig;
   document.getElementById('fp-office-label').textContent = 'From Your Local Weather Service' + (afd && afd.office ? ' · ' + afd.office : '');
   body.innerHTML = html;
   box.style.display = 'block';
@@ -8339,7 +8348,7 @@ function renderForecast(data) {
   renderWinterOutlook(data.latitude ?? (_place && _place.lat), data.longitude ?? (_place && _place.lon));
 
   // ── Local NWS office text (US only) ─────────────────────────────────────────
-  renderOfficeText(data.office);
+  renderOfficeText(data.office, data.source);
 
   // ── 7-Day ─────────────────────────────────────────────────────────────────
   const dailyEl = document.getElementById('fp-daily');
