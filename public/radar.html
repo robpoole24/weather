@@ -164,6 +164,28 @@
   }
 
   #map { position:absolute; top:44px; left:0; right:0; bottom:0; }
+  /* ── Outlook bar: under the top toolbar while an outlook (SPC, winter, rainfall) is on ── */
+  #outlook-bar {
+    position:absolute; left:0; right:0; top:44px; z-index:999; display:none; align-items:center; gap:0.45rem;
+    padding:0.35rem 0.65rem; background:rgba(10,14,20,0.94); backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--accent); box-shadow:0 2px 10px rgba(0,0,0,0.35);
+    overflow-x:auto; white-space:nowrap; scrollbar-width:none; font-family:'Barlow Condensed',sans-serif;
+  }
+  #outlook-bar::-webkit-scrollbar { display:none; }
+  body.ol-pop-open #radar-legend { display:none !important; }
+  #outlook-bar .ol-title { font-weight:700; font-size:0.86rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); margin-right:0.35rem; flex-shrink:0; }
+  #outlook-bar .ol-group { display:inline-flex; gap:0.3rem; flex-shrink:0; }
+  #outlook-bar .ol-sep { width:1px; height:22px; background:var(--border); margin:0 0.2rem; flex-shrink:0; }
+  #outlook-bar .ol-pill { font-family:inherit; font-weight:700; font-size:0.74rem; letter-spacing:0.06em; text-transform:uppercase; color:#cfe3f5;
+    background:rgba(255,255,255,0.05); border:1px solid var(--border); border-radius:999px; padding:0.28rem 0.75rem; cursor:pointer; flex-shrink:0; }
+  #outlook-bar .ol-pill:hover { border-color:var(--accent); color:#fff; }
+  #outlook-bar .ol-pill.on { background:var(--accent); border-color:var(--accent); color:#04121a; }
+  #outlook-bar .ol-valid { font-size:0.72rem; color:var(--muted); letter-spacing:0.03em; margin-left:0.3rem; flex-shrink:0; }
+  #outlook-bar .ol-close { margin-left:auto; flex-shrink:0; background:transparent; border:1px solid var(--border); color:var(--muted); border-radius:6px;
+    width:30px; height:28px; font-size:0.95rem; cursor:pointer; line-height:1; }
+  #outlook-bar .ol-close:hover { color:#fff; border-color:var(--accent); }
+  @media (max-width: 767px) { #outlook-bar .ol-pill { padding:0.42rem 0.8rem; font-size:0.78rem; } #outlook-bar .ol-close { width:36px; height:34px; } }
+
   /* Crosshair cursor while CC is active — signals that clicking the map
      jumps the CC layer to the nearest station, since there's no other
      visual affordance for this on a plain Leaflet tile layer. */
@@ -948,14 +970,6 @@
     </div>
   </div>
   <div class="tb-div"></div>
-
-  <!-- SPC Day selector — shown when SPC is active -->
-  <div id="spc-day-bar" style="display:none;align-items:center;gap:0.3rem;">
-    <button class="tb-btn view-on" id="spc-d1" onclick="setSPCDay(1)">Day 1</button>
-    <button class="tb-btn"         id="spc-d2" onclick="setSPCDay(2)">Day 2</button>
-    <button class="tb-btn"         id="spc-d3" onclick="setSPCDay(3)">Day 3</button>
-  </div>
-  <div id="spc-day-divider" class="tb-div" style="display:none;"></div>
 
   <!-- Radar mode: Past vs Forecast -->
   <div id="mode-bar" style="display:flex;align-items:center;gap:0.3rem;">
@@ -2178,88 +2192,343 @@ const SPC_DN = {
 // Day -> NOAA MapServer layer ID
 const SPC_LAYER_IDS = { 1: 1, 2: 9, 3: 17 };
 
-let spcVisible = false;
-let spcDay = 1;
-let spcLayer = L.layerGroup();
+let spcVisible = false;   // legacy flag; SPC now runs through the Outlooks module below
 
-function toggleSPC() {
-  spcVisible = !spcVisible;
-  document.getElementById('btn-spc').className = 'tb-btn' + (spcVisible ? ' on' : '');
-  document.getElementById('spc-legend').style.display = spcVisible ? 'block' : 'none';
-  document.getElementById('spc-day-bar').style.display = spcVisible ? 'flex' : 'none';
-  document.getElementById('spc-day-divider').style.display = spcVisible ? 'block' : 'none';
-  if (spcVisible) { map.addLayer(spcLayer); loadSPC(); }
-  else map.removeLayer(spcLayer);
+// ═══ OUTLOOKS: SPC severe, Winter Storm Severity, Heavy Snow, Icing, Excessive Rainfall ═══
+// One outlook at a time. Its controls live in a bar under the top toolbar (title, Day pills,
+// options, ✕). Shapes come straight from NOAA's map services as GeoJSON and are drawn with
+// our own solid colors (NOAA's ready-made images are pale gray for winter and vanish on the
+// map). Tapping an area shows everything the outlook says about it.
+const OL_UI_KEY = 'wtv-outlook-ui';
+let olUI = { spcDay: '1', spcHaz: 'cat', wssiDay: '1', wssiComp: 'overall', snowDay: '1', snowIn: '4', iceDay: '1', eroDay: '1' };
+try { Object.assign(olUI, JSON.parse(localStorage.getItem(OL_UI_KEY) || '{}')); } catch (_) {}
+const _olSave = () => { try { localStorage.setItem(OL_UI_KEY, JSON.stringify(olUI)); } catch (_) {} };
+const OL_NOAA = 'https://mapservices.weather.noaa.gov';
+const OL_SPC = 'vector/rest/services/outlooks/SPC_wx_outlks';
+const OL_WSSI = 'vector/rest/services/outlooks/wpc_wssi';
+const OL_PROB = 'vector/rest/services/precip/wpc_prob_winter_precip';
+const OL_ERO = 'vector/rest/services/hazards/wpc_precip_hazards';
+const SPC_CAT_TEXT = {
+  TSTM: 'Thunderstorms possible, but severe storms aren\'t expected. Lightning, gusty winds and heavy rain can still occur.',
+  MRGL: 'Isolated severe storms possible: limited in how long they last, how many there are, or how strong they get.',
+  SLGT: 'Scattered severe storms possible: mostly short-lived and not widespread, though a few intense storms can occur.',
+  ENH: 'Numerous severe storms possible: more persistent and widespread, with a few intense storms.',
+  MDT: 'Widespread severe storms likely: long-lived, widespread and intense.',
+  HIGH: 'Widespread severe storms expected: long-lived, very widespread and particularly intense.',
+};
+const WSSI_TEXT = {
+  'WINTER WEATHER AREA': ['Winter weather', '#7fb8e8', 'Expect winter weather. Stay alert and use caution while traveling.'],
+  MINOR: ['Minor', '#ffe14d', 'Expect a few inconveniences to normal activities. Use caution while driving.'],
+  MODERATE: ['Moderate', '#ff9933', 'Expect disruptions to daily life. Hazardous driving; use extra caution. Some closures and disruptions to infrastructure may occur.'],
+  MAJOR: ['Major', '#ff3333', 'Expect considerable disruptions to daily life. Dangerous or impossible driving; avoid travel if possible. Widespread closures and disruptions likely.'],
+  EXTREME: ['Extreme', '#d633ff', 'Expect substantial disruptions to daily life. Extremely dangerous or impossible driving; travel is not advised. Extensive closures and disruptions; life-saving actions may be needed.'],
+};
+const WSSI_RANK = { 'WINTER WEATHER AREA': 1, MINOR: 2, MODERATE: 3, MAJOR: 4, EXTREME: 5 };
+const WSSI_COMP = { overall: ['Overall', [1, 2, 3, 4]], snow: ['Snow amount', [6, 7, 8, 9]], load: ['Snow load', [11, 12, 13, 14]], ice: ['Ice', [16, 17, 18, 19]], blow: ['Blowing snow', [24, 25, 26, 27]] };
+const PROB_BAND = { 1: ['10–39%', '#9cc9ff'], 2: ['40–69%', '#2f7bff'], 3: ['70%+', '#8b2cff'] };
+const ICE_BAND = { 1: ['10–39%', '#ffb3de'], 2: ['40–69%', '#ff4fa8'], 3: ['70%+', '#b0005e'] };
+const ERO_CAT = { 1: ['Marginal', '#5fd35f', 'At least a 5% chance of rain heavy enough to cause flash flooding within 25 miles. Localized and mostly brief flooding.'],
+  2: ['Slight', '#ffd84d', 'At least a 15% chance. Scattered flash flooding possible, mostly in urban areas, low spots and small streams.'],
+  3: ['Moderate', '#ff4040', 'At least a 40% chance. Numerous flash floods possible; dangerous, life-threatening flooding can occur.'],
+  4: ['High', '#ff3dff', 'At least a 70% chance. Widespread severe flash flooding expected; dangerous to life and property.'] };
+const _olDayPills = (key, days) => days.map(([v, l]) => [key, v, l]);
+const OUTLOOKS = {
+  'spc': {
+    title: 'SPC Severe Outlook', ico: '🗺',
+    days: () => _olDayPills('spcDay', [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']]),
+    opts: () => olUI.spcDay === '3'
+      ? [['spcHaz', 'cat', 'Categorical'], ['spcHaz', 'any', 'Any severe']]
+      : [['spcHaz', 'cat', 'Categorical'], ['spcHaz', 'tor', 'Tornado'], ['spcHaz', 'hail', 'Hail'], ['spcHaz', 'wind', 'Wind']],
+    layers: () => {
+      const d = olUI.spcDay, h = olUI.spcHaz;
+      if (d === '3') return h === 'any' ? { rest: OL_SPC, main: 19, hatch: 18 } : { rest: OL_SPC, main: 17 };
+      const b = d === '2' ? 8 : 0;
+      if (h === 'cat') return { rest: OL_SPC, main: b + 1 };
+      const id = b + ({ tor: 3, hail: 5, wind: 7 }[h] || 3);
+      return { rest: OL_SPC, main: id, hatch: id - 1 };
+    },
+    fixUI: () => { if (olUI.spcDay === '3' && !['cat', 'any'].includes(olUI.spcHaz)) olUI.spcHaz = 'any'; if (olUI.spcDay !== '3' && olUI.spcHaz === 'any') olUI.spcHaz = 'tor'; },
+    rank: (p) => Number(p.dn) || 0,
+    style: (p) => ({ color: p.stroke || '#666', fillColor: p.fill || '#999', weight: 2, fillOpacity: 0.45, opacity: 1 }),
+    label: (p) => p.label2 || p.label || '',
+    swatch: (p) => p.fill || '#999',
+    popup: (p, hatched) => _olSpcPopup(p, hatched),
+    credit: 'NOAA/NWS Storm Prediction Center',
+  },
+  'wssi': {
+    title: 'Winter Storm Severity', ico: '❄️',
+    days: () => _olDayPills('wssiDay', [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3'], ['all', 'Days 1–3']]),
+    opts: () => Object.entries(WSSI_COMP).map(([k, v]) => ['wssiComp', k, v[0]]),
+    layers: () => { const ids = (WSSI_COMP[olUI.wssiComp] || WSSI_COMP.overall)[1]; return { rest: OL_WSSI, main: ids[{ 1: 0, 2: 1, 3: 2, all: 3 }[olUI.wssiDay] ?? 0] }; },
+    rank: (p) => WSSI_RANK[String(p.impact || '').toUpperCase()] || 0,
+    style: (p) => { const t = WSSI_TEXT[String(p.impact || '').toUpperCase()]; const c = t ? t[1] : '#aaa'; return { color: c, fillColor: c, weight: 2, fillOpacity: 0.42, opacity: 1 }; },
+    label: (p) => { const t = WSSI_TEXT[String(p.impact || '').toUpperCase()]; return t ? t[0] + (t[0] === 'Winter weather' ? '' : ' impacts') : p.impact; },
+    swatch: (p) => (WSSI_TEXT[String(p.impact || '').toUpperCase()] || [0, '#aaa'])[1],
+    popup: (p) => _olWssiPopup(p),
+    credit: 'NOAA/NWS Weather Prediction Center · Winter Storm Severity Index',
+  },
+  'snow-prob': {
+    title: 'Chance of Heavy Snow', ico: '🌨',
+    days: () => _olDayPills('snowDay', [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']]),
+    opts: () => [['snowIn', '4', '4″+'], ['snowIn', '8', '8″+'], ['snowIn', '12', '12″+']],
+    layers: () => ({ rest: OL_PROB, main: (Number(olUI.snowDay) - 1) * 5 + ({ 4: 1, 8: 2, 12: 3 }[olUI.snowIn] || 1) }),
+    rank: (p) => Number(p.dn) || 0,
+    style: (p) => { const c = (PROB_BAND[p.dn] || [0, '#9cc9ff'])[1]; return { color: c, fillColor: c, weight: 2, fillOpacity: 0.45, opacity: 1 }; },
+    label: (p) => `${(PROB_BAND[p.dn] || [p.outlook])[0]} chance of ${olUI.snowIn}″+`,
+    swatch: (p) => (PROB_BAND[p.dn] || [0, '#9cc9ff'])[1],
+    popup: (p) => _olProbPopup(p, 'snow'),
+    credit: 'NOAA/NWS Weather Prediction Center',
+  },
+  'ice-prob': {
+    title: 'Chance of Icing', ico: '🧊',
+    days: () => _olDayPills('iceDay', [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']]),
+    opts: () => [],
+    layers: () => ({ rest: OL_PROB, main: (Number(olUI.iceDay) - 1) * 5 + 4 }),
+    rank: (p) => Number(p.dn) || 0,
+    style: (p) => { const c = (ICE_BAND[p.dn] || [0, '#ffb3de'])[1]; return { color: c, fillColor: c, weight: 2, fillOpacity: 0.45, opacity: 1 }; },
+    label: (p) => `${(ICE_BAND[p.dn] || [p.outlook])[0]} chance of ¼″+ ice`,
+    swatch: (p) => (ICE_BAND[p.dn] || [0, '#ffb3de'])[1],
+    popup: (p) => _olProbPopup(p, 'ice'),
+    credit: 'NOAA/NWS Weather Prediction Center',
+  },
+  'ero': {
+    title: 'Excessive Rainfall Outlook', ico: '🌧',
+    days: () => _olDayPills('eroDay', [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3'], ['4', 'Day 4'], ['5', 'Day 5']]),
+    opts: () => [],
+    layers: () => ({ rest: OL_ERO, main: Number(olUI.eroDay) - 1 }),
+    rank: (p) => Number(p.dn) || 0,
+    style: (p) => { const c = (ERO_CAT[p.dn] || [0, '#5fd35f'])[1]; return { color: c, fillColor: c, weight: 2, fillOpacity: 0.42, opacity: 1 }; },
+    label: (p) => (ERO_CAT[p.dn] || [p.outlook])[0] + ' risk',
+    swatch: (p) => (ERO_CAT[p.dn] || [0, '#5fd35f'])[1],
+    popup: (p) => _olEroPopup(p),
+    credit: 'NOAA/NWS Weather Prediction Center',
+  },
+};
+
+// ── time helpers ──
+function _olTime(v) {
+  if (v == null || v === '') return null;
+  let d = null; const s = String(v);
+  if (/^\d{12}$/.test(s)) d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12)));
+  else if (/^\d{4}-\d\d-\d\d \d\d:\d\d/.test(s)) d = new Date(s.replace(' ', 'T') + 'Z');
+  else if (/^\d{4}-\d\d-\d\d \d{4}Z$/.test(s)) d = new Date(s.slice(0, 10) + 'T' + s.slice(11, 13) + ':' + s.slice(13, 15) + ':00Z');
+  else if (/^\d\dZ \d\d\/\d\d\/\d\d$/.test(s)) { const [h, md] = s.split('Z '); const [m, dd, yy] = md.split('/'); d = new Date(Date.UTC(2000 + +yy, +m - 1, +dd, +h)); }
+  else if (/^\d{10,13}$/.test(s)) d = new Date(+s);
+  return d && !isNaN(d) ? d : null;
 }
+const _olFmt = (d) => d ? d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+function _olValid(a, b) { const x = _olTime(a), y = _olTime(b); return x && y ? `${_olFmt(x)} – ${_olFmt(y)}` : ''; }
+function _olWssiValid(p) { const vt = String(p.valid_time || ''); const m = vt.split(' - '); return m.length === 2 ? _olValid(m[0], m[1]) : vt; }
+const _olEsc = (x) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const _olBox = (title, color, body, foot) => `<div class="alert-popup ol-pop" style="max-width:100%;overflow-wrap:anywhere"><div class="ev" style="color:${color}">${title}</div>${body}<div class="exp">${foot}</div></div>`;
+const _olP = (t, extra) => `<div style="margin-top:5px;font-size:0.78rem;line-height:1.45;color:#c8ddf0;${extra || ''}">${t}</div>`;
+const _olMeta = (rows) => `<div style="margin-top:6px;font-size:0.7rem;color:#9fb3c8;line-height:1.5">${rows.filter(Boolean).join('<br>')}</div>`;
 
-function setSPCDay(day) {
-  spcDay = day;
-  [1,2,3].forEach(d => {
-    document.getElementById('spc-d' + d).className = 'tb-btn' + (d === day ? ' view-on' : '');
-  });
-  spcLayer.clearLayers();
-  loadSPC();
+// ── popups ──
+const _spcTextCache = {};
+function _olSpcPopup(p, hatched) {
+  const day = olUI.spcDay, isCat = olUI.spcHaz === 'cat';
+  const lab = String(p.label || '').toUpperCase();
+  let body = '';
+  if (isCat) body += _olP(SPC_CAT_TEXT[lab] || '');
+  else {
+    const pct = Math.round(Number(p.label) * 100);
+    const what = ({ tor: 'a tornado', hail: 'hail 1″ or larger', wind: 'wind gusts of 58 mph or more', any: 'any severe weather (tornado, 1″+ hail or 58 mph+ wind)' })[olUI.spcHaz];
+    body += _olP(`A <b>${pct}% chance</b> of ${what} within 25 miles of any point in this area.`);
+  }
+  if (hatched) body += _olP('<b>Hatched area:</b> if storms develop, significant severe weather is possible here (for example EF2+ tornadoes, 2″+ hail or 75 mph+ gusts).', 'color:#fde68a');
+  body += _olMeta([`Valid ${_olValid(p.valid, p.expire)}`, _olTime(p.issue) ? `Issued ${_olFmt(_olTime(p.issue))}` : '']);
+  body += `<div class="ol-spc-text" data-day="${day}" style="margin-top:8px;font-size:0.75rem;color:#9fb3c8">Loading the forecasters' discussion…</div>`;
+  return _olBox(_olEsc(p.label2 || p.label), p.fill || '#fff', body, 'NOAA/NWS Storm Prediction Center · Norman, OK');
 }
-
-async function loadSPC() {
-  if (!spcVisible) return;
-  const layerId = SPC_LAYER_IDS[spcDay];
-  document.getElementById('alerts-status').textContent = `Loading SPC Day ${spcDay} outlook...`;
+async function _olFillSpcText(el) {
+  const day = el.dataset.day;
   try {
-    const res = await fetch(
-      `https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer/${layerId}/query?where=1%3D1&outFields=*&f=geojson`,
-      { headers:{ 'Accept':'application/json' } }
-    );
-    const data = await res.json();
-    spcLayer.clearLayers();
-
-    // Sort lower risk first so higher risk renders on top
-    const features = (data.features || []).sort((a,b) =>
-      (Number(a.properties?.dn) || 0) - (Number(b.properties?.dn) || 0)
-    );
-
-    features.forEach(feature => {
-      if (!feature.geometry) return;
-      const props = feature.properties || {};
-      const dn = Number(props.dn) || Number(props.DN) || 0;
-      const style = SPC_DN[dn] || SPC_DN[2];
-
-      const layer = L.geoJSON(feature, {
-        style:{
-          color: style.border,
-          fillColor: style.fill,
-          fillOpacity: style.opacity,
-          weight: 2.5,
-          opacity: 1,
-          dashArray: '6 4'
-        }
-      });
-
-      layer.bindPopup(`
-        <div class="alert-popup">
-          <div class="ev" style="color:${style.fill}">SPC Day ${spcDay} Outlook</div>
-          <div style="margin-top:4px;font-weight:600">${style.label}</div>
-          <div style="margin-top:4px;font-size:0.75rem;color:#7a9bb5">Storm Prediction Center · Norman, OK</div>
-          <div class="exp">Valid: ${props.valid || props.VALID || 'See SPC for details'}</div>
-        </div>
-      `);
-      layer.on('mouseover', function(e) {
-        this.setStyle({ fillOpacity: Math.min(style.opacity + 0.18, 0.72), weight:3 });
-        this.openPopup(e.latlng);
-      });
-      layer.on('mouseout', function() {
-        this.setStyle({ fillOpacity: style.opacity, weight:2.5 });
-      });
-      spcLayer.addLayer(layer);
-    });
-
-    const now = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    document.getElementById('alerts-status').textContent = `SPC Day ${spcDay} loaded · ${now}`;
-  } catch(e) {
-    console.error('[SPC]', e);
-    document.getElementById('alerts-status').textContent = 'SPC data unavailable';
+    if (!_spcTextCache[day] || Date.now() - _spcTextCache[day].ts > 10 * 60 * 1000) {
+      const j = await fetch('/api/spc/discussion?day=' + day).then(r => r.ok ? r.json() : Promise.reject());
+      _spcTextCache[day] = { j, ts: Date.now() };
+    }
+    const j = _spcTextCache[day].j;
+    const sent = (t) => t ? t.charAt(0) + t.slice(1).toLowerCase() : '';
+    el.innerHTML = '<div style="font-family:\'Barlow Condensed\',sans-serif;letter-spacing:0.06em;text-transform:uppercase;font-size:0.68rem;color:var(--muted);margin-bottom:2px">Forecaster summary</div>'
+      + (j.headline ? `<div style="font-weight:600;color:#e2e8f0">${_olEsc(sent(j.headline))}.</div>` : '')
+      + (j.summary ? `<div style="margin-top:4px;color:#c8ddf0;line-height:1.45">${_olEsc(j.summary)}</div>` : '')
+      + ((j.sections || []).length ? `<details style="margin-top:5px"><summary style="cursor:pointer;color:var(--accent)">Read the full discussion</summary>${j.sections.map(s => `<div style="margin-top:6px"><b style="color:#e2e8f0">${_olEsc(s.name)}</b><div style="white-space:pre-line;line-height:1.45;color:#c8ddf0">${_olEsc(s.text)}</div></div>`).join('')}</details>` : '')
+      + `<div style="margin-top:5px"><a href="${_olEsc(j.url)}" target="_blank" rel="noopener" style="color:var(--accent)">SPC Day ${day} outlook page →</a></div>`;
+  } catch (_) {
+    el.innerHTML = `<a href="https://www.spc.noaa.gov/products/outlook/day${day}otlk.html" target="_blank" rel="noopener" style="color:var(--accent)">Read SPC's Day ${day} discussion →</a>`;
   }
 }
+function _olWssiPopup(p) {
+  const t = WSSI_TEXT[String(p.impact || '').toUpperCase()] || [p.impact, '#fff', ''];
+  const comp = (WSSI_COMP[olUI.wssiComp] || WSSI_COMP.overall)[0];
+  const body = _olP(t[2]) + _olMeta([`Impact type: ${comp}`, `Valid ${_olWssiValid(p)}`, _olTime(p.issue_time) ? `Issued ${_olFmt(_olTime(p.issue_time))}` : ''])
+    + _olP('<a href="https://www.wpc.ncep.noaa.gov/wwd/wssi/wssi.php" target="_blank" rel="noopener" style="color:var(--accent)">WPC Winter Storm Severity Index →</a>');
+  return _olBox(t[0] + (t[0] === 'Winter weather' ? '' : ' impacts'), t[1], body, 'NOAA/NWS Weather Prediction Center');
+}
+function _olProbPopup(p, kind) {
+  const band = (kind === 'ice' ? ICE_BAND : PROB_BAND)[p.dn] || [p.outlook, '#fff'];
+  const amt = kind === 'ice' ? '¼″ or more of ice from freezing rain' : `${olUI.snowIn}″ or more of snow`;
+  const why = kind === 'ice' ? 'A quarter inch of ice brings down tree limbs and power lines and glazes roads.' : (Number(p.dn) >= 2 ? 'A real possibility worth planning around.' : 'Possible, but less likely than not.');
+  const body = _olP(`A <b>${band[0]} chance</b> of ${amt} during this 24-hour period.`) + _olP(why)
+    + _olMeta([`Valid ${_olValid(p.start_time, p.end_time)}`, _olTime(p.issue_time) ? `Issued ${_olFmt(_olTime(p.issue_time))}` : ''])
+    + _olP('<a href="https://www.wpc.ncep.noaa.gov/wwd/winter_wx.shtml" target="_blank" rel="noopener" style="color:var(--accent)">WPC winter weather forecasts →</a>');
+  return _olBox(`${band[0]} chance of ${kind === 'ice' ? '¼″+ ice' : olUI.snowIn + '″+ snow'}`, band[1], body, 'NOAA/NWS Weather Prediction Center');
+}
+function _olEroPopup(p) {
+  const c = ERO_CAT[p.dn] || [p.outlook, '#fff', ''];
+  const body = _olP(c[2]) + _olMeta([`Valid ${_olValid(p.start_time, p.end_time)}`, _olTime(p.issue_time) ? `Issued ${_olFmt(_olTime(p.issue_time))}` : ''])
+    + _olP('<a href="https://www.wpc.ncep.noaa.gov/qpf/excessive_rainfall_outlook_ero.php" target="_blank" rel="noopener" style="color:var(--accent)">WPC Excessive Rainfall Outlook →</a>');
+  return _olBox(`${c[0]} risk of excessive rainfall`, c[1], body, 'NOAA/NWS Weather Prediction Center');
+}
+
+// ── point-in-polygon for "is this spot hatched?" ──
+function _olInRing(x, y, ring) { let inside = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const [xi, yi] = ring[i], [xj, yj] = ring[j]; if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside; } return inside; }
+function _olInGeom(x, y, g) {
+  if (!g) return false;
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+  return polys.some(rings => rings.length && _olInRing(x, y, rings[0]) && !rings.slice(1).some(h => _olInRing(x, y, h)));
+}
+
+// ── data ──
+const _olData = {};
+async function _olFetch(rest, id) {
+  const k = rest + '/' + id, c = _olData[k];
+  if (c && Date.now() - c.ts < 10 * 60 * 1000) return c.fc;
+  const u = `${OL_NOAA}/${rest}/MapServer/${id}/query?where=1%3D1&outFields=*&outSR=4326&geometryPrecision=3&maxAllowableOffset=0.01&f=geojson`;
+  const fc = await fetch(u).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
+  if (fc.error) throw new Error(fc.error.message || 'NOAA error');
+  _olData[k] = { fc, ts: Date.now() };
+  return fc;
+}
+
+// ── drawing ──
+let _olActive = null, _olLayer = null, _olReq = 0, _olTimer = null, _olRenderer = null;
+function _olHatchRenderer() {
+  if (_olRenderer) return _olRenderer;
+  _olRenderer = L.svg({ padding: 0.5 });
+  _olRenderer.on('add', () => {
+    const svg = _olRenderer._container; if (!svg || svg.querySelector('#wtv-hatch')) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    const defs = document.createElementNS(ns, 'defs'), pat = document.createElementNS(ns, 'pattern'), path = document.createElementNS(ns, 'path');
+    pat.setAttribute('id', 'wtv-hatch'); pat.setAttribute('patternUnits', 'userSpaceOnUse'); pat.setAttribute('width', '10'); pat.setAttribute('height', '10');
+    path.setAttribute('d', 'M-2,2 l4,-4 M0,10 l10,-10 M8,12 l4,-4'); path.setAttribute('stroke', '#111'); path.setAttribute('stroke-width', '1.6');
+    pat.appendChild(path); defs.appendChild(pat); svg.insertBefore(defs, svg.firstChild);
+  });
+  return _olRenderer;
+}
+async function drawOutlook() {
+  const id = _olActive, cfg = OUTLOOKS[id]; if (!cfg) return;
+  if (cfg.fixUI) cfg.fixUI();
+  renderOutlookBar();
+  const req = ++_olReq, lyr = cfg.layers();
+  const legend = _seasonLegendBox('outlook');
+  if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title) + '<div class="leg-row" style="color:var(--muted)">Loading…</div>';
+  let main, hatch = null;
+  try {
+    [main, hatch] = await Promise.all([_olFetch(lyr.rest, lyr.main), lyr.hatch != null ? _olFetch(lyr.rest, lyr.hatch).catch(() => null) : null]);
+  } catch (e) {
+    if (req !== _olReq) return;
+    if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title) + _legNote('This outlook is unavailable right now. We\'ll try again shortly.');
+    const vb = document.getElementById('ol-valid'); if (vb) vb.textContent = 'Unavailable right now';
+    return;
+  }
+  if (req !== _olReq || id !== _olActive) return;
+  if (_olLayer) { map.removeLayer(_olLayer); _olLayer = null; }
+  _olLayer = L.layerGroup().addTo(map);
+  const feats = (main.features || []).filter(f => f.geometry).sort((a, b) => cfg.rank(a.properties || {}) - cfg.rank(b.properties || {}));
+  const hatchFeats = hatch ? (hatch.features || []).filter(f => f.geometry) : [];
+  L.geoJSON({ type: 'FeatureCollection', features: feats }, {
+    style: (f) => cfg.style(f.properties || {}),
+    onEachFeature: (f, layer) => {
+      layer.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        const p = f.properties || {};
+        const hatched = hatchFeats.some(h => _olInGeom(e.latlng.lng, e.latlng.lat, h.geometry));
+        L.popup({ maxWidth: Math.min(340, window.innerWidth - 180), minWidth: Math.min(220, window.innerWidth - 180), autoPanPaddingTopLeft: [window.innerWidth < 600 ? 135 : 60, _olPadTop()], autoPanPaddingBottomRight: [12, 20], className: 'ol-popup' }).setLatLng(e.latlng).setContent(cfg.popup(p, hatched)).openOn(map);
+        // The forecasters' summary loads after the popup opens and makes it taller: re-fit it then
+        const t = document.querySelector('.leaflet-popup .ol-spc-text'); if (t) _olFillSpcText(t).then(() => { const pp = map._popup, c = pp && pp.getElement() && pp.getElement().querySelector('.leaflet-popup-content'); if (c) pp.setContent(c.innerHTML); });
+      });
+    },
+  }).addTo(_olLayer);
+  if (hatchFeats.length) L.geoJSON({ type: 'FeatureCollection', features: hatchFeats }, {
+    renderer: _olHatchRenderer(), interactive: false,
+    style: () => ({ color: '#111', weight: 1.5, dashArray: '4 3', fillColor: 'url(#wtv-hatch)', fillOpacity: 1, opacity: 0.9 }),
+  }).addTo(_olLayer);
+  const seen = new Map();
+  for (const f of feats) { const p = f.properties || {}; const l = cfg.label(p); if (l && !seen.has(l)) seen.set(l, cfg.swatch(p)); }
+  const p0 = (feats[0] || {}).properties || {};
+  const valid = p0.valid ? _olValid(p0.valid, p0.expire) : p0.start_time ? _olValid(p0.start_time, p0.end_time) : p0.valid_time ? _olWssiValid(p0) : '';
+  if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title)
+    + [...seen].map(([l, c]) => `<div class="leg-row"><div class="leg-sw" style="background:${c}"></div>${_olEsc(l)}</div>`).join('')
+    + (hatchFeats.length ? `<div class="leg-row"><div class="leg-sw" style="background:repeating-linear-gradient(45deg,#111 0 2px,#cbd5e1 2px 5px)"></div>Significant severe possible</div>` : '')
+    + (feats.length ? '' : _legNote('✓ Nothing outlooked for this day.'))
+    + (valid ? _legNote('Valid ' + valid) : '') + _legNote('Tap an area for details · ' + cfg.credit);
+  const vb = document.getElementById('ol-valid'); if (vb) vb.textContent = valid ? 'Valid ' + valid : (feats.length ? '' : 'Nothing outlooked for this day');
+}
+
+// ── the bar ──
+function _olBarTop() {
+  const bar = document.getElementById('outlook-bar'), tb = document.getElementById('radar-toolbar');
+  if (bar && tb) bar.style.top = Math.round(tb.getBoundingClientRect().height) + 'px';
+  if (typeof layoutRadarChrome === 'function') layoutRadarChrome();
+}
+// Clearance below the bar, measured from the top of the map (popups pan to stay below it)
+function _olPadTop() {
+  const b = document.getElementById('outlook-bar'), m = document.getElementById('map');
+  const top = m ? m.getBoundingClientRect().top : 0;
+  return b && b.style.display !== 'none' ? Math.round(b.getBoundingClientRect().bottom - top) + 12 : 20;
+}
+function renderOutlookBar() {
+  let bar = document.getElementById('outlook-bar');
+  if (!_olActive) { if (bar) bar.style.display = 'none'; if (typeof layoutRadarChrome === 'function') layoutRadarChrome(); return; }
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'outlook-bar'; bar.setAttribute('role', 'toolbar');
+    document.body.appendChild(bar);
+    try { new ResizeObserver(_olBarTop).observe(document.getElementById('radar-toolbar')); } catch (_) {}
+    window.addEventListener('resize', _olBarTop);
+  }
+  const cfg = OUTLOOKS[_olActive];
+  bar.setAttribute('aria-label', cfg.title + ' options');
+  const pill = ([key, v, l]) => `<button type="button" class="ol-pill${String(olUI[key]) === String(v) ? ' on' : ''}" aria-pressed="${String(olUI[key]) === String(v)}" onclick="outlookPick('${key}','${v}')">${l}</button>`;
+  const opts = cfg.opts();
+  bar.innerHTML = `<span class="ol-title">${cfg.ico} ${cfg.title}</span>`
+    + `<span class="ol-group">${cfg.days().map(pill).join('')}</span>`
+    + (opts.length ? `<span class="ol-sep"></span><span class="ol-group">${opts.map(pill).join('')}</span>` : '')
+    + `<span id="ol-valid" class="ol-valid"></span>`
+    + `<button type="button" class="ol-close" aria-label="Close" title="Turn off ${cfg.title}" onclick="setOutlook('${_olActive}', false)">✕</button>`;
+  bar.style.display = 'flex';
+  _olBarTop();
+}
+// Phones: the legend steps aside while an outlook popup is open, so it doesn't cover it
+map.on('popupopen', (e) => { if (window.innerWidth < 768 && e.popup.options.className === 'ol-popup') document.body.classList.add('ol-pop-open'); });
+map.on('popupclose', () => document.body.classList.remove('ol-pop-open'));
+function outlookPick(key, val) { olUI[key] = val; _olSave(); map.closePopup(); drawOutlook(); }
+
+// ── on / off (one at a time) ──
+function setOutlook(id, on) {
+  if (!OUTLOOKS[id]) return;
+  if (on) {
+    Object.keys(OUTLOOKS).forEach(o => { if (o !== id) overlayState[o] = false; });
+    overlayState[id] = true; _olActive = id;
+    clearInterval(_olTimer); _olTimer = setInterval(() => { if (_olActive) drawOutlook(); }, 15 * 60 * 1000);
+    map.closePopup();
+    drawOutlook();
+  } else {
+    overlayState[id] = false;
+    if (_olActive === id) {
+      _olActive = null; ++_olReq; clearInterval(_olTimer);
+      if (_olLayer) { map.removeLayer(_olLayer); _olLayer = null; }
+      map.closePopup();
+      document.getElementById('sl-outlook')?.remove(); _seasonLegendVisibility();
+      renderOutlookBar();
+    }
+  }
+  if (typeof renderPanel === 'function') renderPanel();
+}
+// Old toolbar entry points, kept so nothing else breaks
+function toggleSPC() { setOutlook('spc', !overlayState.spc); }
+function setSPCDay(day) { outlookPick('spcDay', String(day)); }
 
 // ── LIVE NEAR THIS WARNING ──────────────────────────────────────────────────
 // Shows which WeatherTV chasers are streaming inside (or within 10 mi of) an
@@ -2570,7 +2839,7 @@ async function loadMCD() {
 }
 
 // Refresh SPC and MCD every 10 minutes
-setInterval(() => { if (spcVisible) loadSPC(); if (mcdVisible) loadMCD(); }, 600000);
+setInterval(() => { if (mcdVisible) loadMCD(); }, 600000);
 
 // ── ALERTS ───────────────────────────────────────────────────────────────────
 function toggleAlerts() {
@@ -4753,6 +5022,122 @@ async function startLSR(){
   } catch(e){ console.warn('[LSR]',e); }
 }
 function stopLSR(){ if (lsrLayer){ lsrLayer.clearLayers(); map.removeLayer(lsrLayer); lsrLayer=null; } }
+
+// ═══ Severe weather layers (data fetched and cached by our server: /api/severe/*) ═══
+const _sevEsc = (x) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const _sevTime = (t) => { const d = new Date(typeof t === 'number' ? t : String(t || '').replace(' ', 'T')); return isNaN(d) ? '' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+const _sevRow = (c, l) => `<div class="leg-row"><div class="leg-sw" style="background:${c}"></div>${l}</div>`;
+function _sevLegend(id, html) { const el = _seasonLegendBox(id); if (el) el.innerHTML = html; }
+function _sevLegendOff(id) { document.getElementById('sl-' + id)?.remove(); _seasonLegendVisibility(); }
+
+// ── Storm Threat (ProbSevere v3) ──
+let _psLayer = null, _psTimer = null;
+const PS_COLOR = (p) => p >= 70 ? '#ff2bd6' : p >= 50 ? '#ff3b30' : p >= 30 ? '#ff9500' : '#ffd60a';
+async function loadProbSevere() {
+  try {
+    const j = await fetch('/api/severe/probsevere').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
+    if (!_psLayer) return;
+    _psLayer.clearLayers();
+    const feats = (j.features || []).filter(f => (f.properties.sev || 0) >= 10);
+    L.geoJSON({ type: 'FeatureCollection', features: feats }, {
+      style: (f) => { const p = f.properties; const torny = (p.tor || 0) >= 20;
+        return { color: torny ? '#a855f7' : PS_COLOR(p.sev), weight: torny ? 4 : 2.5, fill: true, fillColor: PS_COLOR(p.sev), fillOpacity: 0.08 }; },
+      onEachFeature: (f, layer) => {
+        const p = f.properties;
+        const bar = (lbl, v, col) => `<div style="display:flex;align-items:center;gap:6px;margin-top:3px"><span style="width:62px;color:#9fb3c8">${lbl}</span><span style="flex:1;height:7px;background:#1e293b;border-radius:4px;overflow:hidden"><span style="display:block;height:100%;width:${Math.max(0, Math.min(100, v || 0))}%;background:${col}"></span></span><b style="width:34px;text-align:right">${v == null ? '—' : Math.round(v) + '%'}</b></div>`;
+        const spd = (p.me != null && p.ms != null) ? Math.round(Math.hypot(p.me, p.ms) * 2.237) : null;
+        const dir = (p.me != null && p.ms != null) ? ['N','NE','E','SE','S','SW','W','NW'][Math.round(((Math.atan2(p.me, p.ms) * 180 / Math.PI) + 360) % 360 / 45) % 8] : '';
+        layer.bindPopup(`<div class="alert-popup" style="min-width:220px"><div class="ev" style="color:${PS_COLOR(p.sev)}">Storm threat · next hour</div>
+          ${bar('Severe', p.sev, PS_COLOR(p.sev))}${bar('Tornado', p.tor, '#a855f7')}${bar('Hail', p.hail, '#22c55e')}${bar('Wind', p.wind, '#38bdf8')}
+          <div style="margin-top:6px;font-size:0.72rem;color:#c8ddf0">${p.mesh ? `Max hail estimate ${p.mesh.toFixed(1)}″ · ` : ''}${spd ? `moving ${dir} at ${spd} mph` : ''}${p.flash ? ` · ${Math.round(p.flash)} flashes/min` : ''}</div>
+          <div class="exp">NOAA/CIMSS ProbSevere · guidance, not a warning</div></div>`, { maxWidth: 300 });
+      },
+    }).addTo(_psLayer);
+    const t = j.validTime ? String(j.validTime).replace(/^(\d{4})(\d\d)(\d\d)_(\d\d)(\d\d).*$/, '$1-$2-$3T$4:$5:00Z') : null;
+    _sevLegend('probsevere', _legTitle('🧭 Storm threat · next hour') + _sevRow('#ffd60a', '10–29% chance of severe') + _sevRow('#ff9500', '30–49%') + _sevRow('#ff3b30', '50–69%') + _sevRow('#ff2bd6', '70%+')
+      + `<div class="leg-row"><div class="leg-sw" style="background:transparent;border:3px solid #a855f7"></div>Tornado chance 20%+</div>`
+      + _legNote(feats.length ? `${feats.length} storm${feats.length === 1 ? '' : 's'} rated · tap one for details` : '✓ No storms with a 10%+ severe chance right now.')
+      + _legNote('NOAA/CIMSS ProbSevere' + (t ? ' · ' + new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '')));
+  } catch (e) {
+    _sevLegend('probsevere', _legTitle('🧭 Storm threat') + _legNote('ProbSevere is unavailable right now. We\'ll keep trying.'));
+  }
+}
+function startProbSevere() {
+  if (!_psLayer) _psLayer = L.layerGroup().addTo(map);
+  loadProbSevere(); clearInterval(_psTimer); _psTimer = setInterval(loadProbSevere, 2 * 60 * 1000);
+}
+function stopProbSevere() { clearInterval(_psTimer); _psTimer = null; if (_psLayer) { map.removeLayer(_psLayer); _psLayer = null; } _sevLegendOff('probsevere'); }
+
+// ── Watch boxes (SPC, via IEM) ──
+let _watchLayer = null, _watchTimer = null;
+async function loadWatches() {
+  try {
+    const j = await fetch('/api/severe/watches').then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
+    if (!_watchLayer) return;
+    _watchLayer.clearLayers();
+    const feats = j.features || [];
+    L.geoJSON({ type: 'FeatureCollection', features: feats }, {
+      style: (f) => { const tor = f.properties.type === 'TOR';
+        return { color: tor ? '#ff2020' : '#ffd400', weight: f.properties.pds ? 5 : 3, dashArray: f.properties.pds ? null : null, fill: true, fillOpacity: 0.06 }; },
+      onEachFeature: (f, layer) => {
+        const p = f.properties, tor = p.type === 'TOR';
+        const name = (p.pds ? 'PDS ' : '') + (tor ? 'Tornado Watch' : 'Severe Thunderstorm Watch') + (p.number ? ' #' + p.number : '');
+        layer.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${tor ? '#ff4d4d' : '#ffd400'}">${_sevEsc(name)}</div>
+          ${p.pds ? '<div style="margin-top:4px;font-weight:700;color:#ff4d4d">Particularly Dangerous Situation</div>' : ''}
+          <div style="margin-top:4px;font-size:0.75rem;color:#c8ddf0">Until ${_sevEsc(_sevTime(p.expire))}${p.hail ? ` · hail up to ${p.hail}″` : ''}${p.gust ? ` · gusts to ${Math.round(p.gust * 1.151)} mph` : ''}</div>
+          ${p.url ? `<div style="margin-top:6px"><a href="${_sevEsc(p.url)}" target="_blank" rel="noopener" style="color:var(--accent)">SPC watch details →</a></div>` : ''}</div>`, { maxWidth: 280 });
+      },
+    }).addTo(_watchLayer);
+    const nTor = feats.filter(f => f.properties.type === 'TOR').length, nSvr = feats.length - nTor;
+    _sevLegend('watches', _legTitle('🟥 Watch boxes') + `<div class="leg-row"><div class="leg-sw" style="background:transparent;border:3px solid #ff2020"></div>Tornado watch</div>`
+      + `<div class="leg-row"><div class="leg-sw" style="background:transparent;border:3px solid #ffd400"></div>Severe thunderstorm watch</div>`
+      + _legNote('Thick outline = PDS (Particularly Dangerous Situation)')
+      + _legNote(feats.length ? `${nTor} tornado · ${nSvr} severe thunderstorm watch${nSvr === 1 ? '' : 'es'} in effect` : '✓ No watches in effect right now.') + _legNote('NOAA/NWS Storm Prediction Center'));
+  } catch (e) {
+    _sevLegend('watches', _legTitle('🟥 Watch boxes') + _legNote('Watch boxes are unavailable right now. We\'ll keep trying.'));
+  }
+}
+function startWatches() {
+  if (!_watchLayer) _watchLayer = L.layerGroup().addTo(map);
+  loadWatches(); clearInterval(_watchTimer); _watchTimer = setInterval(loadWatches, 2 * 60 * 1000);
+}
+function stopWatches() { clearInterval(_watchTimer); _watchTimer = null; if (_watchLayer) { map.removeLayer(_watchLayer); _watchLayer = null; } _sevLegendOff('watches'); }
+
+// ── Tornado survey paths (NWS Damage Assessment Toolkit) ──
+let _surveyLayer = null, _surveyTimer = null;
+const EF_COLOR = ['#60a5fa', '#22c55e', '#facc15', '#f97316', '#ef4444', '#d946ef'];
+async function loadSurveys() {
+  const days = winterUI.surveyDays || '7';
+  try {
+    const j = await fetch('/api/severe/surveys?days=' + days).then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)));
+    if (!_surveyLayer) return;
+    _surveyLayer.clearLayers();
+    const feats = (j.features || []).filter(f => !days || Date.now() - (f.properties.stormdate || 0) <= Number(days) * 86400000);
+    const efn = (p) => { const n = Number.isFinite(Number(p.efnum)) ? Number(p.efnum) : parseInt(String(p.efscale || '').replace(/\D/g, ''), 10); return Number.isFinite(n) && n >= 0 && n <= 5 ? n : null; };
+    L.geoJSON({ type: 'FeatureCollection', features: feats }, {
+      style: (f) => { const n = efn(f.properties); return { color: n == null ? '#94a3b8' : EF_COLOR[n], weight: n == null ? 3 : 3 + n, opacity: 0.9 }; },
+      onEachFeature: (f, layer) => {
+        const p = f.properties, n = efn(p);
+        layer.bindPopup(`<div class="alert-popup"><div class="ev" style="color:${n == null ? '#cbd5e1' : EF_COLOR[n]}">${_sevEsc(p.efscale || 'Unrated')} tornado</div>
+          <div style="margin-top:4px;font-size:0.75rem;color:#c8ddf0">${_sevEsc(_sevTime(p.starttime || p.stormdate))}${p.wfo ? ' · NWS ' + _sevEsc(p.wfo) : ''}</div>
+          <div style="margin-top:4px;font-size:0.75rem;color:#c8ddf0">${p.length ? `${Number(p.length).toFixed(1)} mi long` : ''}${p.width ? ` · ${Math.round(p.width)} yd wide` : ''}${p.maxwind ? ` · peak wind ${Math.round(p.maxwind)} mph` : ''}</div>
+          ${(p.injuries || p.fatalities) ? `<div style="margin-top:4px;font-size:0.75rem;color:#fca5a5">${p.fatalities ? p.fatalities + ' killed' : ''}${p.fatalities && p.injuries ? ' · ' : ''}${p.injuries ? p.injuries + ' injured' : ''}</div>` : ''}
+          ${p.comments ? `<div style="margin-top:6px;font-size:0.72rem;color:#9fb3c8">${_sevEsc(String(p.comments).slice(0, 400))}</div>` : ''}
+          <div class="exp">NWS Damage Assessment Toolkit · preliminary</div></div>`, { maxWidth: 300 });
+      },
+    }).addTo(_surveyLayer);
+    _sevLegend('surveys', _legTitle('📐 Tornado survey paths') + EF_COLOR.map((c, i) => _sevRow(c, 'EF' + i)).join('') + _sevRow('#94a3b8', 'Not yet rated')
+      + _legNote(feats.length ? `${feats.length} path${feats.length === 1 ? '' : 's'} in the last ${days === '1' ? '24 hours' : days + ' days'}` : `✓ No surveyed tornadoes in the last ${days === '1' ? '24 hours' : days + ' days'}.`)
+      + _legNote('NWS Damage Assessment Toolkit · preliminary'));
+  } catch (e) {
+    _sevLegend('surveys', _legTitle('📐 Tornado survey paths') + _legNote('Survey paths are unavailable right now. We\'ll keep trying.'));
+  }
+}
+function startSurveys() {
+  if (!_surveyLayer) _surveyLayer = L.layerGroup().addTo(map);
+  loadSurveys(); clearInterval(_surveyTimer); _surveyTimer = setInterval(loadSurveys, 15 * 60 * 1000);
+}
+function stopSurveys() { clearInterval(_surveyTimer); _surveyTimer = null; if (_surveyLayer) { map.removeLayer(_surveyLayer); _surveyLayer = null; } _sevLegendOff('surveys'); }
 
 // ── NOAA HMS Smoke Plumes ─────────────────────────────────────────────────────
 // Hazard Mapping System smoke polygon GeoJSON, published daily by NOAA/NESDIS.
@@ -7344,6 +7729,11 @@ const WTV_INFO = {
   'banner':        { t:'Warning Banner', w:'A scrolling banner that appears when your location is inside an active warning.', r:'It shows only when a warning covers where you are, along with what the warning is for.' },
   'spc':           { t:'SPC Outlooks', w:'The Storm Prediction Center\'s severe weather risk for the next 3 days.', r:'From low to high: Thunderstorm, Marginal (1), Slight (2), Enhanced (3), Moderate (4), High (5). Enhanced and above — have a plan.' },
   'live-near':     { t:'Live Near Warnings', w:'Storm chasers who are streaming live inside or near an active warning.', r:'Tap a red marker to watch their live view of the storm.' },
+  'probsevere':    { t:'Storm Threat (ProbSevere)', w:'A NOAA and University of Wisconsin model that rates every storm, every 2 minutes, on its chance of producing severe weather in the next hour. Tap a storm for its tornado, hail and wind chances.', r:'Outline color = chance of any severe weather: yellow 10–29%, orange 30–49%, red 50–69%, magenta 70%+. A thick purple outline means the tornado chance is 20% or more. It\'s guidance, not a warning — follow NWS warnings.' },
+  'watches':       { t:'Watch Boxes', w:'The areas where the Storm Prediction Center says conditions are favorable for tornadoes (red) or severe thunderstorms (yellow) for the next several hours.', r:'A watch means be ready; a warning means act now. "PDS" (Particularly Dangerous Situation) watches are rare and signal a major outbreak.' },
+  'rot-tracks':    { t:'Rotation Tracks', w:'Where radar saw strong rotation near the ground over the last 1 to 24 hours: the streak a tornado or a strongly rotating storm leaves behind.', r:'Long red-to-purple streaks often mark tornado paths, but not every track had a tornado on the ground. Survey paths confirm them later.' },
+  'hail-swaths':   { t:'Hail Swaths', w:'The largest hail size radar estimated at each spot over the last 1 to 24 hours.', r:'Yellow (1″) is quarter size and can dent cars; red (2″+) is hen-egg size and breaks windows. Radar estimates can run high or low.' },
+  'surveys':       { t:'Tornado Survey Paths', w:'Tornado paths mapped by National Weather Service survey teams after a storm, colored by EF rating.', r:'EF0–EF1 weak, EF2–EF3 strong, EF4–EF5 violent. Surveys are preliminary and can change; new paths appear as teams finish, often a day or two later.' },
   'lsr':           { t:'Storm Reports', w:'Confirmed reports of tornadoes, hail, wind damage and flooding from the last 3 hours.', r:'These are things that actually happened, reported by spotters and officials.' },
   'chasers':       { t:'Live Storm Chasers', w:'Positions of storm chasers and spotters sharing their location.', r:'Clusters of chasers usually mean that is where the strongest storm is.' },
   'lightning':     { t:'Lightning Strikes', w:'Lightning detected in the last 10 minutes.', r:'Newer strikes are brighter. If strikes are within about 10 miles of you, you are close enough to be struck.' },
@@ -8289,16 +8679,21 @@ const ALERT_ITEMS=[
   {id:'hazards-weather',ico:'⛈️',name:'   ↳ Weather-related only',sub:'Hide construction, crash and event closures',def:false},
 ];
 const CHASER_ITEMS=[
-  {id:'spc',       ico:'🗺', name:'SPC Outlooks',          sub:'Day 1 / 2 / 3',                   def:false},
+  {id:'spc',       ico:'🗺', name:'SPC Severe Outlook',    sub:'Day 1–3 · risk categories, tornado, hail & wind chances', def:false},
   {id:'live-near',  ico:'🔴', name:'Live Near Warnings',     sub:'Chasers streaming inside or near a warning', def:true},
   {id:'lsr',       ico:'📍', name:'Storm Reports',          sub:'Confirmed LSRs · 3h',             def:false},
   {id:'chasers',   ico:'🚗', name:'Live Storm Chasers',     sub:'Spotter Network · live',          def:false},
   {id:'lightning', ico:'⚡', name:'Lightning Strikes',      sub:'Blitzortung · live · last 10 min',def:false},
   {id:'storm-cells',ico:'🎯',name:'Storm Cell Vectors',     sub:'IEM · movement direction & speed',def:false},
+  {id:'probsevere', ico:'🧭', name:'Storm Threat (ProbSevere)', sub:'Each storm\'s chance of severe, tornado, hail & wind · next hour', def:false},
+  {id:'watches',    ico:'🟥', name:'Watch Boxes',            sub:'SPC tornado & severe thunderstorm watches', def:false},
+  {id:'rot-tracks', ico:'🌀', name:'Rotation Tracks',        sub:'Where storms rotated strongly · radar (MRMS) · last 1–24 hrs', def:false},
+  {id:'hail-swaths',ico:'🧊', name:'Hail Swaths',            sub:'Largest hail radar estimated · last 1–24 hrs', def:false},
+  {id:'surveys',    ico:'📐', name:'Tornado Survey Paths',   sub:'NWS damage surveys · EF ratings · last 7 days', def:false},
 ];
 const SURFACE_ITEMS=[
   {id:'fronts',   ico:'🌦', name:'WPC Surface Analysis',       sub:'Fronts · pressure centers · NowCOAST',def:false},
-  {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC ERO · Day 1 flood risk',          def:false},
+  {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC flash flood risk · Day 1–5',      def:false},
 ];
 const PRECIP_ITEMS=[
   {id:'qpe-1h',  ico:'💧', name:'1-Hour Rainfall (MRMS)',   sub:'Radar-estimated accumulation · past 1h', def:false},
@@ -8347,7 +8742,7 @@ const HODO_ITEMS=[
 const NOAA_MS = 'https://mapservices.weather.noaa.gov';
 const SEASONAL_ITEMS = [
   {id:'ptype',       ico:'🌨', name:'Rain / Snow / Ice Radar',  sub:'Rain green · snow blue · sleet & freezing rain pink · lower 48', def:false, season:'winter'},
-  {id:'wssi',        ico:'❄️', name:'Winter Storm Severity',    sub:'WPC impact index · Day 1–3',                                 def:false, season:'winter'},
+  {id:'wssi',        ico:'❄️', name:'Winter Storm Severity',    sub:'WPC impact index · Day 1–3 · how disruptive a storm will be',                                 def:false, season:'winter'},
   {id:'snow-prob',   ico:'🌨', name:'Chance of Heavy Snow',     sub:'WPC · 4″ / 8″ / 12″ or more · Day 1–3',                      def:false, season:'winter'},
   {id:'ice-prob',    ico:'🧊', name:'Chance of Icing',          sub:'WPC · ¼″ of ice or more · Day 1–3',                          def:false, season:'winter'},
   {id:'snow-depth',  ico:'⛄', name:'Snow on the Ground',       sub:'NOHRSC daily snow depth',                                    def:false, season:'winter'},
@@ -8429,17 +8824,16 @@ setTimeout(() => {
 }, 0);
 
 // Day / amount pickers shown under an active layer
-let winterUI = { wssiDay: 'all', snowIn: '4', snowDay: '1', iceDay: '1', foliageFrame: '' };
+let winterUI = { wssiDay: 'all', snowIn: '4', snowDay: '1', iceDay: '1', foliageFrame: '', spcHaz: 'tor', spcDay: '1', surveyDays: '7', rotWin: '120', hailWin: '120' };
 try { Object.assign(winterUI, JSON.parse(localStorage.getItem('wtv-winter-ui') || '{}')); } catch (_) {}
 const _chip = (id, key, val, label) => `<button type="button" class="ws-chip${String(winterUI[key]) === String(val) ? ' on' : ''}"
   onclick="event.stopPropagation();seasonalPick('${id}','${key}','${val}')">${label}</button>`;
 function seasonalOptionsHTML(item) {
   if (!overlayState[item.id]) return '';
   let chips = '';
-  if (item.id === 'wssi') chips = [['all', 'Days 1–3'], ['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('wssi', 'wssiDay', v, l)).join('');
-  if (item.id === 'snow-prob') chips = [['4', '4″+'], ['8', '8″+'], ['12', '12″+']].map(([v, l]) => _chip('snow-prob', 'snowIn', v, l)).join('')
-    + '<span class="ws-sep"></span>' + [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('snow-prob', 'snowDay', v, l)).join('');
-  if (item.id === 'ice-prob') chips = [['1', 'Day 1'], ['2', 'Day 2'], ['3', 'Day 3']].map(([v, l]) => _chip('ice-prob', 'iceDay', v, l)).join('');
+  if (item.id === 'rot-tracks' || item.id === 'hail-swaths') { const k = item.id === 'rot-tracks' ? 'rotWin' : 'hailWin';
+    chips = [['60', '1 hr'], ['120', '2 hrs'], ['360', '6 hrs'], ['1440', '24 hrs']].map(([v, l]) => _chip(item.id, k, v, l)).join(''); }
+  if (item.id === 'surveys') chips = [['1', '24 hrs'], ['3', '3 days'], ['7', '7 days'], ['30', '30 days']].map(([v, l]) => _chip('surveys', 'surveyDays', v, l)).join('');
   return chips ? `<div class="ws-opts">${chips}</div>` : '';
 }
 function seasonalPick(id, key, val) {
@@ -8447,23 +8841,13 @@ function seasonalPick(id, key, val) {
   try { localStorage.setItem('wtv-winter-ui', JSON.stringify(winterUI)); } catch (_) {}
   if (WINTER_WMS[id]) { const l = _winterLayers[id]; if (l) l.setParams({ layers: String(WINTER_WMS[id].layer()) }); renderWinterLegend(id); }
   if (id === 'fall-now' || id === 'fall-forecast') loadFoliageFrame(id);
+  if (id === 'surveys' && overlayState.surveys) loadSurveys();
+  if ((id === 'rot-tracks' || id === 'hail-swaths') && overlayState[id]) refreshSwath(id, true);
   renderPanel();
 }
 
 // ── NOAA map-service layers (WPC + NOHRSC) ──
 const WINTER_WMS = {
-  'wssi':       { svc: 'vector/services/outlooks/wpc_wssi', rest: 'vector/rest/services/outlooks/wpc_wssi', opacity: 0.6, z: 416,
-                  title: '❄️ Winter Storm Severity', attrib: 'Winter Storm Severity Index: NOAA/NWS WPC',
-                  layer: () => ({ all: 4, 1: 1, 2: 2, 3: 3 })[winterUI.wssiDay] || 4,
-                  sub: () => winterUI.wssiDay === 'all' ? 'Days 1–3 combined' : 'Day ' + winterUI.wssiDay, none: 'No winter storm impacts are forecast.' },
-  'snow-prob':  { svc: 'vector/services/precip/wpc_prob_winter_precip', rest: 'vector/rest/services/precip/wpc_prob_winter_precip', opacity: 0.6, z: 417,
-                  title: '🌨 Chance of heavy snow', attrib: 'Snowfall probabilities: NOAA/NWS WPC',
-                  layer: () => (Number(winterUI.snowDay) - 1) * 5 + ({ 4: 1, 8: 2, 12: 3 })[winterUI.snowIn],
-                  sub: () => `${winterUI.snowIn}″ or more · Day ${winterUI.snowDay}`, none: 'No heavy snow is forecast for this day.' },
-  'ice-prob':   { svc: 'vector/services/precip/wpc_prob_winter_precip', rest: 'vector/rest/services/precip/wpc_prob_winter_precip', opacity: 0.6, z: 418,
-                  title: '🧊 Chance of icing', attrib: 'Icing probabilities: NOAA/NWS WPC',
-                  layer: () => (Number(winterUI.iceDay) - 1) * 5 + 4,
-                  sub: () => `¼″ of ice or more · Day ${winterUI.iceDay}`, none: 'No significant icing is forecast for this day.' },
   'snow-depth': { svc: 'raster/services/snow/NOHRSC_Snow_Analysis', rest: 'raster/rest/services/snow/NOHRSC_Snow_Analysis', opacity: 0.6, z: 414,
                   title: '⛄ Snow on the ground', attrib: 'Snow depth: NOAA/NWS NOHRSC', raster: true,
                   layer: () => 3, sub: () => 'Inches · daily analysis' },
@@ -8501,7 +8885,7 @@ const _legTitle = (t) => `<div style="font-family:'Barlow Condensed',sans-serif;
 const _legNote = (t) => `<div style="font-size:0.62rem;color:var(--muted);margin-top:0.15rem;line-height:1.35">${t}</div>`;
 async function renderWinterLegend(id) {
   const c = WINTER_WMS[id]; const el = _seasonLegendBox(id); if (!c || !el) return;
-  const lid = c.layer();
+  const lid = Number(String(c.layer()).split(',')[0]);
   el.innerHTML = _legTitle(c.title) + `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">${c.sub()}</div><div class="leg-row" style="color:var(--muted)">Loading…</div>`;
   try {
     if (!_arcLegendCache[c.rest]) _arcLegendCache[c.rest] = fetch(`${NOAA_MS}/${c.rest}/MapServer/legend?f=json`).then(r => r.json());
@@ -8517,7 +8901,7 @@ async function renderWinterLegend(id) {
     }
     if (!document.getElementById('sl-' + id)) return;      // turned off meanwhile
     el.innerHTML = _legTitle(c.title) + `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">${c.sub()}</div>`
-      + (rows.length > 8 ? rows.filter((_, i) => i % 2 === 0) : rows).join('') + (note ? _legNote('✓ ' + note) : '') + _legNote(c.attrib);
+      + (rows.length > 8 ? rows.filter((_, i) => i % 2 === 0) : rows).join('') + (note ? _legNote('✓ ' + note) : '') + (c.extraNote ? _legNote(c.extraNote) : '') + _legNote(c.attrib);
   } catch (e) {
     el.innerHTML = _legTitle(c.title) + _legNote(c.attrib);
   }
@@ -8550,6 +8934,44 @@ function stopPtype() {
   if (_ptypeLayer) { map.removeLayer(_ptypeLayer); _ptypeLayer = null; }
   _ptypeScan = null;
   document.getElementById('sl-ptype')?.remove(); _seasonLegendVisibility();
+}
+
+// ── Rotation tracks & hail swaths (WeatherTV tile service, from NOAA MRMS) ──
+const _swath = {};   // id -> { layer, timer, scan, win }
+const SWATH_CFG = {
+  'rot-tracks':  { kind: 'rot',  key: 'rotWin',  title: '🌀 Rotation tracks', z: 432, note: 'Strongest low-level rotation · lower 48' },
+  'hail-swaths': { kind: 'hail', key: 'hailWin', title: '🧊 Hail swaths',     z: 431, note: 'Largest hail radar estimated · lower 48' },
+};
+async function refreshSwath(id, force) {
+  const c = SWATH_CFG[id], st = _swath[id]; if (!c || !st) return;
+  const win = winterUI[c.key] || '120';
+  const el = _seasonLegendBox(id);
+  const winTxt = ({ 60: 'last hour', 120: 'last 2 hours', 360: 'last 6 hours', 1440: 'last 24 hours' })[win] || '';
+  try {
+    const m = await fetch(`${WXTILES_BASE}/meta/swaths/${c.kind}/${win}`).then(r => r.json());
+    if (!_swath[id]) return;
+    if (!m.available) { if (el) el.innerHTML = _legTitle(c.title) + _legNote('Unavailable right now. We\'ll try again in a few minutes.'); return; }
+    if (force || m.scan !== st.scan || win !== st.win) {
+      st.scan = m.scan; st.win = win;
+      const url = `${WXTILES_BASE}/tiles/swaths/${c.kind}/${win}/${m.scan}/{z}/{x}/{y}.png`;
+      if (st.layer) st.layer.setUrl(url);
+      else st.layer = L.tileLayer(url, { opacity: 0.9, zIndex: c.z, maxNativeZoom: 10, maxZoom: 16, attribution: 'Rotation & hail: NOAA MRMS' }).addTo(map);
+    }
+    const t = new Date(m.validIso);
+    if (el) el.innerHTML = _legTitle(c.title) + `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:0.2rem">${winTxt}</div>`
+      + (m.legend || []).map(([col, lbl]) => `<div class="leg-row"><div class="leg-sw" style="background:${col}"></div>${lbl}</div>`).join('')
+      + _legNote(`${c.note} · updated ${isNaN(t) ? '' : t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+  } catch (e) { if (el) el.innerHTML = _legTitle(c.title) + _legNote('Unavailable right now. We\'ll try again in a few minutes.'); }
+}
+function startSwath(id) {
+  if (_swath[id]) return;
+  _swath[id] = { layer: null, timer: null, scan: null, win: null };
+  refreshSwath(id); _swath[id].timer = setInterval(() => refreshSwath(id), 2 * 60 * 1000);
+}
+function stopSwath(id) {
+  const st = _swath[id]; if (!st) return;
+  clearInterval(st.timer); if (st.layer) map.removeLayer(st.layer); delete _swath[id];
+  document.getElementById('sl-' + id)?.remove(); _seasonLegendVisibility();
 }
 
 // ── Winter road conditions ──
@@ -8703,6 +9125,7 @@ function stopFoliage() {
 }
 
 function applySeasonal(id, on) {
+  if (OUTLOOKS[id]) { setOutlook(id, on); return true; }
   if (WINTER_WMS[id]) { on ? startWinterWms(id) : stopWinterWms(id); return true; }
   if (id === 'ptype') { on ? startPtype() : stopPtype(); return true; }
   if (id === 'roads') { on ? startRoads() : stopRoads(); return true; }
@@ -8740,7 +9163,6 @@ function applyOverlay(id,on){
   if (applySeasonal(id,on)) return;
   switch(id){
     case 'alerts':    if (on!==alertsVisible) toggleAlerts(); break;
-    case 'spc':       if (on!==spcVisible) toggleSPC(); break;
     case 'mcd':       if (on!==mcdVisible) toggleMCD(); syncMesoButtons(); break;
     case 'mesoanalysis': if (on) startMesoAnalysis(); else stopMesoAnalysis(); syncMesoButtons(); break;
     case 'hodograph':    if (window.WTV_HODO) WTV_HODO.setMode(on); break;
@@ -8749,6 +9171,10 @@ function applyOverlay(id,on){
     case 'hazards-weather': _hazWeatherOnly = !!on; if (_hazLayer) refreshHazards(); break;
     case 'raw-radar':    setRadarSource(on); break;
     case 'lsr':       if (on) startLSR(); else stopLSR(); break;
+    case 'probsevere': if (on) startProbSevere(); else stopProbSevere(); break;
+    case 'watches':    if (on) startWatches(); else stopWatches(); break;
+    case 'surveys':    if (on) startSurveys(); else stopSurveys(); break;
+    case 'rot-tracks': case 'hail-swaths': if (on) startSwath(id); else stopSwath(id); break;
     case 'chasers':   if (on) startChasers(); else stopChasers(); break;
     case 'lightning': if (on) startLightning(); else stopLightning(); break;
     case 'canada':    if (on) startCanadaRadar(); else clearCanada(); break;
@@ -8757,7 +9183,6 @@ function applyOverlay(id,on){
     case 'cameras':   if (on) startCameras(); else stopCameras(); break;
     case 'storm-cells':    if (on) startStormCells(); else stopStormCells(); break;
     case 'fronts':         if (on) startFronts(); else stopFronts(); break;
-    case 'ero':            if (on) startERO(); else stopERO(); break;
     case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); updateQPELegend(); break;
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
@@ -8800,7 +9225,7 @@ function renderPanel(){
   document.getElementById('lp-alerts').innerHTML=ALERT_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-meso').innerHTML=MESO_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-hodo').innerHTML=HODO_ITEMS.map(toggleRowHTML).join('');
-  document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-chaser').innerHTML=CHASER_ITEMS.map(i => toggleRowHTML(i) + seasonalOptionsHTML(i)).join('');
   // Vibration sub-row under the lightning toggle
   const _vr = document.createElement('div');
   _vr.className='ltg-vibe-row'; _vr.id='ltg-vibe-row';
@@ -9331,8 +9756,11 @@ function layoutRadarChrome() {
   if (mapEl.style.top !== h + 'px') { mapEl.style.top = h + 'px'; map.invalidateSize(); }
   const ld = document.getElementById('radar-loading'); if (ld) ld.style.top = h + 'px';
   const lf = document.getElementById('layers-fab'), ff = document.getElementById('forecast-fab');
-  if (lf) lf.style.top = (h + 10) + 'px';
-  if (ff && lf) ff.style.top = (h + 10 + lf.offsetHeight + 8) + 'px';
+  // The outlook bar (when an outlook is on) sits under the toolbar: buttons move below it
+  const ob = document.getElementById('outlook-bar');
+  const oh = ob && ob.style.display !== 'none' ? ob.offsetHeight : 0;
+  if (lf) lf.style.top = (h + oh + 10) + 'px';
+  if (ff && lf) ff.style.top = (h + oh + 10 + lf.offsetHeight + 8) + 'px';
   // Legend sits 150px up from the bottom; on short screens let it scroll
   const leg = document.getElementById('radar-legend');
   if (leg) { leg.style.maxHeight = Math.max(80, window.innerHeight - h - 170) + 'px'; leg.style.overflowY = 'auto'; }

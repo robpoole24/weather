@@ -1529,6 +1529,109 @@ app.get('/api/canada-alerts', async (req, res) => {
 // until a hard refresh). One shared copy is kept for 60 s so every visitor gets it instantly.
 const MRMS_CAPS_URL = 'https://mapservices.weather.noaa.gov/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer?request=GetCapabilities&service=WMS&version=1.3.0';
 let _mrmsCaps = { xml: null, ts: 0, pending: null };
+// ═══ Severe weather feeds (all free US-government or university data) ═══
+// Each is fetched by our server and shared by every visitor for a short time, so NOAA/IEM
+// see one request per few minutes no matter how many people are watching.
+async function _getWithTimeout(url, ms = 20000, asText = false) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: asText ? '*/*' : 'application/json' }, signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return asText ? r.text() : r.json();
+  } finally { clearTimeout(t); }
+}
+function _sharedCache(ttlMs, loader) {
+  let c = { val: null, ts: 0, pending: null, err: null };
+  return async () => {
+    if (c.val && Date.now() - c.ts < ttlMs) return c.val;
+    if (!c.pending) c.pending = loader().then(v => { c.val = v; c.ts = Date.now(); c.err = null; return v; })
+      .catch(e => { c.err = e.message; if (c.val) return c.val; throw e; })          // serve last good copy on a hiccup
+      .finally(() => { c.pending = null; });
+    return c.pending;
+  };
+}
+const _r3 = (n) => Math.round(n * 1000) / 1000;
+// SPC watch boxes (tornado / severe thunderstorm), via the Iowa Environmental Mesonet
+const _watches = _sharedCache(60 * 1000, async () => {
+  const j = await _getWithTimeout('https://mesonet.agron.iastate.edu/json/spcwatch.py');
+  return { features: (j.features || []).map(f => ({ type: 'Feature', geometry: f.geometry, properties: {
+    type: f.properties.type, number: f.properties.number, issue: f.properties.issue, expire: f.properties.expire,
+    pds: !!f.properties.is_pds, hail: f.properties.max_hail_size ?? null, gust: f.properties.max_wind_gust_knots ?? null,
+    url: f.properties.spcurl || null } })), at: new Date().toISOString() };
+});
+app.get('/api/severe/watches', async (req, res) => {
+  try { res.set('Cache-Control', 'no-store'); res.json(await _watches()); }
+  catch (e) { res.status(502).json({ error: 'Watch boxes unavailable: ' + e.message }); }
+});
+// SPC's written convective outlook for Day 1-3 (headline + summary + regional sections), from the
+// official NWS API. Shown when someone taps an outlook area. Cached 10 min per day.
+const _spcText = {};
+app.get('/api/spc/discussion', async (req, res) => {
+  const day = String(req.query.day || '1');
+  if (!['1', '2', '3'].includes(day)) return res.status(400).json({ error: 'day=1,2,3' });
+  _spcText[day] = _spcText[day] || _sharedCache(10 * 60 * 1000, async () => {
+    const ua = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com, contact@altruisticapps.com)', Accept: 'application/ld+json' } };
+    const list = await (await fetch('https://api.weather.gov/products/types/SWO', ua)).json();
+    const want = 'ACUS0' + day;
+    const item = (list['@graph'] || []).find(x => x.wmoCollectiveId === want && x.issuingOffice === 'KWNS');
+    if (!item) throw new Error('no ' + want + ' found');
+    const prod = await (await fetch('https://api.weather.gov/products/' + item.id, ua)).json();
+    const text = String(prod.productText || '').replace(/\r/g, '');
+    const flat = (t) => t.replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    const headline = flat(((text.match(/\n\.\.\.((?:THERE IS|NO SEVERE|THERE ARE)[\s\S]*?)\.\.\.\s*\n/) || [])[1]) || '');
+    const summary = flat(((text.match(/\.\.\.SUMMARY\.\.\.\s*\n([\s\S]*?)(?:\n\s*\n|$)/) || [])[1]) || '');
+    // Regional sections: "...Name..." followed by paragraphs, until the next heading or the forecaster line
+    const sections = [];
+    const body = text.split(/\.\.\.SUMMARY\.\.\.[\s\S]*?\n\s*\n/)[1] || '';
+    for (const m of body.matchAll(/\n?\.\.\.([^\n.][^\n]*?)\.\.\.\s*\n([\s\S]*?)(?=\n\.\.\.[^\n.][^\n]*?\.\.\.\s*\n|\n\.\.[A-Z][a-z]|\n\$\$|$)/g)) {
+      const name = flat(m[1]); const para = m[2].split(/\n\s*\n/).map(flat).filter(Boolean);
+      if (name && para.length && !/^(CATEGORICAL|PROBABILISTIC|TORNADO|HAIL|WIND)\b/.test(name)) sections.push({ name, text: para.join('\n\n') });
+    }
+    return { day, issued: item.issuanceTime, headline, summary, sections: sections.slice(0, 8),
+      url: `https://www.spc.noaa.gov/products/outlook/day${day}otlk.html` };
+  });
+  try { res.set('Cache-Control', 'no-store'); res.json(await _spcText[day]()); }
+  catch (e) { res.status(502).json({ error: 'SPC discussion unavailable: ' + e.message }); }
+});
+// NOAA/CIMSS ProbSevere v3: each storm's chance of severe weather / tornado / hail / wind in
+// the next hour. A new file every 2 minutes on NOAA's NCEP server; slimmed to what the map shows.
+const PROBSEVERE_DIR = 'https://mrms.ncep.noaa.gov/ProbSevere/PROBSEVERE/';
+const _probSevere = _sharedCache(110 * 1000, async () => {
+  const html = await _getWithTimeout(PROBSEVERE_DIR, 20000, true);
+  const files = [...html.matchAll(/href="(MRMS_PROBSEVERE_\d{8}_\d{6}\.json)"/g)].map(m => m[1]).sort();
+  if (!files.length) throw new Error('no ProbSevere files listed');
+  const j = await _getWithTimeout(PROBSEVERE_DIR + files[files.length - 1], 30000);
+  const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+  const features = (j.features || []).map(f => {
+    const p = f.properties || {}, m = f.models || {};
+    const prob = (k, mk) => n(p[k]) ?? n(m[mk] && m[mk].PROB);
+    const ring = ((f.geometry && f.geometry.coordinates) || [])[0] || [];
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring.map(([x, y]) => [_r3(x), _r3(y)])] }, properties: {
+      id: p.ID, sev: prob('ProbSevere', 'probsevere'), tor: prob('ProbTor', 'probtor'), hail: prob('ProbHail', 'probhail'), wind: prob('ProbWind', 'probwind'),
+      mesh: n(p.MESH), lat: n(p.MLAT), lon: n(p.MLON), me: n(p.MOTION_EAST), ms: n(p.MOTION_SOUTH),
+      flash: n(p.FLASH_RATE), shear: n(p.MAXLLAZ), echo: n(p.EchoTop_50) } };
+  }).filter(f => f.geometry.coordinates[0].length >= 4 && (f.properties.sev ?? 0) >= 1);
+  return { validTime: j.validTime || null, file: files[files.length - 1], features, at: new Date().toISOString() };
+});
+app.get('/api/severe/probsevere', async (req, res) => {
+  try { res.set('Cache-Control', 'no-store'); res.json(await _probSevere()); }
+  catch (e) { res.status(502).json({ error: 'ProbSevere unavailable: ' + e.message }); }
+});
+// NWS Damage Assessment Toolkit: surveyed tornado paths with EF ratings (preliminary), last N days
+const _surveyCache = {};
+app.get('/api/severe/surveys', async (req, res) => {
+  const days = Math.min(30, Math.max(1, parseInt(req.query.days, 10) || 7));
+  _surveyCache[days] = _surveyCache[days] || _sharedCache(15 * 60 * 1000, async () => {
+    const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+    const q = new URLSearchParams({ where: `stormdate >= TIMESTAMP '${since}'`, outFields: 'wfo,event_id,stormdate,starttime,endtime,length,width,injuries,fatalities,efscale,efnum,maxwind,comments',
+      outSR: '4326', f: 'geojson', resultRecordCount: '2000' });
+    const j = await _getWithTimeout('https://services.dat.noaa.gov/arcgis/rest/services/nws_damageassessmenttoolkit/DamageViewer/FeatureServer/1/query?' + q, 30000);
+    return { days, features: (j.features || []).filter(f => f.geometry), at: new Date().toISOString() };
+  });
+  try { res.set('Cache-Control', 'no-store'); res.json(await _surveyCache[days]()); }
+  catch (e) { res.status(502).json({ error: 'Tornado surveys unavailable: ' + e.message }); }
+});
+
 app.get('/api/radar/mrms-capabilities', async (req, res) => {
   try {
     if (!_mrmsCaps.xml || Date.now() - _mrmsCaps.ts > 60 * 1000) {
