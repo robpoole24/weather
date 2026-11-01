@@ -3615,6 +3615,36 @@ app.get('/api/alerts/marine', async (req, res) => {
   catch (e) { res.status(502).json({ error: 'Marine alerts unavailable: ' + e.message }); }
 });
 
+// ═══ Aurora forecast (NOAA Space Weather Prediction Center) ═══
+// OVATION model: chance of aurora overhead on a 1° world grid, updated every ~5 min, plus the
+// current planetary Kp index. Slimmed to cells with a 3%+ chance; shared by all viewers 5 min.
+const _aurora = _sharedCache(5 * 60 * 1000, async () => {
+  const H = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)' } };
+  const [ov, kp] = await Promise.all([
+    fetch('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json', H).then(r => r.ok ? r.json() : Promise.reject(new Error('OVATION ' + r.status))),
+    fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json', H).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+  const cells = [];
+  for (const c of ov.coordinates || []) {
+    const [lon, lat, v] = c.map(Number);
+    if (!(v >= 3) || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    cells.push([lon > 180 ? lon - 360 : lon, lat, Math.round(v)]);
+  }
+  // Kp: rows of [time_tag, Kp, ...] after a header row (older format) or objects (newer format)
+  let kpNow = null, kpTime = null;
+  if (Array.isArray(kp) && kp.length) {
+    const last = kp[kp.length - 1];
+    if (Array.isArray(last)) { kpNow = Number(last[1]); kpTime = last[0]; }
+    else if (last && typeof last === 'object') { kpNow = Number(last.Kp ?? last.kp_index ?? last.kp); kpTime = last.time_tag; }
+    if (!Number.isFinite(kpNow)) kpNow = null;
+  }
+  return { observed: ov['Observation Time'] || null, forecast: ov['Forecast Time'] || null, cells, kp: kpNow, kpTime };
+});
+app.get('/api/aurora', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=120'); res.json(await _aurora()); }
+  catch (e) { res.status(502).json({ error: 'Aurora forecast unavailable: ' + e.message }); }
+});
+
 // ═══ Local NWS office text: Area Forecast Discussion + Hazardous Weather Outlook ═══
 // Newest product from the office via the NWS API, parsed into sections, cached 10 min per office.
 const _officeText = {};

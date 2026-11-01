@@ -2225,7 +2225,7 @@ let spcVisible = false;   // legacy flag; SPC now runs through the Outlooks modu
 // our own solid colors (NOAA's ready-made images are pale gray for winter and vanish on the
 // map). Tapping an area shows everything the outlook says about it.
 const OL_UI_KEY = 'wtv-outlook-ui';
-let olUI = { spcDay: '1', spcHaz: 'cat', wssiDay: '1', wssiComp: 'overall', snowDay: '1', snowIn: '4', iceDay: '1', eroDay: '1', windKt: '34', surgeCat: '3' };
+let olUI = { spcDay: '1', spcHaz: 'cat', wssiDay: '1', wssiComp: 'overall', snowDay: '1', snowIn: '4', iceDay: '1', eroDay: '1', windKt: '34', surgeCat: '3', cpcRange: '610', cpcVar: 'temp' };
 try { Object.assign(olUI, JSON.parse(localStorage.getItem(OL_UI_KEY) || '{}')); } catch (_) {}
 const _olSave = () => { try { localStorage.setItem(OL_UI_KEY, JSON.stringify(olUI)); } catch (_) {} };
 const OL_NOAA = 'https://mapservices.weather.noaa.gov';
@@ -2257,6 +2257,23 @@ const ERO_CAT = { 1: ['Marginal', '#5fd35f', 'At least a 5% chance of rain heavy
   3: ['Moderate', '#ff4040', 'At least a 40% chance. Numerous flash floods possible; dangerous, life-threatening flooding can occur.'],
   4: ['High', '#ff3dff', 'At least a 70% chance. Widespread severe flash flooding expected; dangerous to life and property.'] };
 const _olDayPills = (key, days) => days.map(([v, l]) => [key, v, l]);
+// CPC 6–10 / 8–14 day outlooks: color strength by probability of the favored category
+const CPC_RAMPS = {
+  tempAbove: ['#ffd8a8', '#ffb870', '#ff944d', '#ff6b3d', '#e8412e', '#c0201f', '#8f0f14'],
+  tempBelow: ['#c6e0ff', '#9cc7ff', '#6aa8ff', '#3d86f2', '#1f63d6', '#1446a8', '#0c2f7a'],
+  precipAbove: ['#c8f0c0', '#9be38f', '#6ccf5f', '#3fb43a', '#23912a', '#14701f', '#0b5016'],
+  precipBelow: ['#f5e1c0', '#e8c890', '#d9aa63', '#c48a3f', '#a86c28', '#87521c', '#663b12'],
+};
+const _cpcIdx = (p) => { const v = Number(p.prob) || 0; return v < 40 ? 0 : v < 50 ? 1 : v < 60 ? 2 : v < 70 ? 3 : v < 80 ? 4 : v < 90 ? 5 : 6; };
+function _cpcColor(p) {
+  const cat = String(p.cat || '');
+  if (/Normal/i.test(cat)) return '#a3a3a3';
+  return CPC_RAMPS[(olUI.cpcVar === 'precip' ? 'precip' : 'temp') + (/Below/i.test(cat) ? 'Below' : 'Above')][_cpcIdx(p)];
+}
+function _cpcLabel(p) {
+  const cat = String(p.cat || ''), b = ['33–40%', '40–50%', '50–60%', '60–70%', '70–80%', '80–90%', '90%+'][_cpcIdx(p)];
+  return /Normal/i.test(cat) ? 'Near normal favored' : `${/Below/i.test(cat) ? 'Below' : 'Above'} normal · ${b}`;
+}
 const OL_NHC = 'tropical/rest/services/tropical/NHC_tropical_weather';
 const OL_RISK = 'tropical/rest/services/tropical/StormSurgeRisk';
 const WSP_BANDS = ['<5%', '5-10%', '10-20%', '20-30%', '30-40%', '40-50%', '50-60%', '60-70%', '70-80%', '80-90%', '>90%'];
@@ -2337,7 +2354,7 @@ const OUTLOOKS = {
     label: (p) => (p.percentage || '') + ' chance',
     swatch: (p) => WSP_COLORS[_wspIdx(p)],
     popup: (p) => _olBox(`${_olEsc(p.percentage)} chance of ${WSP_SPEED[olUI.windKt][0]} winds`, WSP_COLORS[_wspIdx(p)],
-      _olP(`A <b>${_olEsc(p.percentage)} chance</b> of ${WSP_SPEED[olUI.windKt][1]} at this spot during the next 5 days, from any active tropical storm or hurricane.`)
+      _olP(`${_aAn(String(p.percentage).replace(/^</, '')) === 'an' ? 'An' : 'A'} <b>${_olEsc(p.percentage)} chance</b> of ${WSP_SPEED[olUI.windKt][1]} at this spot during the next 5 days, from any active tropical storm or hurricane.`)
       + _olP('<a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener" style="color:var(--accent)">National Hurricane Center →</a>'), 'NOAA/NWS National Hurricane Center'),
     none: 'No active tropical storms or hurricanes right now.',
     credit: 'NOAA/NWS National Hurricane Center · next 5 days',
@@ -2357,6 +2374,33 @@ const OUTLOOKS = {
     wms: () => ({ rest: OL_RISK, layers: (SURGE_RISK_IDS[olUI.surgeCat] || SURGE_RISK_IDS[3]).join(','), legendRest: OL_RISK, legendId: 5, opacity: 0.8 }),
     note: () => `The worst storm surge flooding possible in a Category ${olUI.surgeCat} hurricane, combining many possible storm tracks. Not a forecast: a picture of risk, useful for knowing your area before a storm.`,
     credit: 'NOAA/NWS National Hurricane Center · National Storm Surge Risk Maps',
+  },
+  'cpc': {
+    title: 'Extended Outlook', ico: '📆',
+    days: () => [['cpcRange', '610', '6–10 days'], ['cpcRange', '814', '8–14 days']],
+    opts: () => [['cpcVar', 'temp', 'Temperature'], ['cpcVar', 'precip', 'Precipitation']],
+    layers: () => ({ rest: olUI.cpcRange === '814' ? 'vector/rest/services/outlooks/cpc_8_14_day_outlk' : 'vector/rest/services/outlooks/cpc_6_10_day_outlk', main: olUI.cpcVar === 'precip' ? 1 : 0 }),
+    rank: (p) => Number(p.prob) || 0,
+    style: (p) => { const c = _cpcColor(p); return { color: c, fillColor: c, weight: 1.25, fillOpacity: 0.5, opacity: 0.9 }; },
+    label: (p) => _cpcLabel(p),
+    swatch: (p) => _cpcColor(p),
+    // Legend: strongest "above" at the top, then near normal, then "below" getting stronger downward
+    legendOrder: (l) => { const m = l.match(/(\d+)/); const n = m ? +m[1] : 0; return /^Above/.test(l) ? -n : /^Below/.test(l) ? 1000 + n : 500; },
+    popup: (p) => {
+      const what = olUI.cpcVar === 'precip' ? 'precipitation' : 'temperatures';
+      const cat = String(p.cat || '');
+      const lead = /Normal/i.test(cat) ? `near-normal ${what}` : `${cat.toLowerCase()}-normal ${what}`;
+      const conf = Number(p.prob) >= 60 ? 'A strong signal.' : Number(p.prob) >= 50 ? 'Clearly favored.' : Number(p.prob) >= 40 ? 'Leaning this way.' : 'Only slightly favored.';
+      const range = (p.start_date && p.end_date) ? `${new Date(p.start_date).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' })} – ${new Date(p.end_date).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' })}` : '';
+      return _olBox(`${Math.round(p.prob)}% chance of ${lead}`, _cpcColor(p),
+        _olP(`For ${range || 'this period'}, the Climate Prediction Center gives ${_aAn(Math.round(p.prob))} <b>${Math.round(p.prob)}% chance</b> of ${lead}, compared with the usual weather for this time of year. ${conf}`)
+        + _olP('With no signal, each of above, near and below normal has about a 33% chance; areas left blank have equal chances.')
+        + _olMeta([_olTime(p.fcst_date) ? `Issued ${_olTime(p.fcst_date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}` : ''])
+        + _olP(`<a href="https://www.cpc.ncep.noaa.gov/products/predictions/${olUI.cpcRange === '814' ? '814day' : '610day'}/" target="_blank" rel="noopener" style="color:var(--accent)">Climate Prediction Center →</a>`),
+        'NOAA/NWS Climate Prediction Center');
+    },
+    none: 'No outlook available right now.',
+    credit: 'NOAA/NWS Climate Prediction Center · compared with 1991–2020 normals',
   },
   'ero': {
     title: 'Excessive Rainfall Outlook', ico: '🌧',
@@ -2384,6 +2428,7 @@ function _olTime(v) {
   return d && !isNaN(d) ? d : null;
 }
 const _olFmt = (d) => d ? d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+const _aAn = (t) => (/^(8|11|18)/.test(String(t).trim()) ? 'an' : 'a');
 function _olValid(a, b) { const x = _olTime(a), y = _olTime(b); return x && y ? `${_olFmt(x)} – ${_olFmt(y)}` : ''; }
 function _olWssiValid(p) { const vt = String(p.valid_time || ''); const m = vt.split(' - '); return m.length === 2 ? _olValid(m[0], m[1]) : vt; }
 const _olEsc = (x) => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -2526,6 +2571,7 @@ async function drawOutlook() {
   }).addTo(_olLayer);
   const seen = new Map();
   for (const f of feats) { const p = f.properties || {}; const l = cfg.label(p); if (l && !seen.has(l)) seen.set(l, cfg.swatch(p)); }
+  if (cfg.legendOrder) { const sorted = [...seen].sort((a, b) => cfg.legendOrder(a[0]) - cfg.legendOrder(b[0])); seen.clear(); sorted.forEach(([l, c]) => seen.set(l, c)); }
   const p0 = (feats[0] || {}).properties || {};
   const valid = p0.valid ? _olValid(p0.valid, p0.expire) : p0.start_time ? _olValid(p0.start_time, p0.end_time) : p0.valid_time ? _olWssiValid(p0) : '';
   if (legend) legend.innerHTML = _legTitle(cfg.ico + ' ' + cfg.title)
@@ -6112,6 +6158,45 @@ async function startTideGauges() {
 }
 function stopTideGauges() { if (_tideLayer) { map.removeLayer(_tideLayer); _tideLayer = null; } document.getElementById('sl-tide-gauges')?.remove(); _seasonLegendVisibility(); }
 
+// ── Aurora forecast (NOAA SWPC OVATION, via our server: /api/aurora) ──
+let _auroraLayer = null, _auroraTimer = null, _auroraRenderer = null;
+const AURORA_BANDS = [[70, '#ef4444', 0.62], [50, '#fb923c', 0.58], [30, '#facc15', 0.52], [10, '#4ade80', 0.45], [3, '#22c55e', 0.28]];
+const _auroraBand = (v) => AURORA_BANDS.find(([t]) => v >= t) || AURORA_BANDS[AURORA_BANDS.length - 1];
+const KP_WORDS = (k) => k == null ? '' : k >= 9 ? 'extreme geomagnetic storm (G5)' : k >= 8 ? 'severe geomagnetic storm (G4)' : k >= 7 ? 'strong geomagnetic storm (G3)' : k >= 6 ? 'moderate geomagnetic storm (G2)' : k >= 5 ? 'minor geomagnetic storm (G1)' : k >= 4 ? 'active' : 'quiet';
+async function loadAurora() {
+  try {
+    const j = await fetch('/api/aurora').then(r => r.ok ? r.json() : Promise.reject());
+    if (!_auroraLayer) return;
+    _auroraLayer.clearLayers();
+    _auroraRenderer = _auroraRenderer || L.canvas({ padding: 0.3 });
+    // One 1°×1° cell per grid point with a 3%+ chance of aurora overhead
+    for (const [lon, lat, v] of j.cells || []) {
+      const [, c, o] = _auroraBand(v);
+      L.rectangle([[lat - 0.5, lon - 0.5], [lat + 0.5, lon + 0.5]], { renderer: _auroraRenderer, stroke: false, fillColor: c, fillOpacity: o, interactive: true })
+        .bindPopup(`<div class="alert-popup"><div class="ev" style="color:${c}">✨ ${v}% chance of aurora overhead</div><div style="font-size:0.76rem;color:#c8ddf0;margin-top:4px">If skies are clear and dark, there's about a ${v}% chance of seeing the northern or southern lights directly overhead here right now.</div><div class="exp">NOAA Space Weather Prediction Center · OVATION</div></div>`, { maxWidth: 260 })
+        .addTo(_auroraLayer);
+    }
+    // Southern edge of a 10% chance in the northern hemisphere: aurora may be seen low on the
+    // northern horizon somewhat south of this line on a clear night
+    const edge = {};
+    for (const [lon, lat, v] of j.cells || []) if (lat > 0 && v >= 10 && (edge[lon] == null || lat < edge[lon])) edge[lon] = lat;
+    const pts = Object.keys(edge).map(Number).sort((a, b) => a - b).map(lon => [edge[lon] - 0.5, lon]);
+    if (pts.length > 10) L.polyline(pts, { color: '#e879f9', weight: 2, dashArray: '6 5', interactive: false }).addTo(_auroraLayer);
+    const el = _seasonLegendBox('aurora');
+    const ft = j.forecast ? new Date(j.forecast) : null;
+    if (el) el.innerHTML = _legTitle('✨ Aurora · chance overhead')
+      + [['#ef4444', '70%+'], ['#fb923c', '50–69%'], ['#facc15', '30–49%'], ['#4ade80', '10–29%'], ['#22c55e', '3–9%']].map(([c, l]) => `<div class="leg-row"><div class="leg-sw" style="background:${c}"></div>${l}</div>`).join('')
+      + `<div class="leg-row"><div class="leg-sw" style="background:transparent;border-top:2px dashed #e879f9;height:0;margin-top:5px"></div>Edge of 10% chance</div>`
+      + (j.kp != null ? _legNote(`Kp ${Number(j.kp).toFixed(1)} · ${KP_WORDS(j.kp)}${j.kp >= 5 ? ' — aurora possible much farther south than usual' : ''}`) : '')
+      + _legNote('On a clear, dark night aurora can show low on the horizon a few hundred miles beyond the colored area.')
+      + _legNote('NOAA Space Weather Prediction Center' + (ft && !isNaN(ft) ? ' · for ' + ft.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''));
+  } catch (_) {
+    const el = _seasonLegendBox('aurora'); if (el) el.innerHTML = _legTitle('✨ Aurora') + _legNote('The aurora forecast is unavailable right now. We\'ll keep trying.');
+  }
+}
+function startAurora() { if (!_auroraLayer) _auroraLayer = L.layerGroup().addTo(map); loadAurora(); clearInterval(_auroraTimer); _auroraTimer = setInterval(loadAurora, 10 * 60 * 1000); }
+function stopAurora() { clearInterval(_auroraTimer); _auroraTimer = null; if (_auroraLayer) { map.removeLayer(_auroraLayer); _auroraLayer = null; } document.getElementById('sl-aurora')?.remove(); _seasonLegendVisibility(); }
+
 // ── GLOBAL RADAR (LibreWXR) ───────────────────────────────────────────────────
 // LibreWXR is a drop-in RainViewer replacement with no rate limits.
 // Covers NOAA MRMS (US), MSC (Canada), EUMETNET OPERA (Europe 24 countries),
@@ -8003,6 +8088,8 @@ const WTV_INFO = {
   'qpe-1h':        { t:'1-Hour Rainfall', w:'How much rain fell in the last hour, estimated by radar.', r:'Over 1 inch in an hour can cause street flooding.' },
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
   'river-gauges':  { t:'River & Flood Gauges', w:'Live river levels from NWS gauges. Tap one for a chart of the last 3 days and the official forecast, where the River Forecast Center issues one.', r:'Green · normal. Yellow · near flood stage. Orange/red/purple · minor, moderate, major flooding. The forecast line shows where the river is headed and when it should crest.' },
+  'cpc':           { t:'6–10 & 8–14 Day Outlook', w:'The Climate Prediction Center\'s outlook for whether the week after next will run warmer or colder, and wetter or drier, than usual for the time of year.', r:'Color strength is confidence: about 33% is no signal, 50%+ is clearly favored. Blank areas have equal chances.' },
+  'aurora':        { t:'Aurora Forecast', w:'NOAA\'s chance of seeing the northern (or southern) lights overhead in the next half hour, plus the Kp index that measures geomagnetic activity.', r:'Kp 5+ is a geomagnetic storm: aurora can reach far south of normal. You need clear, dark skies away from city lights; look north.' },
   'buoys':         { t:'Buoys', w:'Live reports from NOAA buoys and coastal stations on the oceans and Great Lakes: wind, waves, water temperature and pressure.', r:'Dot color is wave height: green under 3 ft up to purple over 15 ft. Many Great Lakes buoys are pulled for the winter.' },
   'tide-gauges':   { t:'Tides & Water Levels', w:'NOAA\'s real-time water-level gauges along the coasts and Great Lakes. Tap one for the level now, coastal flood status and the next high and low tides.', r:'During a storm, a level well above the predicted tide is storm surge.' },
   'nhc-wind':      { t:'Hurricane Wind Chances', w:'The National Hurricane Center\'s chance of strong winds reaching each spot over the next 5 days, from any active storm.', r:'Choose 39+ mph (tropical-storm force), 58+ mph or 74+ mph (hurricane force). Even 10–20% is worth preparing for.' },
@@ -9004,6 +9091,8 @@ const CHASER_ITEMS=[
 const SURFACE_ITEMS=[
   {id:'fronts',   ico:'🌦', name:'WPC Surface Analysis',       sub:'Fronts · pressure centers · NowCOAST',def:false},
   {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC flash flood risk · Day 1–5',      def:false},
+  {id:'cpc',      ico:'📆', name:'6–10 & 8–14 Day Outlook',     sub:'CPC · warmer/colder, wetter/drier than normal', def:false},
+  {id:'aurora',   ico:'✨', name:'Aurora Forecast',             sub:'NOAA SWPC · chance of northern lights · Kp index', def:false},
 ];
 const PRECIP_ITEMS=[
   {id:'qpe-1h',  ico:'💧', name:'1-Hour Rainfall (MRMS)',   sub:'Radar-estimated accumulation · past 1h', def:false},
@@ -9502,6 +9591,7 @@ function applyOverlay(id,on){
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
     case 'buoys':          if (on) startBuoys(); else stopBuoys(); break;
+    case 'aurora':         if (on) startAurora(); else stopAurora(); break;
     case 'tide-gauges':    if (on) startTideGauges(); else stopTideGauges(); break;
     case 'nhc-tropical':   if (on) startTropical(); else stopTropical(); break;
     case 'hms-smoke':      if (on) startHMSSmoke(); else clearHMSSmoke(); break;
