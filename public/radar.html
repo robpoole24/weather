@@ -1764,7 +1764,10 @@ const MRMS_WMS = 'https://mapservices.weather.noaa.gov/eventdriven/services/rada
 let radarRaw = false, _mrmsInfo = null, _rawLabels = FRAMES.map(f => f.label);
 async function _mrmsCapabilities() {
   if (_mrmsInfo && Date.now() - _mrmsInfo.ts < 5 * 60000) return _mrmsInfo;
-  const txt = await (await fetch(`${MRMS_WMS}?request=GetCapabilities&service=WMS&version=1.3.0`)).text();
+  // Through our server first (NOAA doesn't reliably allow browser requests); straight to NOAA only as a backup
+  let txt = '';
+  try { const r = await fetch('/api/radar/mrms-capabilities'); if (r.ok) txt = await r.text(); } catch (_) {}
+  if (!/<Dimension/i.test(txt)) txt = await (await fetch(`${MRMS_WMS}?request=GetCapabilities&service=WMS&version=1.3.0`, { cache: 'no-store' })).text();
   const xml = new DOMParser().parseFromString(txt, 'text/xml');
   const layer = [...xml.getElementsByTagName('Layer')].find(l =>
     [...l.children].some(c => c.tagName === 'Name') &&
@@ -1784,7 +1787,9 @@ function _swapFrameLayers(newLayers) {
   newLayers.forEach(l => frameLayers.push(l));
   if (_pastRadarVisible()) { ensureAttached(frameLayers[currentFrame]); frameLayers[currentFrame].setOpacity(0.72); }
 }
-async function setRadarSource(raw) {
+let _mrmsRetry = null;
+async function setRadarSource(raw, auto) {
+  if (!auto) { clearTimeout(_mrmsRetry); _mrmsRetry = null; }
   radarRaw = !!raw;
   if (radarRaw) {
     FRAMES.forEach((f, i) => { f.label = _rawLabels[i]; });
@@ -1796,6 +1801,9 @@ async function setRadarSource(raw) {
       console.warn('[Radar] Filtered MRMS unavailable, showing raw NEXRAD:', e.message);
       radarRaw = true;
       if (_pastRadarVisible()) { ensureAttached(frameLayers[currentFrame]); frameLayers[currentFrame].setOpacity(0.72); }
+      // Keep radar on screen (raw), and try the weather-only version again shortly
+      clearTimeout(_mrmsRetry);
+      _mrmsRetry = setTimeout(() => { _mrmsRetry = null; setRadarSource(false, true); }, 30000);
       return;
     }
     if (radarRaw) return;   // user switched back while we were loading
@@ -3134,18 +3142,17 @@ async function loadCanadaFrames() {
 
   // Pre-load one WMS layer per timestamp (oldest → newest)
   times.forEach((time, i) => {
-    const layer = L.tileLayer.wms('https://geo.weather.gc.ca/geomet', {
-      // Rain AND snow: the composite is split by precipitation type (RRAI = rain, RSNO = snow),
-      // so rain alone left Canada's snow invisible. One WMS request draws both.
-      layers: 'RADAR_1KM_RRAI,RADAR_1KM_RSNO',
-      format: 'image/png',
-      transparent: true,
-      version: '1.3.0',
-      time: time,
-      opacity: 0,
-      zIndex: 195, pane: 'canadaRadar',
-      attribution: i === 0 ? 'Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a>' : '',
-    });
+    // Canada's composite is split by precipitation type: RRAI = rain, RSNO = snow. Each gets its own
+    // request (one failing can't blank the other); the snow layer rides along with the rain layer.
+    const opts = (name, attrib) => ({ layers: name, format: 'image/png', transparent: true, version: '1.3.0',
+      time, opacity: 0, zIndex: 195, pane: 'canadaRadar', attribution: attrib });
+    const layer = L.tileLayer.wms('https://geo.weather.gc.ca/geomet',
+      opts('RADAR_1KM_RRAI', i === 0 ? 'Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a>' : ''));
+    const snow = L.tileLayer.wms('https://geo.weather.gc.ca/geomet', opts('RADAR_1KM_RSNO', ''));
+    const setOp = layer.setOpacity.bind(layer);
+    layer.setOpacity = (o) => { setOp(o); snow.setOpacity(o); return layer; };
+    layer.on('add', () => { if (!map.hasLayer(snow)) snow.addTo(map); });
+    layer.on('remove', () => { if (map.hasLayer(snow)) map.removeLayer(snow); });
     layer.addTo(map);
     canadaFrameLayers.push(layer);
   });

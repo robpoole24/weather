@@ -1524,6 +1524,28 @@ app.get('/api/canada-alerts', async (req, res) => {
   }
 });
 
+// NOAA MRMS radar time list, fetched by our server. NOAA's map server doesn't reliably send
+// CORS headers, so asking it from the browser failed for some visitors (radar never loaded
+// until a hard refresh). One shared copy is kept for 60 s so every visitor gets it instantly.
+const MRMS_CAPS_URL = 'https://mapservices.weather.noaa.gov/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer?request=GetCapabilities&service=WMS&version=1.3.0';
+let _mrmsCaps = { xml: null, ts: 0, pending: null };
+app.get('/api/radar/mrms-capabilities', async (req, res) => {
+  try {
+    if (!_mrmsCaps.xml || Date.now() - _mrmsCaps.ts > 60 * 1000) {
+      if (!_mrmsCaps.pending) _mrmsCaps.pending = Promise.race([fetchTextOverHttp(MRMS_CAPS_URL), new Promise((_, rej) => setTimeout(() => rej(new Error('NOAA timed out')), 15000))])
+        .then(xml => { if (/<Dimension/i.test(xml)) _mrmsCaps = { xml, ts: Date.now(), pending: null }; else throw new Error('no time list in reply'); })
+        .finally(() => { _mrmsCaps.pending = null; });
+      try { await _mrmsCaps.pending; } catch (e) { if (!_mrmsCaps.xml) throw e; }   // NOAA hiccup: serve the last good copy
+    }
+    res.set('Content-Type', 'application/xml');
+    res.set('Cache-Control', 'no-store');
+    res.send(_mrmsCaps.xml);
+  } catch (e) {
+    console.warn('[Radar] MRMS capabilities proxy failed:', e.message);
+    res.status(502).json({ error: 'Could not reach NOAA radar server' });
+  }
+});
+
 app.get('/api/canada-radar/capabilities', async (req, res) => {
   const layer = (req.query.layer || 'RADAR_1KM_RRAI').replace(/[^A-Z0-9_]/gi, ''); // basic allowlist sanitization
   const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=${layer}&t=${Date.now()}`;
