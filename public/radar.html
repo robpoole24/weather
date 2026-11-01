@@ -3101,13 +3101,45 @@ async function getCanadaTimestamps() {
 let canadaToggleOn = false;
 let canadaZoomListenerAttached = false;
 
+const CANADA_BOUNDS = L.latLngBounds([41.5, -141], [84, -52]);
+// Load the other frames one at a time (newest first). While the map moves, only the frame on
+// screen stays attached; the rest reload one by one once it stops.
+let _canadaPreloadGen = 0;
+function _canadaPreload() {
+  const gen = ++_canadaPreloadGen;
+  const order = canadaFrameLayers.map((_, i) => i).reverse().filter(i => i !== canadaFrameIdx);
+  const next = () => {
+    if (gen !== _canadaPreloadGen || !canadaToggleOn) return;
+    const i = order.shift();
+    if (i === undefined) return;
+    const l = canadaFrameLayers[i];
+    if (map.hasLayer(l)) return next();
+    let done = false;
+    const go = () => { if (done) return; done = true; next(); };
+    l.once('load', go); setTimeout(go, 8000);          // never stall the queue on a slow frame
+    l.setOpacity(0); l.addTo(map);
+  };
+  next();
+}
+let _canadaMoveHooked = false;
+function _canadaHookMoves() {
+  if (_canadaMoveHooked) return; _canadaMoveHooked = true;
+  map.on('movestart', () => {
+    if (!canadaToggleOn) return;
+    ++_canadaPreloadGen;
+    canadaFrameLayers.forEach((l, i) => { if (i !== canadaFrameIdx && map.hasLayer(l)) map.removeLayer(l); });
+  });
+  map.on('moveend', () => { if (canadaToggleOn && canadaFrameLayers.length) _canadaPreload(); });
+}
 // Canadian (North American) radar follows the same Play / step buttons as the US radar
 function canadaShowing() { return canadaToggleOn && canadaFrameLayers.length > 0; }
 function canadaShowFrame(i) {
   if (!canadaFrameLayers.length) return;
   canadaFrameLayers[canadaFrameIdx].setOpacity(0);
   canadaFrameIdx = (i + canadaFrameLayers.length) % canadaFrameLayers.length;
-  canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+  const l = canadaFrameLayers[canadaFrameIdx];
+  if (!map.hasLayer(l)) l.addTo(map);   // not preloaded yet (e.g. right after a pan)
+  l.setOpacity(0.72);
 }
 function canadaStartAnim() {
   if (canadaAnimTimer) clearInterval(canadaAnimTimer);
@@ -3132,9 +3164,10 @@ function clearCanada() {
 }
 
 async function loadCanadaFrames() {
-  _canadaPane(); _canadaClip();
+  _canadaPane(); _canadaClip(); _canadaHookMoves();
   setStatus('Loading Canadian radar…');
-  const times = await getCanadaTimestamps();
+  // Last 12 frames (2 hours), matching the US loop
+  const times = (await getCanadaTimestamps()).slice(-12);
   if (!times.length) { setStatus('Canadian radar unavailable'); return; }
 
   canadaFrameLayers.forEach(l => { try { map.removeLayer(l); } catch (_) {} });
@@ -3145,7 +3178,9 @@ async function loadCanadaFrames() {
     // Canada's composite is split by precipitation type: RRAI = rain, RSNO = snow. Each gets its own
     // request (one failing can't blank the other); the snow layer rides along with the rain layer.
     const opts = (name, attrib) => ({ layers: name, format: 'image/png', transparent: true, version: '1.3.0',
-      time, opacity: 0, zIndex: 195, pane: 'canadaRadar', attribution: attrib });
+      time, opacity: 0, zIndex: 195, pane: 'canadaRadar', attribution: attrib,
+      // Only fetch tiles over Canada (the US part is cut off anyway) and only when the map stops moving
+      bounds: CANADA_BOUNDS, keepBuffer: 1, updateWhenIdle: true, updateWhenZooming: false });
     const layer = L.tileLayer.wms('https://geo.weather.gc.ca/geomet',
       opts('RADAR_1KM_RRAI', i === 0 ? 'Radar: <a href="https://eccc-msc.github.io/open-data/">ECCC/MSC GeoMet</a>' : ''));
     const snow = L.tileLayer.wms('https://geo.weather.gc.ca/geomet', opts('RADAR_1KM_RSNO', ''));
@@ -3153,13 +3188,16 @@ async function loadCanadaFrames() {
     layer.setOpacity = (o) => { setOp(o); snow.setOpacity(o); return layer; };
     layer.on('add', () => { if (!map.hasLayer(snow)) snow.addTo(map); });
     layer.on('remove', () => { if (map.hasLayer(snow)) map.removeLayer(snow); });
-    layer.addTo(map);
-    canadaFrameLayers.push(layer);
+    canadaFrameLayers.push(layer);    // not added to the map yet: frames load one at a time (below)
   });
 
-  // Start at most recent frame
+  // Show the newest frame now; the older ones load one after another in the background.
+  // Adding them all at once fired hundreds of tile requests together and the browser
+  // refused them (ERR_INSUFFICIENT_RESOURCES).
   canadaFrameIdx = canadaFrameLayers.length - 1;
+  canadaFrameLayers[canadaFrameIdx].addTo(map);
   canadaFrameLayers[canadaFrameIdx].setOpacity(0.72);
+  _canadaPreload();
 
   // Sit on the newest frame like the US radar; Play animates it
   if (canadaAnimTimer) { clearInterval(canadaAnimTimer); canadaAnimTimer = null; }
