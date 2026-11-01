@@ -1895,6 +1895,15 @@ const STATE_DOTS = [
     load: async () => process.env.VA_VDOT_KEY ? (await _vdotStreams()).map(_vdotCamera).filter(Boolean) : [] },
   // Maryland — MDOT SHA CHART public data feed (no key). Also fills in DC (see _camerasFor).
   { id:'md', label:'Maryland (MDOT SHA CHART)', cacheTTL:15*60*1000, load: () => _chartMdCams() },
+  // Missouri — MoDOT Traveler Information Map camera files (no key)
+  { id:'mo', label:'Missouri (MoDOT Traveler Map)', cacheTTL:30*60*1000, load: () => _modotCams() },
+  // Michigan — MDOT Mi Drive camera list (no key); each picture is looked up when opened
+  { id:'mi', label:'Michigan (MDOT Mi Drive)', cacheTTL:60*60*1000, load: () => _miDriveCams() },
+  // Washington — WSDOT Traveler Information API (WSDOT_ACCESS_CODE); until it's
+  // set, the camera file WSDOT's own travel map reads
+  { id:'wa', label:'Washington (WSDOT)', cacheTTL:30*60*1000, load: () => _wsdotCams() },
+  // Tennessee — TDOT open-data API (TN_TDOT_KEY)
+  { id:'tn', label:'Tennessee (TDOT SmartWay)', envKey:'TN_TDOT_KEY', cacheTTL:30*60*1000, load: () => _tdotCams() },
 
   // ── ArcGIS open-data layers (no key) ───────────────────────────────────
   // Florida: statewide from FL511 once FL_511_KEY is set (same platform as
@@ -4303,6 +4312,131 @@ app.get('/api/admin/cameras/la-offline', (req, res) => res.json({
   note: 'Each check loads every Louisiana camera picture from 511LA; "unavailable" = showing 511LA\'s gray placeholder.',
   history: _laSweep.history,
 }));
+
+// ── Small JSON helper for the camera feeds below ─────────────────────────────
+async function _camJson(url, headers = {}, ms = 30000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: 'application/json', ...headers }, signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+const _okLatLng = (c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && c.lat && c.lng;
+
+// ── Missouri: MoDOT Traveler Information Map ─────────────────────────────────
+// StreamingCams2.json = live video (HLS) cameras; snapshot.json = a few still
+// pictures. Both are the files MoDOT's own map reads (same feed folder as the
+// Missouri work-zone feed in closures.js).
+async function _modotCams() {
+  const [vids, snaps] = await Promise.all([
+    _camJson('https://traveler.modot.org/timconfig/feed/desktop/StreamingCams2.json').catch(e => { console.warn('[Cameras] MoDOT video list:', e.message); return []; }),
+    _camJson('https://traveler.modot.org/map/js/snapshot.json').catch(() => ({ cameras: [] })),
+  ]);
+  const out = [];
+  (Array.isArray(vids) ? vids : []).forEach((c, i) => {
+    const url = String(c && c.html || '');
+    if (!/^https:\/\/[^/]+\/.+\.m3u8(\?|$)/i.test(url)) return;
+    const name = String(c.location || 'MoDOT camera').trim();
+    const m = url.match(/rtplive\/([^/]+)\//);
+    out.push({ id: 'mo-' + (m ? m[1] : i), name, lat: Number(c.y), lng: Number(c.x), imageUrl: null, videoUrl: url.replace(/:443\//, '/'),
+               direction: null, route: null, source: 'dot' });
+  });
+  ((snaps && snaps.cameras) || []).forEach(c => {
+    const lat = Number(c.location && c.location.y), lng = Number(c.location && c.location.x);
+    if (!c.url || out.some(o => _haversineM(o.lat, o.lng, lat, lng) < 80)) return;
+    out.push({ id: 'mo-snap-' + c.id, name: String(c.caption || 'MoDOT camera'), lat, lng,
+               imageUrl: new URL(c.url, 'https://traveler.modot.org/').href, videoUrl: null, direction: null, route: null, source: 'dot' });
+  });
+  return out.filter(_okLatLng);
+}
+
+// ── Michigan: MDOT Mi Drive ──────────────────────────────────────────────────
+// The list has places and names only; each camera's picture address comes from
+// a second call, made when someone opens that camera (refreshUrl), so we don't
+// ask MDOT 800 times every hour.
+const MIDRIVE = 'https://mdotjboss.state.mi.us/MiDrive/camera/';
+async function _miDriveCams() {
+  const list = await _camJson(MIDRIVE + 'AllForMap');
+  return (Array.isArray(list) ? list : []).filter(c => c && Number.isFinite(+c.id)).map(c => ({
+    id: 'mi-' + c.id, name: String(c.title || 'MDOT camera').trim(), lat: Number(c.latitude), lng: Number(c.longitude),
+    imageUrl: null, videoUrl: null, direction: null, route: null, source: 'dot',
+    refreshUrl: '/api/cameras/mi/cam/' + c.id,
+  })).filter(_okLatLng);
+}
+const _miFresh = new Map();
+app.get('/api/cameras/mi/cam/:id', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^\d{1,8}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const hit = _miFresh.get(id);
+  if (hit && Date.now() - hit.ts < 10 * 60 * 1000) return res.json(hit.cam);
+  try {
+    const c = await _camJson(MIDRIVE + 'getCameraInformation/' + id, {}, 15000);
+    const img = String(c && c.link || '').replace(/^http:/i, 'https:');
+    if (!/^https:\/\//i.test(img)) return res.status(404).json({ error: 'no picture for this camera' });
+    _registerCamHost(img);
+    const cam = { imageUrl: img, direction: c.orientation ? String(c.orientation).replace(/^Traffic closest to camera is traveling /i, '').replace(/\.$/, '') : null };
+    _miFresh.set(id, { ts: Date.now(), cam });
+    if (_miFresh.size > 1500) _miFresh.delete(_miFresh.keys().next().value);
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json(cam);
+  } catch (e) {
+    res.status(502).json({ error: 'MDOT unavailable' });
+  }
+});
+
+// ── Washington: WSDOT ────────────────────────────────────────────────────────
+// Official: Traveler Information API (free access code, WSDOT_ACCESS_CODE).
+// Until that's set: the camera file WSDOT's travel map reads (Web Mercator).
+async function _wsdotCams() {
+  const code = (process.env.WSDOT_ACCESS_CODE || '').trim();
+  if (code) {
+    const list = await _camJson('https://wsdot.wa.gov/Traffic/api/HighwayCameras/HighwayCamerasREST.svc/GetCamerasAsJson?AccessCode=' + encodeURIComponent(code));
+    return (Array.isArray(list) ? list : []).filter(c => c && c.IsActive !== false && /^https?:\/\//i.test(c.ImageURL || '')).map(c => {
+      const loc = c.CameraLocation || {};
+      return { id: 'wa-' + c.CameraID, name: String(c.Title || loc.Description || 'WSDOT camera').trim(),
+               lat: Number(c.DisplayLatitude || loc.Latitude), lng: Number(c.DisplayLongitude || loc.Longitude),
+               imageUrl: c.ImageURL.replace(/^http:/i, 'https:'), videoUrl: null, direction: loc.Direction || null, route: loc.RoadName || null, source: 'dot' };
+    }).filter(_okLatLng);
+  }
+  const j = await _camJson('https://data.wsdot.wa.gov/travelcenter/Cameras.json');
+  const R = 6378137;
+  return ((j && j.features) || []).map(f => {
+    const a = f.attributes || {}, g = f.geometry || {};
+    const lng = g.x / R * 180 / Math.PI, lat = (2 * Math.atan(Math.exp(g.y / R)) - Math.PI / 2) * 180 / Math.PI;
+    return { id: 'wa-' + a.CameraID, name: String(a.CameraTitle || 'WSDOT camera').trim(), lat, lng,
+             imageUrl: String(a.ImageURL || '').replace(/^http:/i, 'https:'), videoUrl: null, direction: a.CompassDirection || null, route: null, source: 'dot' };
+  }).filter(c => c.imageUrl.startsWith('https://') && _okLatLng(c));
+}
+
+// ── Tennessee: TDOT open-data API (TN_TDOT_KEY) ──────────────────────────────
+// Field names are read defensively until we've seen a live reply; the admin
+// page /api/admin/cameras/dot-status shows what came back ("tn").
+async function _tdotCams() {
+  const key = (process.env.TN_TDOT_KEY || '').trim();
+  if (!key) return [];
+  const st = _dotStatus.tn = { label: 'Tennessee (TDOT SmartWay)', at: new Date().toISOString(), host: 'www.tdot.tn.gov' };
+  let j;
+  try { j = await _camJson('https://www.tdot.tn.gov/opendata/api/public/RoadwayCameras', { ApiKey: key }); }
+  catch (e) { st.error = e.message; throw e; }
+  const list = Array.isArray(j) ? j : (j && (j.data || j.Data || j.cameras || j.Cameras || Object.values(j).find(Array.isArray))) || [];
+  st.received = list.length; st.sampleFields = list[0] ? Object.keys(list[0]).slice(0, 30) : [];
+  const pick = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(k) && o[k] != null && o[k] !== ''); return k ? o[k] : undefined; };
+  const out = list.map((c, i) => {
+    const loc = c.location || c.Location || {};
+    const lat = Number(pick(c, /^lat(itude)?$/i) ?? pick(loc, /^lat(itude)?$/i));
+    const lng = Number(pick(c, /^(lng|lon|long|longitude)$/i) ?? pick(loc, /^(lng|lon|long|longitude)$/i));
+    const urls = Object.values(c).filter(v => typeof v === 'string' && /^https?:\/\//i.test(v)).map(v => v.replace(/^http:/i, 'https:'));
+    const video = urls.find(u => /\.m3u8(\?|$)/i.test(u)) || null;
+    const image = urls.find(u => /\.(jpe?g|png)(\?|$)/i.test(u) || /snapshot|thumbnail|image/i.test(u)) || null;
+    const active = pick(c, /^(active|isactive|enabled|status)$/i);
+    if (active === false || /offline|inactive|disabled/i.test(String(active || ''))) return null;
+    return { id: 'tn-' + (pick(c, /^(id|cameraid|camera_id)$/i) ?? i), name: String(pick(c, /^(title|name|description|location|locationdescription)$/i) || 'TDOT camera').trim(),
+             lat, lng, imageUrl: image, videoUrl: video, direction: pick(c, /direction/i) || null, route: pick(c, /^(route|roadway|road)$/i) || null, source: 'dot' };
+  }).filter(c => c && (c.imageUrl || c.videoUrl) && _okLatLng(c));
+  st.kept = out.length;
+  return out;
+}
 
 // ── Maryland: MDOT SHA CHART camera feed ──────────────────────────────────────
 // Public, no key: chart.maryland.gov/DataFeeds/GetDataFeeds → "Live Traffic
