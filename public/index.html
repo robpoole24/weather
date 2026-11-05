@@ -974,6 +974,9 @@
      nothing, which fails store testing. Phones and computers still show them. */
   .tv-mode .ch-btn.subscribe,
   .tv-mode a[href="/shop.html"],
+  /* Android app (Google Play): no shop link, so the app stays plainly non-commercial
+     (Play "non-trader" status). The shop stays on the website. */
+  .native-app a[href="/shop.html"],
   .tv-mode a[href*="youtube.com"],
   .tv-mode #playlist-yt-link { display: none !important; }
   .tv-mode .wtv-store-link { pointer-events: none; }
@@ -1307,6 +1310,17 @@
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
 <link rel="icon" href="/images/icon-192.png?v=2" type="image/png">
 <link rel="apple-touch-icon" href="/images/apple-touch-icon.png?v=2">
+<script>
+  // Inside the Android app (Capacitor shell around this site): mark the page so
+  // app-only rules apply, e.g. hiding the shop link (see .native-app in the CSS)
+  (function () {
+    function mark() {
+      try { if (window.Capacitor && (Capacitor.isNativePlatform ? Capacitor.isNativePlatform() : Capacitor.getPlatform && Capacitor.getPlatform() !== 'web'))
+        document.documentElement.classList.add('native-app'); } catch (_) {}
+    }
+    mark(); document.addEventListener('DOMContentLoaded', mark);
+  })();
+</script>
 </head>
 <body>
 
