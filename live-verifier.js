@@ -60,6 +60,27 @@ function playerDetails(html) {
   }
   return null;
 }
+// Bot-check page (YouTube's "confirm you're not a bot", shown to cloud servers):
+// the player data is withheld, but the page's own header data (ytInitialData)
+// still names the video (currentVideoEndpoint) and its view counter says
+// "… watching now" with "isLive":true when it's live. Read that instead.
+function pageHeaderDetails(html) {
+  const cve = html.match(/"currentVideoEndpoint":\{"clickTrackingParams":"[^"]*",(?:"commandMetadata":\{"webCommandMetadata":\{[^{}]*\}\},)?"watchEndpoint":\{"videoId":"([\w-]{11})"/);
+  if (!cve) return null;
+  const near = (key, len) => { const i = html.indexOf(key); return i < 0 ? '' : html.slice(i, i + len); };
+  const views = near('"videoViewCountRenderer"', 500);
+  const overlay = near('"playerOverlayVideoDetailsRenderer":{', 1200);
+  const owner = near('"videoOwnerRenderer"', 3000).match(/"browseEndpoint":\{"browseId":"(UC[\w-]{22})"/);
+  const title = overlay.match(/"title":\{"simpleText":"((?:[^"\\]|\\.)*)"/);
+  let t = null; try { t = title ? JSON.parse('"' + title[1] + '"') : null; } catch (_) {}
+  return {
+    videoId: cve[1],
+    channelId: owner ? owner[1] : null,
+    isLive: /"isLive":true/.test(views) || /"text":" watching now"/.test(overlay),
+    isUpcoming: /"isUpcoming":true/.test(views) || /waiting|scheduled for|premieres/i.test(overlay.replace(/"clickTrackingParams":"[^"]*"/g, '')),
+    title: t,
+  };
+}
 function findVideoId(html) {
   for (const re of VIDEO_ID_PATTERNS) { const m = html.match(re); if (m) return m[1]; }
   const d = playerDetails(html);
@@ -113,7 +134,7 @@ function parseLivePage(channelId, html, finalUrl = '') {
   if (/consent\.(youtube|google)\.com/.test(finalUrl) || html.includes('consent.youtube.com') ||
       html.includes('google.com/sorry') || html.includes('g-recaptcha')) return { channelId, status: 'blocked' };
 
-  const details = playerDetails(html);
+  const details = playerDetails(html) || pageHeaderDetails(html);
   const videoId = (details && details.videoId) || findVideoId(html);
   if (!videoId) return { channelId, status: 'offline' };
 
@@ -183,6 +204,7 @@ async function diagnoseChannel(channelId) {
       snippets: { canonical: snip('rel="canonical"'), ogUrl: snip('property="og:url"'), liveBroadcastDetails: snip('"liveBroadcastDetails"', 220),
                   videoDetails: snip('"videoDetails"', 320) },
       playerDetails: (() => { const d = playerDetails(html); return d ? { videoId: d.videoId, channelId: d.channelId, isLive: d.isLive, isUpcoming: d.isUpcoming, title: d.title } : null; })(),
+      headerDetails: pageHeaderDetails(html),
       parsed: code === 200 ? parseLivePage(channelId, html, finalUrl) : null,
     };
   } catch (e) {
