@@ -35,9 +35,35 @@ const VIDEO_ID_PATTERNS = [
 // Positive proof the page is the channel homepage (i.e. not live)
 const CHANNEL_PAGE = /<link rel="canonical" href="https:\/\/www\.youtube\.com\/(?:channel\/|@)|<meta property="og:url" content="https:\/\/www\.youtube\.com\/(?:channel\/|@)/;
 
+// The player's own videoDetails object, read as JSON (not by pattern): since
+// Nov 2026 YouTube serves cloud servers a page whose canonical tag is
+// href="undefined" and whose player data sits at the very end, with the keys in
+// a different order — the old "videoDetails":{"videoId": pattern found nothing,
+// so every live channel read as offline. Tries each "videoDetails" on the page
+// and returns the first that parses and has a videoId.
+function playerDetails(html) {
+  let from = 0;
+  for (let tries = 0; tries < 6; tries++) {
+    const k = html.indexOf('"videoDetails"', from);
+    if (k < 0) return null;
+    from = k + 14;
+    const o = html.indexOf('{', from);
+    if (o < 0 || o - from > 8) continue;
+    let d = 0, inStr = false, esc = false, end = -1;
+    for (let i = o; i < html.length && i < o + 200000; i++) {
+      const c = html[i];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true; else if (c === '{') d++; else if (c === '}') { if (--d === 0) { end = i; break; } }
+    }
+    if (end < 0) continue;
+    try { const v = JSON.parse(html.slice(o, end + 1)); if (v && /^[\w-]{11}$/.test(v.videoId || '')) return v; } catch (_) {}
+  }
+  return null;
+}
 function findVideoId(html) {
   for (const re of VIDEO_ID_PATTERNS) { const m = html.match(re); if (m) return m[1]; }
-  return null;
+  const d = playerDetails(html);
+  return d ? d.videoId : null;
 }
 
 // Stop reading once the answer is known. Watch page: once the player response is in.
@@ -87,18 +113,20 @@ function parseLivePage(channelId, html, finalUrl = '') {
   if (/consent\.(youtube|google)\.com/.test(finalUrl) || html.includes('consent.youtube.com') ||
       html.includes('google.com/sorry') || html.includes('g-recaptcha')) return { channelId, status: 'blocked' };
 
-  const videoId = findVideoId(html);
+  const details = playerDetails(html);
+  const videoId = (details && details.videoId) || findVideoId(html);
   if (!videoId) return { channelId, status: 'offline' };
 
   // Ownership: only reject when the player data explicitly names a DIFFERENT channel
-  const owner = html.match(/"videoDetails":\{[^{}]*?"channelId":"(UC[\w-]{22})"/);
-  if (owner && owner[1] !== channelId) return { channelId, status: 'offline', videoId, note: 'foreign' };
+  const ownerId = details ? details.channelId : (html.match(/"videoDetails":\{[^{}]*?"channelId":"(UC[\w-]{22})"/) || [])[1];
+  if (ownerId && ownerId !== channelId) return { channelId, status: 'offline', videoId, note: 'foreign' };
 
   const isLiveNow = /"isLiveNow":true/.test(html);
-  const isLiveFlag = /"videoDetails":\{[^{}]*?"isLive":true/.test(html);
+  const isLiveFlag = details ? details.isLive === true : /"videoDetails":\{[^{}]*?"isLive":true/.test(html);
   const liveMicrodata = /itemprop="isLiveBroadcast" content="True"/i.test(html) && !/itemprop="endDate"/.test(html);
   const liveBadge = /BADGE_STYLE_TYPE_LIVE_NOW/.test(html);
-  const isUpcoming = /"isUpcoming":true/.test(html) || /"status":"LIVE_STREAM_OFFLINE"/.test(html);
+  const isUpcoming = details ? (details.isUpcoming === true && details.isLive !== true)
+    : (/"isUpcoming":true/.test(html) || /"status":"LIVE_STREAM_OFFLINE"/.test(html));
   // YouTube's "Sign in to confirm you're not a bot" wall (common for cloud servers like
   // Railway): the page still names the video but hides the player data that says
   // whether it's live. That's "blocked", not "offline" — the server confirms the
@@ -106,7 +134,7 @@ function parseLivePage(channelId, html, finalUrl = '') {
   const botWall = /"status":"LOGIN_REQUIRED"/.test(html) || /confirm you(?:\\u2019|’|'|&#39;)re not a bot/i.test(html)
     || /"status":"UNPLAYABLE"/.test(html) && !/"videoDetails"/.test(html);
 
-  const title = html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<meta property="og:title" content="([^"]*)"/);
+  const title = (details && details.title) ? [null, details.title] : (html.match(/<meta name="title" content="([^"]*)"/) || html.match(/<meta property="og:title" content="([^"]*)"/));
   const start = html.match(/"startTimestamp":"([^"]+)"/);
   const base = { channelId, videoId, title: title ? decode(title[1]) : null, startedAt: start ? start[1] : null };
   if (isUpcoming) return { ...base, status: 'upcoming' };
@@ -152,7 +180,9 @@ async function diagnoseChannel(channelId) {
         consentOrBotWall: has('consent.youtube.com') || has('google.com/sorry') || has('g-recaptcha') || has('"status":"LOGIN_REQUIRED"') || has(/not a bot/i),
         liveBadge: has('BADGE_STYLE_TYPE_LIVE_NOW'),
       },
-      snippets: { canonical: snip('rel="canonical"'), ogUrl: snip('property="og:url"'), liveBroadcastDetails: snip('"liveBroadcastDetails"', 220) },
+      snippets: { canonical: snip('rel="canonical"'), ogUrl: snip('property="og:url"'), liveBroadcastDetails: snip('"liveBroadcastDetails"', 220),
+                  videoDetails: snip('"videoDetails"', 320) },
+      playerDetails: (() => { const d = playerDetails(html); return d ? { videoId: d.videoId, channelId: d.channelId, isLive: d.isLive, isUpcoming: d.isUpcoming, title: d.title } : null; })(),
       parsed: code === 200 ? parseLivePage(channelId, html, finalUrl) : null,
     };
   } catch (e) {
