@@ -847,7 +847,38 @@ module.exports = function setupCommunityCams(app, deps) {
   const shownName = (n) => String(n || '').replace(/\s*[-–|:]?\s*(?:live\s*)?[(\[]?\d{1,2}[./-]\d{1,2}[./-]\d{2,4}[)\]]?\s*$/i, '').trim() || n;
   // Sky cams: the ones worth watching for aurora, meteors and night skies
   const SKY_RE = /aurora|northern lights|borealis|australis|night ?sky|dark ?sky|all[- ]?sky|meteor|milky ?way|star ?(?:cam|gaz)|sky ?cam|stargaz/i;
-  const isSkyCam = (c) => c.sky === true || (c.sky !== false && SKY_RE.test([c.name, c.streamTitle, c.channelTitle].join(' ')));
+  // Also every cam from a channel marked as a sky channel (admin → Sky Cams, a channel link)
+  const isSkyCam = (c) => c.sky === true || (c.sky !== false && ((c.channelId && (db.skyChannels || []).includes(c.channelId))
+    || (c.kind === 'yt-channel' && (db.skyChannels || []).includes(c.ref))
+    || SKY_RE.test([c.name, c.streamTitle, c.channelTitle].join(' '))));
+  // Mark a YouTube link as sky: a channel (all its cams, now and later) or one cam's stream
+  async function markSky(url, on = true) {
+    await load();
+    const p = await parseUrl(url);
+    if (p.kind === 'yt-channel') {
+      const list = db.skyChannels || (db.skyChannels = []);
+      if (on && !list.includes(p.ref)) list.push(p.ref);
+      if (!on) db.skyChannels = list.filter(x => x !== p.ref);
+      const cams = db.cams.filter(c => c.channelId === p.ref || (c.kind === 'yt-channel' && c.ref === p.ref));
+      const title = (cams[0] && (cams[0].channelTitle || cams[0].name)) || (db.channels[p.ref] && db.channels[p.ref].title) || p.ref;
+      await save();
+      return { kind: 'channel', channelId: p.ref, title, camsNow: cams.length, watched: !!db.channels[p.ref] };
+    }
+    const c = db.cams.find(x => x.ref === p.ref);
+    if (!c) throw new Error("That stream isn't one of our community cams yet: add it in the Webcams Control Panel first, or paste the channel's link instead");
+    if (on) c.sky = true; else c.sky = false;
+    await save();
+    return { kind: 'cam', name: c.name };
+  }
+  async function skyChannels() {
+    await load();
+    return (db.skyChannels || []).map(id => {
+      const cams = db.cams.filter(c => c.channelId === id || (c.kind === 'yt-channel' && c.ref === id));
+      return { channelId: id, title: (cams[0] && (cams[0].channelTitle || cams[0].name)) || (db.channels[id] && db.channels[id].title) || id,
+               camsOnMap: cams.length, watched: !!db.channels[id] };
+    });
+  }
+  async function unmarkSkyChannel(id) { await load(); db.skyChannels = (db.skyChannels || []).filter(x => x !== id); await save(); }
   async function skyCams() {
     await load();
     return db.cams.filter(c => visible(c) && Number.isFinite(c.lat) && Number.isFinite(c.lng) && isSkyCam(c)).map(toCamera);
@@ -1771,5 +1802,5 @@ module.exports = function setupCommunityCams(app, deps) {
     if (h === 3 && (!db.lastDiscovery || Date.now() - db.lastDiscovery > 20 * 3600 * 1000)) nightly().catch(() => {});
   }, 15 * 60 * 1000);
 
-  return { forState, skyCams, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll, sweepQueueForRestarts, predecessorOf, load } };
+  return { forState, skyCams, markSky, skyChannels, unmarkSkyChannel, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll, sweepQueueForRestarts, predecessorOf, load } };
 };

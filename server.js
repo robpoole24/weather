@@ -3137,17 +3137,32 @@ app.get('/api/cameras/sky', async (req, res) => {
   try { res.set('Cache-Control', 'public, max-age=120'); res.json({ cameras: await _skyCams() }); }
   catch (e) { res.status(500).json({ error: 'Sky cams unavailable' }); }
 });
+app.post('/api/admin/sky-cams/channel-remove', async (req, res) => {
+  try { await community.unmarkSkyChannel(String((req.body || {}).channelId || '')); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/api/admin/sky-cams', async (req, res) => {
-  try { res.json({ cameras: (await _skyCams({ withHidden: true })).map(c => ({ id: c.id, name: c.name, source: c.source || null,
+  try { res.json({ channels: await community.skyChannels(), cameras: (await _skyCams({ withHidden: true })).map(c => ({ id: c.id, name: c.name, source: c.source || null,
     auto: !!c.skyAuto, added: !!c.skyAdded, hidden: !!c.hidden, missing: !!c.missing, lat: c.lat, lng: c.lng })) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Add a Windy webcam by its link (windy.com/webcams/<id>) or id
 app.post('/api/admin/sky-cams/add', async (req, res) => {
   try {
-    const raw = String((req.body || {}).url || '').trim();
+    let raw = String((req.body || {}).url || '').trim();
+    // YouTube: a channel (all its cams, now and later) or one community cam's stream
+    if (/^@[\w.-]+$/.test(raw)) raw = 'https://www.youtube.com/' + raw;
+    if (/(?:^|\/\/)(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(raw)) {
+      const r = await community.markSky(raw, true);
+      if (r.kind === 'channel') {
+        const x = await _skyLoad();
+        const before = x.hide.length;                              // shown again if it was hidden
+        return res.json({ ok: true, name: `${r.title} (channel): ${r.camsNow} cam${r.camsNow === 1 ? '' : 's'} on the map now` + (r.watched ? ', new streams join automatically once approved' : '. Add the channel to the watch list in the Webcams Control Panel so its new streams get found') });
+      }
+      return res.json({ ok: true, name: r.name });
+    }
     const m = raw.match(/webcams\/(?:[a-z-]+\/)*?(\d{6,})/i) || raw.match(/^(?:windy-)?(\d{6,})$/);
-    if (!m) throw new Error('Paste the camera\'s "View on Windy.com" link (windy.com/webcams/…)');
+    if (!m) throw new Error('Paste a "View on Windy.com" link, or a YouTube channel (@handle) or stream link');
     const id = m[1];
     let found = null;
     for (const [st, e] of _windyCache) { const c = (e && e.cameras || []).find(w => String(w.windyId) === id); if (c) { found = { ...c, state: c.state || st }; break; } }
