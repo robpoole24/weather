@@ -1385,7 +1385,7 @@
   </div>
 
   <div class="lp-section">
-    <div class="lp-section-label">Surface Analysis</div>
+    <div class="lp-section-label">Weather Pattern</div>
     <div id="lp-surface"></div>
   </div>
 
@@ -6007,20 +6007,261 @@ function stopStormCells() {
 }
 
 // ── WPC Surface Analysis (Fronts) ─────────────────────────────────────────────
-let _frontsLayer = null;
+// Fronts, highs & lows, TV-style: fronts with their triangles / half-circles
+// ("pips") on the side each one is moving toward, and round H / L badges. Our
+// server works out which side of each front is warmer (/api/fronts): a cold
+// front moves toward warm air, a warm front into cold air.
+const FRONT_TYPES = {
+  cold:       { label: 'Cold front',       color: '#2563eb', what: 'Colder, drier air pushing in behind it.', expect: 'As it passes: a quick line of showers or storms (sometimes severe), a wind shift, then falling temperatures and clearing skies.' },
+  warm:       { label: 'Warm front',       color: '#dc2626', what: 'Warmer, more humid air sliding in.', expect: 'Ahead of it: clouds thicken and steady, lighter rain or snow falls for hours. Behind it: warmer and muggier.' },
+  stationary: { label: 'Stationary front', color: '#9333ea', what: 'A boundary between two air masses that has stalled.', expect: 'Can park clouds and rain over the same area for days, a common flooding setup.' },
+  occluded:   { label: 'Occluded front',   color: '#9333ea', what: 'Where a cold front has caught up to a warm front, near a mature low.', expect: 'A mix of both: rain or snow, gusty winds, and the storm usually starts to weaken.' },
+  trough:     { label: 'Trough',           color: '#b45309', what: 'A stretch of lower pressure, without a clear air-mass change.', expect: 'Often a focus for showers, storms and wind shifts.' },
+};
+const _frontType = (f) => /cold/i.test(f) ? 'cold' : /warm/i.test(f) ? 'warm' : /stationary/i.test(f) ? 'stationary' : /occlud/i.test(f) ? 'occluded' : /trough/i.test(f) ? 'trough' : null;
+let _frontsLayer = null, _frontPips = null, _frontsTimer = null, _frontsData = null;
+const _frontPop = (T) => `<div class="alert-popup"><div class="ev" style="color:${T.color}">${T.label}</div><div style="font-size:0.78rem;color:#c8ddf0;margin-top:4px">${T.what}</div><div style="font-size:0.76rem;color:#c8ddf0;margin-top:4px"><b>What to expect:</b> ${T.expect}</div><div class="exp">WPC national forecast chart · today</div></div>`;
+// One pip: an SVG triangle or half-circle sitting on the line, pointing along "up"
+const _pipSvg = (shape, color) => shape === 'tri'
+  ? `<svg width="16" height="12" viewBox="0 0 16 12"><path d="M1,11 L8,1 L15,11 Z" fill="${color}" stroke="#fff" stroke-width="0.8"/></svg>`
+  : `<svg width="16" height="12" viewBox="0 0 16 12"><path d="M1,11 A7,7 0 0 1 15,11 Z" fill="${color}" stroke="#fff" stroke-width="0.8"/></svg>`;
+function _drawFrontPips() {
+  if (!_frontsLayer || !_frontsData) return;
+  if (_frontPips) _frontPips.clearLayers(); else _frontPips = L.layerGroup().addTo(_frontsLayer);
+  const SPACING = 38;
+  _frontsData.lines.forEach(ln => {
+    const t = _frontType(ln.feat); if (!t || t === 'trough') return;
+    const pts = ln.coords.map(([x, y]) => map.latLngToLayerPoint([y, x]));
+    let carry = SPACING / 2, n = 0;             // distance into the next segment where the next pip goes
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i], p2 = pts[i + 1], dx = p2.x - p1.x, dy = p2.y - p1.y, segLen = Math.hypot(dx, dy);
+      if (!segLen) continue;
+      // screen "left" of the drawing direction is (dy, -dx); the warm side is left or right of it
+      let nx = dy / segLen, ny = -dx / segLen; if (ln.warmSide === 'right') { nx = -nx; ny = -ny; }
+      let d = carry;
+      for (; d < segLen; d += SPACING, n++) {
+        const at = L.point(p1.x + dx * d / segLen, p1.y + dy * d / segLen);
+        let shape, color, sx = nx, sy = ny;
+        if (t === 'cold') { shape = 'tri'; color = '#2563eb'; }
+        else if (t === 'warm') { shape = 'semi'; color = '#dc2626'; sx = -nx; sy = -ny; }        // into the cold air
+        else if (t === 'occluded') { shape = n % 2 ? 'semi' : 'tri'; color = '#9333ea'; }
+        else { if (n % 2) { shape = 'semi'; color = '#dc2626'; sx = -nx; sy = -ny; } else { shape = 'tri'; color = '#2563eb'; } }   // stationary
+        const ang = Math.atan2(sx, -sy) * 180 / Math.PI;
+        L.marker(map.layerPointToLatLng(at), { interactive: false, keyboard: false, icon: L.divIcon({ className: '', iconSize: [16, 12], iconAnchor: [8, 11],
+          html: `<div style="width:16px;height:12px;transform:rotate(${ang.toFixed(1)}deg);transform-origin:8px 11px">${_pipSvg(shape, color)}</div>` }) }).addTo(_frontPips);
+      }
+      carry = d - segLen;
+    }
+  });
+}
+// Round TV-style badge: red L (winds turn counter-clockwise) / blue H (clockwise)
+const _hlBadge = (type) => {
+  const hi = type === 'H', c1 = hi ? '#3b82f6' : '#ef4444', c2 = hi ? '#1e3a8a' : '#7f1d1d';
+  const arrows = hi
+    ? '<path d="M8,15 A11,11 0 0 1 20,6" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M18,4 L21.5,6.2 L18.3,8.6" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M28,21 A11,11 0 0 1 16,30" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M18,32 L14.5,29.8 L17.7,27.4" fill="none" stroke="#fff" stroke-width="1.6"/>'
+    : '<path d="M20,6 A11,11 0 0 0 8,15" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M6.4,12.4 L8,16 L10.8,13.4" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M16,30 A11,11 0 0 0 28,21" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M29.6,23.6 L28,20 L25.2,22.6" fill="none" stroke="#fff" stroke-width="1.6"/>';
+  return `<svg width="36" height="36" viewBox="0 0 36 36"><defs><radialGradient id="g${type}" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></radialGradient></defs>
+    <circle cx="18" cy="18" r="16.5" fill="url(#g${type})" stroke="#fff" stroke-width="2"/>${arrows}
+    <text x="18" y="24.5" text-anchor="middle" font-family="'Barlow Condensed',Arial,sans-serif" font-weight="800" font-size="18" fill="#fff">${type}</text></svg>`;
+};
+async function loadFronts() {
+  try {
+    const d = await fetch('/api/fronts').then(r => r.ok ? r.json() : Promise.reject());
+    if (!_frontsLayer) return;
+    _frontsData = d; _frontsLayer.clearLayers(); _frontPips = null;
+    d.lines.forEach(ln => {
+      const t = _frontType(ln.feat); if (!t) return; const T = FRONT_TYPES[t];
+      const ll = ln.coords.map(([x, y]) => [y, x]);
+      L.polyline(ll, { color: '#ffffff', weight: 6, opacity: 0.55, interactive: false }).addTo(_frontsLayer);
+      if (t === 'stationary') {
+        L.polyline(ll, { color: '#dc2626', weight: 3.5, opacity: 1 }).bindPopup(_frontPop(T), { maxWidth: 270 }).addTo(_frontsLayer);
+        L.polyline(ll, { color: '#2563eb', weight: 3.5, opacity: 1, dashArray: '38 38' }).bindPopup(_frontPop(T), { maxWidth: 270 }).addTo(_frontsLayer);
+      } else {
+        L.polyline(ll, { color: T.color, weight: 3.5, opacity: 1, dashArray: t === 'trough' ? '8 6' : null }).bindPopup(_frontPop(T), { maxWidth: 270 }).addTo(_frontsLayer);
+      }
+    });
+    d.centers.forEach(c => {
+      const hi = c.type === 'H';
+      const pop = hi
+        ? `<div class="alert-popup"><div class="ev" style="color:#60a5fa">High pressure</div><div style="font-size:0.78rem;color:#c8ddf0;margin-top:4px">Sinking air: usually fair, drier weather, lighter winds and cooler nights. Winds turn clockwise around it.</div><div class="exp">WPC national forecast chart · today</div></div>`
+        : `<div class="alert-popup"><div class="ev" style="color:#f87171">Low pressure</div><div style="font-size:0.78rem;color:#c8ddf0;margin-top:4px">Rising air: the center of a storm system, with clouds, rain or snow and stronger winds. Winds turn counter-clockwise around it, and fronts usually trail from it.</div><div class="exp">WPC national forecast chart · today</div></div>`;
+      L.marker([c.lat, c.lon], { zIndexOffset: 650, icon: L.divIcon({ className: '', iconSize: [36, 36], iconAnchor: [18, 18], html: _hlBadge(c.type) }) })
+        .bindPopup(pop, { maxWidth: 260 }).addTo(_frontsLayer);
+    });
+    _drawFrontPips();
+    const el = _seasonLegendBox('fronts');
+    if (el) {
+      const row = (svg, txt) => `<div style="font-size:0.66rem;color:#c8ddf0;margin:3px 0;display:flex;align-items:center;gap:6px">${svg}${txt}</div>`;
+      const line = (c, pip, flip) => `<span style="display:inline-flex;align-items:flex-end;width:30px;height:12px;border-bottom:3px solid ${c}">${pip}</span>`;
+      el.innerHTML = _legTitle('🌦 Fronts · highs & lows (today)')
+        + row(`<span style="display:inline-flex;gap:1px;border-bottom:3px solid #2563eb;width:30px;height:10px;align-items:flex-end">${_pipSvg('tri', '#2563eb').replace('width="16" height="12"', 'width="11" height="8"')}${_pipSvg('tri', '#2563eb').replace('width="16" height="12"', 'width="11" height="8"')}</span>`, 'Cold front')
+        + row(`<span style="display:inline-flex;gap:1px;border-bottom:3px solid #dc2626;width:30px;height:10px;align-items:flex-end">${_pipSvg('semi', '#dc2626').replace('width="16" height="12"', 'width="11" height="8"')}${_pipSvg('semi', '#dc2626').replace('width="16" height="12"', 'width="11" height="8"')}</span>`, 'Warm front')
+        + row(`<span style="display:inline-block;width:30px;height:3px;background:linear-gradient(90deg,#dc2626 50%,#2563eb 50%)"></span>`, 'Stationary front')
+        + row(`<span style="display:inline-flex;gap:1px;border-bottom:3px solid #9333ea;width:30px;height:10px;align-items:flex-end">${_pipSvg('tri', '#9333ea').replace('width="16" height="12"', 'width="11" height="8"')}${_pipSvg('semi', '#9333ea').replace('width="16" height="12"', 'width="11" height="8"')}</span>`, 'Occluded front')
+        + row(`<span style="display:inline-block;width:30px;border-top:3px dashed #b45309"></span>`, 'Trough')
+        + `<div style="display:flex;gap:10px;align-items:center;margin:4px 0">${_hlBadge('H').replace(/width="36" height="36"/, 'width="20" height="20"')}<span style="font-size:0.64rem;color:#c8ddf0">High (fair)</span>${_hlBadge('L').replace(/width="36" height="36"/, 'width="20" height="20"')}<span style="font-size:0.64rem;color:#c8ddf0">Low (stormy)</span></div>`
+        + _legNote('Triangles and half-circles point the way each front is moving. Tap any front, H or L to learn more.') + await _ensoNote();
+    }
+  } catch (_) {
+    const el = _seasonLegendBox('fronts'); if (el) el.innerHTML = _legTitle('🌦 Fronts') + _legNote('Fronts are unavailable right now. We\'ll keep trying.');
+  }
+}
 function startFronts() {
   if (_frontsLayer) return;
-  // natl_fcst_wx_chart includes fronts, highs/lows, precip areas — updated 2x/day
-  // Same mapservices.weather.noaa.gov server as NHC (not NowCOAST which 503s)
-  _frontsLayer = L.tileLayer.wms(
-    'https://mapservices.weather.noaa.gov/vector/services/outlooks/natl_fcst_wx_chart/MapServer/WMSServer',
-    { layers: '5,6,7,8,9,10', format: 'image/png', transparent: true, version: '1.3.0',
-      opacity: 0.85, zIndex: 420, attribution: 'WPC Surface Analysis: NOAA/NWS' }
-  ).addTo(map);
+  _frontsLayer = L.layerGroup().addTo(map);
+  map.on('zoomend', _drawFrontPips);
+  loadFronts(); _frontsTimer = setInterval(loadFronts, 60 * 60 * 1000);
 }
 function stopFronts() {
-  if (_frontsLayer) { map.removeLayer(_frontsLayer); _frontsLayer = null; }
+  clearInterval(_frontsTimer); _frontsTimer = null; map.off('zoomend', _drawFrontPips);
+  if (_frontsLayer) { map.removeLayer(_frontsLayer); _frontsLayer = null; } _frontPips = null; _frontsData = null;
+  document.getElementById('sl-fronts')?.remove(); _seasonLegendVisibility();
 }
+
+// ── El Niño / La Niña (NOAA CPC) — a note in the fronts and jet stream legends ──
+let _ensoData = null;
+const ENSO_US = {
+  'el-nino':  'The Pacific jet stream tends to run farther south across the U.S. this winter: a wetter, stormier South and Gulf Coast, and a milder, drier northern tier and Ohio Valley.',
+  'la-nina':  'The jet stream tends to buckle north over the Pacific and dive into the northern U.S.: colder and snowier North, warmer and drier South (drought risk).',
+  'neutral':  'Neither El Niño nor La Niña is steering the pattern, so other influences dominate this season.',
+};
+async function _ensoNote() {
+  try {
+    if (!_ensoData) _ensoData = await fetch('/api/enso').then(r => r.ok ? r.json() : Promise.reject());
+    const d = _ensoData, icon = d.phase === 'el-nino' ? '🔥' : d.phase === 'la-nina' ? '❄️' : '⚖️';
+    return `<div style="margin-top:0.35rem;padding-top:0.3rem;border-top:1px solid var(--border)">`
+      + `<div style="font-size:0.66rem;color:#fbbf24;font-weight:600">${icon} ${d.status}</div>`
+      + _legNote(ENSO_US[d.phase] || '')
+      + _legNote(`<a href="${d.url}" target="_blank" rel="noopener" style="color:var(--accent)">NOAA CPC</a>${d.issued ? ' · ' + d.issued : ''}`) + `</div>`;
+  } catch (_) { return ''; }
+}
+
+// ── Jet stream, TV-style: a ribbon along the jet's fastest core with arrows ──
+// From the 250 mb wind grid (/api/jetstream): in each column of longitude the
+// fastest spots (70+ kt) are found, linked west→east into ribbons and smoothed.
+// Two ribbons (as in El Niño winters) are labeled polar and subtropical jet.
+let _jetLayer = null, _jetArrows = null, _jetTimer = null, _jetRibbons = null;
+const _compass = (deg) => ['north','north-northeast','northeast','east-northeast','east','east-southeast','southeast','south-southeast','south','south-southwest','southwest','west-southwest','west','west-northwest','northwest','north-northwest'][Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+function _jetChains(points, step) {
+  const cols = new Map();
+  points.forEach(([la, lo, kt, dir]) => { if (!cols.has(lo)) cols.set(lo, []); cols.get(lo).push({ la, lo, kt, dir }); });
+  const lons = [...cols.keys()].sort((x, y) => x - y);
+  const chains = [];
+  lons.forEach(lo => {
+    const col = cols.get(lo).sort((x, y) => x.la - y.la);
+    // local maxima of speed down the column, 70 kt or more
+    const peaks = col.filter((p, i) => p.kt >= 70 && (!col[i - 1] || p.kt >= col[i - 1].kt) && (!col[i + 1] || p.kt >= col[i + 1].kt));
+    peaks.forEach(p => {
+      let best = null;
+      chains.forEach(ch => { const last = ch[ch.length - 1]; if (lo - last.lo <= step * 1.01 && Math.abs(last.la - p.la) <= 8 && (!best || Math.abs(last.la - p.la) < Math.abs(best[best.length - 1].la - p.la))) best = ch; });
+      if (best && best[best.length - 1].lo !== lo) best.push(p); else chains.push([p]);
+    });
+  });
+  return chains.filter(ch => ch.length >= 4);
+}
+// Chaikin smoothing so the ribbon curves like a hand-drawn jet
+function _smooth(ll, rounds = 3) {
+  let p = ll;
+  for (let r = 0; r < rounds; r++) {
+    const q = [p[0]];
+    for (let i = 0; i < p.length - 1; i++) { const [a1, b1] = p[i], [a2, b2] = p[i + 1]; q.push([a1 * 0.75 + a2 * 0.25, b1 * 0.75 + b2 * 0.25], [a1 * 0.25 + a2 * 0.75, b1 * 0.25 + b2 * 0.75]); }
+    q.push(p[p.length - 1]); p = q;
+  }
+  return p;
+}
+function _drawJetArrows() {
+  if (!_jetLayer || !_jetRibbons) return;
+  if (_jetArrows) _jetArrows.clearLayers(); else _jetArrows = L.layerGroup().addTo(_jetLayer);
+  const SP = 70;
+  _jetRibbons.forEach(r => {
+    const pts = r.ll.map(p => map.latLngToLayerPoint(p));
+    let carry = SP / 2;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i], p2 = pts[i + 1], dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy);
+      if (!len) continue;
+      let d = carry;
+      for (; d < len; d += SP) {
+        const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+        L.marker(map.layerPointToLatLng(L.point(p1.x + dx * d / len, p1.y + dy * d / len)), { interactive: false, keyboard: false,
+          icon: L.divIcon({ className: '', iconSize: [14, 14], iconAnchor: [7, 7],
+            html: `<div style="width:14px;height:14px;transform:rotate(${ang.toFixed(1)}deg)"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2,2 L12,7 L2,12 L5,7 Z" fill="#fff" opacity="0.95"/></svg></div>` }) }).addTo(_jetArrows);
+      }
+      carry = d - len;
+    }
+  });
+}
+async function loadJet() {
+  try {
+    const j = await fetch('/api/jetstream').then(r => r.ok ? r.json() : Promise.reject());
+    if (!_jetLayer) return;
+    _jetLayer.clearLayers(); _jetArrows = null;
+    const chains = _jetChains(j.points || [], j.step || 4);
+    const avgLat = (ch) => ch.reduce((t, p) => t + p.la, 0) / ch.length;
+    chains.sort((x, y) => avgLat(y) - avgLat(x));            // north first
+    const two = chains.length >= 2 && avgLat(chains[chains.length - 1]) < 36;
+    _jetRibbons = chains.map((ch, k) => {
+      const max = ch.reduce((m, p) => p.kt > m.kt ? p : m, ch[0]);
+      const name = two ? (k === chains.length - 1 && avgLat(ch) < 36 ? 'Subtropical jet' : 'Polar jet') : 'Jet stream';
+      return { ll: _smooth(ch.map(p => [p.la, p.lo])), max, name };
+    });
+    _jetRibbons.forEach(r => {
+      const color = r.name === 'Subtropical jet' ? '#a855f7' : '#7c3aed';
+      const pop = `<div class="alert-popup"><div class="ev" style="color:#c4b5fd">${r.name}</div><div style="font-size:0.78rem;color:#c8ddf0;margin-top:4px">The fast river of air about 34,000 ft up. Fastest stretch: about ${r.max.kt} kt (${Math.round(r.max.kt * 1.151)} mph), from the ${_compass(r.max.dir)}.</div><div style="font-size:0.76rem;color:#c8ddf0;margin-top:4px">${r.name === 'Subtropical jet' ? 'Carries Pacific moisture, clouds and rain across the southern U.S., especially in El Niño winters.' : 'Storms ride along it. Colder air sits on its north side; where it dips south, cold air follows.'}</div><div class="exp">GFS model · 250 mb winds</div></div>`;
+      L.polyline(r.ll, { color: '#1e1b4b', weight: 22, opacity: 0.35, interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(_jetLayer);
+      L.polyline(r.ll, { color, weight: 16, opacity: 0.75, lineCap: 'round', lineJoin: 'round' }).bindPopup(pop, { maxWidth: 270 }).addTo(_jetLayer);
+      const mid = r.ll[Math.floor(r.ll.length / 2)];
+      L.marker(mid, { icon: L.divIcon({ className: '', iconSize: null,
+        html: `<div style="transform:translate(-50%,-190%);white-space:nowrap;font:800 11px/1 'Barlow Condensed',sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:#fff;background:#4c1d95;border:1px solid #c4b5fd;padding:3px 7px;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.5)">${r.name}</div>` }) })
+        .bindPopup(pop, { maxWidth: 270 }).addTo(_jetLayer);
+    });
+    _drawJetArrows();
+    const el = _seasonLegendBox('jet');
+    if (el) el.innerHTML = _legTitle('💨 Jet stream (~34,000 ft)')
+      + `<div style="font-size:0.66rem;color:#c8ddf0;margin:3px 0;display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:30px;height:8px;border-radius:4px;background:#7c3aed"></span>Fastest winds aloft (70+ kt)</div>`
+      + _legNote(_jetRibbons.length ? 'Arrows show which way it flows. Storms ride along the jet; colder air sits north of it.' : 'No strong jet over North America right now.')
+      + await _ensoNote();
+  } catch (_) {
+    const el = _seasonLegendBox('jet'); if (el) el.innerHTML = _legTitle('💨 Jet stream') + _legNote('The jet stream is unavailable right now. We\'ll keep trying.');
+  }
+}
+function startJet() { if (_jetLayer) return; _jetLayer = L.layerGroup().addTo(map); map.on('zoomend', _drawJetArrows); loadJet(); _jetTimer = setInterval(loadJet, 60 * 60 * 1000); }
+function stopJet() { clearInterval(_jetTimer); _jetTimer = null; map.off('zoomend', _drawJetArrows); if (_jetLayer) { map.removeLayer(_jetLayer); _jetLayer = null; } _jetArrows = null; _jetRibbons = null; document.getElementById('sl-jet')?.remove(); _seasonLegendVisibility(); }
+
+// ── El Niño / La Niña: the typical winter (Dec–Feb) pattern for the current phase ──
+// Broad zones like the TV graphics, from NOAA CPC's typical U.S. impacts.
+let _ensoLayer = null;
+const ENSO_SOUTH = [[38,-124.5],[36.5,-121],[35.5,-116],[36.5,-109],[36,-100],[36,-90],[36.5,-80],[36.7,-75.8],[33.5,-77.5],[30.5,-80.7],[25.2,-80.2],[24.8,-81.5],[29,-83],[30,-86],[29.5,-89],[28.5,-95],[25.9,-97.2],[29.5,-103.5],[31.3,-108.2],[32.5,-114.7],[32.5,-117.1],[34.4,-120.5]];
+const ENSO_NORTH = [[49,-125],[52,-110],[52,-95],[50,-85],[48,-77],[46,-69],[44.5,-67],[42.5,-72],[41.5,-80],[41,-90],[42,-100],[43,-110],[44.5,-118],[46,-124]];
+async function startEnso() {
+  if (_ensoLayer) return;
+  _ensoLayer = L.layerGroup().addTo(map);
+  try {
+    if (!_ensoData) _ensoData = await fetch('/api/enso').then(r => r.ok ? r.json() : Promise.reject());
+  } catch (_) {}
+  if (!_ensoLayer) return;
+  const d = _ensoData || { phase: 'neutral', status: 'ENSO status unavailable' };
+  const zones = d.phase === 'el-nino'
+    ? [[ENSO_SOUTH, '#22c55e', 'Wetter &amp; cooler', 'The subtropical jet steers Pacific storms across the southern U.S.: more rain and mountain snow, more clouds, cooler days.'],
+       [ENSO_NORTH, '#facc15', 'Drier &amp; warmer', 'The northern jet is weaker and pulled north: milder, often less snowy winters across the northern tier.']]
+    : d.phase === 'la-nina'
+    ? [[ENSO_SOUTH, '#f97316', 'Drier &amp; warmer', 'The storm track stays north: a warmer, drier South, raising drought and wildfire risk.'],
+       [ENSO_NORTH, '#38bdf8', 'Wetter &amp; colder', 'The jet dips into the northern U.S.: colder outbreaks and more snow across the North and Great Lakes.']]
+    : [];
+  zones.forEach(([poly, color, label, why]) => {
+    const pop = `<div class="alert-popup"><div class="ev" style="color:${color}">${label} than normal</div><div style="font-size:0.78rem;color:#c8ddf0;margin-top:4px">${why}</div><div style="font-size:0.72rem;color:#94a3b8;margin-top:4px">Typical December–February pattern during ${d.status.replace(/ (Advisory|Watch).*$/i, '')}. Individual storms and cold snaps still happen.</div><div class="exp">NOAA Climate Prediction Center</div></div>`;
+    L.polygon(poly, { color, weight: 1.5, opacity: 0.8, fillColor: color, fillOpacity: 0.28, smoothFactor: 2 }).bindPopup(pop, { maxWidth: 270 }).addTo(_ensoLayer);
+    const c = L.polygon(poly).getBounds().getCenter();
+    L.marker(c, { icon: L.divIcon({ className: '', iconSize: null,
+      html: `<div style="transform:translate(-50%,-50%);white-space:nowrap;font:800 14px/1 'Barlow Condensed',sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#fff;background:rgba(15,23,42,0.85);border:1.5px solid ${color};padding:5px 9px;border-radius:4px">${label}</div>` }) })
+      .bindPopup(pop, { maxWidth: 270 }).addTo(_ensoLayer);
+  });
+  const el = _seasonLegendBox('enso');
+  if (el) el.innerHTML = _legTitle((d.phase === 'el-nino' ? '🔥 ' : d.phase === 'la-nina' ? '❄️ ' : '⚖️ ') + (d.status || 'El Niño / La Niña'))
+    + (d.synopsis ? _legNote(d.synopsis) : '')
+    + _legNote(zones.length ? 'Shaded areas: the typical winter (Dec–Feb) pattern for this phase. Turn on 💨 Jet Stream to see where the jet actually is today.' : 'Neither El Niño nor La Niña is active, so there\'s no typical pattern to show.')
+    + (d.url ? _legNote(`<a href="${d.url}" target="_blank" rel="noopener" style="color:var(--accent)">NOAA CPC</a>${d.issued ? ' · ' + d.issued : ''}`) : '');
+}
+function stopEnso() { if (_ensoLayer) { map.removeLayer(_ensoLayer); _ensoLayer = null; } document.getElementById('sl-enso')?.remove(); _seasonLegendVisibility(); }
 
 // ── WPC Excessive Rainfall Outlook ───────────────────────────────────────────
 let _eroLayer = null;
@@ -8196,7 +8437,9 @@ const WTV_INFO = {
   'chasers':       { t:'Live Storm Chasers', w:'Positions of storm chasers and spotters sharing their location.', r:'Clusters of chasers usually mean that is where the strongest storm is.' },
   'lightning':     { t:'Lightning Strikes', w:'Lightning detected in the last 10 minutes.', r:'Newer strikes are brighter. If strikes are within about 10 miles of you, you are close enough to be struck.' },
   'storm-cells':   { t:'Storm Cell Vectors', w:'Arrows showing where each storm is heading and how fast.', r:'Follow the arrow to see if a storm is coming your way and roughly when.' },
-  'fronts':        { t:'WPC Surface Analysis', w:'Fronts and pressure centers drawn by Weather Prediction Center forecasters.', r:'Weather changes along fronts. Storms often fire along cold fronts.' },
+  'fronts':        { t:'Fronts, Highs & Lows', w:'Today\'s fronts and high/low pressure centers from Weather Prediction Center forecasters. Blue = cold front, red = warm, red/blue = stationary, purple = occluded, brown dashes = trough.', r:'Weather changes along fronts: storms often fire along cold fronts, and steady rain falls ahead of warm fronts. H means fair weather, L means a storm system.' },
+  'enso':          { t:'El Niño / La Niña', w:'NOAA\'s current El Niño / La Niña status and the typical winter pattern it brings to the U.S.', r:'These are typical tendencies for December–February, not a forecast for any one day.' },
+  'jet':           { t:'Jet Stream', w:'The fast river of air about 34,000 ft up (250 mb), from the GFS model, drawn along its fastest core with arrows showing which way it flows.', r:'Storms form and track along the jet. Where it dips south, cold air follows; where it bulges north, it\'s warm underneath. El Niño and La Niña shift where it sits each winter.' },
   'ptype':         { t:'Rain / Snow / Ice Radar', w:'Live radar colored by what is falling: rain, snow, sleet, freezing rain or a mix.', r:'Pink means ice — sleet or freezing rain — the most dangerous for driving. Darker colors are heavier.' },
   'wssi':          { t:'Winter Storm Severity', w:'The Weather Prediction Center\'s estimate of how much a winter storm will disrupt daily life over the next 3 days.', r:'Minor → Moderate → Major → Extreme. Major or Extreme means travel may be impossible and closures are likely.' },
   'snow-prob':     { t:'Chance of Heavy Snow', w:'The chance of at least 4, 8 or 12 inches of snow, for each of the next 3 days.', r:'40%+ is a real possibility worth planning around; 70%+ means it\'s likely.' },
@@ -9263,7 +9506,9 @@ const CHASER_ITEMS=[
   {id:'surveys',    ico:'📐', name:'Tornado Survey Paths',   sub:'NWS damage surveys · EF ratings · last 7 days', def:false},
 ];
 const SURFACE_ITEMS=[
-  {id:'fronts',   ico:'🌦', name:'WPC Surface Analysis',       sub:'Fronts · pressure centers · NowCOAST',def:false},
+  {id:'fronts',   ico:'🌦', name:'Fronts, Highs & Lows',        sub:'WPC · cold, warm & stationary fronts · tap to learn what each means', def:false},
+  {id:'jet',      ico:'💨', name:'Jet Stream',                  sub:'Today\'s jet ~34,000 ft · where storms track', def:false},
+  {id:'enso',     ico:'🌊', name:'El Niño / La Niña',           sub:'NOAA CPC status · typical winter pattern it brings', def:false},
   {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC flash flood risk · Day 1–5',      def:false},
   {id:'cpc',      ico:'📆', name:'6–10 & 8–14 Day Outlook',     sub:'CPC · warmer/colder, wetter/drier than normal', def:false},
 ];
@@ -9765,6 +10010,8 @@ function applyOverlay(id,on){
     case 'cameras':   if (on) startCameras(); else stopCameras(); break;
     case 'storm-cells':    if (on) startStormCells(); else stopStormCells(); break;
     case 'fronts':         if (on) startFronts(); else stopFronts(); break;
+    case 'jet':            if (on) startJet(); else stopJet(); break;
+    case 'enso':           if (on) startEnso(); else stopEnso(); break;
     case 'qpe-1h':         if (on) startQPE('01H'); else stopQPE('01H'); updateQPELegend(); break;
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;

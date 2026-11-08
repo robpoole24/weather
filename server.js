@@ -2989,6 +2989,126 @@ async function _camerasFor(code) {
   return { cameras: merged, sources: sourceCounts };
 }
 
+// ── Fronts with "pips" on the right side (/api/fronts) ──────────────────────
+// WPC's map data says what each front is, not which way it moves. A cold front
+// moves toward the warmer air and a warm front into the colder air, so we read
+// the current temperature a little way off each side of every front (one
+// Open-Meteo call) and send which side is warmer. "left" means left of the line
+// as drawn (from its first point to its last).
+const WPC_CHART_URL = 'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/natl_fcst_wx_chart/MapServer/';
+let _fronts = null, _frontsBusy = null;
+async function _frontsWithSides() {
+  if (_fronts && Date.now() - _fronts.ts < 60 * 60 * 1000) return _fronts.data;
+  if (_frontsBusy) return _frontsBusy;
+  _frontsBusy = (async () => {
+    const q = (id) => _camJson(WPC_CHART_URL + id + '/query?where=1%3D1&outFields=feat,idp_filedate&returnGeometry=true&f=geojson', {}, 20000);
+    const [fr, hl] = await Promise.all([q(2), q(1)]);
+    const lines = [];
+    (fr.features || []).forEach(f => {
+      const g = f.geometry || {}; const parts = g.type === 'MultiLineString' ? g.coordinates : g.type === 'LineString' ? [g.coordinates] : [];
+      parts.forEach(c => { if (c.length >= 2) lines.push({ feat: f.properties.feat, coords: c.map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)]) }); });
+    });
+    // Sample points: 3 along each line, ~1.5° off each side
+    const samples = [];
+    lines.forEach((ln, i) => {
+      const c = ln.coords;
+      [0.25, 0.5, 0.75].forEach(frac => {
+        const k = Math.min(c.length - 2, Math.max(0, Math.floor(frac * (c.length - 1))));
+        const [x1, y1] = c[k], [x2, y2] = c[k + 1];
+        const cos = Math.cos(((y1 + y2) / 2) * Math.PI / 180);
+        const e = (x2 - x1) * cos, n = y2 - y1, len = Math.hypot(e, n) || 1;
+        const le = -n / len, ln_ = e / len;                    // left normal (east, north)
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, d = 1.5;
+        samples.push({ i, side: 'L', lat: my + ln_ * d, lon: mx + le * d / cos });
+        samples.push({ i, side: 'R', lat: my - ln_ * d, lon: mx - le * d / cos });
+      });
+    });
+    const temps = new Array(samples.length).fill(null);
+    for (let s0 = 0; s0 < samples.length; s0 += 150) {
+      const ch = samples.slice(s0, s0 + 150);
+      try {
+        const j = await _camJson('https://api.open-meteo.com/v1/gfs?latitude=' + ch.map(p => p.lat.toFixed(2)).join(',') + '&longitude=' + ch.map(p => p.lon.toFixed(2)).join(',')
+          + '&current=temperature_2m&timezone=GMT', {}, 20000);
+        (Array.isArray(j) ? j : [j]).forEach((r, k) => { const t = r && r.current && r.current.temperature_2m; if (Number.isFinite(t)) temps[s0 + k] = t; });
+      } catch (_) {}
+    }
+    lines.forEach((ln, i) => {
+      let l = 0, r = 0, nl = 0, nr = 0;
+      samples.forEach((p, k) => { if (p.i !== i || temps[k] == null) return; if (p.side === 'L') { l += temps[k]; nl++; } else { r += temps[k]; nr++; } });
+      if (nl && nr && Math.abs(l / nl - r / nr) >= 0.3) ln.warmSide = (l / nl > r / nr) ? 'left' : 'right';
+      else {                                                    // no clear difference: the warm side is usually the south
+        const c = ln.coords, e = c[c.length - 1][0] - c[0][0];
+        ln.warmSide = e >= 0 ? 'right' : 'left';
+      }
+    });
+    const data = { at: new Date().toISOString(), lines,
+      centers: (hl.features || []).map(f => ({ type: /high/i.test(f.properties.feat) ? 'H' : 'L', lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] })) };
+    _fronts = { ts: Date.now(), data };
+    return data;
+  })().finally(() => { _frontsBusy = null; });
+  return _frontsBusy;
+}
+app.get('/api/fronts', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=600'); res.json(await _frontsWithSides()); }
+  catch (e) { if (_fronts) return res.json(_fronts.data); res.status(502).json({ error: 'Fronts unavailable' }); }
+});
+
+// ── Jet stream: 250 mb winds on a 4° grid over North America (Open-Meteo GFS) ──
+// ~312 points in 3 requests, refreshed every 3 hours and shared by everyone.
+let _jet = null, _jetBusy = null;
+async function _jetStream() {
+  if (_jet && Date.now() - _jet.ts < 3 * 3600 * 1000) return _jet.data;
+  if (_jetBusy) return _jetBusy;
+  _jetBusy = (async () => {
+    const pts = [];
+    for (let la = 20; la <= 64; la += 4) for (let lo = -150; lo <= -50; lo += 4) pts.push([la, lo]);
+    const out = [];
+    for (let i = 0; i < pts.length; i += 104) {
+      const chunk = pts.slice(i, i + 104);
+      const url = 'https://api.open-meteo.com/v1/gfs?latitude=' + chunk.map(p => p[0]).join(',') + '&longitude=' + chunk.map(p => p[1]).join(',')
+        + '&hourly=wind_speed_250hPa,wind_direction_250hPa&wind_speed_unit=kn&forecast_hours=1&timezone=GMT';
+      const j = await _camJson(url, {}, 30000);
+      (Array.isArray(j) ? j : [j]).forEach((r, k) => {
+        const h = r && r.hourly; if (!h) return;
+        const sp = h.wind_speed_250hPa && h.wind_speed_250hPa[0], dir = h.wind_direction_250hPa && h.wind_direction_250hPa[0];
+        if (Number.isFinite(sp) && Number.isFinite(dir)) out.push([chunk[k][0], chunk[k][1], Math.round(sp), Math.round(dir)]);
+      });
+    }
+    const data = { at: new Date().toISOString(), step: 4, level: '250 mb (~34,000 ft)', points: out };
+    if (out.length > 50) _jet = { ts: Date.now(), data };
+    return data;
+  })().finally(() => { _jetBusy = null; });
+  return _jetBusy;
+}
+app.get('/api/jetstream', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=900'); res.json(await _jetStream()); }
+  catch (e) { if (_jet) return res.json(_jet.data); res.status(502).json({ error: 'Jet stream data unavailable' }); }
+});
+
+// ── El Niño / La Niña: NOAA CPC's ENSO Alert System status (updated monthly) ──
+let _enso = null;
+app.get('/api/enso', async (req, res) => {
+  try {
+    if (!_enso || Date.now() - _enso.ts > 12 * 3600 * 1000) {
+      const html = await fetchTextOverHttp('https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml');
+      const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&ntilde;/g, 'ñ').replace(/&Ntilde;/g, 'Ñ')
+        .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+      const status = (text.match(/ENSO Alert System Status:\s*([A-Za-zñÑ\- ]+?(?:Advisory|Watch|Not Active|Final [A-Za-zñÑ ]+?Advisory))/i) || [])[1];
+      const synopsis = (text.match(/Synopsis:\s*(.+?\.)(?:\s|$)/) || [])[1];
+      const issued = (text.match(/issued by\s+CLIMATE PREDICTION CENTER.*?(\d{1,2}\s+[A-Z][a-z]+\s+\d{4})/i) || text.match(/(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})/) || [])[1];
+      if (!status) throw new Error('status not found');
+      const phase = /ni(ñ|n)a/i.test(status) ? 'la-nina' : /ni(ñ|n)o/i.test(status) ? 'el-nino' : 'neutral';
+      _enso = { ts: Date.now(), data: { status: status.trim(), phase, synopsis: synopsis || null, issued: issued || null,
+        source: 'NOAA Climate Prediction Center', url: 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml' } };
+    }
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json(_enso.data);
+  } catch (e) {
+    if (_enso) return res.json(_enso.data);
+    res.status(502).json({ error: 'ENSO status unavailable' });
+  }
+});
+
 // Sky cams (aurora, meteors, night sky) from the community list, shown with the
 // Aurora Forecast layer. Under /api/cameras so their hosts are learned for the proxies.
 // Plus cameras added by hand on the admin page (any Windy webcam, by its link),
