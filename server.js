@@ -2991,9 +2991,66 @@ async function _camerasFor(code) {
 
 // Sky cams (aurora, meteors, night sky) from the community list, shown with the
 // Aurora Forecast layer. Under /api/cameras so their hosts are learned for the proxies.
+// Plus cameras added by hand on the admin page (any Windy webcam, by its link),
+// minus any hidden there (e.g. a tower "SkyCam" that isn't aimed at the sky).
+const SKY_KEY = 'wt:skycams';
+let _skyExtra = null;                  // { add: [{ windyId, state, name }], hide: [cameraId] }
+async function _skyLoad() {
+  if (_skyExtra) return _skyExtra;
+  let v = null; try { v = await rGet(SKY_KEY); } catch (_) {}
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (_) { v = null; } }
+  _skyExtra = { add: (v && Array.isArray(v.add)) ? v.add : [], hide: (v && Array.isArray(v.hide)) ? v.hide : [] };
+  return _skyExtra;
+}
+async function _skyCams({ withHidden = false } = {}) {
+  const x = await _skyLoad(), hide = new Set(x.hide);
+  const out = (await community.skyCams()).map(c => ({ ...c, skyAuto: true }));
+  for (const a of x.add) {
+    try {
+      const c = (await _loadWindy(a.state)).find(w => String(w.windyId) === String(a.windyId));
+      out.push(c ? { ...c, skyAdded: true } : { id: 'windy-' + a.windyId, name: a.name, skyAdded: true, missing: true });
+    } catch (_) {}
+  }
+  return out.filter(c => withHidden || (!hide.has(c.id) && !c.missing)).map(c => withHidden ? { ...c, hidden: hide.has(c.id) } : c);
+}
 app.get('/api/cameras/sky', async (req, res) => {
-  try { res.set('Cache-Control', 'public, max-age=300'); res.json({ cameras: await community.skyCams() }); }
+  try { res.set('Cache-Control', 'public, max-age=120'); res.json({ cameras: await _skyCams() }); }
   catch (e) { res.status(500).json({ error: 'Sky cams unavailable' }); }
+});
+app.get('/api/admin/sky-cams', async (req, res) => {
+  try { res.json({ cameras: (await _skyCams({ withHidden: true })).map(c => ({ id: c.id, name: c.name, source: c.source || null,
+    auto: !!c.skyAuto, added: !!c.skyAdded, hidden: !!c.hidden, missing: !!c.missing, lat: c.lat, lng: c.lng })) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Add a Windy webcam by its link (windy.com/webcams/<id>) or id
+app.post('/api/admin/sky-cams/add', async (req, res) => {
+  try {
+    const raw = String((req.body || {}).url || '').trim();
+    const m = raw.match(/webcams\/(?:[a-z-]+\/)*?(\d{6,})/i) || raw.match(/^(?:windy-)?(\d{6,})$/);
+    if (!m) throw new Error('Paste the camera\'s "View on Windy.com" link (windy.com/webcams/…)');
+    const id = m[1];
+    let found = null;
+    for (const [st, e] of _windyCache) { const c = (e && e.cameras || []).find(w => String(w.windyId) === id); if (c) { found = { ...c, state: c.state || st }; break; } }
+    if (!found) throw new Error('That webcam isn\'t loaded yet: open its state\'s cameras on the map, then try again');
+    const x = await _skyLoad();
+    x.hide = x.hide.filter(h => h !== 'windy-' + id);
+    if (!x.add.some(a => String(a.windyId) === id)) x.add.push({ windyId: id, state: found.state, name: found.name });
+    await rSet(SKY_KEY, x);
+    res.json({ ok: true, name: found.name });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Hand-added: removed from the list. Picked by name: hidden (and shown again with show:true)
+app.post('/api/admin/sky-cams/remove', async (req, res) => {
+  try {
+    const id = String((req.body || {}).id || ''), show = !!(req.body || {}).show;
+    const x = await _skyLoad();
+    const n = x.add.length;
+    if (!show) x.add = x.add.filter(a => 'windy-' + a.windyId !== id);
+    if (show) x.hide = x.hide.filter(h => h !== id);
+    else if (x.add.length === n && !x.hide.includes(id)) x.hide.push(id);
+    await rSet(SKY_KEY, x);
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.get('/api/cameras/state/:code', async (req, res) => {
   const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');

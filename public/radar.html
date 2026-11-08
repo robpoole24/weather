@@ -6285,7 +6285,7 @@ async function loadAurora() {
       + `<div class="leg-row"><div class="leg-sw" style="background:transparent;border-top:2px dashed #e879f9;height:0;margin-top:5px"></div>Edge of 10% chance</div>`
       + (j.kp != null ? _legNote(`Kp ${Number(j.kp).toFixed(1)} · ${KP_WORDS(j.kp)}${j.kp >= 5 ? ' — aurora possible much farther south than usual' : ''}`) : '')
       + _legNote('On a clear, dark night aurora can show low on the horizon a few hundred miles beyond the colored area.')
-      + _legNote('🌌 Glowing dots are live sky cams. Tap one to look at the sky there now.')
+      + (_skyLayer ? '' : _legNote('Turn on 🌌 Sky Cams to see live cams aimed at the sky.'))
       + _legNote('NOAA Space Weather Prediction Center' + (ft && !isNaN(ft) ? ' · for ' + ft.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''));
   } catch (_) {
     const el = _seasonLegendBox('aurora'); if (el) el.innerHTML = _legTitle('✨ Aurora') + _legNote('The aurora forecast is unavailable right now. We\'ll keep trying.');
@@ -8212,7 +8212,7 @@ const WTV_INFO = {
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
   'river-gauges':  { t:'River & Flood Gauges', w:'Live river levels from NWS gauges. Tap one for a chart of the last 3 days and the official forecast, where the River Forecast Center issues one.', r:'Green · normal. Yellow · near flood stage. Orange/red/purple · minor, moderate, major flooding. The forecast line shows where the river is headed and when it should crest.' },
   'cpc':           { t:'6–10 & 8–14 Day Outlook', w:'The Climate Prediction Center\'s outlook for whether the week after next will run warmer or colder, and wetter or drier, than usual for the time of year.', r:'Color strength is confidence: about 33% is no signal, 50%+ is clearly favored. Blank areas have equal chances.' },
-  'sky-cams':      { t:'Sky Cams', w:'Live cams pointed at the night sky: aurora cams, meteor cams and dark-sky cams from our community camera list.', r:'Turn on Aurora Forecast too to see where the lights are likely; the sky cams show up with it automatically.' },
+  'sky-cams':      { t:'Sky Cams', w:'Live cams pointed at the night sky: aurora cams, meteor cams and dark-sky cams.', r:'Turn on Aurora Forecast too to see where the lights are likely tonight.' },
   'aurora':        { t:'Aurora Forecast', w:'NOAA\'s chance of seeing the northern (or southern) lights overhead in the next half hour, plus the Kp index that measures geomagnetic activity.', r:'Kp 5+ is a geomagnetic storm: aurora can reach far south of normal. You need clear, dark skies away from city lights; look north.' },
   'buoys':         { t:'Buoys', w:'Live reports from NOAA buoys and coastal stations on the oceans and Great Lakes: wind, waves, water temperature and pressure.', r:'Dot color is wave height: green under 3 ft up to purple over 15 ft. Many Great Lakes buoys are pulled for the winter.' },
   'tide-gauges':   { t:'Tides & Water Levels', w:'NOAA\'s real-time water-level gauges along the coasts and Great Lakes. Tap one for the level now, coastal flood status and the next high and low tides.', r:'During a storm, a level well above the predicted tide is storm surge.' },
@@ -9267,9 +9267,9 @@ const SURFACE_ITEMS=[
   {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC flash flood risk · Day 1–5',      def:false},
   {id:'cpc',      ico:'📆', name:'6–10 & 8–14 Day Outlook',     sub:'CPC · warmer/colder, wetter/drier than normal', def:false},
 ];
-// Night Sky: the aurora forecast brings its sky cams along; Sky Cams also work on their own
+// Night Sky: two independent layers — use either or both
 const SKY_ITEMS=[
-  {id:'aurora',   ico:'✨', name:'Aurora Forecast',  sub:'NOAA SWPC · chance of northern lights · Kp index · with sky cams', def:false},
+  {id:'aurora',   ico:'✨', name:'Aurora Forecast',  sub:'NOAA SWPC · chance of northern lights · Kp index', def:false},
   {id:'sky-cams', ico:'🌌', name:'Sky Cams',         sub:'Live cams aimed at the night sky · aurora, meteors, stars', def:false},
 ];
 const PRECIP_ITEMS=[
@@ -9769,7 +9769,7 @@ function applyOverlay(id,on){
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
     case 'buoys':          if (on) startBuoys(); else stopBuoys(); break;
-    case 'aurora':         if (on) { startAurora(); skyCamsWant('aurora', true); } else { stopAurora(); skyCamsWant('aurora', false); } break;
+    case 'aurora':         if (on) startAurora(); else stopAurora(); break;
     case 'sky-cams':       skyCamsWant('toggle', on); break;
     case 'tide-gauges':    if (on) startTideGauges(); else stopTideGauges(); break;
     case 'nhc-tropical':   if (on) startTropical(); else stopTropical(); break;

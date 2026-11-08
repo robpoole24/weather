@@ -669,6 +669,52 @@
       </div>
     </div>
   </div>
+  <!-- Sky Cams — the map's 🌌 Sky Cams layer (/api/admin/sky-cams) -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">🌌 Sky Cams</div>
+      <button class="btn btn-ghost btn-sm" onclick="skyLoad()">Refresh</button>
+    </div>
+    <div class="section-body">
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.6rem">Cams on the map's <b>Sky Cams</b> layer. Community cams join automatically when their name mentions aurora, northern lights, night/dark sky, meteors or stars. Add any Windy webcam by pasting its <b>View on Windy.com</b> link (open that state's cameras on the map first). Hide a cam that isn't really aimed at the sky.</div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.6rem">
+        <input id="sky-url" type="text" placeholder="https://www.windy.com/webcams/1234567890" style="flex:1;min-width:240px;font-size:0.82rem;">
+        <button class="btn btn-primary btn-sm" onclick="skyAdd()">Add to Sky Cams</button>
+      </div>
+      <div id="sky-msg" style="font-size:0.8rem;margin-bottom:0.5rem"></div>
+      <div id="sky-list" style="font-size:0.82rem">Loading…</div>
+    </div>
+  </div>
+  <script>
+  async function skyLoad() {
+    const el = document.getElementById('sky-list');
+    try {
+      const j = await (await fetch('/api/admin/sky-cams')).json();
+      const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      el.innerHTML = (j.cameras || []).map(c => `<div style="display:flex;gap:0.5rem;align-items:center;padding:0.3rem 0;border-bottom:1px solid var(--border);${c.hidden ? 'opacity:0.5' : ''}">
+          <span style="flex:1">${esc(c.name)} <span style="color:var(--muted)">· ${c.added ? 'added by you' : 'by name'} · ${esc(c.source || '')}${c.missing ? ' · not loaded right now' : ''}${c.hidden ? ' · hidden' : ''}</span></span>
+          <button class="btn btn-ghost btn-sm" onclick="skyRemove('${esc(c.id)}', ${c.hidden})">${c.hidden ? 'Show again' : c.added ? 'Remove' : 'Hide'}</button></div>`).join('') || 'No sky cams yet.';
+    } catch (e) { el.textContent = 'Could not load the sky cams list.'; }
+  }
+  async function skyAdd() {
+    const msg = document.getElementById('sky-msg'), url = document.getElementById('sky-url').value.trim();
+    if (!url) return;
+    msg.style.color = 'var(--muted)'; msg.textContent = 'Adding…';
+    try {
+      const r = await fetch('/api/admin/sky-cams/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Failed');
+      msg.style.color = 'var(--green)'; msg.textContent = '✓ Added: ' + j.name;
+      document.getElementById('sky-url').value = '';
+      skyLoad();
+    } catch (e) { msg.style.color = 'var(--red)'; msg.textContent = '✗ ' + e.message; }
+  }
+  async function skyRemove(id, show) {
+    await fetch('/api/admin/sky-cams/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, show }) });
+    skyLoad();
+  }
+  document.addEventListener('DOMContentLoaded', skyLoad);
+  </script>
   <!-- Camera Counter — every camera the radar map can show (/api/cameras/stats) -->
   <div class="section">
     <div class="section-header">
