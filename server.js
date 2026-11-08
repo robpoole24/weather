@@ -1971,10 +1971,13 @@ const STATE_DOTS = [
     envKey: null,
     cacheTTL: 10 * 60 * 1000,
     // The CARS Hub camera list when it answers, else MnDOT's own camera API
-    load: async (dot) => {
+    // Castle Rock (Nov 2026): Minnesota no longer shares cameras through the
+    // CARS Hub, and MnDOT's old tgcameras address is gone. The new 511MN map
+    // reads an open camera list instead (live video from MnDOT's servers).
+    load: async () => {
       const c = await _carsHubCams('mn');
       if (c.length) return c;
-      return _parseMnDOT(JSON.parse(await fetchTextOverHttp(dot.url)), 'mn');
+      return _cars511xCams('mn');
     },
   },
 
@@ -2986,6 +2989,12 @@ async function _camerasFor(code) {
   return { cameras: merged, sources: sourceCounts };
 }
 
+// Sky cams (aurora, meteors, night sky) from the community list, shown with the
+// Aurora Forecast layer. Under /api/cameras so their hosts are learned for the proxies.
+app.get('/api/cameras/sky', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=300'); res.json({ cameras: await community.skyCams() }); }
+  catch (e) { res.status(500).json({ error: 'Sky cams unavailable' }); }
+});
 app.get('/api/cameras/state/:code', async (req, res) => {
   const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');
   const REGION = CAMERA_REGIONS.has(code);
@@ -4242,6 +4251,24 @@ async function _tripcheckCams() {
 
 // CARS Hub camera lists (cars.js). A state without a camera file (404) just
 // returns none, and the admin CARS page says so.
+// New CARS "511x" map sites (511mn.org): the open camera list their map reads.
+// Each camera has views: live video (HLS) and/or a preview picture.
+async function _cars511xCams(st) {
+  const j = await _camJson(`https://api-511x-${st}.carsprogram.org/cameras/map-features`);
+  const feats = Array.isArray(j) ? j : (j && j.features) || [];
+  const out = [];
+  feats.forEach(f => {
+    const p = f.properties || {}, [lng, lat] = (f.geometry && f.geometry.coordinates) || [];
+    if (p.public === false) return;
+    const views = (p.views || []).filter(v => v && !v.broken);
+    const vid = views.find(v => /^https:\/\/.+\.m3u8(\?|$)/i.test(v.url || ''));
+    const pic = views.map(v => v.videoPreviewUrl || (/\.(jpe?g|png)(\?|$)/i.test(v.url || '') ? v.url : null)).find(u => /^https:\/\//i.test(u || ''));
+    if (!vid && !pic) return;
+    out.push({ id: `${st}-${p.id}`, name: String(p.name || p.tooltip || 'Traffic camera').trim(), lat: Number(lat), lng: Number(lng),
+               imageUrl: pic || null, videoUrl: vid ? vid.url : null, direction: null, route: p.route || null, source: st });
+  });
+  return out.filter(_okLatLng);
+}
 async function _carsHubCams(id) {
   if (!cars.configured(id)) return [];
   try { return await cars.loadCameras(id); }

@@ -323,6 +323,10 @@
   .cam-dot.cam-dot-nps  { background:#22c55e; box-shadow:0 0 4px rgba(34,197,94,0.7); }
   .cam-dot.cam-dot-usgs { background:#ef4444; box-shadow:0 0 5px rgba(239,68,68,0.8); }
   .cam-dot.cam-dot-community { background:#a855f7; box-shadow:0 0 5px rgba(168,85,247,0.8); }
+  /* Sky cams (shown with Aurora Forecast / Sky Cams): a green glow, like the lights themselves */
+  .sky-cam { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px;
+    background:radial-gradient(circle, rgba(74,222,128,0.95) 0%, rgba(34,197,94,0.55) 45%, rgba(168,85,247,0.15) 75%, transparent 100%);
+    box-shadow:0 0 10px rgba(74,222,128,0.8); border:1.5px solid rgba(255,255,255,0.85); cursor:pointer; }
   .cam-dot.cam-dot-mountain { background:#eab308; box-shadow:0 0 5px rgba(234,179,8,0.85); }   /* Cal OES / ALERTCalifornia */
   .cam-dot {
     width:10px; height:10px; border-radius:50%;
@@ -1373,6 +1377,11 @@
         <div id="sc-result" style="margin-top:0.3rem;min-height:1em;"></div>
       </div>
     </div>
+  </div>
+
+  <div class="lp-section">
+    <div class="lp-section-label">Night Sky</div>
+    <div id="lp-sky"></div>
   </div>
 
   <div class="lp-section">
@@ -6276,12 +6285,39 @@ async function loadAurora() {
       + `<div class="leg-row"><div class="leg-sw" style="background:transparent;border-top:2px dashed #e879f9;height:0;margin-top:5px"></div>Edge of 10% chance</div>`
       + (j.kp != null ? _legNote(`Kp ${Number(j.kp).toFixed(1)} · ${KP_WORDS(j.kp)}${j.kp >= 5 ? ' — aurora possible much farther south than usual' : ''}`) : '')
       + _legNote('On a clear, dark night aurora can show low on the horizon a few hundred miles beyond the colored area.')
+      + _legNote('🌌 Glowing dots are live sky cams. Tap one to look at the sky there now.')
       + _legNote('NOAA Space Weather Prediction Center' + (ft && !isNaN(ft) ? ' · for ' + ft.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''));
   } catch (_) {
     const el = _seasonLegendBox('aurora'); if (el) el.innerHTML = _legTitle('✨ Aurora') + _legNote('The aurora forecast is unavailable right now. We\'ll keep trying.');
   }
 }
 function startAurora() { if (!_auroraLayer) _auroraLayer = L.layerGroup().addTo(map); loadAurora(); clearInterval(_auroraTimer); _auroraTimer = setInterval(loadAurora, 10 * 60 * 1000); }
+// ── Sky cams: community cams aimed at the night sky (/api/cameras/sky) ──
+// Shown while Aurora Forecast or Sky Cams is on (either one keeps them up).
+let _skyLayer = null, _skyTimer = null; const _skyWanted = new Set();
+function skyCamsWant(who, on) {
+  if (on) _skyWanted.add(who); else _skyWanted.delete(who);
+  if (_skyWanted.size && !_skyLayer) {
+    _skyLayer = L.layerGroup().addTo(map); loadSkyCams();
+    _skyTimer = setInterval(loadSkyCams, 10 * 60 * 1000);
+  } else if (!_skyWanted.size && _skyLayer) {
+    clearInterval(_skyTimer); _skyTimer = null; map.removeLayer(_skyLayer); _skyLayer = null;
+  }
+}
+async function loadSkyCams() {
+  try {
+    const j = await fetch('/api/cameras/sky').then(r => r.ok ? r.json() : Promise.reject());
+    if (!_skyLayer) return;
+    _skyLayer.clearLayers();
+    (j.cameras || []).forEach(cam => {
+      const icon = L.divIcon({ className: '', html: '<div class="sky-cam" title="Sky cam">🌌</div>', iconSize: [22, 22], iconAnchor: [11, 11] });
+      L.marker([cam.lat, cam.lng], { icon, zIndexOffset: 700 })
+        .bindTooltip('🌌 ' + cam.name, { direction: 'top', offset: [0, -10], className: 'cam-tooltip' })
+        .on('click', () => openCameraOverlay(cam))
+        .addTo(_skyLayer);
+    });
+  } catch (_) { /* try again on the next refresh */ }
+}
 function stopAurora() { clearInterval(_auroraTimer); _auroraTimer = null; if (_auroraLayer) { map.removeLayer(_auroraLayer); _auroraLayer = null; } document.getElementById('sl-aurora')?.remove(); _seasonLegendVisibility(); }
 
 // ── GLOBAL RADAR (LibreWXR) ───────────────────────────────────────────────────
@@ -8176,6 +8212,7 @@ const WTV_INFO = {
   'qpe-24h':       { t:'24-Hour Rainfall', w:'How much rain fell in the last day, estimated by radar.', r:'Compare it with the ground: 2–3 inches in a day can flood creeks and low spots.' },
   'river-gauges':  { t:'River & Flood Gauges', w:'Live river levels from NWS gauges. Tap one for a chart of the last 3 days and the official forecast, where the River Forecast Center issues one.', r:'Green · normal. Yellow · near flood stage. Orange/red/purple · minor, moderate, major flooding. The forecast line shows where the river is headed and when it should crest.' },
   'cpc':           { t:'6–10 & 8–14 Day Outlook', w:'The Climate Prediction Center\'s outlook for whether the week after next will run warmer or colder, and wetter or drier, than usual for the time of year.', r:'Color strength is confidence: about 33% is no signal, 50%+ is clearly favored. Blank areas have equal chances.' },
+  'sky-cams':      { t:'Sky Cams', w:'Live cams pointed at the night sky: aurora cams, meteor cams and dark-sky cams from our community camera list.', r:'Turn on Aurora Forecast too to see where the lights are likely; the sky cams show up with it automatically.' },
   'aurora':        { t:'Aurora Forecast', w:'NOAA\'s chance of seeing the northern (or southern) lights overhead in the next half hour, plus the Kp index that measures geomagnetic activity.', r:'Kp 5+ is a geomagnetic storm: aurora can reach far south of normal. You need clear, dark skies away from city lights; look north.' },
   'buoys':         { t:'Buoys', w:'Live reports from NOAA buoys and coastal stations on the oceans and Great Lakes: wind, waves, water temperature and pressure.', r:'Dot color is wave height: green under 3 ft up to purple over 15 ft. Many Great Lakes buoys are pulled for the winter.' },
   'tide-gauges':   { t:'Tides & Water Levels', w:'NOAA\'s real-time water-level gauges along the coasts and Great Lakes. Tap one for the level now, coastal flood status and the next high and low tides.', r:'During a storm, a level well above the predicted tide is storm surge.' },
@@ -9229,7 +9266,11 @@ const SURFACE_ITEMS=[
   {id:'fronts',   ico:'🌦', name:'WPC Surface Analysis',       sub:'Fronts · pressure centers · NowCOAST',def:false},
   {id:'ero',      ico:'🌧', name:'Excessive Rainfall Outlook',  sub:'WPC flash flood risk · Day 1–5',      def:false},
   {id:'cpc',      ico:'📆', name:'6–10 & 8–14 Day Outlook',     sub:'CPC · warmer/colder, wetter/drier than normal', def:false},
-  {id:'aurora',   ico:'✨', name:'Aurora Forecast',             sub:'NOAA SWPC · chance of northern lights · Kp index', def:false},
+];
+// Night Sky: the aurora forecast brings its sky cams along; Sky Cams also work on their own
+const SKY_ITEMS=[
+  {id:'aurora',   ico:'✨', name:'Aurora Forecast',  sub:'NOAA SWPC · chance of northern lights · Kp index · with sky cams', def:false},
+  {id:'sky-cams', ico:'🌌', name:'Sky Cams',         sub:'Live cams aimed at the night sky · aurora, meteors, stars', def:false},
 ];
 const PRECIP_ITEMS=[
   {id:'qpe-1h',  ico:'💧', name:'1-Hour Rainfall (MRMS)',   sub:'Radar-estimated accumulation · past 1h', def:false},
@@ -9680,7 +9721,7 @@ function applySeasonal(id, on) {
   return false;
 }
 
-const OVERLAY_ITEMS=SEASONAL_ITEMS.concat(ALERT_ITEMS).concat(MESO_ITEMS).concat(HODO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
+const OVERLAY_ITEMS=SEASONAL_ITEMS.concat(ALERT_ITEMS).concat(MESO_ITEMS).concat(HODO_ITEMS).concat(CHASER_ITEMS).concat(EXTENDED_ITEMS).concat(CC_ITEMS).concat(CAM_ITEMS).concat(FIRE_ITEMS).concat(SURFACE_ITEMS).concat(SKY_ITEMS).concat(PRECIP_ITEMS).concat(TROPICAL_ITEMS);
 
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
@@ -9728,7 +9769,8 @@ function applyOverlay(id,on){
     case 'qpe-24h':        if (on) startQPE('24H'); else stopQPE('24H'); updateQPELegend(); break;
     case 'river-gauges':   if (on) startRiverGauges(); else stopRiverGauges(); break;
     case 'buoys':          if (on) startBuoys(); else stopBuoys(); break;
-    case 'aurora':         if (on) startAurora(); else stopAurora(); break;
+    case 'aurora':         if (on) { startAurora(); skyCamsWant('aurora', true); } else { stopAurora(); skyCamsWant('aurora', false); } break;
+    case 'sky-cams':       skyCamsWant('toggle', on); break;
     case 'tide-gauges':    if (on) startTideGauges(); else stopTideGauges(); break;
     case 'nhc-tropical':   if (on) startTropical(); else stopTropical(); break;
     case 'hms-smoke':      if (on) startHMSSmoke(); else clearHMSSmoke(); break;
@@ -9782,6 +9824,7 @@ function renderPanel(){
   document.getElementById('lp-cameras').innerHTML=CAM_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-fire').innerHTML=FIRE_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-surface').innerHTML=SURFACE_ITEMS.map(toggleRowHTML).join('');
+  document.getElementById('lp-sky').innerHTML=SKY_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-precip').innerHTML=PRECIP_ITEMS.map(toggleRowHTML).join('');
   document.getElementById('lp-tropical').innerHTML=TROPICAL_ITEMS.map(toggleRowHTML).join('');
   renderSeasonal();

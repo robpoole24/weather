@@ -841,11 +841,22 @@ module.exports = function setupCommunityCams(app, deps) {
   }
 
   // ── Map output ─────────────────────────────────────────────────────────────
+  // A cam's name is its place, but some were saved with their first stream's
+  // title, date and all ("… - LIVE 10.20.2026"). Streams get replaced, the date
+  // doesn't — so drop a date (and a "LIVE" before it) from the end when shown.
+  const shownName = (n) => String(n || '').replace(/\s*[-–|:]?\s*(?:live\s*)?[(\[]?\d{1,2}[./-]\d{1,2}[./-]\d{2,4}[)\]]?\s*$/i, '').trim() || n;
+  // Sky cams: the ones worth watching for aurora, meteors and night skies
+  const SKY_RE = /aurora|northern lights|borealis|australis|night ?sky|dark ?sky|all[- ]?sky|meteor|milky ?way|star ?(?:cam|gaz)|sky ?cam|stargaz/i;
+  const isSkyCam = (c) => c.sky === true || (c.sky !== false && SKY_RE.test([c.name, c.streamTitle, c.channelTitle].join(' ')));
+  async function skyCams() {
+    await load();
+    return db.cams.filter(c => visible(c) && Number.isFinite(c.lat) && Number.isFinite(c.lng) && isSkyCam(c)).map(toCamera);
+  }
   function toCamera(c) {
     // Owner blocks embedding: YouTube's live thumbnail (refreshes every few
     // minutes) + a button to watch on YouTube — like the HDOnTap preview cards
     if (c.kind === 'yt-video' && c.embeddable === false) {
-      return { id: 'comm-' + c.id, name: c.name, lat: c.lat, lng: c.lng, source: 'community', playerUrl: null,
+      return { id: 'comm-' + c.id, name: shownName(c.name), lat: c.lat, lng: c.lng, source: 'community', playerUrl: null,
                imageUrl: `https://i.ytimg.com/vi/${c.ref}/hqdefault_live.jpg`, videoUrl: null, direction: null,
                pageUrl: `https://www.youtube.com/watch?v=${c.ref}`, provider: 'YouTube', isStreaming: true };
     }
@@ -855,7 +866,7 @@ module.exports = function setupCommunityCams(app, deps) {
     const page = c.kind === 'yt-video' ? `https://www.youtube.com/watch?v=${c.ref}` : c.kind === 'yt-channel' ? `https://www.youtube.com/channel/${c.ref}/live`
       : c.kind === 'link' ? c.ref : (c.page || null);
     return {
-      id: 'comm-' + c.id, name: c.name, lat: c.lat, lng: c.lng, source: 'community',
+      id: 'comm-' + c.id, name: shownName(c.name), lat: c.lat, lng: c.lng, source: 'community',
       playerUrl: player, imageUrl: c.kind === 'image' ? c.ref : c.kind === 'link' ? c.preview : null,
       videoUrl: c.kind === 'hls' ? c.ref : null, direction: null,
       pageUrl: page, provider: c.provider || (/^yt-/.test(c.kind) ? 'YouTube' : null),
@@ -1760,5 +1771,5 @@ module.exports = function setupCommunityCams(app, deps) {
     if (h === 3 && (!db.lastDiscovery || Date.now() - db.lastDiscovery > 20 * 3600 * 1000)) nightly().catch(() => {});
   }, 15 * 60 * 1000);
 
-  return { forState, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll, sweepQueueForRestarts, predecessorOf, load } };
+  return { forState, skyCams, parseUrl, geocode, _test: { db: () => db, discover, checkOne, visible, replaceEnded, scanWatchedChannels, titleSimilarity, checkAll, sweepQueueForRestarts, predecessorOf, load } };
 };
