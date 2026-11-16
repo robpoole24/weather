@@ -6053,15 +6053,66 @@ async function subscribeAllChannels(force = false) {
 }
 
 // WebSub verification handshake — YouTube calls this to confirm subscription
+// Records what the hub actually confirmed: YouTube's hub may grant a shorter
+// lease than we ask for, so the real expiry comes from hub.lease_seconds here.
+const _websubVerified = {};   // channelId -> { at, mode, leaseSeconds }
 app.get('/websub/callback/:channelId', (req, res) => {
   const challenge = req.query['hub.challenge'];
   const mode = req.query['hub.mode'];
-  console.log('[WebSub] Verification for ' + req.params.channelId + ' mode=' + mode);
-  if (challenge) {
-    res.status(200).send(challenge);
-  } else {
-    res.status(400).send('No challenge');
+  const channelId = req.params.channelId;
+  const lease = parseInt(req.query['hub.lease_seconds'], 10);
+  console.log('[WebSub] Verification for ' + channelId + ' mode=' + mode + (lease ? ' lease=' + lease + 's' : ''));
+  if (!challenge) return res.status(400).send('No challenge');
+  _websubVerified[channelId] = { at: Date.now(), mode, leaseSeconds: lease || null };
+  if (mode === 'subscribe' && lease > 0) {
+    const expiresAt = Date.now() + lease * 1000;
+    websubLeases[channelId] = { ...(websubLeases[channelId] || {}), expiresAt, status: 'verified', verifiedAt: Date.now() };
+    rSet('wt:ws:' + channelId, expiresAt);
   }
+  res.status(200).type('text/plain').send(challenge);
+});
+
+// Ask the hub itself how a subscription is doing (state, last verification and
+// delivery errors). Runs server-side so the secret never leaves the server.
+async function _hubDetails(channelId) {
+  const cb = process.env.APP_URL + '/websub/callback/' + channelId;
+  const url = 'https://pubsubhubbub.appspot.com/subscription-details?hub.callback=' + encodeURIComponent(cb) +
+    '&hub.topic=' + encodeURIComponent('https://www.youtube.com/xml/feeds/videos.xml?channel_id=' + channelId) +
+    '&hub.secret=' + encodeURIComponent(process.env.WEBSUB_SECRET || 'weathertv-secret');
+  const html = await fetchTextOverHttp(url);
+  const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ');
+  const between = (a, b) => { const m = text.match(new RegExp(a + ' (.*?) ' + b)); return m ? m[1].trim() : null; };
+  const err = text.match(/Error (.*?) These legal/);
+  if (err) return { channelId, error: err[1].trim() };
+  return {
+    channelId, callback: cb,
+    state: between('State', 'Last successful verification'),
+    lastVerified: between('Last successful verification', 'Expiration time'),
+    expires: between('Expiration time', 'Last subscribe request'),
+    lastSubscribeRequest: between('Last subscribe request', 'Last unsubscribe request'),
+    lastVerificationError: between('Last verification error', 'Last delivery error'),
+    lastDeliveryError: between('Last delivery error', 'Aggregate statistics'),
+    stats: between('Aggregate statistics', 'Last item delivered'),
+    lastItemDelivered: between('Content delivered', 'These legal'),
+  };
+}
+app.get('/api/admin/websub/hub-check', async (req, res) => {
+  if (!process.env.APP_URL) return res.status(400).json({ error: 'APP_URL not set' });
+  const n = Math.min(parseInt(req.query.n, 10) || 5, 20);
+  const pick = req.query.channel ? [req.query.channel]
+    : (_websubSilent.length ? _websubSilent.map(c => c.id) : getLiveChannels(true).map(c => c.id)).slice(0, n);
+  const results = [];
+  for (const id of pick) {
+    try { results.push(await _hubDetails(id)); } catch (e) { results.push({ channelId: id, error: e.message }); }
+  }
+  res.json({
+    appUrl: process.env.APP_URL,
+    lastNotificationReceived: cache.lastNotificationReceived ? new Date(cache.lastNotificationReceived).toISOString() : null,
+    verificationsSinceRestart: Object.keys(_websubVerified).length,
+    sampleVerifications: Object.entries(_websubVerified).slice(-5).map(([id, v]) => ({ id, ...v, at: new Date(v.at).toISOString() })),
+    hub: results,
+  });
 });
 
 // WebSub notification — YouTube pushes this when a channel posts or goes live
