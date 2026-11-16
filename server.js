@@ -6050,6 +6050,17 @@ async function subscribeAllChannels(force = false) {
   cache.websubActive = true;
   rSet('wt:websubActive', true);
   console.log('[WebSub] Subscription refresh complete — push notifications active');
+  // The hub confirms each subscription by calling us back within seconds. If none
+  // of those calls arrive, the callback address (APP_URL) is wrong or unreachable.
+  const askedAt = Date.now();
+  setTimeout(() => {
+    const confirmed = Object.values(_websubVerified).filter(v => v.at >= askedAt).length;
+    if (confirmed) return;
+    const msg = 'No WebSub subscriptions confirmed 10 min after subscribing ' + toSubscribe.length +
+      ' channels — check APP_URL (' + process.env.APP_URL + ') is the public address of this server';
+    console.warn('[WebSub] ' + msg);
+    logEvent({ type: 'websub', severity: 'error', source: 'websub', message: msg });
+  }, 10 * 60 * 1000).unref();
 }
 
 // WebSub verification handshake — YouTube calls this to confirm subscription
