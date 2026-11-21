@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-21T09:45:00Z build.1795254300
+// WeatherTV Server — updated 2026-11-21T10:00:00Z build.1795255200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -4050,8 +4050,11 @@ app.get('/api/forecast', async (req, res) => {
   const gLat = _snap(lat), gLon = _snap(lon);
   const cellKey = `${gLat.toFixed(3)},${gLon.toFixed(3)}`;
   const respond = (entry, stale) => {
-    res.set('Cache-Control', stale ? 'public, max-age=120' : 'public, max-age=900');
-    if (stale) res.set('X-Forecast-Stale', '1');
+    const partial = entry.data && entry.data.source === 'nws' && !(entry.data.hourly && entry.data.hourly.uv_index);
+    // no-cache: browsers check back every time (cheap — served from our cache, usually a 304),
+    // so a forecast saved while a source was down never sticks around for hours
+    res.set('Cache-Control', 'no-cache');
+    if (stale || partial) res.set('X-Forecast-Stale', '1');
     res.json({ ...entry.data, location: { lat, lon, name: locationName } });
   };
 
@@ -4067,7 +4070,10 @@ app.get('/api/forecast', async (req, res) => {
     if (!p) {
       upstreamCount('forecastCacheMiss');
       p = _fetchForecastCell(gLat, gLon, cellKey)
-        .then(data => { const entry = { data, ts: Date.now() }; _lruSet(_forecastCache, cellKey, entry, FORECAST_MAX); return entry; })
+        .then(data => {
+          const partial = data && data.source === 'nws' && !(data.hourly && data.hourly.uv_index);
+          const entry = { data, ts: partial ? Date.now() - FORECAST_TTL + 2 * 60 * 1000 : Date.now() };
+          _lruSet(_forecastCache, cellKey, entry, FORECAST_MAX); return entry; })
         .finally(() => _forecastInflight.delete(cellKey));
       _forecastInflight.set(cellKey, p);
     } else {

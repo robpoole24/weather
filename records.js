@@ -1,4 +1,4 @@
-// WeatherTV daily records module — updated 2026-11-21T09:35:00Z build.1795253700
+// WeatherTV daily records module — updated 2026-11-21T10:00:00Z build.1795255200
 // Daily climate records and normals for the forecast panel, from the Regional
 // Climate Centers' ACIS service (data.rcc-acis.org, free, no key).
 //
@@ -197,13 +197,14 @@ module.exports = function records(app, { rGet, rSet }) {
       const d = miles(lat, lon, st.lat, st.lon);
       if (d < bestMi) { bestMi = d; best = st; }
     }
+    if (!STATIONS.length) { res.set('Cache-Control', 'no-store'); return res.json({ found: false, reason: 'warming_up' }); }
     if (!best || bestMi > RADIUS_MI) { res.set('Cache-Control', 'public, max-age=1800'); return res.json({ found: false, reason: STATIONS.length ? 'no_station_nearby' : 'warming_up' }); }
     if (!mem.has(best.sid)) {
       wanted.add(best.sid);                       // viewers are waiting on this one: the sweep takes it next
       res.set('Cache-Control', 'no-store');
       return res.json({ found: false, reason: 'warming_up' });
     }
-    res.set('Cache-Control', 'public, max-age=1800');
+    res.set('Cache-Control', 'no-cache');
 
     const rows = mem.get(best.sid).days, out = [];
     for (let i = 0; i < nDays; i++) {

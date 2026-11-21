@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-11-21 build.1795254300 -->
+<!-- WeatherTV Radar — updated 2026-11-21 build.1795255200 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -7875,12 +7875,12 @@ async function loadForecast(coords) {
   if (loadingEl) loadingEl.style.display = 'block';
   try {
     console.log('[Forecast] fetching /api/forecast?'+params);
-    let resp = await fetch(`/api/forecast?${params}`);
+    let resp = await fetch(`/api/forecast?${params}`, { cache: 'no-cache' });
     // A brief 502/503/504 usually means the server is restarting after a
     // deploy or an upstream was slow — wait a moment and try once more.
     if ([502, 503, 504].includes(resp.status)) {
       await new Promise(r => setTimeout(r, 3000));
-      resp = await fetch(`/api/forecast?${params}`);
+      resp = await fetch(`/api/forecast?${params}`, { cache: 'no-cache' });
     }
     console.log('[Forecast] response status:', resp.status);
     if (!resp.ok) {
@@ -7917,7 +7917,7 @@ async function loadForecast(coords) {
 }
 
 async function fetchForecastData({ lat, lon }) {
-  const resp = await fetch(`/api/forecast?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`);
+  const resp = await fetch(`/api/forecast?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`, { cache: 'no-cache' });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -8866,8 +8866,15 @@ async function renderRecords(lat, lon, d) {
   let hit = _recCache.get(key);
   if (!hit || Date.now() - hit.ts > 30 * 60 * 1000) {
     try {
-      const j = await fetch(`/api/records?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&start=${days[0]}&days=${Math.min(days.length, 14)}`).then(r => r.json());
-      hit = { j, ts: Date.now() }; _recCache.set(key, hit);
+      const j = await fetch(`/api/records?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&start=${days[0]}&days=${Math.min(days.length, 14)}`, { cache: 'no-cache' }).then(r => r.json());
+      hit = { j, ts: Date.now() };
+      if (j && j.found) { _recCache.set(key, hit); renderRecords._retry = 0; }
+      else if (j && j.reason === 'warming_up' && !(renderRecords._retry > 3)) {
+        // this spot's station is still loading on the server — look again shortly
+        renderRecords._retry = (renderRecords._retry || 0) + 1;
+        const n = renderRecords._n;
+        setTimeout(() => { if (renderRecords._n === n) renderRecords(lat, lon, d); }, 45 * 1000);
+      }
     } catch (_) { box.style.display = 'none'; return; }
   }
   if (token !== renderRecords._n) return;
