@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-10-20T20:00:00Z build.1792600000
+// WeatherTV Server — updated 2026-11-21T09:00:00Z build.1795251600
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2919,6 +2919,11 @@ require('./airports')(app, { rGet, rSet });
 // WeatherStar "Tides" and "Marine Forecast" data (marine.js): NOAA tide
 // predictions and NWS marine zone forecasts, cached per station/zone.
 require('./marine')(app);
+
+// Forecast panel "Records & Normals" (records.js): daily record highs/lows,
+// rain/snow records and 1991–2020 normals for every NWS long-record climate
+// site, pulled from ACIS on the server's own daily schedule and kept in Redis.
+require('./records')(app, { rGet, rSet });
 
 // Replaces the old bbox-based endpoint — state-level loading is far more
 // performant than loading thousands of cameras across the whole country

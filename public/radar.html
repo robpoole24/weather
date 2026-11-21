@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-10-12 build.1792130000 -->
+<!-- WeatherTV Radar — updated 2026-11-21 build.1795251600 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -722,6 +722,16 @@
   .xo-cell { border-radius:6px; padding:0.32rem 0.45rem; font-size:0.74rem; line-height:1.25; color:#0b1220; font-weight:600; }
   .xo-cell small { display:block; font-weight:500; font-size:0.64rem; opacity:0.85; }
   .xo-cell.flat { background:rgba(255,255,255,0.06); color:var(--muted); font-weight:500; }
+  .rec-where { font-size:0.7rem; color:var(--muted); margin:-0.1rem 0 0.4rem; }
+  .rec-say { font-size:0.82rem; color:var(--text); line-height:1.35; margin-bottom:0.45rem; }
+  .rec-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.35rem; }
+  .rec-card { background:rgba(255,255,255,0.04); border:1px solid var(--border); border-radius:8px; padding:0.4rem 0.55rem; }
+  .rec-card .v { font-family:'Barlow Condensed',sans-serif; font-size:1.15rem; font-weight:700; line-height:1.1; }
+  .rec-card .v small { font-size:0.7rem; font-weight:500; color:var(--muted); margin-left:0.25rem; }
+  .rec-card .l { font-size:0.64rem; letter-spacing:0.05em; text-transform:uppercase; color:var(--muted); margin-top:0.1rem; }
+  .rec-watch { margin-top:0.45rem; display:flex; flex-direction:column; gap:0.3rem; }
+  .rec-watch div { border-left:3px solid #f97316; background:rgba(249,115,22,0.1); border-radius:4px; padding:0.3rem 0.5rem; font-size:0.76rem; line-height:1.3; color:var(--text); }
+  .fp-rec-flag { display:inline-block; margin-left:0.3rem; padding:0 0.3rem; border-radius:3px; background:#f97316; color:#0b1220; font-size:0.58rem; letter-spacing:0.04em; vertical-align:middle; }
   .of-card { border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.6rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.02); }
   .of-card.hwo { border-color:rgba(250,204,21,0.45); }
   .of-h { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.74rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); margin-bottom:0.3rem; }
@@ -1184,6 +1194,12 @@
     <div id="fp-daily-wrap" style="display:none;">
       <div class="fp-section-label">7-Day Forecast</div>
       <div id="fp-daily" class="fp-daily-list"></div>
+    </div>
+
+    <!-- ── Daily records + normals for this spot (US, from the nearest long-record NWS climate site) ── -->
+    <div id="fp-records" style="display:none;">
+      <div class="fp-section-label">Records &amp; Normals · Today</div>
+      <div id="fp-records-body"></div>
     </div>
 
     <!-- ── Days 6–14: CPC outlooks for this spot (US only) ── -->
@@ -8398,6 +8414,7 @@ const WTV_INFO = {
   'fc-models':     { t:'Model comparison', w:'Weather forecasts start as computer models run by different countries. This shows what 8 of them predict for your spot.', r:'Lines bunched together · the models agree, so the forecast is more trustworthy. Lines spread apart · they disagree, so expect changes. Agreement usually drops after 3–4 days. Each day’s badge shows how closely the models agree: on highs in the Temperature tab, on rain totals in the Precipitation tab. Agree · Some spread · Wide variance (uncertain — check back).' },
   'fc-storm':      { t:'Storm indicators', w:'Ingredients meteorologists check before thunderstorms. Shown only when there is notable storm energy nearby.', r:'CAPE is fuel: over 1,000 means storms can grow tall, over 2,500 strong storms are possible. Lifted Index below 0 means unstable air; below −6 is very unstable. These are ingredients, not a guarantee — storms still need a trigger.' },
   'fc-nws':        { t:'NWS detailed forecast', w:'The written forecast from your local National Weather Service office, made by human meteorologists.', r:'Tap a period to read the full text. This is the same forecast your local TV meteorologists start from.' },
+  'fc-records':    { t:'Records & normals', w:'What a typical day looks like at this time of year, and the warmest, coldest, wettest and snowiest this date has ever been. They come from the nearest official National Weather Service climate site, whose records go back to the 1800s in many cities.', r:'Normal · the 1991–2020 average for this date. Record high / low · the hottest and coldest temperatures ever on this date, with the year. Warmest low · the mildest night. Coldest high · the chilliest afternoon. An orange "Record" tag on a day in the 7-day forecast means the forecast is close to one of these records.' },
   'fc-tempmap':    { t:'Temperature map', w:'Colors the whole map by temperature so you can see warm and cold areas at a glance.', r:'Feels Like · wind chill and heat index right now. Hi/Lo · today\'s forecast high and low. Turn it Off to see the radar clearly.' },
   // ── Layers panel: sections ──
   'ly-radar':      { t:'Radar', w:'Radar sends out a beam and measures what bounces back from rain, snow and hail.', r:'Green · light rain. Yellow · moderate. Orange/red · heavy rain and storms. Purple/white · very heavy rain or hail. Use US Radar in the US, Worldwide elsewhere.' },
@@ -8547,7 +8564,8 @@ function infoBtn(key) {
 function addStaticInfoButtons() {
   const add = (el, key) => { if (el && !el.querySelector('.rx-ibtn')) el.insertAdjacentHTML('beforeend', infoBtn(key)); };
   const fcMap = { 'Hourly Forecast':'fc-hourly', '7-Day Forecast':'fc-daily', 'Model Comparison':'fc-models',
-    'Storm Indicators':'fc-storm', 'NWS Detailed Forecast':'fc-nws', 'Temperature Map Overlay':'fc-tempmap', 'Rain Outlook':'rain-outlook' };
+    'Storm Indicators':'fc-storm', 'NWS Detailed Forecast':'fc-nws', 'Temperature Map Overlay':'fc-tempmap', 'Rain Outlook':'rain-outlook',
+    'Records & Normals':'fc-records' };
   document.querySelectorAll('#forecast-panel .fp-section-label').forEach(l => {
     const k = Object.keys(fcMap).find(t => l.textContent.includes(t)); if (k) add(l, fcMap[k]);
   });
@@ -8831,6 +8849,81 @@ async function renderExtendedOutlook(lat, lon) {
   body.innerHTML = `<div style="display:grid;grid-template-columns:5.6rem 1fr 1fr;gap:0.4rem;font-family:'Barlow Condensed',sans-serif;font-size:0.64rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);margin-bottom:0.15rem"><span></span><span>Temperature</span><span>Precipitation</span></div>`
     + rows.map(([, label, t, p]) => `<div class="xo-row"><div class="xo-when">${label}<span>${range(t) || range(p)}</span></div>${cell(t, 'temp')}${cell(p, 'precip')}</div>`).join('')
     + '<div class="wo-src">Compared with normal for this time of year · NOAA Climate Prediction Center · <button type="button" class="rx-src-link" onclick="overlayState.cpc=true;applyOverlay(\'cpc\',true);if(typeof toggleForecastPanel===\'function\')toggleForecastPanel(false)">See it on the map</button></div>';
+  box.style.display = 'block';
+}
+
+// ── Daily records + normals for one spot ─────────────────────────────────────
+// Our server keeps every NWS long-record climate site's daily records (ACIS), so this
+// is one small request to /api/records, cached 30 min per spot. US only; hidden when
+// the nearest site is too far away. Also tags 7-day rows where the forecast nears a record.
+const _recCache = new Map();
+async function renderRecords(lat, lon, d) {
+  const box = document.getElementById('fp-records'), body = document.getElementById('fp-records-body');
+  if (!box || !body) return;
+  const days = (d && d.time) || [];
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !days.length) { box.style.display = 'none'; return; }
+  const key = lat.toFixed(2) + ',' + lon.toFixed(2) + ',' + days[0], token = (renderRecords._n = (renderRecords._n || 0) + 1);
+  let hit = _recCache.get(key);
+  if (!hit || Date.now() - hit.ts > 30 * 60 * 1000) {
+    try {
+      const j = await fetch(`/api/records?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&start=${days[0]}&days=${Math.min(days.length, 14)}`).then(r => r.json());
+      hit = { j, ts: Date.now() }; _recCache.set(key, hit);
+    } catch (_) { box.style.display = 'none'; return; }
+  }
+  if (token !== renderRecords._n) return;
+  const j = hit.j;
+  if (!j || !j.found || !j.days || !j.days.length) { box.style.display = 'none'; return; }
+  const T = (v) => v == null ? '—' : Math.round(v) + '°';
+  const IN = (v) => v == null ? '—' : (v < 0.01 ? 'Trace' : v.toFixed(v < 10 ? 2 : 1).replace(/0$/, '') + '"');
+  const yr = (r) => r && r.year ? `<small>${r.year}</small>` : '';
+  const t0 = j.days[0], n = t0.normal || {}, R = t0.record || {};
+  const card = (val, label, color) => `<div class="rec-card"><div class="v"${color ? ` style="color:${color}"` : ''}>${val}</div><div class="l">${label}</div></div>`;
+
+  // One plain sentence: today's forecast vs normal
+  const hi0 = d.temperature_2m_max && d.temperature_2m_max[0];
+  let say = '';
+  if (hi0 != null && n.high != null) {
+    const diff = Math.round(hi0 - n.high);
+    say = diff === 0 ? `Today's forecast high of ${T(hi0)} is right at normal.`
+      : `Today's forecast high of ${T(hi0)} is ${Math.abs(diff)}° ${diff > 0 ? 'warmer' : 'colder'} than normal.`;
+  }
+  const cards = [
+    card(T(n.high), 'Normal high'), card(T(n.low), 'Normal low'),
+    card(T(R.high && R.high.value) + yr(R.high), 'Record high', '#f87171'), card(T(R.low && R.low.value) + yr(R.low), 'Record low', '#60a5fa'),
+    card(T(R.warmestLow && R.warmestLow.value) + yr(R.warmestLow), 'Warmest low'), card(T(R.coldestHigh && R.coldestHigh.value) + yr(R.coldestHigh), 'Coldest high'),
+  ];
+  // Rain and snow records only where this date has ever had some
+  if (R.precip && R.precip.value >= 0.01) cards.push(card(IN(R.precip.value) + yr(R.precip), 'Record rain'));
+  if (R.snow && R.snow.value >= 0.1) cards.push(card(IN(R.snow.value) + yr(R.snow), 'Record snow'));
+
+  // Record watch: forecast within 1° of a record (or past it), next 7 days
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const rows = document.getElementById('fp-daily') ? document.getElementById('fp-daily').children : [];
+  const watch = [];
+  j.days.forEach((rd, i) => {
+    const hi = d.temperature_2m_max && d.temperature_2m_max[i], lo = d.temperature_2m_min && d.temperature_2m_min[i], r = rd.record || {};
+    if (hi == null && lo == null) return;
+    const when = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : names[new Date(rd.date + 'T12:00:00').getDay()];
+    const hits = [];
+    if (hi != null && r.high && r.high.value != null && Math.round(hi) >= r.high.value - 1) hits.push(['record high', hi, r.high]);
+    if (lo != null && r.low && r.low.value != null && Math.round(lo) <= r.low.value + 1) hits.push(['record low', lo, r.low]);
+    if (lo != null && r.warmestLow && r.warmestLow.value != null && Math.round(lo) >= r.warmestLow.value - 1) hits.push(['warmest low on record', lo, r.warmestLow]);
+    if (hi != null && r.coldestHigh && r.coldestHigh.value != null && Math.round(hi) <= r.coldestHigh.value + 1) hits.push(['coldest high on record', hi, r.coldestHigh]);
+    if (!hits.length) return;
+    hits.forEach(([what, f, rec]) => watch.push(`<div><strong>${when}:</strong> forecast ${T(f)} — the ${what} for ${rd.date.slice(5).replace('-', '/')} is ${T(rec.value)} (${rec.year}). ${Math.round(f) === rec.value ? 'Could tie it.' : (/high$|warmest/.test(what) ? Math.round(f) > rec.value : Math.round(f) < rec.value) ? 'Could break it.' : 'Close to it.'}</div>`));
+    const row = rows[i];
+    if (row && !row.querySelector('.fp-rec-flag')) {
+      row.querySelector('.fp-day-name')?.insertAdjacentHTML('beforeend', '<span class="fp-rec-flag">Record</span>');
+      row.querySelector('.fp-day-detail')?.insertAdjacentHTML('afterbegin', hits.map(([what, f, rec]) => `<div>🏆 ${what[0].toUpperCase() + what.slice(1)} <strong>${T(rec.value)} (${rec.year})</strong></div>`).join(''));
+    }
+  });
+
+  const st = j.station || {};
+  body.innerHTML = `<div class="rec-where">${st.name}${st.state ? ', ' + st.state : ''} climate records${st.since ? ' since ' + st.since : ''}${st.miles > 15 ? ' · ' + st.miles + ' mi away' : ''}</div>`
+    + (say ? `<div class="rec-say">${say}</div>` : '')
+    + `<div class="rec-grid">${cards.join('')}</div>`
+    + (watch.length ? `<div class="rec-watch">${watch.join('')}</div>` : '')
+    + `<div class="wo-src">Normals are 1991–2020 averages · NOAA Regional Climate Centers (ACIS) and the National Weather Service</div>`;
   box.style.display = 'block';
 }
 
@@ -9161,6 +9254,8 @@ function renderForecast(data) {
     dailyEl.appendChild(row);
   });
   document.getElementById('fp-daily-wrap').style.display = 'block';
+  // ── Daily records + normals (US) — after the 7-day rows exist, so it can tag them
+  renderRecords(data.latitude ?? (_place && _place.lat), data.longitude ?? (_place && _place.lon), d);
   try { renderSchoolForecast(data); } catch (e) { console.warn('[School]', e.message); }
   // New location → offer the comparison again (loads only if the user asks)
   _mmData = null;
