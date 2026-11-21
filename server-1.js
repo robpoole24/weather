@@ -1,0 +1,7732 @@
+// WeatherTV Server — updated 2026-11-21T09:00:00Z build.1795251600
+const express = require('express');
+const compression = require('compression');
+const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const radar = require('./radar');
+const winter = require('./winter');   // road conditions
+const nec = require('./nec');         // Maine/NH/VT DOT cameras + road weather (New England Compass)
+const cars = require('./cars');       // CARS 511 states (New York…): cameras + road conditions, login in Railway variables
+const http = require('http');
+const { WebSocketServer, WebSocket } = require('ws');
+const { createLiveVerifier } = require('./live-verifier');
+
+// Load .env file if present
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+    const [key, ...val] = line.split('=');
+    if (key && !key.startsWith('#') && val.length) {
+      process.env[key.trim()] = val.join('=').trim();
+    }
+  });
+}
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const DATA_FILE = path.join(__dirname, 'data', 'channels.json');
+
+// gzip/deflate every compressible response (HTML, JS, CSS, JSON, KML, m3u8).
+// Railway bills bytes sent to Cloudflare, and Cloudflare only compresses what
+// it sends onward to visitors — so without this, every cache miss left
+// Railway uncompressed. Images and video segments are skipped automatically
+// (already compressed). Registered first so it covers every route.
+app.use(compression());
+
+applySecurityMiddleware(app);
+app.use(express.json({ limit: '5mb' })); // 5MB covers the full appData payload sent by saveAll()
+
+// ── WS4KP dynamic music playlist ──────────────────────────────────────────
+// Scans the actual music folder so any MP3 pushed to GitHub is auto-included.
+// Must be before express.static so it takes precedence over any static file.
+app.get('/weatherstar/playlist.json', (req, res) => {
+  const fs = require('fs');
+  const musicRoot = path.join(__dirname, 'public', 'weatherstar', 'music');
+  const files = [];
+  // 🎃 Haddonfield easter egg: music/haddonfield/ plays ONLY for Haddonfield
+  // (the normal list below never reads that folder, so no other city hears it)
+  if (req.query.town === 'haddonfield') {
+    try {
+      fs.readdirSync(path.join(musicRoot, 'haddonfield')).filter(f => /\.mp3$/i.test(f)).forEach(f => files.push(`haddonfield/${f}`));
+    } catch (_) {}
+    if (files.length) return res.json({ availableFiles: files });
+  }
+  // Root music/ folder
+  try {
+    fs.readdirSync(musicRoot)
+      .filter(f => /\.mp3$/i.test(f))
+      .forEach(f => files.push(f));
+  } catch (_) {}
+  // music/default/ subfolder (WS4KP's built-in location)
+  try {
+    fs.readdirSync(path.join(musicRoot, 'default'))
+      .filter(f => /\.mp3$/i.test(f))
+      .forEach(f => files.push(`default/${f}`));
+  } catch (_) {}
+  res.json({ availableFiles: files });
+});
+
+// ── Admin Authentication ──
+// HTTP Basic Auth gates the entire admin panel and all /api/admin/* routes.
+// Without this, ANYONE who finds /admin can read the YouTube API key (via
+// GET /api/admin/config, which returns the full data store including
+// config.apiKey), overwrite the entire channel database (POST /api/admin/restore
+// accepts arbitrary JSON with no validation beyond shape), mark channels
+// live/offline, burn API quota on demand, etc.
+//
+// Set ADMIN_USER and ADMIN_PASSWORD as Railway environment variables to enable.
+// If ADMIN_PASSWORD is not set, admin routes remain OPEN (fail-open) so local
+// dev isn't broken by default -- but a loud warning is logged on every request
+// so this can't go unnoticed in production logs.
+function adminAuth(req, res, next) {
+  const expectedUser = process.env.ADMIN_USER || 'admin';
+  const expectedPass = process.env.ADMIN_PASSWORD;
+
+  if (!expectedPass) {
+    console.warn('[WeatherTV] WARNING: ADMIN_PASSWORD not set -- admin panel is UNPROTECTED. Set ADMIN_USER and ADMIN_PASSWORD env vars to secure it.');
+    return next();
+  }
+
+  const authHeader = req.headers.authorization || '';
+  const [scheme, encoded] = authHeader.split(' ');
+
+  if (scheme === 'Basic' && encoded) {
+    try {
+      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+      const sepIdx = decoded.indexOf(':');
+      const user = decoded.slice(0, sepIdx);
+      const pass = decoded.slice(sepIdx + 1);
+
+      // Timing-safe comparison -- pad to equal length first since
+      // timingSafeEqual throws on mismatched buffer lengths.
+      const userBuf = Buffer.from(user);
+      const expectedUserBuf = Buffer.from(expectedUser);
+      const passBuf = Buffer.from(pass);
+      const expectedPassBuf = Buffer.from(expectedPass);
+
+      const userMatch = userBuf.length === expectedUserBuf.length && crypto.timingSafeEqual(userBuf, expectedUserBuf);
+      const passMatch = passBuf.length === expectedPassBuf.length && crypto.timingSafeEqual(passBuf, expectedPassBuf);
+
+      if (userMatch && passMatch) return next();
+    } catch (e) { /* fall through to 401 */ }
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="WeatherTV Admin"');
+  return res.status(401).send('Authentication required');
+}
+
+// /admin and /api/admin must be registered BEFORE the general public static
+// middleware below. express.static() serves a matching file and never calls
+// next() -- if public/admin/ exists for any reason (e.g. leftover from an
+// earlier project layout), the general static handler would serve it directly
+// and adminAuth would never run, regardless of whether ADMIN_PASSWORD is set.
+app.use('/admin', adminAuth, express.static(path.join(__dirname, 'admin')));
+app.use('/api/admin', adminAuth);
+
+// ── Map data is for our own site and apps, not a public feed ─────────────────
+// Road conditions, road hazards and camera lists come from providers whose
+// terms don't allow passing the data on (Road511, state 511s). The site and
+// every WeatherTV app (Android, Xbox, Samsung) load watchweathertv.com itself,
+// so their requests are same-origin; anything else is refused. Admins can
+// still look with their login. (A determined scraper can fake these headers —
+// this stops casual reuse of our addresses as a free data feed.)
+const _ownHosts = new Set(['watchweathertv.com', 'www.watchweathertv.com', (process.env.RAILWAY_PUBLIC_DOMAIN || '').toLowerCase()].filter(Boolean));
+function ownSiteOnly(req, res, next) {
+  const site = req.headers['sec-fetch-site'];
+  if (site === 'same-origin' || site === 'same-site') return next();
+  let host = '';
+  try { host = new URL(req.headers.origin || req.headers.referer || '').hostname.toLowerCase(); } catch (_) {}
+  if (host && (_ownHosts.has(host) || host.endsWith('.watchweathertv.com'))) return next();   // older TVs send no Sec-Fetch-Site
+  if (!(process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT)) return next();   // local testing
+  if (req.headers.authorization) return adminAuth(req, res, next);
+  res.set('Cache-Control', 'no-store');
+  return res.status(403).json({ error: 'This data is only available on watchweathertv.com' });
+}
+app.use(['/api/roads', '/api/road-hazards', '/api/cameras/state', '/api/cameras/va'], ownSiteOnly);
+app.get('/api/admin/cameras/dot-status', (req, res) => res.json({ note: 'Each state camera feed, as of its last load (feeds load when someone views that state, or during a recount).', states: _dotStatus }));
+// Static files: let Cloudflare keep copies so most page loads never wait on Railway.
+// Versioned files (?v=...) never change at that address, so they keep for a year;
+// images/fonts a week; other scripts/styles 5 min; pages and data files always re-check.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, file) {
+    const url = res.req && res.req.originalUrl || '';
+    if (/\.html?$/i.test(file) || /sw\.js$|manifest|camera-count|\.json$/i.test(file)) res.setHeader('Cache-Control', 'no-cache');
+    else if (/[?&]v=/.test(url)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    else if (/\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp3|mp4)$/i.test(file)) res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    else res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
+  },
+}));
+
+// ── Load / Save data ──
+// In-memory data store — loaded from Redis or file on startup
+let appDataStore = null;
+
+function loadData() {
+  if (appDataStore) return appDataStore;
+  // Fall back to file if Redis hasn't loaded yet
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      appDataStore = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      return appDataStore;
+    } catch(e) {}
+  }
+  appDataStore = getDefaultData();
+  return appDataStore;
+}
+
+function saveData(data) {
+  // Update in-memory store
+  appDataStore = data;
+
+  // Write to Redis (primary persistent store)
+  rSet('wt:appData', data);
+
+  // Also write to file as backup
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch(e) {
+    console.warn('[WeatherTV] Could not write channels.json:', e.message);
+  }
+}
+
+// Load app data from Redis into memory on startup
+async function restoreAppDataFromRedis() {
+  if (!redis) return;
+  try {
+    const stored = await rGet('wt:appData');
+    if (stored && stored.groups && stored.groups.length > 0) {
+      // Validate structure — must have proper groups with channels arrays
+      const valid = stored.groups.every(g => g.id && g.label && Array.isArray(g.channels));
+      if (!valid) {
+        console.error('[Redis] Stored data has invalid structure — using defaults');
+        return;
+      }
+
+      // Use Redis data directly — it was saved by admin and is authoritative
+      // New channels added via code will appear after admin does Save All Changes
+      appDataStore = stored;
+      const chCount = stored.groups.reduce((s, g) => s + (g.channels||[]).length, 0);
+      console.log('[Redis] App data restored — ' + stored.groups.length + ' groups, ' + chCount + ' channels');
+    } else {
+      console.log('[Redis] No app data in Redis — using defaults');
+    }
+  } catch(e) {
+    console.error('[Redis] App data restore error:', e.message);
+  }
+}
+
+function getDefaultData() {
+  return {
+    config: {
+      playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI',
+      apiKey: process.env.YOUTUBE_API_KEY || '',
+      liveCheckIntervalHours: 2,    // 2 hours between live polls — set to 0.25 after quota increase to 50k
+      recentFetchHourEST: 12,       // hour (0-23) in EST for first daily fetch -- noon, after most forecasters post their daily forecast
+      recentFetchHour2EST: 18,      // hour (0-23) in EST for second daily fetch -- 6pm, catches afternoon/evening storm content
+    },
+    groups: [
+      {
+        id: 'forecasters',
+        label: 'Weather Forecasters',
+        icon: '⛅',
+        channels: [
+          { id: 'UCuYqi3hOfz6-3Hdp6tEJjAg', name: 'AccuWeather',         hasLive: true,  enabled: true },
+          { id: 'UCp2G_jHO53yj2NVjv8zbDmQ', name: 'Evan Fryberger',    hasLive: true,  enabled: true },
+          { id: 'UCvBVK2ymNzPLRJrgip2GeQQ', name: 'Max Velocity',      hasLive: true,  enabled: true,
+            collections: [
+              { id: 'max-chasers', label: 'Exclusive Chasers', enabled: false }
+            ]
+          },
+          { id: 'UCJHAT3Uvv-g3I8H3GhHWV7w', name: "Ryan Hall Y'all",   hasLive: true,  enabled: true,
+            collections: [
+              { id: 'ryan-chasers', label: 'Exclusive Chasers', enabled: false }
+            ]
+          },
+          { id: 'UCBtR7ynKM9odz-PW_7uyzDw', name: 'Severe Studios',    hasLive: true,  enabled: true },
+        ]
+      },
+      {
+        id: 'chasers',
+        label: 'Storm Chasers',
+        icon: '🌪',
+        channels: [
+          { id: 'UC8QZ-OIqfWKek1CpMvs2O3g', name: 'Aaron Jayjack',          hasLive: true,  enabled: true },
+          { id: 'UCf8dNCufHlKZp-CgU8NPryw', name: 'Adam Lucio',             hasLive: true,  enabled: true },
+          { id: 'UCXQYQMwU9wc584i7ecZzm_A', name: 'Adri Mozeris',           hasLive: false, enabled: true },
+          { id: 'UCW-db9uRShMINgICqQeyt1Q', name: 'Alexander Spahn',        hasLive: false, enabled: true },
+          { id: 'UCT1IIkU3Yafr6nfNxQlWuSQ', name: 'Andrew Pritchard',       hasLive: true,  enabled: true },
+          { id: 'UCXZJRhrMbtXqjZCZUGp5CTg', name: 'Bamawxcom',              hasLive: false, enabled: true },
+          { id: 'UCj6aoh3tZuQoqfHs4ZWpHcA', name: 'Brad Arnold',            hasLive: true,  enabled: true },
+          { id: 'UCD3KREyo3IqCLBC-4khGgIw', name: 'Brandon Clement',        hasLive: true,  enabled: true },
+          { id: 'UCniY5-9rLWSE6c3iA4fh73w', name: 'Brandon Copic Archive',  hasLive: false, enabled: true },
+          { id: 'UCPqLI_AohMn1jnFg8ocMyHA', name: 'Brandon Copic Live',     hasLive: true,  enabled: true },
+          { id: 'UC0xEzjGJ6waQPoHwAdhYD7Q', name: 'Brandon Ivey', hasLive: true, enabled: true },
+          { id: 'UCMmlV4B6Bx2GuYtIaxpLcfw', name: 'Brittney Richardson',    hasLive: true,  enabled: true },
+          { id: 'UCLfN3U2O0sEYabjo2lxIttw', name: 'Celton Henderson',       hasLive: false, enabled: true },
+          { id: 'UCvIqVAaqpx1Q_e9DzIxgk1A', name: 'CF Productions',         hasLive: true,  enabled: true },
+          { id: 'UCGpPbdVAtTUgW_w98lXC9nw', name: 'Chris Riske',            hasLive: true,  enabled: true },
+          { id: 'UCx_mcHxMvZ8PBmVTtg6Ddtw', name: 'CJ Ziegler',             hasLive: true,  enabled: true },
+          { id: 'UCb0U1g5r4kH_NDMGiGRhysA', name: 'Connor Croff',           hasLive: true,  enabled: true },
+          { id: 'UCRYYy0UrfyGmMKQDU1N1R3g', name: 'Convective Chronicles',  hasLive: true,  enabled: true },
+          { id: 'UCx5ex9rJumpj-oKgVJrP4hA', name: 'Corey Gerken',           hasLive: true,  enabled: true },
+          { id: 'UC1dcRoXHbZ0QFOBB6DKPmdg', name: 'Dan Robinson',            hasLive: false, enabled: true },
+          { id: 'UCemyFpFfu55JvAP_eWW1NdA', name: 'Daniel Shaw',            hasLive: true,  enabled: true },
+          { id: 'UCixgOrfusZuPt_FVO1sIXAw', name: 'Dilly Dilly Dalton',      hasLive: true,  enabled: true },
+          { id: 'UChZ_VT3MrHB53bSqFiVf4eg', name: "Edgar O'Neal",           hasLive: true,  enabled: true },
+          { id: 'UCZSDkxJS7PRw9V0_Sm6U7jg', name: 'Freddy McKinney',        hasLive: true,  enabled: true },
+          { id: 'UC6lUxl1KxmI7TWnAA6go1EQ', name: 'Jaden Pappenheim',       hasLive: true,  enabled: true },
+          { id: 'UCPgskHnT1cT_hpfbq9nUK7w', name: 'Jakob McMillin',         hasLive: true,  enabled: true },
+          { id: 'UCgHiLhzivmLjWTnYerF8E9A', name: 'James Hammett', hasLive: false, enabled: true },
+          { id: 'UCWMRFAo3Cvd7W8yQpQwsOQA', name: 'John McKinney',          hasLive: true,  enabled: true },
+          { id: 'UCSoEfOMuGNjrrhD4iLTKo_A', name: 'Jonas Piontek',          hasLive: false, enabled: true },
+          { id: 'UC86mOt7YnKgRUQxblDpsN-g', name: 'Jordan Hall',            hasLive: true,  enabled: true },
+          { id: 'UCvRBXkjHG0vbDrO-03ZIWxw', name: 'Justin Noonan',          hasLive: false, enabled: true },
+          { id: 'UClIZx2ESMJVocfMIbji_ujg', name: 'Justin Poublon',         hasLive: true,  enabled: true },
+          { id: 'UCPtizAsfQaJktz0tw9YuKLQ', name: 'Kannon Kalton',          hasLive: true,  enabled: true },
+          { id: 'UC1nJElGcVcTpeZJVyxEbzJw', name: 'Live Storms Media',      hasLive: true,  enabled: true },
+          { id: 'UC9Y_sKyerjEGdywnoB0XrXg', name: 'Mark Peyton', hasLive: true, enabled: true },
+          { id: 'UCeE90n3GWO1XZcwt8xpNRtw', name: 'Melanie Metz',           hasLive: true,  enabled: true },
+          { id: 'UCXUU-_dJ-eGBh3-bjPNsalQ', name: 'Nathan Moore',            hasLive: true,  enabled: true },
+          { id: 'UC-uBgtNjd3V0ngd7-IZbphQ', name: 'Nick Stewart', hasLive: true, enabled: true },
+          { id: 'UCy5cFthFcECu6DMSBcOX5AQ', name: 'Oklahoma Weather Couple', hasLive: false, enabled: true },
+          { id: 'UCV6hWxB0-u_IX7e-h4fEBAw', name: 'Reed Timmer',            hasLive: true,  enabled: true },
+          { id: 'UChxsy558HhpaqnB1Hk6tHkw', name: 'Reilly Dibble',          hasLive: true,  enabled: true },
+          { id: 'UCY4Vj4lQZ-TSrz66RDi-DJA', name: 'Ryan Miller',             hasLive: true,  enabled: true },
+          { id: 'UCSQH3qItz0gZ5oXw8cSNR2w', name: 'Ryan Scholl',            hasLive: true,  enabled: true },
+          { id: 'UCIQ1bii18GuNOICBA86HUMQ', name: 'Sawyer Spiral',           hasLive: false, enabled: true },
+          { id: 'UCqsI0A7OlQTnwPFOUZaISMA', name: 'Scott Currens',          hasLive: false, enabled: true },
+          { id: 'UCqAWcfd0BJBgCW8iyOLOF3g', name: 'Scott Peake',            hasLive: true,  enabled: true },
+          { id: 'UCkB7RBehEqHvsD60C1yfAAg', name: 'Skip Talbot', hasLive: false, enabled: true },
+          { id: 'UCddpbBha4DGhxy5KI9smjow', name: 'Storm Chase HQ',        hasLive: true,  enabled: true },
+          { id: 'UCdSMdTFOfqmOXP-1vD2cxAA', name: 'Storm Chase TV',         hasLive: true,  enabled: true },
+          { id: 'UCrqV52vTW5wksR-8vCZgAyA', name: 'Storm Chaser Dana',     hasLive: true,  enabled: true },
+          { id: 'UCWAN-rRJFLosqgiiIFVpkEQ', name: 'Storm Chasing Video',    hasLive: true,  enabled: true },
+          { id: 'UCapcjkwRd5jNJ6vbE7NWIkw', name: 'Storm Hunters',           hasLive: true,  enabled: true },
+          { id: 'UCGS82m2ORvg1nfeAJsFqWDg', name: 'Storm of Passion', hasLive: true, enabled: true },
+          { id: 'UCAnSuGYTjwbGoBMgF_aBpnQ', name: 'Stormgasm',              hasLive: true,  enabled: true },
+          { id: 'UCBmOfiL9LC3dT4Ps2veVCoQ', name: 'Stormrunner Media',      hasLive: true,  enabled: true },
+          { id: 'UCAdsKTAapDXhosiq7B237SA', name: 'Tanner Charles',           hasLive: true,  enabled: true },
+          { id: 'UCaS1PyCKSyoDlel7iVOI2Vw', name: 'Tornado Crew Storm Chasers', hasLive: true, enabled: true },
+          { id: 'UCCzfjxXs0o9h1cOgnnmc2Zw', name: 'Tornado Paigeyy',        hasLive: true,  enabled: true },
+          { id: 'UCuer9Sw2UAD5LWZpVXbgKTA', name: 'Tornado TRX',            hasLive: false, enabled: true },
+          { id: 'UCTWhf2uDTdr3pVNKUCdgnDQ', name: 'Twister Chasers', hasLive: true, enabled: true },
+          { id: 'UC-4XLQqaY8y7K2aNGbOAJfQ', name: 'White Weather', hasLive: false, enabled: true },
+          { id: 'UCuDoeT6EEdOTtuZh0s_gcpQ', name: 'DL Scales', hasLive: true, enabled: true },
+          { id: 'UCMARQE2OVE9a6kzOMhKuPVw', name: 'Moderate Motley', hasLive: true, enabled: true },
+          { id: 'UCqSk-ojoH2rgAuYadPLJgJA', name: 'Vince Waelti', hasLive: true, enabled: true },
+          { id: 'UCG6jXdmfKUqR_OiPsRLDAnw', name: 'The UK Storm Chaser', hasLive: true, enabled: true },
+        ]
+      },
+      {
+        id: 'creators',
+        label: 'Other Weather Creators',
+        icon: '🎬',
+        channels: [
+          { id: 'UCBJXCq0V3EdcbQWwZ7HO7tQ', name: 'Alexander Androshchuk', hasLive: false, enabled: true },
+          { id: 'UCuFxM1HTY6SONb_FICAl6gQ', name: 'Carly Anna WX',          hasLive: false, enabled: true },
+          { id: 'UCGEZlX4V82wv7_Z2LsXtjPA', name: 'June First',             hasLive: true,  enabled: true },
+          { id: 'UCy4Zv53jpdE_FfNh3bmtKiA', name: 'Michigan Storm Chasers', hasLive: true, enabled: true },
+          { id: 'UCpYQmszu4IP37xyt3RQb2gw', name: 'More Max Velocity',      hasLive: true,  enabled: true },
+          { id: 'UCTRPdC_jSFKsBVOUFQ52jGg', name: 'Out of the Whirlwind',   hasLive: false, enabled: true },
+          { id: 'UCo-3ThNQmPmQSQL9WPjMaUQ', name: 'Pecos Hank',             hasLive: false, enabled: true },
+          { id: 'UClEH97oWJjrm1PX6ZCEcafQ', name: 'Sky Whisper', hasLive: false, enabled: true },
+          { id: 'UCCP12NYSDa9KL26PW1zokcA', name: 'Storm Channel Coaching', hasLive: false, enabled: true },
+          { id: 'UCz2BWcrW-njx_py1FR0447A', name: 'Storm Reel',             hasLive: false, enabled: true },
+          { id: 'UCZTme3vf6kXmXfSsIr06lvQ', name: 'Swegle Studios',         hasLive: false, enabled: true },
+          { id: 'UCVdfIdcYEQfUJ9bpmGMaK4Q', name: 'The Old Callisto', hasLive: false, enabled: true },
+          { id: 'UCbxfONPDpv4r3IXwppgcTdA', name: 'The Twister Archives',   hasLive: false, enabled: true },
+          { id: 'UCGTUbwceCMibvpbd2NaIP7A', name: 'The Weather Channel', hasLive: false, enabled: true },
+          { id: 'UC0CPqIPMHCELm208KiwBwdw', name: 'Tornado Forensics',      hasLive: false, enabled: true },
+          { id: 'UC9c4E_DWmPMel1MelOBTznw', name: 'Tornado Video Library',  hasLive: false, enabled: true },
+          { id: 'UCgGTo_tNrWxArxh3c3aI6bw', name: 'Tornado Warned',         hasLive: false, enabled: true },
+          { id: 'UCZOxO3O5KWC4FvSL3d-U_8w', name: 'Weather Beat', hasLive: false, enabled: true },
+          { id: 'UCCtYdNBm-8C_wZk0n6u8VnQ', name: 'Weatherbox Studios',     hasLive: false, enabled: true },
+          { id: 'UCHf2fy0H-GJNrdVO3KxDV5Q', name: 'WorldStorm',             hasLive: false, enabled: true },
+        ]
+      }
+    ],
+    apps: [
+      { name: 'WeatherFront',        img: 'images/weatherfront.webp',    ios: 'https://apps.apple.com/us/app/weatherfront-radar-models/id6739154126',            iosSoon: false, android: null,                                                                          androidSoon: true,  enabled: true },
+      { name: 'Weather Wise',        img: 'images/weather-wise.webp',    ios: 'https://apps.apple.com/us/app/weatherwise-app/id6736407724',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.interactiveweather.weatherwise', androidSoon: false, enabled: true },
+      { name: 'Radar Omega',         img: 'images/radar-omega.webp',     ios: 'https://apps.apple.com/us/app/radaromega-doppler-radar-app/id1439881811',         iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.radarx.stormmapping.stormmapping', androidSoon: false, enabled: true },
+      { name: 'Windy',               img: 'images/windy.webp',           ios: 'https://apps.apple.com/app/windy-wind-weather-forecast/id1161387262',             iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.windyty.android',          androidSoon: false, enabled: true },
+      { name: 'The Weather Channel', img: 'images/weather-channel.webp', ios: 'https://apps.apple.com/app/the-weather-channel/id295646461',                     iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.weather.Weather',          androidSoon: false, enabled: true },
+      { name: 'AccuWeather',         img: 'images/accuweather.webp',     ios: 'https://apps.apple.com/app/accuweather/id300048137',                              iosSoon: false, android: 'https://play.google.com/store/apps/details?id=com.accuweather.android',      androidSoon: false, enabled: true, collectionRef: 'UCuYqi3hOfz6-3Hdp6tEJjAg::col-1780335893616' },
+    ],
+    highlights: [],
+    chaserMap: {},
+    // Accumulating registry of every Spotter Network chaser we've ever seen
+    // in a poll, keyed by their Spotter Network ID. The live feed only
+    // shows who's currently broadcasting a position, so this persists names
+    // across polls — without it, suggestions/matching would be at the mercy
+    // of whoever happens to be active in any given 2-minute window.
+    // Shape: { [spotterNetworkId]: { name, firstSeenAt, lastSeenAt, youtubeUrl } }
+    knownChasers: {},
+    // Spotter Network IDs the admin has explicitly said are NOT a match for
+    // anything (dismissed from Suggestions) or NOT worth adding (dismissed
+    // from New Chasers Found) — excluded from those lists going forward so
+    // a "no" answer doesn't keep resurfacing every refresh.
+    dismissedSuggestions: [], // array of "spotterNetworkId::channelId" pairs
+    dismissedNewChasers: [],  // array of spotterNetworkId
+    playlists: [
+      { id: 'playlist-1', title: 'Weather Playlist', playlistId: 'PLNDLR7JhLYhOdX-lSyjsgUSkwcd55UuiI' }
+    ]
+  };
+}
+
+// ── API Routes ──
+
+// Get all data
+app.get('/api/data', (req, res) => {
+  const data = loadData();
+  // Strip API key from public response
+  const safe = { ...data, config: { ...data.config, apiKey: '***' } };
+  res.json(safe);
+});
+
+// Get config (admin only — protect this in production!)
+app.get('/api/admin/config', (req, res) => {
+  // Prevent Cloudflare (and any other proxy) from caching admin API responses.
+  // Without this, a POST to /api/admin/restore followed immediately by a GET
+  // here could return a stale cached version, making edits appear to revert.
+  res.set('Cache-Control', 'no-store');
+  res.json(loadData());
+});
+
+// Export full config as downloadable JSON backup
+app.get('/api/admin/backup', (req, res) => {
+  const data = loadData();
+  const filename = 'weathertv-backup-' + new Date().toISOString().split('T')[0] + '.json';
+  res.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
+  res.setHeader('Content-Type', 'application/json');
+  res.json(data);
+});
+
+// Restore from JSON backup — overwrites current data
+app.post('/api/admin/restore', async (req, res) => {
+  const data = req.body;
+  if (!data || !data.groups || !data.config) {
+    return res.status(400).json({ error: 'Invalid backup file — must contain groups and config' });
+  }
+  // The admin page leaves out the Spotter Network registry and your "not a
+  // match" choices to keep the upload small — keep the server's copies, or
+  // every Save wiped them (and dismissed suggestions came back)
+  const current = loadData() || {};
+  for (const k of ['knownChasers', 'dismissedSuggestions']) {
+    if (data[k] === undefined && current[k] !== undefined) data[k] = current[k];
+  }
+  // Update in-memory immediately
+  appDataStore = data;
+  // Wait for Redis to confirm save before responding
+  await rSet('wt:appData', data);
+  // Also write to filesystem
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch(e) {}
+  const totalChannels = data.groups.reduce((s,g) => s + (g.channels||[]).length, 0);
+  res.json({ ok: true, message: 'Restored — ' + data.groups.length + ' groups, ' + totalChannels + ' channels loaded' });
+});
+
+// Update config
+app.put('/api/admin/config', (req, res) => {
+  const data = loadData();
+  data.config = { ...data.config, ...req.body };
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Get all groups
+app.get('/api/groups', (req, res) => {
+  res.json(loadData().groups);
+});
+
+// ── Highlights routes ──
+
+// Public — frontend fetches on page load
+app.get('/api/highlights', (req, res) => {
+  const data = loadData();
+  res.json(data.highlights || []);
+});
+
+// Admin — get highlights
+app.get('/api/admin/highlights', (req, res) => {
+  const data = loadData();
+  res.json(data.highlights || []);
+});
+
+// Admin — add highlight
+app.post('/api/admin/highlights', (req, res) => {
+  const { channelId, videoId, title, thumbnail } = req.body;
+  if (!channelId || !videoId) return res.status(400).json({ error: 'channelId and videoId required' });
+  const data = loadData();
+  if (!data.highlights) data.highlights = [];
+  data.highlights.push({ channelId, videoId, title: title || '', thumbnail: thumbnail || '' });
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — remove highlight by index
+app.delete('/api/admin/highlights/:index', (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  const data = loadData();
+  if (!data.highlights || idx < 0 || idx >= data.highlights.length) {
+    return res.status(404).json({ error: 'Highlight not found' });
+  }
+  data.highlights.splice(idx, 1);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — reorder highlights (swap by index, direction up/down)
+app.put('/api/admin/highlights/reorder', (req, res) => {
+  const { index, direction } = req.body;
+  const data = loadData();
+  if (!data.highlights) return res.json({ ok: true });
+  const newIdx = direction === 'up' ? index - 1 : index + 1;
+  if (newIdx < 0 || newIdx >= data.highlights.length) return res.json({ ok: true });
+  const tmp = data.highlights[index];
+  data.highlights[index] = data.highlights[newIdx];
+  data.highlights[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// ── Playlists routes ──
+
+// Public — frontend fetches on page load
+app.get('/api/playlists', (req, res) => {
+  const data = loadData();
+  res.json(data.playlists || []);
+});
+
+// Admin — add playlist
+app.post('/api/admin/playlists', (req, res) => {
+  const { title, playlistId } = req.body;
+  if (!title || !playlistId) return res.status(400).json({ error: 'title and playlistId required' });
+  const data = loadData();
+  if (!data.playlists) data.playlists = [];
+  data.playlists.push({ id: 'playlist-' + Date.now(), title, playlistId });
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — reorder playlists (must be before /:id to avoid Express matching 'reorder' as a param)
+app.put('/api/admin/playlists/reorder', (req, res) => {
+  const { id, direction } = req.body;
+  const data = loadData();
+  if (!data.playlists) return res.json({ ok: true });
+  const idx = data.playlists.findIndex(p => p.id === id);
+  if (idx === -1) return res.json({ ok: true });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= data.playlists.length) return res.json({ ok: true });
+  const tmp = data.playlists[idx];
+  data.playlists[idx] = data.playlists[newIdx];
+  data.playlists[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — update playlist
+app.put('/api/admin/playlists/:id', (req, res) => {
+  const data = loadData();
+  if (!data.playlists) return res.status(404).json({ error: 'Not found' });
+  const idx = data.playlists.findIndex(p => p.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Playlist not found' });
+  data.playlists[idx] = { ...data.playlists[idx], ...req.body };
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — remove playlist
+app.delete('/api/admin/playlists/:id', (req, res) => {
+  const data = loadData();
+  if (!data.playlists) return res.json({ ok: true });
+  data.playlists = data.playlists.filter(p => p.id !== req.params.id);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Reorder groups — must be registered BEFORE /groups/:id, or Express
+// treats "reorder" as a group id and the up/down arrows silently 404
+app.put('/api/admin/groups/reorder', (req, res) => {
+  const data = loadData();
+  const { groupId, direction } = req.body;
+  const idx = data.groups.findIndex(g => g.id === groupId);
+  if (idx === -1) return res.status(404).json({ error: 'Group not found' });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= data.groups.length) return res.json({ ok: true });
+  const tmp = data.groups[idx];
+  data.groups[idx] = data.groups[newIdx];
+  data.groups[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Update a group
+app.put('/api/admin/groups/:id', (req, res) => {
+  const data = loadData();
+  const idx = data.groups.findIndex(g => g.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Group not found' });
+  data.groups[idx] = { ...data.groups[idx], ...req.body };
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Add channel to group
+app.post('/api/admin/groups/:groupId/channels', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const newChannel = { enabled: true, hasLive: true, ...req.body };
+  group.channels.push(newChannel);
+  saveData(data);
+  res.json({ ok: true, channel: newChannel });
+});
+
+// Update channel
+app.put('/api/admin/groups/:groupId/channels/reorder', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const { channelId, direction } = req.body;
+  const idx = group.channels.findIndex(c => c.id === channelId);
+  if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
+  const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= group.channels.length) return res.json({ ok: true });
+  const tmp = group.channels[idx];
+  group.channels[idx] = group.channels[newIdx];
+  group.channels[newIdx] = tmp;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Set full channel order for a group (used by A-Z sort and drag-drop).
+// Accepts an array of channel IDs in the desired order; reorders the
+// channels array in place without touching any other channel fields.
+app.put('/api/admin/groups/:groupId/channels/order', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds)) return res.status(400).json({ error: 'orderedIds must be an array' });
+  const byId = Object.fromEntries(group.channels.map(c => [c.id, c]));
+  const reordered = orderedIds.map(id => byId[id]).filter(Boolean);
+  // Preserve any channels not in orderedIds (edge case safety)
+  const included = new Set(orderedIds);
+  group.channels.find(c => !included.has(c.id)) && reordered.push(...group.channels.filter(c => !included.has(c.id)));
+  group.channels = reordered;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const idx = group.channels.findIndex(c => c.id === req.params.channelId);
+  if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
+  group.channels[idx] = { ...group.channels[idx], ...req.body };
+  saveData(data);
+  if ('weatherOnly' in (req.body || {})) {            // refetch their recent videos with the new rule
+    delete cache.recentVideos[req.params.channelId];
+    rDel('wt:recent:' + req.params.channelId);
+  }
+  res.json({ ok: true });
+});
+
+// Delete channel
+app.delete('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  group.channels = group.channels.filter(c => c.id !== req.params.channelId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Reorder channels within a group
+// Add group
+app.post('/api/admin/groups', (req, res) => {
+  const data = loadData();
+  const newGroup = {
+    id: req.body.id || 'group-' + Date.now(),
+    label: req.body.label || 'New Group',
+    icon: req.body.icon || '📺',
+    channels: []
+  };
+  data.groups.push(newGroup);
+  saveData(data);
+  res.json({ ok: true, group: newGroup });
+});
+
+// Delete group
+app.delete('/api/admin/groups/:groupId', (req, res) => {
+  const data = loadData();
+  data.groups = data.groups.filter(g => g.id !== req.params.groupId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// ── Collection (sub-group) routes ──
+
+// Add collection to a channel
+app.post('/api/admin/groups/:groupId/channels/:channelId/collections', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  if (!channel.collections) channel.collections = [];
+  const col = {
+    id: req.body.id || 'col-' + Date.now(),
+    label: req.body.label || 'New Collection',
+    enabled: req.body.enabled !== false
+    // No channelIds — channels declare membership via their own collectionId field
+  };
+  channel.collections.push(col);
+  saveData(data);
+  res.json({ ok: true, collection: col });
+});
+
+// Update collection
+app.put('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel || !channel.collections) return res.status(404).json({ error: 'Not found' });
+  const colIdx = channel.collections.findIndex(c => c.id === req.params.colId);
+  if (colIdx === -1) return res.status(404).json({ error: 'Collection not found' });
+  // Only update label and enabled — membership managed via channel's collectionId
+  const { label, enabled } = req.body;
+  if (label !== undefined) channel.collections[colIdx].label = label;
+  if (enabled !== undefined) channel.collections[colIdx].enabled = enabled;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// ── Standalone collections (folders owned by a GROUP, not a channel) ────────
+// Shown on the site as their own card titled with the collection's name, after
+// the group's channels. Members point at them as "group:<groupId>::<colId>".
+const _groupColKey = (gid, cid) => 'group:' + gid + '::' + cid;
+function _rekeyMembers(data, fromKey, toKey) {
+  for (const g of data.groups || []) for (const c of g.channels || []) {
+    const ids = Array.isArray(c.collectionIds) ? c.collectionIds : (c.collectionId ? [c.collectionId] : []);
+    if (!ids.includes(fromKey)) continue;
+    const next = [...new Set(ids.map(k => k === fromKey ? toKey : k).filter(Boolean))];
+    c.collectionIds = next; c.collectionId = next[0] || null;
+  }
+}
+app.post('/api/admin/groups/:groupId/collections', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const label = String((req.body || {}).label || '').trim().slice(0, 60);
+  if (!label) return res.status(400).json({ error: 'Give the collection a name' });
+  const col = { id: 'col-' + Date.now(), label, enabled: true };
+  (group.collections || (group.collections = [])).push(col);
+  saveData(data);
+  res.json({ ok: true, collection: col });
+});
+app.put('/api/admin/groups/:groupId/collections/order', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group || !Array.isArray((req.body || {}).orderedIds)) return res.status(400).json({ error: 'Bad request' });
+  const byId = Object.fromEntries((group.collections || []).map(c => [c.id, c]));
+  const ordered = req.body.orderedIds.map(id => byId[id]).filter(Boolean);
+  group.collections = [...ordered, ...(group.collections || []).filter(c => !ordered.includes(c))];
+  saveData(data);
+  res.json({ ok: true });
+});
+app.put('/api/admin/groups/:groupId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  const col = group && (group.collections || []).find(c => c.id === req.params.colId);
+  if (!col) return res.status(404).json({ error: 'Collection not found' });
+  const { label, enabled } = req.body || {};
+  if (label !== undefined && String(label).trim()) col.label = String(label).trim().slice(0, 60);
+  if (enabled !== undefined) col.enabled = !!enabled;
+  saveData(data);
+  res.json({ ok: true });
+});
+app.delete('/api/admin/groups/:groupId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  group.collections = (group.collections || []).filter(c => c.id !== req.params.colId);
+  _rekeyMembers(data, _groupColKey(group.id, req.params.colId), null);   // members just leave it
+  saveData(data);
+  res.json({ ok: true });
+});
+// Move a channel's collection to its group: same name, same members, no host channel
+app.post('/api/admin/groups/:groupId/channels/:channelId/collections/:colId/standalone', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  const host = group && group.channels.find(c => c.id === req.params.channelId);
+  const col = host && (host.collections || []).find(c => c.id === req.params.colId);
+  if (!col) return res.status(404).json({ error: 'Collection not found' });
+  let id = col.id;
+  while ((group.collections || []).some(c => c.id === id)) id = col.id + '-' + Math.random().toString(36).slice(2, 5);
+  host.collections = host.collections.filter(c => c !== col);
+  (group.collections || (group.collections = [])).push({ ...col, id });
+  _rekeyMembers(data, host.id + '::' + col.id, _groupColKey(group.id, id));
+  saveData(data);
+  res.json({ ok: true, hostHidden: !!host.hiddenInGroup, host: host.name });
+});
+
+// Update a channel's collection memberships (supports multiple)
+app.put('/api/admin/groups/:groupId/channels/:channelId/collection-membership', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  const ids = req.body.collectionIds || [];
+  channel.collectionIds = ids;
+  channel.collectionId = ids.length > 0 ? ids[0] : null;
+  // hiddenInGroup: hide this channel from the main group list
+  // Only visible through its collection button on the parent channel card
+  if (req.body.hiddenInGroup !== undefined) {
+    channel.hiddenInGroup = req.body.hiddenInGroup;
+  }
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Delete collection
+app.delete('/api/admin/groups/:groupId/channels/:channelId/collections/:colId', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const channel = group.channels.find(c => c.id === req.params.channelId);
+  if (!channel || !channel.collections) return res.status(404).json({ error: 'Not found' });
+  channel.collections = channel.collections.filter(c => c.id !== req.params.colId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Update apps
+app.put('/api/admin/apps', (req, res) => {
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: 'Expected an array of apps' });
+  }
+  const data = loadData();
+  data.apps = req.body;
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// ── App logo upload ──
+// Accepts a base64 data URL from the admin panel's file picker, decodes it,
+// and writes it to public/images/apps/<slug>.<ext>. Returns the relative path
+// to store in app.img -- index.html's buildAppsPanel() and the collection-button
+// logo (height:10px, auto width) both render whatever this points to, so any
+// reasonably square image works without further resizing.
+app.post('/api/admin/upload-app-logo', (req, res) => {
+  try {
+    const { name, dataUrl } = req.body;
+    if (!name || !dataUrl) return res.status(400).json({ error: 'name and dataUrl required' });
+
+    const match = dataUrl.match(/^data:image\/(png|jpeg|jpg|webp|svg\+xml);base64,(.+)$/);
+    if (!match) return res.status(400).json({ error: 'Unsupported image format -- use PNG, JPEG, WEBP, or SVG' });
+
+    let ext = match[1] === 'jpeg' ? 'jpg' : match[1] === 'svg+xml' ? 'svg' : match[1];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Image too large -- 3MB max' });
+
+    const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
+    const dir = path.join(__dirname, 'public', 'images', 'apps');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const filename = `${slug}-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(dir, filename), buffer);
+
+    res.json({ ok: true, path: `images/apps/${filename}` });
+  } catch (e) {
+    console.error('[WeatherTV] App logo upload failed:', e.message);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// ── YouTube API Proxy with Server-Side Caching ──
+// The server checks live status on a schedule and caches all results.
+// Browser clients get cached data instantly — no extra API calls per user.
+// This means 1 user or 1000 users costs the same quota.
+
+const https = require('https');
+
+// ── Quota Guard ──
+// Primary key (YOUTUBE_API_KEY): 60,000 units/day — handles all normal
+// operations: WebSub live confirmations, recent video fetches (via
+// playlistItems.list at 1 unit/channel), and manual checks.
+//
+// Archive key (YOUTUBE_API_KEY_2): 10,000 units/day — kept configured as
+// emergency standby only. Never used on a normal day. Activates automatically
+// if the primary key somehow hits its limit (e.g. an unusual spike in
+// WebSub confirmations or a manual admin fetch run on top of scheduled ones).
+//
+// Estimated normal daily usage on primary key:
+//   2x recent fetch × 146 channels × 1 unit = ~292 units
+//   WebSub confirmations (videos.list, 1 unit each, ~30/day) = ~30 units
+//   Total: ~320 units/day — well under 60,000 unit limit.
+//
+// These pools are independent — the archive key running out must NOT also
+// halt WebSub-based live detection on the primary key, which is the
+// safety-critical path.
+let primaryQuotaExceeded = false;
+let archiveQuotaExceeded = false;
+let primaryQuotaResetTimer = null;
+let archiveQuotaResetTimer = null;
+
+function markQuotaExceeded(isPrimary = true) {
+  const label = isPrimary ? 'primary' : 'archive';
+  const already = isPrimary ? primaryQuotaExceeded : archiveQuotaExceeded;
+  if (already) return;
+  if (isPrimary) primaryQuotaExceeded = true; else archiveQuotaExceeded = true;
+  console.warn(`[WeatherTV] YouTube ${label} key quota exceeded — pausing ${label}-key calls until midnight Pacific`);
+  logEvent({ type: 'quota', severity: 'warn', source: label + '-key', message: `YouTube ${label} key quota exceeded — pausing until midnight Pacific` });
+  const now = new Date();
+  const pacific = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const midnight = new Date(pacific);
+  midnight.setHours(24, 0, 30, 0);
+  const msUntilReset = midnight - pacific;
+  console.log(`[WeatherTV] ${label} key quota will reset in ${Math.round(msUntilReset / 60000)} minutes`);
+  const resetFn = () => {
+    if (isPrimary) primaryQuotaExceeded = false; else archiveQuotaExceeded = false;
+    console.log(`[WeatherTV] ${label} key quota reset — resuming ${label}-key calls`);
+    logEvent({ type: 'quota', severity: 'info', source: label + '-key', message: `${label} key quota reset at midnight Pacific — resuming calls` });
+    if (isPrimary) scheduledLiveCheck();
+  };
+  if (isPrimary) {
+    if (primaryQuotaResetTimer) clearTimeout(primaryQuotaResetTimer);
+    primaryQuotaResetTimer = setTimeout(resetFn, msUntilReset);
+  } else {
+    if (archiveQuotaResetTimer) clearTimeout(archiveQuotaResetTimer);
+    archiveQuotaResetTimer = setTimeout(resetFn, msUntilReset);
+  }
+}
+
+function getApiKey() {
+  return process.env.YOUTUBE_API_KEY || ((loadData() || {}).config || {}).apiKey || '';
+}
+
+// Archive key (YOUTUBE_API_KEY_2) — used for recent video fetches and playlist access
+// Falls back to primary key if not configured
+function getArchiveApiKey() {
+  return process.env.YOUTUBE_API_KEY_2 || getApiKey();
+}
+
+function ytFetch(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch(e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+function checkQuotaError(data) {
+  return data.error && data.error.errors && data.error.errors[0].reason === 'quotaExceeded';
+}
+
+// ── Redis Persistent Cache ──
+const Redis = require('ioredis');
+
+let redis = null;
+if (process.env.REDIS_URL) {
+  redis = new Redis(process.env.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 2 });
+  redis.on('connect', () => console.log('[Redis] Connected — cache persists across deploys'));
+  redis.on('error', (e) => console.error('[Redis] Error:', e.message));
+} else {
+  console.warn('[Redis] No REDIS_URL — using in-memory cache only');
+}
+
+// ── Server start time ────────────────────────────────────────────────────────
+const SERVER_START_TIME = Date.now();
+
+// In-memory mirrors (fast reads, Redis for persistence)
+const cache = {
+  liveStatuses: {},
+  recentVideos: {},
+  playlist: {},
+  channelActivity: {}, // { channelId: { lastVideoDate, lastLiveDate, nextFetchDue } }
+  lastLiveCheck: null,
+  lastNotificationReceived: null, // last WebSub push from YouTube (free, 0 units)
+  lastRecentFetch: null,
+  websubActive: false,
+};
+
+// ── Daily quota burn tracker ─────────────────────────────────────────────────
+// Tracks estimated total API units used per day, per key.
+// Resets automatically at midnight by checking today's date.
+const burnTracker = { date: '', primaryUnits: 0, archiveUnits: 0 };
+
+function trackBurn(isPrimary, units = 100) {
+  const today = new Date().toISOString().split('T')[0];
+  if (burnTracker.date !== today) {
+    burnTracker.date = today;
+    burnTracker.primaryUnits = 0;
+    burnTracker.archiveUnits = 0;
+  }
+  if (isPrimary) burnTracker.primaryUnits += units;
+  else burnTracker.archiveUnits += units;
+}
+
+// ── Storm Chaser Tracker (Spotter Network) ──────────────────────────────────
+// Polls the public Spotter Network KML feed every 2 minutes and caches the
+// parsed result in memory. No API key required — this is a public feed.
+// Source: https://www.spotternetwork.org/feeds/earth-all.txt
+//
+// Each chaser record looks like:
+// { id, name, lat, lng, status, movement, heading, note, positionTime, youtubeUrl }
+//
+// youtubeUrl is auto-detected from the free-text `Note` field when a chaser
+// has self-reported their channel — this lets us flag chasers we don't have
+// in our Groups yet (see /api/admin/chasers/unmapped-youtube below).
+
+const SPOTTER_NETWORK_FEED_URL = 'https://www.spotternetwork.org/feeds/earth-all.txt';
+
+let chaserCache = { updatedAt: null, chasers: [] };
+
+function fetchTextOverHttp(url, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https://') ? https : require('http');
+    const opts = new URL(url);
+    const reqOptions = {
+      hostname: opts.hostname,
+      path: opts.pathname + opts.search,
+      headers: { 'User-Agent': 'WeatherTV/1.0', ...extraHeaders },
+    };
+    lib.get(reqOptions, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchTextOverHttp(res.headers.location, extraHeaders).then(resolve, reject);
+      }
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
+
+// Extracts a YouTube channel/handle/video URL from free text, if present.
+function extractYouTubeUrl(text) {
+  if (!text) return null;
+  const match = text.match(/https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/[^\s<>"']+/i);
+  if (match) return match[0].replace(/[.,)]+$/, ''); // trim trailing punctuation
+  return null;
+}
+
+// Parses the Spotter Network KML text into an array of chaser objects.
+// Regex-based rather than a full XML parser — the feed's structure is flat
+// and consistent (one <Placemark> per chaser), so this avoids adding a
+// dependency for a one-off parse.
+function parseSpotterNetworkKML(kmlText) {
+  const chasers = [];
+  const placemarkRegex = /<Placemark id="(\d+)">([\s\S]*?)<\/Placemark>/g;
+  let pm;
+  while ((pm = placemarkRegex.exec(kmlText)) !== null) {
+    const id = pm[1];
+    const block = pm[2];
+
+    const iconMatch = block.match(/<href>([^<]+)<\/href>/);
+    const icon = iconMatch ? iconMatch[1] : '';
+    let status = 'active';
+    let mobile = false;
+    if (icon.includes('red_house')) status = 'inactive';
+    if (icon.includes('mobile')) mobile = true;
+    if (icon.includes('inactive_mobile')) status = 'inactive';
+
+    const nameMatch = block.match(/<name>([^<]*)<\/name>/);
+    const name = nameMatch ? nameMatch[1].trim() : 'Unknown';
+
+    const descMatch = block.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/);
+    const descRaw = descMatch ? descMatch[1] : '';
+
+    const posTimeMatch = descRaw.match(/Position Time:\s*([^<]+)</);
+    const positionTime = posTimeMatch ? posTimeMatch[1].trim() : null;
+
+    const movementMatch = descRaw.match(/Movement:\s*([^<]+)</);
+    const movement = movementMatch ? movementMatch[1].trim() : 'Stationary';
+
+    const noteMatch = descRaw.match(/Note:\s*([^<]+)</);
+    const note = noteMatch ? noteMatch[1].trim() : null;
+
+    const coordMatch = block.match(/<coordinates>([^<]+)<\/coordinates>/);
+    let lat = null, lng = null;
+    if (coordMatch) {
+      const parts = coordMatch[1].split(',');
+      lng = parseFloat(parts[0]);
+      lat = parseFloat(parts[1]);
+    }
+
+    if (lat === null || lng === null || isNaN(lat) || isNaN(lng)) continue;
+
+    chasers.push({
+      id,
+      name,
+      lat,
+      lng,
+      status,           // 'active' | 'inactive'
+      mobile,           // true if currently moving
+      movement,         // e.g. 'NNW (321)' or 'Stationary'
+      note,
+      positionTime,
+      youtubeUrl: extractYouTubeUrl(note)
+    });
+  }
+  return chasers;
+}
+
+async function refreshChaserCache() {
+  try {
+    const text = await fetchTextOverHttp(SPOTTER_NETWORK_FEED_URL);
+    const chasers = parseSpotterNetworkKML(text);
+    chaserCache = { updatedAt: new Date().toISOString(), chasers };
+    console.log(`[Chasers] Refreshed Spotter Network feed: ${chasers.length} positions`);
+    mergeIntoKnownChasers(chasers);
+  } catch (e) {
+    console.warn('[Chasers] Failed to refresh Spotter Network feed:', e.message);
+  }
+}
+
+// Merges this poll's live positions into the persisted, accumulating
+// registry (data.knownChasers). This is what lets suggestions/matching work
+// against everyone we've EVER seen broadcast, not just whoever happens to
+// be active in this specific 2-minute window. Saved to Redis via saveData
+// so it survives restarts and keeps growing over days/weeks.
+function mergeIntoKnownChasers(chasers) {
+  if (!chasers.length) return;
+  const data = loadData();
+  if (!data.knownChasers) data.knownChasers = {};
+  const now = Date.now();
+  let added = 0;
+
+  chasers.forEach(c => {
+    const existing = data.knownChasers[c.id];
+    if (existing) {
+      existing.name = c.name; // keep name current in case they update it
+      existing.lastSeenAt = now;
+      if (c.youtubeUrl) existing.youtubeUrl = c.youtubeUrl; // pick up a newly-added link
+    } else {
+      data.knownChasers[c.id] = {
+        name: c.name,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        youtubeUrl: c.youtubeUrl || null
+      };
+      added++;
+    }
+  });
+
+  if (added > 0) console.log(`[Chasers] Added ${added} newly-seen chaser(s) to known registry (total: ${Object.keys(data.knownChasers).length})`);
+  saveData(data);
+}
+
+// Public — all current chaser positions, with our channel mapping applied
+app.get('/api/chasers', (req, res) => {
+  const data = loadData();
+  const chaserMap = data.chaserMap || {}; // { spotterNetworkId: channelId }
+  // Build reverse lookup: channelId -> name, for attaching to mapped chasers
+  const channelById = {};
+  (data.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => { channelById[ch.id] = ch; });
+  });
+
+  const enriched = chaserCache.chasers.map(c => {
+    const mappedChannelId = chaserMap[c.id] || null;
+    const mappedChannel = mappedChannelId ? channelById[mappedChannelId] : null;
+    return {
+      ...c,
+      channelId: mappedChannelId,
+      channelName: mappedChannel ? mappedChannel.name : null
+    };
+  });
+
+  res.json({ updatedAt: chaserCache.updatedAt, chasers: enriched });
+});
+
+// ── Live near this warning ───────────────────────────────────────────────────
+// GET /api/live-near-warnings — active storm warnings that have a LIVE WeatherTV
+// chaser inside them or within 10 miles, sorted by severity.
+// Chasers need a Spotter Network ↔ channel mapping (admin) to be placed.
+// Each chaser appears under ONE warning: the one they're inside (or closest
+// to), so three chasers on three storms show up as three separate entries.
+const NEAR_WARNING_MI = 10;
+const WARNING_RANK = { 'TORNADO EMERGENCY': 0, 'PDS Tornado Warning': 1, 'Tornado Warning': 2, 'FLASH FLOOD EMERGENCY': 3,
+                       'Hurricane Warning': 4.2, 'Storm Surge Warning': 4.4, 'Tropical Storm Warning': 6.5,
+                       'Extreme Wind Warning': 4, 'Severe Thunderstorm Warning': 5, 'Flash Flood Warning': 6 };
+let _nearWarnCache = { data: null, ts: 0 };
+
+function _rings(geom) {
+  if (!geom) return [];
+  if (geom.type === 'Polygon') return [geom.coordinates[0]];
+  if (geom.type === 'MultiPolygon') return geom.coordinates.map(p => p[0]);
+  return [];
+}
+function _inRing(lat, lng, ring) {           // ring: [[lng,lat],…]
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function _milesToRing(lat, lng, ring) {       // shortest distance to the outline, miles
+  const kx = 69.17 * Math.cos(lat * Math.PI / 180), ky = 69.05;
+  let best = Infinity;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const ax = (ring[i][0] - lng) * kx, ay = (ring[i][1] - lat) * ky;
+    const bx = (ring[i + 1][0] - lng) * kx, by = (ring[i + 1][1] - lat) * ky;
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}
+
+function buildLiveNearWarnings() {
+  const { list: warnings, updatedAt } = radar.getActiveStormWarnings();
+  const data = loadData();
+  const chaserMap = data.chaserMap || {};
+  const channelById = {};
+  (data.groups || []).forEach(g => (g.channels || []).forEach(ch => { channelById[ch.id] = ch; }));
+
+  // Live WeatherTV chasers who have a Spotter Network position right now
+  const liveChasers = chaserCache.chasers.map(c => {
+    const channelId = chaserMap[c.id];
+    const live = channelId && cache.liveStatuses[channelId];
+    if (!live || !live.isLive) return null;
+    return { snId: c.id, lat: c.lat, lng: c.lng, channelId, channelName: channelById[channelId]?.name || c.name,
+             videoId: live.videoId || null, movement: c.movement, positionTime: c.positionTime };
+  }).filter(Boolean);
+
+  const byWarning = new Map();
+  for (const ch of liveChasers) {
+    let best = null;
+    for (const w of warnings) {
+      const rings = _rings(w.geometry);
+      if (!rings.length) continue;
+      const inside = rings.some(r => _inRing(ch.lat, ch.lng, r));
+      const miles = inside ? 0 : Math.min(...rings.map(r => _milesToRing(ch.lat, ch.lng, r)));
+      if (!inside && miles > NEAR_WARNING_MI) continue;
+      const rank = WARNING_RANK[w.displayEvent] ?? 9;
+      // inside beats nearby; then the more dangerous warning; then the closer one
+      const score = (inside ? 0 : 1000) + rank * 50 + miles;
+      if (!best || score < best.score) best = { w, inside, miles, score };
+    }
+    if (!best) continue;
+    const entry = byWarning.get(best.w.id) || { ...best.w, chasers: [] };
+    entry.chasers.push({ channelId: ch.channelId, name: ch.channelName, videoId: ch.videoId, inside: best.inside,
+                         distanceMi: Math.round(best.miles * 10) / 10, lat: ch.lat, lng: ch.lng, movement: ch.movement });
+    byWarning.set(best.w.id, entry);
+  }
+  const out = [...byWarning.values()]
+    .map(w => ({ ...w, chasers: w.chasers.sort((a, b) => a.distanceMi - b.distanceMi) }))
+    .sort((a, b) => (WARNING_RANK[a.displayEvent] ?? 9) - (WARNING_RANK[b.displayEvent] ?? 9) || b.chasers.length - a.chasers.length);
+  return { updatedAt, activeWarnings: warnings.length, liveMappedChasers: liveChasers.length, warnings: out };
+}
+
+app.get('/api/live-near-warnings', (req, res) => {
+  if (!_nearWarnCache.data || Date.now() - _nearWarnCache.ts > 60 * 1000) {
+    try { _nearWarnCache = { data: buildLiveNearWarnings(), ts: Date.now() }; }
+    catch (e) { console.warn('[NearWarnings]', e.message); if (!_nearWarnCache.data) return res.status(500).json({ error: 'unavailable' }); }
+  }
+  res.set('Cache-Control', 'public, max-age=60');
+  res.json(_nearWarnCache.data);
+});
+
+// ── Timing-based chaser matching (chaser-timing.js) ─────────────────────────
+// Spotter Network writes "Oct 29 12:39 UTC" — no year. Date.parse() fills in
+// 2001 for that, which made every tracker look 25 years old (never "active").
+const _SN_MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function _spotterTimeMs(t) {
+  if (!t) return NaN;
+  const m = String(t).trim().match(/^([A-Za-z]{3})\w*\s+(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:UTC|Z)?$/);
+  if (m && _SN_MON[m[1].toLowerCase()] != null) {
+    const now = new Date();
+    let ms = Date.UTC(now.getUTCFullYear(), _SN_MON[m[1].toLowerCase()], +m[2], +m[3], +m[4], +(m[5] || 0));
+    if (ms > Date.now() + 2 * 864e5) ms = Date.UTC(now.getUTCFullYear() - 1, _SN_MON[m[1].toLowerCase()], +m[2], +m[3], +m[4], +(m[5] || 0));   // Dec → Jan
+    return ms;
+  }
+  const iso = String(t).trim().replace(' UTC', 'Z').replace(/^(\d{4}-\d{2}-\d{2}) /, '$1T');
+  return Date.parse(iso);
+}
+const chaserTiming = require('./chaser-timing')(app, {
+  rGet, rSet, loadData, saveData,
+  getLiveChannelIds: () => Object.entries(cache.liveStatuses || {}).filter(([, v]) => v && v.isLive).map(([id]) => id),
+  // Active = pinged within the last 30 min (or present in the live feed when its time can't be read)
+  getActiveTrackerIds: () => chaserCache.chasers.filter(c => {
+    const t = _spotterTimeMs(c.positionTime);
+    return !Number.isFinite(t) || Date.now() - t < 30 * 60 * 1000;
+  }).map(c => String(c.id)),
+});
+
+// Admin — same data, used by the Chaser Mapping panel
+app.get('/api/admin/chasers', (req, res) => {
+  const data = loadData();
+  res.json({
+    updatedAt: chaserCache.updatedAt,
+    chasers: chaserCache.chasers,
+    chaserMap: data.chaserMap || {},
+    knownChasersCount: Object.keys(data.knownChasers || {}).length
+  });
+});
+
+// Admin — full accumulated registry of every chaser we've ever seen, for
+// browsing directly (the "All Known" tab). The Suggestions matcher is
+// intentionally conservative to avoid false positives, so this gives the
+// admin a way to manually catch anything the matcher missed — e.g. a
+// channel name that's a stage name with zero token overlap with the
+// chaser's real name on Spotter Network.
+app.get('/api/admin/chasers/known', (req, res) => {
+  const data = loadData();
+  const knownChasers = data.knownChasers || {};
+  const chaserMap = data.chaserMap || {};
+  const dismissedNew = new Set(data.dismissedNewChasers || []);
+  const liveIds = new Set(chaserCache.chasers.map(c => c.id));
+
+  const all = Object.entries(knownChasers).map(([spotterNetworkId, c]) => ({
+    spotterNetworkId,
+    name: c.name,
+    firstSeenAt: c.firstSeenAt,
+    lastSeenAt: c.lastSeenAt,
+    youtubeUrl: c.youtubeUrl || null,
+    isLiveNow: liveIds.has(spotterNetworkId),
+    mappedChannelId: chaserMap[spotterNetworkId] || null,
+    dismissedAsNew: dismissedNew.has(spotterNetworkId)
+  }));
+
+  res.json({ total: all.length, chasers: all });
+});
+
+// ── Canadian Radar (MSC GeoMet) GetCapabilities proxy ───────────────────────
+// The WMS tile images themselves (RADAR_1KM_RRAI) load fine directly from
+// the browser via Leaflet's <img>-based tile layer — <img> tags aren't
+// subject to CORS. The one call that IS subject to CORS is the
+// GetCapabilities XML fetch radar.html uses to discover available frame
+// timestamps, since that goes through fetch(), which browsers do enforce
+// CORS on. Rather than depend on whether geo.weather.gc.ca happens to send
+// permissive CORS headers (unverified, and out of our control either way),
+// this proxies that one XML request through our own server — server-to-
+// server requests are never subject to CORS, so this removes the
+// uncertainty entirely regardless of the answer.
+//
+// LAYER ID NOTE: the originally-used RADAR_1KM_RDBR does not appear in MSC
+// GeoMet's current official documentation and was almost certainly the
+// reason nothing rendered. RADAR_1KM_RRAI ("Radar precipitation rate for
+// rain [mm/hr]") is the confirmed correct ID per ECCC's own readme:
+// https://eccc-msc.github.io/open-data/msc-data/obs_radar/readme_radar_geomet_en/
+// GET /api/firebase-config
+// Serves the PUBLIC Firebase web app config to the client.
+// These values identify the Firebase project but are NOT secret — they are
+// safe to expose to browsers (this is how Firebase is designed to work).
+// Store these in Railway env vars rather than hardcoding in index.html so
+// the source code doesn't need to change if the Firebase project changes.
+//
+// Required Railway env vars:
+//   FIREBASE_WEB_API_KEY         — Firebase Console → Project Settings → Web app → apiKey
+//   FIREBASE_MESSAGING_SENDER_ID — Firebase Console → Project Settings → Web app → messagingSenderId
+//   FIREBASE_APP_ID              — Firebase Console → Project Settings → Web app → appId
+//   FIREBASE_VAPID_KEY           — Firebase Console → Cloud Messaging → Web Push certificates → Key pair
+app.get('/api/firebase-config', (req, res) => {
+  const apiKey      = process.env.FIREBASE_WEB_API_KEY;
+  const senderId    = process.env.FIREBASE_MESSAGING_SENDER_ID;
+  const appId       = process.env.FIREBASE_APP_ID;
+  const vapidKey    = process.env.FIREBASE_VAPID_KEY;
+
+  // If none of the vars are set, return a signal the client can detect
+  if (!apiKey && !senderId && !appId && !vapidKey) {
+    return res.json({ configured: false });
+  }
+
+  res.set('Cache-Control', 'public, max-age=3600'); // config rarely changes
+  res.json({
+    configured: true,
+    config: {
+      apiKey:            apiKey            || '',
+      authDomain:        'weather-tv-radar.firebaseapp.com',
+      projectId:         'weather-tv-radar',
+      storageBucket:     'weather-tv-radar.firebasestorage.app',
+      messagingSenderId: senderId          || '',
+      appId:             appId             || '',
+    },
+    vapidKey: vapidKey || '',
+  });
+});
+
+// GET /api/nhc-storms
+// Proxies NHC CurrentStorms.json — nhc.noaa.gov does not send CORS headers so
+// browsers (including the WeatherStar iframe) cannot fetch it directly.
+// Cached 10 minutes — storm positions update roughly every 3-6 hours.
+const _nhcCache = { data: null, ts: 0 };
+const NHC_TTL = 10 * 60 * 1000;
+
+app.get('/api/nhc-storms', async (req, res) => {
+  if (_nhcCache.data && Date.now() - _nhcCache.ts < NHC_TTL) {
+    res.set('Cache-Control', 'public, max-age=600');
+    return res.json(_nhcCache.data);
+  }
+  try {
+    const text = await fetchTextOverHttp('https://www.nhc.noaa.gov/CurrentStorms.json');
+    const data = JSON.parse(text);
+    _nhcCache.data = data;
+    _nhcCache.ts = Date.now();
+    res.set('Cache-Control', 'public, max-age=600');
+    res.json(data);
+  } catch(e) {
+    console.warn('[NHC] Proxy error:', e.message);
+    if (_nhcCache.data) return res.json(_nhcCache.data);
+    res.status(502).json({ activeStorms: [], error: 'NHC unavailable' });
+  }
+});
+
+// GET /api/river-gauges?xmin=&ymin=&xmax=&ymax=
+// Proxies NOAA NWPS gauge API — api.water.noaa.gov does not send CORS headers.
+// Cached 5 minutes per bbox (gauges update every 15 min).
+const _gaugeCache = new Map();
+const GAUGE_TTL = 5 * 60 * 1000;
+
+app.get('/api/river-gauges', async (req, res) => {
+  const [xmin, ymin, xmax, ymax] = ['xmin', 'ymin', 'xmax', 'ymax'].map(k => parseFloat(req.query[k]));
+  if (![xmin, ymin, xmax, ymax].every(Number.isFinite)) {
+    return res.status(400).json({ error: 'Missing bbox params: xmin, ymin, xmax, ymax' });
+  }
+  const key = [xmin, ymin, xmax, ymax].map(v => v.toFixed(2)).join(',');
+  const cached = _gaugeCache.get(key);
+  if (cached && Date.now() - cached.ts < GAUGE_TTL) {
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.json(cached.data);
+  }
+  try {
+    const url = `https://api.water.noaa.gov/nwps/v1/gauges?` +
+      `bbox.xmin=${xmin}&bbox.ymin=${ymin}&bbox.xmax=${xmax}&bbox.ymax=${ymax}` +
+      `&srid=EPSG_4326&count=200`;
+    const text = await fetchTextOverHttp(url);
+    const data = JSON.parse(text);
+    _gaugeCache.set(key, { data, ts: Date.now() });
+    if (_gaugeCache.size > 50) {
+      const oldest = [..._gaugeCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      _gaugeCache.delete(oldest[0]);
+    }
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(data);
+  } catch(e) {
+    console.warn('[River Gauges] Proxy error:', e.message);
+    const stale = _gaugeCache.get(key);
+    if (stale) return res.json(stale.data);
+    res.status(502).json({ gauges: [], error: 'NWPS unavailable' });
+  }
+});
+
+// GET /api/river-gauge?lid=XXXX1  — one gauge's recent stage, its official forecast (where the
+// River Forecast Center issues one) and its flood stages, for the gauge popup's chart.
+const _gaugeDetail = new Map();
+app.get('/api/river-gauge', async (req, res) => {
+  const lid = String(req.query.lid || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!/^[A-Z0-9]{4,6}$/.test(lid)) return res.status(400).json({ error: 'lid required' });
+  const hit = _gaugeDetail.get(lid);
+  if (hit && Date.now() - hit.ts < 15 * 60 * 1000) { res.set('Cache-Control', 'public, max-age=300'); return res.json(hit.data); }
+  try {
+    const base = 'https://api.water.noaa.gov/nwps/v1/gauges/' + lid;
+    const [sfTxt, gTxt] = await Promise.all([fetchTextOverHttp(base + '/stageflow').catch(() => null), fetchTextOverHttp(base).catch(() => null)]);
+    const sf = sfTxt ? JSON.parse(sfTxt) : {}, g = gTxt ? JSON.parse(gTxt) : {};
+    const series = (blk) => {
+      const b = blk || {}; const rows = b.data || [];
+      return {
+        units: b.primaryUnits || b.primary_units || 'ft', issued: b.issuedTime || b.issued_time || null,
+        pts: rows.map(r => [Date.parse(r.validTime || r.valid_time), Number(r.primary)])
+          .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v) && v > -900).sort((a, b) => a[0] - b[0]),
+      };
+    };
+    const obs = series(sf.observed), fc = series(sf.forecast);
+    const cut = Date.now() - 3 * 86400000;
+    const stage = (c) => { if (c == null) return null; const v = typeof c === 'object' ? (c.stage ?? c.value) : c; const n = Number(v); return Number.isFinite(n) && n > -900 ? n : null; };
+    const cats = (g.flood && g.flood.categories) || {};
+    const flood = { action: stage(cats.action), minor: stage(cats.minor), moderate: stage(cats.moderate), major: stage(cats.major) };
+    const crest = fc.pts.length ? fc.pts.reduce((m, p) => (p[1] > m[1] ? p : m), fc.pts[0]) : null;
+    const data = { lid, name: g.name || null, units: obs.units || fc.units, flood,
+      observed: obs.pts.filter(p => p[0] >= cut), forecast: fc.pts, forecastIssued: fc.issued,
+      crest: crest ? { t: crest[0], stage: crest[1] } : null,
+      url: `https://water.noaa.gov/gauges/${lid.toLowerCase()}` };
+    _gaugeDetail.set(lid, { data, ts: Date.now() });
+    if (_gaugeDetail.size > 500) _gaugeDetail.delete(_gaugeDetail.keys().next().value);
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(data);
+  } catch (e) {
+    if (hit) return res.json(hit.data);
+    res.status(502).json({ error: 'gauge forecast unavailable' });
+  }
+});
+
+// GET /api/canada-alerts
+// Proxies Environment Canada's national weather alert ATOM feed and returns
+// structured JSON. EC's ATOM feed gives us event type, headline, province/
+// territory, severity, and expiry time. We also fetch GeoMet's WFS features
+// for the ALERTS layer to get geographic polygons where available.
+// Cached 5 minutes — EC typically updates alerts every 5–15 minutes.
+const _caAlertsCache = { data: null, ts: 0 };
+const CA_ALERTS_TTL = 5 * 60 * 1000;
+
+const EC_SEVERITY = {
+  'warning':  { color: '#ff0000', rank: 3 },
+  'watch':    { color: '#ff8c00', rank: 2 },
+  'advisory': { color: '#ffff00', rank: 1 },
+  'statement':{ color: '#6699cc', rank: 0 },
+  'ended':    { color: '#888888', rank: -1 },
+};
+
+function parseECAtom(xml) {
+  const entries = [];
+  const entryBlocks = xml.match(/<entry[\s\S]*?<\/entry>/g) || [];
+  entryBlocks.forEach(block => {
+    const title    = (block.match(/<title[^>]*>([^<]+)<\/title>/)  || [])[1] || '';
+    const summary  = (block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/) || [])[1] || '';
+    const updated  = (block.match(/<updated>([^<]+)<\/updated>/)   || [])[1] || '';
+    const link     = (block.match(/<link[^>]+href="([^"]+)"/)      || [])[1] || '';
+    const category = (block.match(/<category[^>]+term="([^"]+)"/)  || [])[1] || '';
+    const id       = (block.match(/<id>([^<]+)<\/id>/)             || [])[1] || '';
+
+    // Parse "Event Type in effect - Location, Province" pattern
+    const titleMatch = title.match(/^(.+?)\s+in\s+effect\s*[-–]\s*(.+)$/i);
+    const eventType  = titleMatch ? titleMatch[1].trim() : title.trim();
+    const location   = titleMatch ? titleMatch[2].trim() : '';
+
+    // Derive severity from event name
+    const lower = eventType.toLowerCase();
+    let severity = 'statement';
+    if (lower.includes('warning') || lower.includes('watch')) {
+      severity = lower.includes('warning') ? 'warning' : 'watch';
+    } else if (lower.includes('advisory')) {
+      severity = 'advisory';
+    }
+    if (lower.includes('ended') || lower.includes('cancel')) severity = 'ended';
+
+    entries.push({ id, eventType, location, severity, summary: summary.replace(/<[^>]+>/g,'').trim().slice(0,300), updated, link, category });
+  });
+  // Sort by severity rank (warnings first)
+  entries.sort((a,b) => (EC_SEVERITY[b.severity]?.rank||0) - (EC_SEVERITY[a.severity]?.rank||0));
+  return entries;
+}
+
+app.get('/api/canada-alerts', async (req, res) => {
+  if (_caAlertsCache.data && Date.now() - _caAlertsCache.ts < CA_ALERTS_TTL) {
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.json(_caAlertsCache.data);
+  }
+  // EC has several URL patterns for their alert feeds — try each until one works
+  const EC_ALERT_URLS = [
+    'https://weather.gc.ca/rss/battleboard/can_e.xml',
+    'https://www.weather.gc.ca/rss/battleboard/can_e.xml',
+    'https://weather.gc.ca/en/warnings/rss/can_e.xml',
+  ];
+  let xml = null;
+  for (const feedUrl of EC_ALERT_URLS) {
+    try {
+      const text = await fetchTextOverHttp(feedUrl);
+      if (text.includes('<entry') || text.includes('<item')) { xml = text; break; }
+      console.log(`[CA Alerts] ${feedUrl} returned no entries`);
+    } catch(e) {
+      console.warn(`[CA Alerts] ${feedUrl} failed:`, e.message);
+    }
+  }
+  if (!xml) {
+    console.warn('[CA Alerts] All EC feed URLs failed');
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
+    return res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
+  }
+  try {
+    const alerts = parseECAtom(xml);
+    console.log(`[CA Alerts] Parsed ${alerts.length} alerts from EC feed`);
+    const result = { alerts, generatedAt: Date.now(), source: 'Environment Canada / ECCC' };
+    _caAlertsCache.data = result;
+    _caAlertsCache.ts = Date.now();
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(result);
+  } catch(e) {
+    console.warn('[CA Alerts] Parse failed:', e.message);
+    if (_caAlertsCache.data) return res.json(_caAlertsCache.data);
+    res.status(502).json({ error: 'Environment Canada alerts unavailable', alerts: [] });
+  }
+});
+
+// NOAA MRMS radar time list, fetched by our server. NOAA's map server doesn't reliably send
+// CORS headers, so asking it from the browser failed for some visitors (radar never loaded
+// until a hard refresh). One shared copy is kept for 60 s so every visitor gets it instantly.
+const MRMS_CAPS_URL = 'https://mapservices.weather.noaa.gov/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer?request=GetCapabilities&service=WMS&version=1.3.0';
+let _mrmsCaps = { xml: null, ts: 0, pending: null };
+// ═══ Severe weather feeds (all free US-government or university data) ═══
+// Each is fetched by our server and shared by every visitor for a short time, so NOAA/IEM
+// see one request per few minutes no matter how many people are watching.
+async function _getWithTimeout(url, ms = 20000, asText = false) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: asText ? '*/*' : 'application/json' }, signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return asText ? r.text() : r.json();
+  } finally { clearTimeout(t); }
+}
+function _sharedCache(ttlMs, loader) {
+  let c = { val: null, ts: 0, pending: null, err: null };
+  return async () => {
+    if (c.val && Date.now() - c.ts < ttlMs) return c.val;
+    if (!c.pending) c.pending = loader().then(v => { c.val = v; c.ts = Date.now(); c.err = null; return v; })
+      .catch(e => { c.err = e.message; if (c.val) return c.val; throw e; })          // serve last good copy on a hiccup
+      .finally(() => { c.pending = null; });
+    return c.pending;
+  };
+}
+const _r3 = (n) => Math.round(n * 1000) / 1000;
+// SPC watch boxes (tornado / severe thunderstorm), via the Iowa Environmental Mesonet
+const _watches = _sharedCache(60 * 1000, async () => {
+  const j = await _getWithTimeout('https://mesonet.agron.iastate.edu/json/spcwatch.py');
+  return { features: (j.features || []).map(f => ({ type: 'Feature', geometry: f.geometry, properties: {
+    type: f.properties.type, number: f.properties.number, issue: f.properties.issue, expire: f.properties.expire,
+    pds: !!f.properties.is_pds, hail: f.properties.max_hail_size ?? null, gust: f.properties.max_wind_gust_knots ?? null,
+    url: f.properties.spcurl || null } })), at: new Date().toISOString() };
+});
+app.get('/api/severe/watches', async (req, res) => {
+  try { res.set('Cache-Control', 'no-store'); res.json(await _watches()); }
+  catch (e) { res.status(502).json({ error: 'Watch boxes unavailable: ' + e.message }); }
+});
+// SPC's written convective outlook for Day 1-3 (headline + summary + regional sections), from the
+// official NWS API. Shown when someone taps an outlook area. Cached 10 min per day.
+const _spcText = {};
+app.get('/api/spc/discussion', async (req, res) => {
+  const day = String(req.query.day || '1');
+  if (!['1', '2', '3'].includes(day)) return res.status(400).json({ error: 'day=1,2,3' });
+  _spcText[day] = _spcText[day] || _sharedCache(10 * 60 * 1000, async () => {
+    const ua = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com, contact@altruisticapps.com)', Accept: 'application/ld+json' } };
+    const list = await (await fetch('https://api.weather.gov/products/types/SWO', ua)).json();
+    const want = 'ACUS0' + day;
+    const item = (list['@graph'] || []).find(x => x.wmoCollectiveId === want && x.issuingOffice === 'KWNS');
+    if (!item) throw new Error('no ' + want + ' found');
+    const prod = await (await fetch('https://api.weather.gov/products/' + item.id, ua)).json();
+    const text = String(prod.productText || '').replace(/\r/g, '');
+    const flat = (t) => t.replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    const headline = flat(((text.match(/\n\.\.\.((?:THERE IS|NO SEVERE|THERE ARE)[\s\S]*?)\.\.\.\s*\n/) || [])[1]) || '');
+    const summary = flat(((text.match(/\.\.\.SUMMARY\.\.\.\s*\n([\s\S]*?)(?:\n\s*\n|$)/) || [])[1]) || '');
+    // Regional sections: "...Name..." followed by paragraphs, until the next heading or the forecaster line
+    const sections = [];
+    const body = text.split(/\.\.\.SUMMARY\.\.\.[\s\S]*?\n\s*\n/)[1] || '';
+    for (const m of body.matchAll(/\n?\.\.\.([^\n.][^\n]*?)\.\.\.\s*\n([\s\S]*?)(?=\n\.\.\.[^\n.][^\n]*?\.\.\.\s*\n|\n\.\.[A-Z][a-z]|\n\$\$|$)/g)) {
+      const name = flat(m[1]); const para = m[2].split(/\n\s*\n/).map(flat).filter(Boolean);
+      if (name && para.length && !/^(CATEGORICAL|PROBABILISTIC|TORNADO|HAIL|WIND)\b/.test(name)) sections.push({ name, text: para.join('\n\n') });
+    }
+    return { day, issued: item.issuanceTime, headline, summary, sections: sections.slice(0, 8),
+      url: `https://www.spc.noaa.gov/products/outlook/day${day}otlk.html` };
+  });
+  try { res.set('Cache-Control', 'no-store'); res.json(await _spcText[day]()); }
+  catch (e) { res.status(502).json({ error: 'SPC discussion unavailable: ' + e.message }); }
+});
+// NOAA/CIMSS ProbSevere v3: each storm's chance of severe weather / tornado / hail / wind in
+// the next hour. A new file every 2 minutes on NOAA's NCEP server; slimmed to what the map shows.
+const PROBSEVERE_DIR = 'https://mrms.ncep.noaa.gov/ProbSevere/PROBSEVERE/';
+const _probSevere = _sharedCache(110 * 1000, async () => {
+  const html = await _getWithTimeout(PROBSEVERE_DIR, 20000, true);
+  const files = [...html.matchAll(/href="(MRMS_PROBSEVERE_\d{8}_\d{6}\.json)"/g)].map(m => m[1]).sort();
+  if (!files.length) throw new Error('no ProbSevere files listed');
+  const j = await _getWithTimeout(PROBSEVERE_DIR + files[files.length - 1], 30000);
+  const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+  const features = (j.features || []).map(f => {
+    const p = f.properties || {}, m = f.models || {};
+    const prob = (k, mk) => n(p[k]) ?? n(m[mk] && m[mk].PROB);
+    const ring = ((f.geometry && f.geometry.coordinates) || [])[0] || [];
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring.map(([x, y]) => [_r3(x), _r3(y)])] }, properties: {
+      id: p.ID, sev: prob('ProbSevere', 'probsevere'), tor: prob('ProbTor', 'probtor'), hail: prob('ProbHail', 'probhail'), wind: prob('ProbWind', 'probwind'),
+      mesh: n(p.MESH), lat: n(p.MLAT), lon: n(p.MLON), me: n(p.MOTION_EAST), ms: n(p.MOTION_SOUTH),
+      flash: n(p.FLASH_RATE), shear: n(p.MAXLLAZ), echo: n(p.EchoTop_50) } };
+  }).filter(f => f.geometry.coordinates[0].length >= 4 && (f.properties.sev ?? 0) >= 1);
+  return { validTime: j.validTime || null, file: files[files.length - 1], features, at: new Date().toISOString() };
+});
+app.get('/api/severe/probsevere', async (req, res) => {
+  try { res.set('Cache-Control', 'no-store'); res.json(await _probSevere()); }
+  catch (e) { res.status(502).json({ error: 'ProbSevere unavailable: ' + e.message }); }
+});
+// NWS Damage Assessment Toolkit: surveyed tornado paths with EF ratings (preliminary), last N days
+const _surveyCache = {};
+app.get('/api/severe/surveys', async (req, res) => {
+  const days = Math.min(30, Math.max(1, parseInt(req.query.days, 10) || 7));
+  _surveyCache[days] = _surveyCache[days] || _sharedCache(15 * 60 * 1000, async () => {
+    const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+    const q = new URLSearchParams({ where: `stormdate >= TIMESTAMP '${since}'`, outFields: 'wfo,event_id,stormdate,starttime,endtime,length,width,injuries,fatalities,efscale,efnum,maxwind,comments',
+      outSR: '4326', f: 'geojson', resultRecordCount: '2000' });
+    const j = await _getWithTimeout('https://services.dat.noaa.gov/arcgis/rest/services/nws_damageassessmenttoolkit/DamageViewer/FeatureServer/1/query?' + q, 30000);
+    return { days, features: (j.features || []).filter(f => f.geometry), at: new Date().toISOString() };
+  });
+  try { res.set('Cache-Control', 'no-store'); res.json(await _surveyCache[days]()); }
+  catch (e) { res.status(502).json({ error: 'Tornado surveys unavailable: ' + e.message }); }
+});
+
+app.get('/api/radar/mrms-capabilities', async (req, res) => {
+  try {
+    if (!_mrmsCaps.xml || Date.now() - _mrmsCaps.ts > 60 * 1000) {
+      if (!_mrmsCaps.pending) _mrmsCaps.pending = Promise.race([fetchTextOverHttp(MRMS_CAPS_URL), new Promise((_, rej) => setTimeout(() => rej(new Error('NOAA timed out')), 15000))])
+        .then(xml => { if (/<Dimension/i.test(xml)) _mrmsCaps = { xml, ts: Date.now(), pending: null }; else throw new Error('no time list in reply'); })
+        .finally(() => { _mrmsCaps.pending = null; });
+      try { await _mrmsCaps.pending; } catch (e) { if (!_mrmsCaps.xml) throw e; }   // NOAA hiccup: serve the last good copy
+    }
+    res.set('Content-Type', 'application/xml');
+    res.set('Cache-Control', 'no-store');
+    res.send(_mrmsCaps.xml);
+  } catch (e) {
+    console.warn('[Radar] MRMS capabilities proxy failed:', e.message);
+    res.status(502).json({ error: 'Could not reach NOAA radar server' });
+  }
+});
+
+app.get('/api/canada-radar/capabilities', async (req, res) => {
+  const layer = (req.query.layer || 'RADAR_1KM_RRAI').replace(/[^A-Z0-9_]/gi, ''); // basic allowlist sanitization
+  const url = `https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&layer=${layer}&t=${Date.now()}`;
+  try {
+    const xml = await fetchTextOverHttp(url);
+    res.set('Content-Type', 'application/xml');
+    res.set('Cache-Control', 'public, max-age=120'); // capabilities don't change every second
+    res.send(xml);
+  } catch (e) {
+    console.warn('[CanadaRadar] GetCapabilities proxy failed:', e.message);
+    res.status(502).json({ error: 'Could not reach geo.weather.gc.ca' });
+  }
+});
+
+// GET /api/geomet/precip-layers
+// GeoMet renames model layers over time (e.g. RDPS.ETA_* → RDPS_10km_*), so
+// instead of hard-coding names we read GeoMet's own layer list once a day and
+// return every precipitation layer for the Canadian models. The full list is
+// ~40 MB, so it's STREAMED: only Name/Title pairs mentioning precipitation are
+// kept (a few KB), never the whole document.
+let _geometPrecip = { data: null, ts: 0, pending: null };
+function _scanGeometCapabilities() {
+  return new Promise((resolve, reject) => {
+    const https = require('https');
+    const found = new Map();
+    let tail = '';
+    const re = /<Name>([^<]{2,120})<\/Name>\s*<Title>([^<]{2,300})<\/Title>/g;
+    const req = https.get('https://geo.weather.gc.ca/geomet?service=WMS&version=1.3.0&request=GetCapabilities&lang=en',
+      { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' }, timeout: 90000 }, r => {
+        if (r.statusCode !== 200) { r.resume(); return reject(new Error('GeoMet HTTP ' + r.statusCode)); }
+        r.setEncoding('utf8');
+        r.on('data', chunk => {
+          const buf = tail + chunk;
+          let m, last = 0;
+          re.lastIndex = 0;
+          while ((m = re.exec(buf))) {
+            last = re.lastIndex;
+            const [, name, title] = m;
+            if (/^(RDPS|HRDPS|GDPS)/i.test(name) && /precip|rain|taux|pr[ée]cip/i.test(title + ' ' + name)) found.set(name.trim(), title.trim());
+          }
+          tail = buf.slice(Math.max(last, buf.length - 2000));   // keep a little overlap for tags split across chunks
+        });
+        r.on('end', () => resolve([...found].map(([name, title]) => ({ name, title }))));
+        r.on('error', reject);
+      });
+    req.on('timeout', () => req.destroy(new Error('GeoMet capabilities timeout')));
+    req.on('error', reject);
+  });
+}
+app.get('/api/geomet/precip-layers', async (req, res) => {
+  const fresh = _geometPrecip.data && Date.now() - _geometPrecip.ts < 24 * 3600 * 1000;
+  if (!fresh) {
+    if (!_geometPrecip.pending) {
+      _geometPrecip.pending = _scanGeometCapabilities()
+        .then(list => { if (list.length) _geometPrecip = { data: list, ts: Date.now(), pending: null }; else _geometPrecip.pending = null; return list; })
+        .catch(e => { _geometPrecip.pending = null; throw e; });
+    }
+    try { await _geometPrecip.pending; } catch (e) {
+      if (!_geometPrecip.data) return res.status(502).json({ error: 'GeoMet layer list unavailable', detail: e.message });
+    }
+  }
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({ layers: _geometPrecip.data || [], fetchedAt: _geometPrecip.ts });
+});
+
+// ── TRAFFIC CAMERAS ─────────────────────────────────────────────────────────
+// Merges two sources into one normalised feed:
+//   1. OpenTrafficCamMap (OTC) — MIT-licensed static JSON on GitHub,
+//      ~7,500 US cameras, no API key required. Fetched once and cached for
+//      60 min since it's a static file that rarely changes.
+//   2. Road511 — normalised 511 feed, 10,000+ cameras, requires API key
+//      (ROAD511_API_KEY env var). Queried per bounding-box viewport so
+//      we only pull what's visible. Cached 3 min per viewport cell.
+//
+// The client sees ONE endpoint, ONE schema. Source attribution is invisible
+// to users. Road511 data is preferred when both sources have a camera at
+// the same physical location (deduplicated within 100m).
+//
+// CORS handling: DOT camera image URLs almost universally block direct
+// browser requests. We don't proxy the images themselves (that would
+// massively increase bandwidth costs) — instead, the client fetches
+// images via /api/camera-image?url=... which pipes them back with the
+// right CORS headers. Cached 25s so a 30-second refresh cycle stays fresh.
+
+const OTC_JSON_URL = 'https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/master/cameras/USA.json';
+let _otcCache = null;       // parsed flat array of cameras
+let _otcCacheTime = 0;
+const OTC_TTL = 60 * 60 * 1000; // 60 min — static file, rarely changes
+
+// Road511 viewport cache: key = `${bbox}` -> { cameras, ts }
+const _road511Cache = new Map();
+const ROAD511_TTL = 3 * 60 * 1000; // 3 min
+
+
+// ── STATE DOT CAMERA SOURCES ─────────────────────────────────────────────────
+// The IBI Group / Skyline 511 platform is used by the majority of US state
+// DOTs. Every state on this platform uses the IDENTICAL JSON schema:
+//   GET /api/v2/get/cameras?key={key}&format=json
+//   → [ { Id, Latitude, Longitude, Location, Roadway, Direction,
+//          Views: [{ Id, Url, VideoUrl, Status }] } ]
+//
+// Adding a new state DOT is a single entry in STATE_DOTS — no new parse
+// logic, no new edge cases, no code changes beyond this array. The generic
+// _loadStateDOT() loader handles fetch, cache, parse, and error handling
+// uniformly for every entry.
+//
+// To add a state:
+//   1. Sign up for a developer key at their 511 portal (or confirm it's public)
+//   2. Add { id, label, url, envKey, cacheTTL } below
+//   3. Add the env var to Railway — that's it
+//
+// envKey: Railway env var name that holds the API key.
+//         Set to null for public endpoints that need no key.
+//
+// CONFIRMED ON SAME PLATFORM (can add immediately once you have a key):
+//   Arizona:   https://az511.com/api/v2/get/cameras   (AZDOT_511_KEY)
+//   Georgia:   https://511ga.org/api/v2/get/cameras   (GA_511_KEY)
+//   Louisiana: https://511la.org/api/v2/get/cameras   (LA_511_KEY)
+//   (any other state 511 site running the IBI/Skyline platform)
+
+const STATE_DOTS = [
+  // ── IBI Group / Skyline 511 platform ────────────────────────────────────
+  // All these states use the IDENTICAL API schema. Adding any new state on
+  // this platform: copy an entry, update id/label/url/envKey, done.
+  // Env var convention: {STATE}_511_KEY  (e.g. WI_511_KEY, GA_511_KEY)
+  {
+    id: 'wi',
+    label: 'Wisconsin DOT',
+    url: 'https://511wi.gov/api/v2/get/cameras?format=json',
+    envKey: 'WI_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+  // New York: see the CARS entry further down (one entry per state — the first match wins)
+  {
+    id: 'ga',
+    label: 'Georgia DOT',
+    url: 'https://511ga.org/api/v2/get/cameras?format=json',
+    envKey: 'GA_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+  // Louisiana: 511LA declined a developer key, so its cameras come through
+  // Road511 (ROAD511_CAMERA_STATES includes LA). If 511LA ever issues a key
+  // (LA_511_KEY), their own feed is used instead. The list is cached 6 h;
+  // images load straight from Louisiana's servers.
+  {
+    id: 'la',
+    label: 'Louisiana DOTD (via Road511)',
+    cacheTTL: 6 * 3600 * 1000,
+    load: async () => {
+      if (process.env.LA_511_KEY) {
+        const txt = await fetchTextOverHttp('https://www.511la.org/api/v2/get/cameras?format=json&key=' + encodeURIComponent(process.env.LA_511_KEY.trim()));
+        return _parseIBI511(JSON.parse(txt), 'la', { url: 'https://www.511la.org/api/v2/get/cameras' });
+      }
+      const cams = await winter.road511Cameras('LA');
+      _laImageSweep(cams);                                      // background: find cameras showing 511LA's "unavailable" card
+      return cams.filter(c => !_laOffline.has(c.imageUrl));
+    },
+  },
+  {
+    id: 'az',
+    label: 'Arizona DOT',
+    url: 'https://az511.com/api/v2/get/cameras?format=json',
+    envKey: 'AZ_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+
+  // ── North Carolina ───────────────────────────────────────────────────────
+  // DriveNC (drivenc.gov) — confirmed IBI/Skyline platform, same schema.
+  // Env var: NC_511_KEY (key obtained via drivenc.gov developer portal)
+  {
+    id: 'nc',
+    label: 'North Carolina DOT',
+    url: 'https://www.drivenc.gov/api/v2/get/cameras?format=json',
+    envKey: 'NC_511_KEY',
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseIBI511,
+  },
+
+  // ── Waiting on keys: these stay OFF until their variable is set ─────────
+  // New York — 511NY's CARS-Hub camera inventory (~2,900 NYSDOT + NYC DOT cameras).
+  // Login: NY_CARS_USER / NY_CARS_PASSWORD. (Replaces the retired 511ny.org/api/getcameras.)
+  { id:'ny', label:'New York 511 (NYSDOT CARS)', envKey:'NY_CARS_USER', cacheTTL:30*60*1000, load: () => cars.loadCameras('ny') },
+  // CARS Hub states (login CARS_HUB_USER / CARS_HUB_PASSWORD)
+  { id:'in', label:'Indiana (INDOT 511 CARS)',  cacheTTL:30*60*1000, load: () => _carsHubCams('in') },
+  { id:'ks', label:'Kansas (KanDrive CARS)',    cacheTTL:30*60*1000, load: () => _carsHubCams('ks') },
+  // Ohio: OHGO public API. Key in OH_DOT_KEY (the variable Ohio cameras used
+  // before) or OHGO_API_KEY — the same key also unlocks Ohio's work zones
+  { id:'oh', label:'Ohio (OHGO · ODOT)', envKey:'OH_DOT_KEY', cacheTTL:30*60*1000, load: () => _ohgoCams() },
+  // Oregon: ODOT TripCheck API (subscription key ODOT_API_KEY, sent as a header)
+  { id:'or', label:'Oregon (ODOT TripCheck)', envKey:'ODOT_API_KEY', cacheTTL:30*60*1000, load: () => _tripcheckCams() },
+  { id:'ne', label:'Nebraska (Nebraska 511 CARS)', cacheTTL:30*60*1000, load: () => _carsHubCams('ne') },
+  // California: San Diego's SANDAG cameras on top of the open traffic feeds;
+  // the 100 m merge keeps one copy where both have the same camera
+  { id:'ca', label:'California — San Diego (511SD SANDAG CARS)', cacheTTL:30*60*1000, load: () => _sandagCams() },
+  // Virginia — VDOT cameras via Iteris/Skyline "Manager API" 2.0 (api.vdotcameras.com).
+  // Key: VA_VDOT_KEY (sent as the x-api-key header). Terms (Iteris agreement +
+  // Attachment A): never crop/cover the VDOT/511 banner on the picture, show the
+  // 511 notice + No Endorsement statement wherever these cameras appear (the
+  // camera viewer does this for attribution:'vdot'), free display only.
+  { id:'va', label:'Virginia DOT (VDOT 511 via Iteris)', envKey:'VA_VDOT_KEY', cacheTTL:30*60*1000,
+    load: async () => process.env.VA_VDOT_KEY ? (await _vdotStreams()).map(_vdotCamera).filter(Boolean) : [] },
+  // Maryland — MDOT SHA CHART public data feed (no key). Also fills in DC (see _camerasFor).
+  { id:'md', label:'Maryland (MDOT SHA CHART)', cacheTTL:15*60*1000, load: () => _chartMdCams() },
+  // Missouri — MoDOT Traveler Information Map camera files (no key)
+  { id:'mo', label:'Missouri (MoDOT Traveler Map)', cacheTTL:30*60*1000, load: () => _modotCams() },
+  // Michigan — MDOT Mi Drive camera list (no key); each picture is looked up when opened
+  { id:'mi', label:'Michigan (MDOT Mi Drive)', cacheTTL:60*60*1000, load: () => _miDriveCams() },
+  // Washington — WSDOT Traveler Information API (WSDOT_ACCESS_CODE); until it's
+  // set, the camera file WSDOT's own travel map reads
+  { id:'wa', label:'Washington (WSDOT)', cacheTTL:30*60*1000, load: () => _wsdotCams() },
+  // Oklahoma — OKTraffic map (ODOT/OTA) camera list (no key)
+  { id:'ok', label:'Oklahoma (OKTraffic)', cacheTTL:30*60*1000, load: () => _okTrafficCams() },
+  // North Dakota — NDDOT travel map camera file (no key)
+  { id:'nd', label:'North Dakota (NDDOT)', cacheTTL:30*60*1000, load: () => _ndCams() },
+  // Tennessee — TDOT open-data API (TN_TDOT_KEY)
+  { id:'tn', label:'Tennessee (TDOT SmartWay)', envKey:'TN_TDOT_KEY', cacheTTL:30*60*1000, load: () => _tdotCams() },
+
+  // ── ArcGIS open-data layers (no key) ───────────────────────────────────
+  // Florida: statewide from FL511 once FL_511_KEY is set (same platform as
+  // GA/NC). Until then, a public ArcGIS copy of FL511 cameras (partial —
+  // mostly east-central/southeast Florida, last updated July 2026).
+  { id:'fl', label:'Florida 511', cacheTTL:15*60*1000,
+    load: async (dot) => {
+      if (process.env.FL_511_KEY) {
+        const txt = await fetchTextOverHttp(`https://fl511.com/api/v2/get/cameras?format=json&key=${encodeURIComponent(process.env.FL_511_KEY)}`);
+        return _parseIBI511(JSON.parse(txt), 'fl', { url: 'https://fl511.com/api/v2/get/cameras' });
+      }
+      return _loadArcGISLayer({ id: 'fl', arcgisLayer: 'https://services.arcgis.com/3wFbqsFPLeKqOlIK/arcgis/rest/services/FL511_Traffic_Cameras/FeatureServer/0' });
+    } },
+  // Illinois: IDOT Open Data "Gateway Traffic Camera Locations" (SnapShot = public image; TooOld skipped)
+  { id:'il', label:'Illinois DOT', cacheTTL:15*60*1000, arcgisItem:'8a885da23dfb46caaa1827ad920fb5b1', load: _loadArcGISLayer },
+  // Iowa: Iowa DOT Open Data "Traffic Cameras" (static image + video where available; list updated daily)
+  // Iowa: the CARS Hub camera list when it answers, else Iowa DOT's open-data layer
+  { id:'ia', label:'Iowa DOT (511 Iowa CARS / open data)', cacheTTL:60*60*1000, arcgisItem:'c4063f200a7b4da5826e2ac86c677cf5',
+    load: async (dot) => { const c = await _carsHubCams('ia'); return c.length ? c : _loadArcGISLayer(dot); } },
+
+  // ── Pennsylvania ─────────────────────────────────────────────────────────
+  // PA uses ASP.NET map layer markers per Road511's article — non-standard
+  // format, needs investigation before building a parser.
+  // { id:'pa', label:'Pennsylvania DOT', url:'CONFIRM_URL',
+  //   envKey:'PA_511_KEY', cacheTTL:10*60*1000, parse:_parsePADOT },
+
+  // ── Additional IBI/Skyline states (same _parseIBI511, just needs a key) ─
+  { id:'id', label:'Idaho DOT',   url:'https://511.idaho.gov/api/v2/get/cameras?format=json',     envKey:'ID_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  { id:'nv', label:'Nevada DOT',  url:'https://www.nvroads.com/api/v2/get/cameras?format=json',    envKey:'NV_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  { id:'ut', label:'Utah DOT',    url:'https://prod-ut.ibi511.com/api/v2/get/cameras?format=json', envKey:'UT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Same IBI/Skyline platform — keys: AK_511_KEY, CT_511_KEY
+  { id:'ak', label:'Alaska DOT&PF', url:'https://511.alaska.gov/api/v2/get/cameras?format=json',   envKey:'AK_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Connecticut: CTroads' docs only list event feeds, but its camera address now
+  // answers (400 "Invalid Key" without a key, instead of the 404 it gave before),
+  // so try it with CT_511_KEY. Off until that variable is set.
+  { id:'ct', label:'Connecticut DOT', url:'https://ctroads.org/api/v2/get/cameras?format=json',    envKey:'CT_511_KEY', cacheTTL:10*60*1000, parse:_parseIBI511 },
+  // Maine, New Hampshire, Vermont — New England Compass developer portal (no key; credit the Tri-State DOTs)
+  { id:'me', label:'Maine DOT (New England Compass)',         cacheTTL:30*60*1000, load: () => nec.loadCameras('me') },
+  { id:'nh', label:'New Hampshire DOT (New England Compass)', cacheTTL:30*60*1000, load: () => nec.loadCameras('nh') },
+  { id:'vt', label:'Vermont AOT (New England Compass)',       cacheTTL:30*60*1000, load: () => nec.loadCameras('vt') },
+
+  // ── Florida ──────────────────────────────────────────────────────────────
+  // FL511 (fl511.com) runs on FDOT's proprietary SunGuide ATMS platform,
+  // built entirely in-house. There is NO public developer API — no endpoint
+  // docs, no key signup, no documented REST interface. The camera images
+  // are publicly viewable on fl511.com but the data comes from internal
+  // SunGuide feeds that aren't exposed externally. Would require
+  // reverse-engineering the FL511 web app's network requests, which is
+  // fragile, against their ToS, and not worth maintaining.
+  // Florida is one of the few states Road511 had to handle with custom
+  // scraping rather than an official API — if we ever want FL coverage,
+  // Road511 Starter ($29/mo) is the realistic path.
+
+  // ── Minnesota DOT ────────────────────────────────────────────────────────
+  // Public endpoint, no key required. Different platform from IBI/Skyline.
+  // Schema verified defensively — see _parseMnDOT below.
+  {
+    id: 'mn',
+    label: 'Minnesota DOT (511MN CARS / MnDOT)',
+    url: 'https://tr.511mn.org/tgcameras/api/cameras',
+    envKey: null,
+    cacheTTL: 10 * 60 * 1000,
+    // The CARS Hub camera list when it answers, else MnDOT's own camera API
+    // Castle Rock (Nov 2026): Minnesota no longer shares cameras through the
+    // CARS Hub, and MnDOT's old tgcameras address is gone. The new 511MN map
+    // reads an open camera list instead (live video from MnDOT's servers).
+    load: async () => {
+      const c = await _carsHubCams('mn');
+      if (c.length) return c;
+      return _cars511xCams('mn');
+    },
+  },
+
+  // ── Illinois DOT (Gateway system) ────────────────────────────────────────
+  // Illinois uses IDOT's ArcGIS Hub (public open data portal) for the
+  // Gateway camera dataset. gis-idot.opendata.arcgis.com is IDOT's PUBLIC
+  // data sharing site — NOT the same system as gis1.dot.illinois.gov
+  // (their private internal ArcGIS Server for infrastructure/permits).
+  //
+  // The IL_ARCGIS_KEY obtained from gis1.dot.illinois.gov almost certainly
+  // does NOT authenticate against the public Hub — but the Hub dataset is
+  // likely publicly accessible without any key at all, since that's the
+  // whole point of an open data portal. Setting envKey to null so this
+  // always loads without requiring a key.
+  //
+  // If the public endpoint starts returning 401/403, revisit whether IDOT
+  // has added auth to this specific dataset — at that point contact
+  // travelmidwest.com directly for data feed credentials (which Road511's
+  // article identified as the real upstream for IL camera images).
+  {
+    id: 'il',
+    label: 'Illinois DOT (Gateway)',
+    url: 'https://gis-idot.opendata.arcgis.com/datasets/IDOT::illinois-gateway-traffic-cameras/FeatureServer/0/query?where=1%3D1&outFields=*&f=json',
+    envKey: null,                  // public open data Hub — no key required
+    cacheTTL: 10 * 60 * 1000,
+    parse: _parseILGateway,
+  },
+
+  // ── To add more states ───────────────────────────────────────────────────
+  // IBI/Skyline platform (most US state 511 sites):
+  //   { id:'xx', label:'State DOT', url:'https://511xx.gov/api/v2/get/cameras?format=json',
+  //     envKey:'XX_511_KEY', cacheTTL: 10*60*1000, parse: _parseIBI511 }
+  //
+  // Other platforms: write a new parse function following the same pattern
+  // as _parseILGateway, then use it here.
+];
+
+// Cache for state DOT data: id -> { cameras, ts }
+const _stateDOTCache = new Map();
+const _stateDOTLoading = new Map();   // feed id → load in progress
+
+// Standard IBI Group / Skyline 511 platform parser.
+// Used by WI and confirmed identical on AZ, GA, LA, and most US state DOTs.
+function _parseIBI511(raw, sourceId, dot) {
+  if (!Array.isArray(raw)) return [];
+  let baseUrl = '';
+  try { if (dot?.url) baseUrl = new URL(dot.url).origin; } catch(_) {}
+  const cameras = [];
+  for (const cam of raw) {
+    const lat = parseFloat(cam.Latitude), lng = parseFloat(cam.Longitude);
+    if (!isFinite(lat) || !isFinite(lng)) continue;
+    // v2: cam.Views[] · v1 (e.g. 511NY /api/getcameras): Url/VideoUrl on the camera itself
+    const views = Array.isArray(cam.Views) ? cam.Views
+      : (cam.Url || cam.VideoUrl) ? [{ Id: cam.ID || cam.Id, Url: cam.Url, VideoUrl: cam.VideoUrl,
+          Status: (cam.Disabled || cam.Blocked) ? 'Disabled' : 'Enabled', Description: cam.Name }] : [];
+    const view = views.find(v => v.Status === 'Enabled') || views[0];
+    if (!view) continue;
+    // Skip cameras where ALL views are disabled — their images redirect to /notfound
+    if (view.Status === 'Disabled' && !views.some(v => v.Status === 'Enabled')) continue;
+    const videoUrl = view.VideoUrl || null;
+    const key = (dot?.envKey && process.env[dot.envKey]) ? process.env[dot.envKey] : null;
+    // The v2 API gives each view's image link as `Url` (e.g. https://511ga.org/map/Cctv/24698).
+    // The old fallback built /Cctv/GetCctvImage?viewId=… — a path these sites
+    // don't have, so every image 404'd (GA, NC, AZ, ID, UT). /map/Cctv/{id}
+    // is the public image path on this platform.
+    void key;
+    const imageUrl = view.Url || view.ImageUrl
+      || (baseUrl && view.Id ? `${baseUrl}/map/Cctv/${view.Id}` : null);
+    cameras.push({
+      id: `${sourceId}-${cam.Id}`,
+      name: cam.Location || cam.Name || cam.Roadway || cam.RoadwayName || 'Traffic Camera',
+      lat, lng,
+      imageUrl,
+      videoUrl,
+      direction: (cam.Direction && cam.Direction !== 'Unknown') ? cam.Direction : null,
+      source: sourceId,
+    });
+  }
+  return cameras;
+}
+
+// Minnesota DOT parser (tr.511mn.org/tgcameras/api/cameras).
+// Schema unverified from official docs — written defensively to handle
+// whatever actually comes back. Will log the raw schema on first load so
+// we can refine this if the field names differ from the IBI standard.
+function _parseMnDOT(raw, sourceId) {
+  if (!Array.isArray(raw)) {
+    // Some MN endpoints wrap the array in a container object
+    if (raw && Array.isArray(raw.cameras)) raw = raw.cameras;
+    else if (raw && Array.isArray(raw.features)) {
+      // GeoJSON FeatureCollection fallback
+      return raw.features.map((f, i) => {
+        const p = f.properties || {};
+        const coords = f.geometry && f.geometry.coordinates;
+        if (!coords) return null;
+        return {
+          id: `${sourceId}-${p.id || p.ID || i}`,
+          name: p.location || p.name || p.roadway || 'MN Traffic Camera',
+          lat: coords[1], lng: coords[0],
+          imageUrl: p.imageUrl || p.image_url || null,
+          videoUrl: p.videoUrl || p.video_url || null,
+          direction: p.direction || null,
+          source: sourceId,
+        };
+      }).filter(Boolean);
+    }
+    else { console.warn('[Cameras] MN DOT: unexpected schema', typeof raw); return []; }
+  }
+  // Log first entry on first load so we can see the real field names
+  if (raw.length > 0 && !_stateDOTCache.has('mn')) {
+    console.log('[Cameras] MN DOT first entry schema:', JSON.stringify(raw[0], null, 2).slice(0, 500));
+  }
+  return raw.map((cam, i) => {
+    // Try the IBI field names first, then common MN-specific variants
+    const lat = parseFloat(cam.Latitude ?? cam.latitude ?? cam.lat ?? cam.Y ?? cam.y);
+    const lng = parseFloat(cam.Longitude ?? cam.longitude ?? cam.lng ?? cam.X ?? cam.x);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    const views = cam.Views || cam.views || [];
+    const view = (Array.isArray(views) ? views : []).find(v => (v.Status || v.status) === 'Enabled') || views[0];
+    const videoUrl = (view && (view.VideoUrl || view.videoUrl)) || cam.videoUrl || cam.VideoUrl || null;
+    const imageUrl = (view && (view.ImageUrl || view.imageUrl)) || cam.imageUrl || cam.url || null;
+    const name = cam.Location || cam.location || cam.name || cam.description || cam.Roadway || cam.roadway || 'MN Traffic Camera';
+    return {
+      id: `${sourceId}-${cam.Id || cam.id || cam.cameraId || i}`,
+      name, lat, lng, imageUrl, videoUrl,
+      direction: cam.Direction || cam.direction || null,
+      source: sourceId,
+    };
+  }).filter(Boolean);
+}
+
+// Illinois Gateway system parser.
+// ArcGIS FeatureServer response; field names: y (lat), x (lng),
+// CameraLocation, CameraDirection, SnapShot (direct image URL).
+// The ArcGIS token goes in the query string as `token=`.
+function _parseILGateway(raw, sourceId) {
+  // ArcGIS query responses wrap features in { features: [{ attributes, geometry }] }
+  const features = raw.features || [];
+  return features.map((f, i) => {
+    const a = f.attributes || {};
+    // Geometry coordinates come in the feature's geometry block if outSR=4326,
+    // but we also have explicit lat/lng attributes from this layer.
+    const lat = parseFloat(a.y ?? (f.geometry && f.geometry.y));
+    const lng = parseFloat(a.x ?? (f.geometry && f.geometry.x));
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    return {
+      id: `${sourceId}-${a.OBJECTID || a.FID || i}`,
+      name: a.CameraLocation || a.ImgPath || 'IL Traffic Camera',
+      lat, lng,
+      imageUrl: a.SnapShot || null,   // direct JPEG URL, suitable for <img>
+      videoUrl: null,                  // Gateway is image-only, no HLS streams
+      direction: a.CameraDirection !== 'NONE' ? a.CameraDirection : null,
+      source: sourceId,
+    };
+  }).filter(Boolean);
+}
+
+// ── Generic camera-record reader (ArcGIS layers, and feeds like VA SmarterRoads)
+// Works out which field is the latitude, longitude, image, video, name and
+// direction by name and by value, so a new state's layer usually needs no code.
+function _pickField(obj, keyRe, valueTest) {
+  let best = null, bestScore = -1;
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v == null || v === '') continue;
+    let score = keyRe.test(k) ? 2 : 0;
+    if (valueTest) { const t = valueTest(v, k); if (t < 0) continue; score += t; }
+    if (score > bestScore && score > 0) { best = k; bestScore = score; }
+  }
+  return best;
+}
+const _isHttp = (v) => typeof v === 'string' && /^https?:\/\//i.test(v.trim());
+function _detectCamFields(sample) {
+  const imgTest = (v, k) => {
+    if (!_isHttp(v) || /\.m3u8(\?|$)/i.test(v) || /\.(jsp|html?|aspx?|php)(\?|$)/i.test(v)) return -1;
+    let t = /\.(jpe?g|png|gif|webp)(\?|$)/i.test(v) ? 3 : 0;
+    if (/snap|image|img|still|photo|jpg|cctv|cam/i.test(v)) t += 1;
+    if (/snap ?shot/i.test(k)) t += 2;
+    return t;
+  };
+  return {
+    // Latitude/longitude fields must be NAMED like one (a small number such as
+    // OBJECTID would otherwise pass); without one, the record's map point is used.
+    lat: _pickField(sample, /^(lat|latitude|y|lat_dd|ycoord)$/i, (v, k) => (/^(lat|latitude|y|lat_dd|ycoord)$/i.test(k) && Number.isFinite(+v) && Math.abs(+v) <= 90 ? 0.5 : -1)),
+    lng: _pickField(sample, /^(lon|lng|long|longitude|x|lon_dd|xcoord)$/i, (v, k) => (/^(lon|lng|long|longitude|x|lon_dd|xcoord)$/i.test(k) && Number.isFinite(+v) && Math.abs(+v) <= 180 ? 0.5 : -1)),
+    image: _pickField(sample, /snap ?shot|image|img|still|photo|picture|jpeg|jpg/i, imgTest),
+    video: _pickField(sample, /video|stream|hls|m3u8/i, (v) => (_isHttp(v) && /\.m3u8(\?|$)/i.test(v) ? 3 : -1)),
+    name: _pickField(sample, /^(name|title|label|descript(ion)?|location|cameralocation|camera_name|cameraname|site|description1)$/i,
+                     (v) => (typeof v === 'string' && !_isHttp(v) && v.length >= 3 ? 0.5 : -1)),
+    dir: _pickField(sample, /direction|facing|^dir$|cameradirection|heading/i, (v) => (typeof v === 'string' && v.length <= 20 ? 0.2 : -1)),
+  };
+}
+function _recordsToCameras(records, prefix, stateCode) {
+  if (!records.length) return [];
+  // Detect fields across a few records (the first may have blanks)
+  const merged = Object.assign({}, ...records.slice(0, 25).reverse());
+  const f = _detectCamFields(merged);
+  if (!f.image && !f.video) { console.warn(`[Cameras] ${prefix}: no image or video field found in: ${Object.keys(merged).join(', ')}`); return []; }
+  console.log(`[Cameras] ${prefix}: fields → lat=${f.lat || 'geometry'} lng=${f.lng || 'geometry'} image=${f.image} video=${f.video} name=${f.name} dir=${f.dir}`);
+  const out = [];
+  records.forEach((r, i) => {
+    if (String(r.TooOld).toLowerCase() === 'true') return;               // Illinois: image over 30 min old
+    // Map point first (always correct for ArcGIS/GeoJSON), then the named fields
+    let lat = parseFloat(r.__lat), lng = parseFloat(r.__lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) { lat = parseFloat(f.lat && r[f.lat]); lng = parseFloat(f.lng && r[f.lng]); }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return;
+    const img = f.image && _isHttp(r[f.image]) ? r[f.image].trim() : null;
+    const vid = f.video && _isHttp(r[f.video]) ? r[f.video].trim() : null;
+    if (!img && !vid) return;
+    out.push({ id: `${prefix}-${r.OBJECTID || r.OBJECTID_1 || r.ID || r.id || i}`, name: String((f.name && r[f.name]) || 'Traffic camera').slice(0, 120),
+               lat, lng, imageUrl: img, videoUrl: vid, direction: (f.dir && r[f.dir]) || null, source: stateCode.toLowerCase() });
+  });
+  return out;
+}
+
+// ArcGIS Feature/Map layer → cameras. Accepts a layer URL, or an ArcGIS item id
+// (resolved through ArcGIS Online's public catalog — survives service renames).
+const _arcgisItemUrl = new Map();
+async function _loadArcGISLayer(dot) {
+  let layerUrl = dot.arcgisLayer;
+  if (!layerUrl && dot.arcgisItem) {
+    if (!_arcgisItemUrl.has(dot.arcgisItem)) {
+      const it = JSON.parse(await fetchTextOverHttp(`https://www.arcgis.com/sharing/rest/content/items/${dot.arcgisItem}?f=json`));
+      if (!it.url) throw new Error(`ArcGIS item ${dot.arcgisItem} has no service URL`);
+      _arcgisItemUrl.set(dot.arcgisItem, it.url.replace(/\/+$/, ''));
+    }
+    const base = _arcgisItemUrl.get(dot.arcgisItem);
+    layerUrl = /\/\d+$/.test(base) ? base : `${base}/${dot.arcgisLayerIndex || 0}`;
+  }
+  const records = [];
+  for (let offset = 0, page = 0; page < 20; page++) {
+    const q = `${layerUrl}/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=json&resultOffset=${offset}&resultRecordCount=1000`;
+    const j = JSON.parse(await fetchTextOverHttp(q));
+    if (j.error) throw new Error(j.error.message || 'ArcGIS query failed');
+    for (const ft of j.features || []) {
+      const a = { ...(ft.attributes || {}) };
+      if (ft.geometry && Number.isFinite(ft.geometry.x)) { a.__lng = ft.geometry.x; a.__lat = ft.geometry.y; }
+      records.push(a);
+    }
+    if (!j.exceededTransferLimit || !(j.features || []).length) break;
+    offset += (j.features || []).length;
+  }
+  return _recordsToCameras(records, dot.id, dot.id);
+}
+
+// Any JSON feed (array, {data:[…]}, GeoJSON) → cameras, with field detection
+function _parseGenericCameraJSON(raw, dot) {
+  let recs = Array.isArray(raw) ? raw : raw && (raw.features || raw.data || raw.cameras || raw.items || raw.results || []);
+  if (!Array.isArray(recs)) recs = [];
+  recs = recs.map(r => {
+    if (r && r.type === 'Feature') {
+      const a = { ...(r.properties || {}) };
+      if (r.geometry && Array.isArray(r.geometry.coordinates)) { a.__lng = r.geometry.coordinates[0]; a.__lat = r.geometry.coordinates[1]; }
+      return a;
+    }
+    return r;
+  });
+  return _recordsToCameras(recs, dot.id, dot.id);
+}
+
+// What each state's camera feed last answered — /api/admin/cameras/dot-status
+const _dotStatus = {};
+async function _loadStateDOT(dot) {
+  const cached = _stateDOTCache.get(dot.id);
+  if (cached && Date.now() - cached.ts < dot.cacheTTL) return cached.cameras;
+
+  // Custom loaders (ArcGIS layers, key-or-fallback states)
+  if (dot.load) {
+    // One load at a time per feed: after a restart, several visitors opening the
+    // same state used to each start their own (slow) download.
+    if (_stateDOTLoading.has(dot.id)) return _stateDOTLoading.get(dot.id);
+    const job = (async () => {
+      let cameras = [];
+      try { cameras = (await dot.load(dot)) || []; console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`); }
+      catch (e) { console.warn(`[Cameras] ${dot.label} failed:`, e.message); }
+      if (!cameras.length) {
+        // A failed or empty load used to leave the state with no DOT cameras for
+        // the whole cache time (30 min for Virginia). Keep the last good list and
+        // try again in 2 minutes.
+        const prev = (cached && cached.cameras) || [];
+        _stateDOTCache.set(dot.id, { cameras: prev, ts: Date.now() - dot.cacheTTL + 2 * 60 * 1000 });
+        return prev;
+      }
+      _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
+      return cameras;
+    })().finally(() => _stateDOTLoading.delete(dot.id));
+    _stateDOTLoading.set(dot.id, job);
+    return job;
+  }
+
+  // Skip if this DOT requires a key and it's not configured
+  if (dot.envKey && !process.env[dot.envKey]) return [];
+
+  let url = dot.url;
+  if (dot.envKey && process.env[dot.envKey]) {
+    // 511 IBI/Skyline platforms use `key=`, ArcGIS services use `token=`.
+    // Each DOT config can specify authParam to override; default is 'key'.
+    const paramName = dot.authParam || 'key';
+    // .trim(): a stray space or line break pasted into Railway makes the key "Invalid"
+    url += (url.includes('?') ? '&' : '?') + `${paramName}=${encodeURIComponent(process.env[dot.envKey].trim())}`;
+  }
+
+  let cameras = [];
+  const st = _dotStatus[dot.id] = { label: dot.label, at: new Date().toISOString(), host: (() => { try { return new URL(dot.url).host; } catch (_) { return null; } })() };
+  let text = '';
+  try {
+    // fetch (not fetchTextOverHttp) so the HTTP status is known: an empty reply
+    // is usually 429 (511 sites allow 10 calls/minute) or 401/403 (key not active)
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
+    let r;
+    try { r = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: 'application/json' }, signal: ctl.signal }); }
+    finally { clearTimeout(t); }
+    st.status = r.status;
+    text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}${r.status === 429 ? ' — rate limited (10 calls/minute)' : r.status === 401 || r.status === 403 ? ' — key rejected or not activated yet' : ''}${text ? '' : ' (empty reply)'}`);
+    if (!text.trim()) throw new Error('HTTP 200 with an empty reply');
+    const raw = JSON.parse(text);
+    const list = Array.isArray(raw) ? raw : null;
+    st.received = list ? list.length : `not a list (${Object.keys(raw || {}).slice(0, 6).join(', ')})`;
+    if (list && list[0]) {
+      st.sampleFields = Object.keys(list[0]).slice(0, 25);
+      const v = Array.isArray(list[0].Views) ? list[0].Views[0] : null;
+      if (v) st.sampleViewFields = Object.keys(v);
+      st.viewStatuses = [...new Set(list.flatMap(c => (c.Views || []).map(x => x.Status)))].slice(0, 6);
+    }
+    cameras = dot.parse(raw, dot.id, dot);
+    st.cameras = cameras.length;
+    console.log(`[Cameras] ${dot.label}: ${cameras.length} cameras loaded`);
+  } catch (e) {
+    st.error = e.message;
+    // What the server sent back instead (key removed), e.g. "<Error><Message>Invalid Key</Message></Error>"
+    st.answer = String(text || '').replace(/key=[^&"'\s]+/gi, 'key=…').replace(/\s+/g, ' ').slice(0, 200);
+    console.warn(`[Cameras] ${dot.label} failed:`, e.message, st.answer ? '— answered: ' + st.answer : '');
+  }
+
+  _stateDOTCache.set(dot.id, { cameras, ts: Date.now() });
+  return cameras;
+}
+
+function _haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Full-name → 2-letter code map for OTC state keys
+const OTC_STATE_CODES = {
+  'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+  'Colorado':'CO','Connecticut':'CT','Delaware':'DE','Florida':'FL','Georgia':'GA',
+  'Hawaii':'HI','Idaho':'ID','Illinois':'IL','Indiana':'IN','Iowa':'IA',
+  'Kansas':'KS','Kentucky':'KY','Louisiana':'LA','Maine':'ME','Maryland':'MD',
+  'Massachusetts':'MA','Michigan':'MI','Minnesota':'MN','Mississippi':'MS',
+  'Missouri':'MO','Montana':'MT','Nebraska':'NE','Nevada':'NV','New Hampshire':'NH',
+  'New Jersey':'NJ','New Mexico':'NM','New York':'NY','North Carolina':'NC',
+  'North Dakota':'ND','Ohio':'OH','Oklahoma':'OK','Oregon':'OR','Pennsylvania':'PA',
+  'Rhode Island':'RI','South Carolina':'SC','South Dakota':'SD','Tennessee':'TN',
+  'Texas':'TX','Utah':'UT','Vermont':'VT','Virginia':'VA','Washington':'WA',
+  'West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY','District of Columbia':'DC',
+};
+
+async function _loadOTC() {
+  if (_otcCache && Date.now() - _otcCacheTime < OTC_TTL) return _otcCache;
+  console.log('[Cameras] Fetching OpenTrafficCamMap USA.json…');
+  const text = await fetchTextOverHttp(OTC_JSON_URL);
+  const raw = JSON.parse(text);
+  const cameras = [];
+
+  // OTC has two known schemas:
+  // v1/old master: { "Wisconsin": { "county": [{latitude, longitude, url, ...}] } }
+  // new master: may be a flat array or restructured — handle gracefully
+  const addCam = (cam, stateCode) => {
+    // Support both old field names (latitude/longitude) and new (lat/lng or location.*)
+    const lat = parseFloat(cam.latitude ?? cam.lat ?? cam.location?.latitude);
+    const lng = parseFloat(cam.longitude ?? cam.lng ?? cam.location?.longitude);
+    const url = cam.url ?? cam.imageUrl ?? cam.image_url ?? null;
+    if (!isFinite(lat) || !isFinite(lng)) return;
+    if (Math.abs(lat) < 1 && Math.abs(lng) < 1) return;
+    if (!url) return; // skip cameras with no feed URL
+    const isHLS = (cam.format ?? '').toUpperCase().includes('M3U');
+    cameras.push({
+      id: 'otc-' + cameras.length,
+      name: cam.description ?? cam.name ?? cam.title ?? 'Traffic Camera',
+      lat, lng,
+      imageUrl: isHLS ? null : url,
+      videoUrl: isHLS ? url : null,
+      direction: cam.direction ?? null,
+      source: 'otc',
+      state: stateCode,
+    });
+  };
+
+  if (Array.isArray(raw)) {
+    // Flat array schema
+    raw.forEach(cam => addCam(cam, OTC_STATE_CODES[cam.state] || cam.state || null));
+  } else if (typeof raw === 'object') {
+    // Nested state→county schema (original format)
+    for (const [stateName, counties] of Object.entries(raw)) {
+      const stateCode = OTC_STATE_CODES[stateName] || null;
+      if (Array.isArray(counties)) {
+        counties.forEach(cam => addCam(cam, stateCode));
+      } else if (typeof counties === 'object') {
+        for (const countyArr of Object.values(counties)) {
+          if (Array.isArray(countyArr)) countyArr.forEach(cam => addCam(cam, stateCode));
+        }
+      }
+    }
+  }
+  _otcCache = cameras;
+  _otcCacheTime = Date.now();
+  console.log(`[Cameras] OTC loaded: ${cameras.length} cameras`);
+  return cameras;
+}
+
+async function _loadRoad511(bbox) {
+  const key = bbox;
+  const cached = _road511Cache.get(key);
+  if (cached && Date.now() - cached.ts < ROAD511_TTL) return cached.cameras;
+
+  const apiKey = process.env.ROAD511_API_KEY;
+  if (!apiKey) return [];
+
+  const url = `https://api.road511.com/api/v1/features/geojson?type=cameras&bbox=${encodeURIComponent(bbox)}&limit=500`;
+  let cameras = [];
+  try {
+    const text = await fetchTextOverHttp(url, { 'X-API-Key': apiKey });
+    const gj = JSON.parse(text);
+    cameras = (gj.features || []).map(f => {
+      const p = f.properties || {};
+      return {
+        id: 'r511-' + (p.id || ''),
+        name: p.name || 'Traffic Camera',
+        lat: f.geometry.coordinates[1],
+        lng: f.geometry.coordinates[0],
+        imageUrl: p.image_url || null,
+        videoUrl: p.video_url || null,
+        direction: p.direction || null,
+        source: 'road511',
+      };
+    }).filter(c => isFinite(c.lat) && isFinite(c.lng));
+  } catch (e) {
+    console.warn('[Cameras] Road511 fetch failed:', e.message);
+  }
+  _road511Cache.set(key, { cameras, ts: Date.now() });
+  return cameras;
+}
+
+
+// ── Windy Webcams Integration ─────────────────────────────────────────────────
+// Approximate bounding boxes [N, W, S, E] for all 50 states + DC.
+// Used to query Windy's bounding-box API when a user selects a state.
+const STATE_BBOX = {
+  AL:[35.0,-88.5,30.1,-84.8], AK:[71.5,-168.0,54.5,-130.0],
+  AZ:[37.0,-114.8,31.3,-109.0], AR:[36.5,-94.6,33.0,-89.6],
+  CA:[42.0,-124.5,32.5,-114.1], CO:[41.0,-109.1,36.9,-102.0],
+  CT:[42.1,-73.7,40.9,-71.8],  DE:[39.8,-75.8,38.4,-75.0],
+  FL:[31.0,-87.6,24.4,-80.0],  GA:[35.0,-85.6,30.4,-80.8],
+  HI:[22.2,-160.2,18.9,-154.8],ID:[49.0,-117.2,41.9,-111.0],
+  IL:[42.5,-91.5,36.9,-87.0],  IN:[41.8,-88.1,37.8,-84.7],
+  IA:[43.5,-96.6,40.4,-90.1],  KS:[40.0,-102.1,36.9,-94.6],
+  KY:[39.1,-89.6,36.5,-81.9],  LA:[33.0,-94.0,28.9,-88.8],
+  ME:[47.5,-71.1,43.0,-66.9],  MD:[39.7,-79.5,37.9,-75.0],
+  MA:[42.9,-73.5,41.2,-69.9],  MI:[48.3,-90.4,41.7,-82.4],
+  MN:[49.4,-97.2,43.5,-89.5],  MS:[35.0,-91.7,30.2,-88.1],
+  MO:[40.6,-95.8,35.9,-89.1],  MT:[49.0,-116.0,44.4,-104.0],
+  NE:[43.0,-104.1,40.0,-95.3], NV:[42.0,-120.0,35.0,-114.0],
+  NH:[45.3,-72.6,42.7,-70.6],  NJ:[41.4,-75.6,38.9,-73.9],
+  NM:[37.0,-109.1,31.3,-103.0],NY:[45.0,-79.8,40.5,-71.9],
+  NC:[36.6,-84.3,33.8,-75.5],  ND:[49.0,-104.1,45.9,-96.6],
+  OH:[42.3,-84.8,38.4,-80.5],  OK:[37.0,-103.0,33.6,-94.4],
+  OR:[46.3,-124.6,41.9,-116.5],PA:[42.3,-80.5,39.7,-74.7],
+  RI:[42.0,-71.9,41.1,-71.1],  SC:[35.2,-83.4,32.0,-78.5],
+  SD:[45.9,-104.1,42.5,-96.4], TN:[36.7,-90.3,34.9,-81.6],
+  TX:[36.5,-106.6,25.8,-93.5], UT:[42.0,-114.1,36.9,-109.0],
+  VT:[45.0,-73.4,42.7,-71.5],  VA:[39.5,-83.7,36.5,-75.2],
+  WA:[49.0,-124.7,45.5,-116.9],WV:[40.6,-82.6,37.2,-77.7],
+  WI:[47.1,-92.9,42.5,-86.8],  WY:[45.0,-111.1,40.9,-104.0],
+  DC:[39.0,-77.12,38.79,-76.91],
+  // Territories — Caribbean coverage for tropical storms
+  PR:[18.6,-67.95,17.85,-65.2], VI:[18.45,-65.1,17.65,-64.55],
+  // Camera-only regions outside the US (Community Cams) — the whole world is covered
+  CAN:[60.0,-141.0,41.6,-52.6], CAR:[27.3,-86.0,10.0,-59.4], MEX:[33.0,-118.0,5.0,-77.0],
+  SAM:[13.0,-82.0,-56.0,-34.0], EUR:[72.0,-25.0,34.0,45.0], MEA:[42.0,-20.0,-35.0,63.0],
+  ASI:[60.0,45.0,-11.0,150.0], OCE:[0.0,110.0,-50.0,180.0], WLD:[75.0,-180.0,-60.0,180.0],
+};
+const CAMERA_REGIONS = new Set(['CAN', 'CAR', 'MEX', 'SAM', 'EUR', 'MEA', 'ASI', 'OCE', 'WLD']);
+
+function _windyPlayerUrl(w) {
+  const p = w.player || {};
+  const pick = (v) => (typeof v === 'string' ? v : (v && typeof v.embed === 'string' ? v.embed : null));
+  for (const view of ['live', 'day', 'month', 'year', 'lifetime']) {
+    const u = pick(p[view]);
+    if (u && /^https:\/\//.test(u) && !u.includes('/we_player/')) return u;   // skip old v2-style links
+  }
+  return w.webcamId ? `https://webcams.windy.com/webcams/public/embed/player/${w.webcamId}/day` : null;
+}
+
+const _windyCache = new Map();
+// Camera LOCATIONS barely change, so the list is cached 6 h. The popup uses
+// Windy's player embed (doesn't expire); preview images are left out because
+// free-tier image tokens expire after 10 min.
+const WINDY_TTL = 6 * 60 * 60 * 1000;
+const WINDY_PARTIAL_TTL = 30 * 60 * 1000;      // a list cut short by Windy's limit is retried sooner
+const WINDY_REDIS_TTL = 3 * 24 * 3600;          // survives redeploys (camera locations barely change)
+
+// Windy's free API allows only a few requests per second. Every Windy search
+// (camera counter, viewers, all states) goes through this one queue with a
+// gap between calls, and the gap grows while Windy is answering "Too Many Requests".
+let _windyGap = 400, _windyChain = Promise.resolve();
+function _windyFetch(url, key) {
+  const run = _windyChain.then(async () => {
+    await new Promise(r => setTimeout(r, _windyGap));
+    let text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+    if (!/^\s*[{[]/.test(text)) {                  // "Too Many Requests" (plain text)
+      _windyGap = Math.min(5000, _windyGap * 2);
+      await new Promise(r => setTimeout(r, 3000));
+      text = await fetchTextOverHttp(url, { 'x-windy-api-key': key });
+      if (!/^\s*[{[]/.test(text)) { const e = new Error('rate limited'); e.rateLimited = true; throw e; }
+    }
+    _windyGap = Math.max(400, Math.round(_windyGap * 0.9));
+    return JSON.parse(text);
+  });
+  _windyChain = run.catch(() => {});
+  return run;
+}
+
+async function _loadWindy(stateCode) {
+  const key = process.env.WINDY_WEBCAM_KEY;
+  if (!key) { console.log('[Cameras] Windy skipped — WINDY_WEBCAM_KEY not set'); return []; }
+
+  let cached = _windyCache.get(stateCode);
+  if (!cached && redis) {
+    try {
+      const saved = JSON.parse((await redis.get('wt:windy:' + stateCode)) || 'null');
+      if (saved && Array.isArray(saved.cameras)) { cached = saved; _windyCache.set(stateCode, saved); }
+    } catch (_) {}
+  }
+  if (cached && Date.now() - cached.ts < (cached.partial ? WINDY_PARTIAL_TTL : WINDY_TTL)) {
+    return cached.cameras;
+  }
+  if (cached && cached.loading) return cached.loading;
+  const loading = _loadWindyFresh(stateCode, key, cached);
+  _windyCache.set(stateCode, { ...(cached || { cameras: [], ts: 0 }), loading });
+  try { return await loading; }
+  catch (e) { _windyCache.set(stateCode, cached || { cameras: [], ts: Date.now(), partial: true }); return cached ? cached.cameras : []; }
+}
+
+async function _loadWindyFresh(stateCode, key, previous) {
+
+  const bbox = STATE_BBOX[stateCode];
+  if (!bbox) return [];
+  const [N, W, S, E] = bbox;
+
+  // Windy v3 searches around a point (nearby=lat,lon,radiusKm, max 250 km) and
+  // returns the CLOSEST cameras first. One search from the state's center
+  // missed every metro more than 250 km out (NYC, Detroit, Dallas, Houston,
+  // Las Vegas, Philadelphia…). So the state is covered with a grid of ~2°
+  // cells, one search each, and results are merged.
+  const CELL = 2.0, MAX_CALLS = 64;
+  const cells = [];   // [lat, lng, radiusKm, halfSizeDeg, depth]
+  for (let la = S; la < N; la += CELL) {
+    for (let lo = W; lo < E; lo += CELL) {
+      const cLa = (la + Math.min(la + CELL, N)) / 2, cLo = (lo + Math.min(lo + CELL, E)) / 2;   // center of this (possibly partial) cell
+      const hLat = Math.min(CELL, N - la) * 111 / 2, hLng = Math.min(CELL, E - lo) * 111 * Math.cos(cLa * Math.PI / 180) / 2;
+      cells.push([cLa, cLo, Math.min(250, Math.ceil(Math.hypot(hLat, hLng)) + 5), CELL / 2, 0]);
+    }
+  }
+  const allCameras = [];
+  const seen = new Set();
+  let calls = 0, failed = 0;
+  // A search that comes back FULL (50) means a dense area (NYC, Miami, LA…) —
+  // split it into 4 smaller searches so the city itself gets covered.
+  while (cells.length) {
+    const [cLa, cLo, radiusKm, half, depth] = cells.shift();
+    if (calls >= MAX_CALLS) { console.warn(`[Cameras] Windy ${stateCode}: stopped at ${MAX_CALLS} searches`); break; }
+    calls++;
+    const url = `https://api.windy.com/webcams/api/v3/webcams`
+      + `?nearby=${cLa.toFixed(4)},${cLo.toFixed(4)},${radiusKm}`
+      + `&include=location,player&limit=50`;
+    try {
+      const data = await _windyFetch(url, key);
+      const batch = data.webcams || data.data || [];
+      if (batch.length >= 50 && depth < 2) {
+        const q = half / 2;
+        for (const [dy, dx] of [[-q, -q], [-q, q], [q, -q], [q, q]]) {
+          const la = cLa + dy, lo = cLo + dx;
+          const r = Math.ceil(Math.hypot(q * 111, q * 111 * Math.cos(la * Math.PI / 180))) + 3;
+          cells.push([la, lo, r, q, depth + 1]);
+        }
+      }
+      batch.forEach(w => {
+        const lat = w.location?.latitude, lng = w.location?.longitude;
+        if (!isFinite(lat) || !isFinite(lng) || seen.has(w.webcamId)) return;
+        if (lat < S || lat > N || lng < W || lng > E || !_inState(stateCode, lat, lng)) return;   // this state only (real outline)
+        seen.add(w.webcamId);
+        allCameras.push({
+          id: 'windy-' + w.webcamId,
+          name: w.title || 'Webcam',
+          lat, lng,
+          imageUrl: null,
+          videoUrl: null,
+          playerUrl: _windyPlayerUrl(w),
+          windyId: w.webcamId,
+          direction: null,
+          source: 'windy',
+          state: stateCode,
+        });
+      });
+    } catch (e) {
+      failed++;
+      if (e.rateLimited && failed >= 3) { console.warn(`[Cameras] Windy ${stateCode}: Windy is limiting requests — stopping this state for now`); break; }
+    }
+  }
+  // Never replace a good list with a worse one cut short by Windy's limit
+  if (failed && previous && previous.cameras && previous.cameras.length > allCameras.length) {
+    console.warn(`[Cameras] Windy ${stateCode}: ${failed} of ${calls} searches failed — keeping the earlier ${previous.cameras.length} webcams`);
+    const keep = { cameras: previous.cameras, ts: Date.now(), partial: true };
+    _windyCache.set(stateCode, keep);
+    return previous.cameras;
+  }
+  const entry = { cameras: allCameras, ts: Date.now(), partial: failed > 0 };
+  _windyCache.set(stateCode, entry);
+  if (redis && allCameras.length) redis.set('wt:windy:' + stateCode, JSON.stringify(entry), 'EX', WINDY_REDIS_TTL).catch(() => {});
+  console.log(`[Cameras] Windy ${stateCode}: ${allCameras.length} webcams from ${calls} searches` + (failed ? ` (${failed} failed — will retry within 30 min)` : ''));
+  return allCameras;
+}
+
+// GET /api/cameras/coverage
+// Learn camera-proxy allowlist hosts (see camera proxy section below)
+// from every camera list this server returns. Must be registered BEFORE the
+// /api/cameras routes or it never runs.
+// Learn hosts from every camera list this server returns
+app.use('/api/cameras', (req, res, next) => {
+  const origJson = res.json.bind(res);
+  res.json = (body) => { try { _collectCamUrls(body); } catch {} return origJson(body); };
+  next();
+});
+
+// Returns which state codes have camera data available (used by the client
+// to build the state dropdown and mark states as covered vs. unavailable).
+// STATE_DOTS states are included if their key is configured (or no key required).
+// OTC states are always included since the file is always loaded.
+app.get('/api/cameras/coverage', async (req, res) => {
+  const covered = new Set();
+
+  // OTC states (always available once the file loads)
+  Object.keys(OTC_STATE_CODES).forEach(name => {
+    // We'll only mark a state as covered if OTC actually has cameras there
+  });
+  // Fetch OTC to know which states have entries
+  try {
+    const otc = await _loadOTC();
+    otc.forEach(c => { if (c.state) covered.add(c.state); });
+  } catch (e) { /* OTC unavailable, skip */ }
+
+  // STATE_DOTS states: covered if key is configured (or envKey is null = public)
+  STATE_DOTS.forEach(dot => {
+    if (!dot.envKey || process.env[dot.envKey]) covered.add(dot.id.toUpperCase());
+  });
+
+  res.set('Cache-Control', 'public, max-age=300'); // 5 min — coverage rarely changes
+  // If Windy key is configured, all 50 states have webcam coverage
+  // (Windy is global — every state has at least some cameras indexed)
+  if (process.env.WINDY_WEBCAM_KEY) {
+    Object.keys(STATE_BBOX).forEach(s => covered.add(s));
+  }
+
+  res.json({ covered: [...covered].sort() });
+});
+
+// GET /api/cameras/state/:code
+// Returns all cameras for a specific US state code (e.g. WI, CA, MN).
+// ── Real state outlines (data/us-states.json: 50 states + DC + PR + VI) ──────
+// Rectangles overlap neighbours (Georgia's box covers western South Carolina),
+// so cameras are placed by the actual outline. Coasts are simplified (~2 km),
+// so a camera within 3 km of the state's edge — a beach or harbour cam — counts
+// as long as it isn't inside a different state.
+let _stateShapes = {};
+try { _stateShapes = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'us-states.json'), 'utf8')); }
+catch (e) { console.warn('[Cameras] data/us-states.json missing — falling back to rectangles'); }
+function _inPolyRing(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function _stateOf(lat, lng) {
+  for (const [code, rings] of Object.entries(_stateShapes)) if (rings.some(r => _inPolyRing(lat, lng, r))) return code;
+  return null;
+}
+function _inState(code, lat, lng, edgeMi = 8, allowOtherState = false) {
+  const rings = _stateShapes[code];
+  if (!rings) {                                          // no outline: use the rectangle
+    const bb = STATE_BBOX[code];
+    return !bb || (lat <= bb[0] && lat >= bb[2] && lng >= bb[1] && lng <= bb[3]);
+  }
+  if (rings.some(r => _inPolyRing(lat, lng, r))) return true;
+  // Inside a DIFFERENT state → not ours (unless it's this state's own DOT camera
+  // just over the line). On the water/coast (no state) → ours if close enough.
+  const other = _stateOf(lat, lng);
+  if (other && other !== code && !allowOtherState) return false;
+  return rings.some(r => _milesToRing(lat, lng, r) <= edgeMi);
+}
+
+// ── Cal OES California Webcams (public ArcGIS layer, via FEMA open data) ─────
+// Consolidates ALERTCalifornia + ALERTWildfire mountaintop fire cameras (images
+// refresh every ~15 s, 60+ mile views — ideal for watching weather come in),
+// tsunami cameras and others. Traffic cameras are skipped (Caltrans covers
+// those). Cached 30 min; the image links always point at the latest frame.
+const CALOES_LAYER = 'https://services.arcgis.com/BLN4oKB0N1YSgvY8/arcgis/rest/services/CalOES_California_Webcams/FeatureServer/0';
+let _caloes = { list: null, ts: 0, pending: null };
+function _loadCalOES() {
+  if (_caloes.list && Date.now() - _caloes.ts < 30 * 60 * 1000) return Promise.resolve(_caloes.list);
+  if (_caloes.pending) return _caloes.pending;
+  _caloes.pending = (async () => {
+    const out = [];
+    for (let offset = 0, page = 0; page < 10; page++) {
+      const q = `${CALOES_LAYER}/query?where=${encodeURIComponent("CameraType <> 'Traffic'")}&outFields=Location,Source,Source_URL,Display_Type,View_Direction,Webcam_URL,PopUp_URL,NearBy_Place,CameraType,Thumbnail_Url,Camera_ID,OBJECTID`
+        + `&returnGeometry=true&outSR=4326&f=json&resultOffset=${offset}&resultRecordCount=2000`;
+      const j = JSON.parse(await fetchTextOverHttp(q));
+      if (j.error) throw new Error(j.error.message || 'Cal OES query failed');
+      for (const f of j.features || []) {
+        const a = f.attributes || {}, g = f.geometry || {};
+        if (!Number.isFinite(g.x) || !Number.isFinite(g.y)) continue;
+        const url = String(a.Webcam_URL || '').trim(), thumb = String(a.Thumbnail_Url || '').trim();
+        const isHls = /\.m3u8(\?|$)/i.test(url);
+        const isImg = /^https?:\/\//i.test(url) && (/picture/i.test(a.Display_Type || '') || /\.(jpe?g|png|webp)(\?|$)/i.test(url));
+        const img = isImg ? url : (/^https?:\/\//i.test(thumb) ? thumb : null);
+        if (!isHls && !img) continue;
+        out.push({
+          id: 'caloes-' + (a.Camera_ID || a.OBJECTID), name: [a.Location, a.NearBy_Place && a.NearBy_Place !== a.Location ? `(${a.NearBy_Place})` : ''].filter(Boolean).join(' '),
+          lat: g.y, lng: g.x, imageUrl: isHls ? null : img, videoUrl: isHls ? url : null, direction: a.View_Direction || null,
+          source: 'caloes', provider: a.Source || 'Cal OES', pageUrl: a.PopUp_URL || a.Source_URL || null, cameraType: a.CameraType,
+        });
+      }
+      if (!j.exceededTransferLimit || !(j.features || []).length) break;
+      offset += (j.features || []).length;
+    }
+    console.log(`[Cameras] Cal OES: ${out.length} fire/tsunami/other cameras (traffic skipped)`);
+    _caloes.list = out; _caloes.ts = Date.now();
+    return out;
+  })().catch(e => { console.warn('[Cameras] Cal OES failed:', e.message); return _caloes.list || []; })
+      .finally(() => { _caloes.pending = null; });
+  return _caloes.pending;
+}
+
+// ── PennDOT (static images, agreement on file) — data/penndot-cameras.json ──
+let _penndot = null;
+function _loadPennDOT() {
+  if (_penndot) return _penndot;
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'penndot-cameras.json'), 'utf8'));
+    _penndot = j.cameras.map(c => ({
+      id: 'pa-' + c.id, name: c.n + (c.d ? ` (${c.d})` : ''), lat: c.lat, lng: c.lng,
+      imageUrl: c.img, videoUrl: null, direction: c.d || null, source: 'pa',
+    }));
+    console.log(`[Cameras] PennDOT: ${_penndot.length} cameras loaded from data file`);
+  } catch (e) { console.warn('[Cameras] PennDOT data file missing:', e.message); _penndot = []; }
+  return _penndot;
+}
+
+// ── National Park Service webcams (api.data.gov key: GOV_API_KEY) ───────────
+// One call returns every NPS webcam nationwide; cached 12 h and filtered per
+// state. Many parks are exactly where weather happens: Hawaiʻi Volcanoes,
+// Virgin Islands, Everglades, Cape Hatteras, Gulf Islands, Acadia…
+const _nps = { list: null, ts: 0, pending: null };
+async function _loadNPSAll() {
+  const key = process.env.GOV_API_KEY;
+  if (!key) return [];
+  if (_nps.list && Date.now() - _nps.ts < 12 * 3600 * 1000) return _nps.list;
+  if (_nps.pending) return _nps.pending;
+  _nps.pending = (async () => {
+    const out = [];
+    let start = 0, total = Infinity, noCoords = 0, inactive = 0;
+    while (start < total && start < 2000) {
+      const j = JSON.parse(await fetchTextOverHttp(
+        `https://developer.nps.gov/api/v1/webcams?limit=500&start=${start}`, { 'X-Api-Key': key }));
+      const data = j.data || [];
+      if (start === 0) console.log(`[Cameras] NPS: ${j.total} webcams listed; fields: ${Object.keys(data[0] || {}).join(',')}`);
+      total = Number(j.total) || data.length;
+      for (const w of data) {
+        if (w.status && /inactive|offline|disabled/i.test(w.status)) { inactive++; continue; }
+        const lat = parseFloat(w.latitude), lng = parseFloat(w.longitude);
+        if (!isFinite(lat) || !isFinite(lng) || (lat === 0 && lng === 0)) { noCoords++; continue; }
+        const parks = w.relatedParks || [];
+        const states = [...new Set(parks.flatMap(pk => String(pk.states || '').split(',').map(x => x.trim().toUpperCase())).filter(Boolean))];
+        const img = (w.images || []).map(i => i && i.url).find(u => /^https?:\/\//.test(u || ''));
+        out.push({
+          id: 'nps-' + w.id, name: w.title || 'Park webcam', lat, lng,
+          imageUrl: img || null, videoUrl: null, direction: null, source: 'nps',
+          pageUrl: w.url || null, isStreaming: !!w.isStreaming,
+          statusMessage: (w.statusMessage || '').trim() || null,
+          parkName: parks[0] && parks[0].fullName, states,
+        });
+      }
+      if (!data.length) break;
+      start += data.length;
+    }
+    console.log(`[Cameras] NPS: ${out.length} usable (${noCoords} without coordinates, ${inactive} inactive)`);
+    _nps.list = out; _nps.ts = Date.now();
+    return out;
+  })().catch(e => { console.warn('[Cameras] NPS failed:', e.message); return _nps.list || []; })
+      .finally(() => { _nps.pending = null; });
+  return _nps.pending;
+}
+// Many NPS webcam entries have no image in the API — the live picture is only
+// on the camera's nps.gov page. Read that page (public government content)
+// once per 12 h and take either the embedded YouTube stream (plays inside our
+// popup) or the webcam image. Cameras where neither is found keep the link.
+const _npsPage = new Map();   // id -> { ts, imageUrl, playerUrl }
+async function _enrichNPS(cam) {
+  const hit = _npsPage.get(cam.id);
+  if (hit && Date.now() - hit.ts < 12 * 3600 * 1000) return hit;
+  const found = { ts: Date.now(), imageUrl: null, playerUrl: null };
+  try {
+    const u = new URL(cam.pageUrl);
+    if (!/(^|\.)nps\.gov$/i.test(u.hostname)) throw new Error('not nps.gov');
+    const html = await fetchTextOverHttp(cam.pageUrl);
+    const yt = html.match(/youtube(?:-nocookie)?\.com\/embed\/([A-Za-z0-9_-]{11})/) || html.match(/youtu\.be\/([A-Za-z0-9_-]{11})/)
+            || html.match(/youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})/);
+    if (yt) found.playerUrl = `https://www.youtube-nocookie.com/embed/${yt[1]}?autoplay=1&mute=1&playsinline=1`;
+    // NPS serves every park's live image from /webcams-{park}/… on nps.gov
+    // (e.g. /webcams-hale/HaleSummitCamCrater.jpg). The page inserts it with
+    // a script, so look for that address pattern anywhere in the page rather
+    // than in <img> tags (which only held a broken placeholder).
+    const m = html.match(/(?:https?:\/\/(?:www\.)?nps\.gov)?\/webcams-[a-z0-9]+\/[^"'\s<>\\)]+?\.(?:jpe?g|png|gif|webp)/i);
+    if (m) found.imageUrl = new URL(m[0], 'https://www.nps.gov').href;
+    else {
+      // Other hosts sometimes carry the image (e.g. a USGS camera shown on a park page)
+      const ext = html.match(/https:\/\/[a-z0-9.-]+\.(?:gov|edu)\/[^"'\s<>]*(?:webcam|cams?)\/[^"'\s<>]+?\.(?:jpe?g|png|gif)/i);
+      if (ext) found.imageUrl = ext[0];
+    }
+  } catch (e) { /* keep the link-only fallback */ }
+  _npsPage.set(cam.id, found);
+  return found;
+}
+async function _loadNPS(code) {
+  const all = await _loadNPSAll();
+  const list = all.filter(c => c.states.includes(code) || (!c.states.length && _inState(code, c.lat, c.lng)));
+  // Check EVERY camera's nps.gov page for its LIVE image or stream. The API's
+  // own "images" are often representative park photos, not the camera view,
+  // so they're only a last resort. 4 pages at a time within ~10 s; results are
+  // cached 12 h, so later visits are instant and fill in anything missed.
+  const need = list.filter(c => c.pageUrl && !c._checked);
+  const deadline = Date.now() + 10000;
+  for (let i = 0; i < need.length && Date.now() < deadline; i += 4) {
+    await Promise.all(need.slice(i, i + 4).map(async (c) => {
+      const f = await _enrichNPS(c);
+      c._checked = true;
+      if (f.playerUrl) { c.playerUrl = f.playerUrl; c.imageUrl = null; c.live = true; }
+      else if (f.imageUrl) { c.imageUrl = f.imageUrl; c.live = true; }
+      else if (c.imageUrl) { c.imageUrl = null; c.photoOnly = true; }   // only a park photo — not a live view
+    }));
+  }
+  const viewable = list.filter(c => c.live);
+  const pending = list.filter(c => !c._checked).length;
+  console.log(`[Cameras] NPS ${code}: ${viewable.length}/${list.length} have a live image or stream` +
+    (pending ? ` (${pending} still to check — shown on a later visit)` : '') +
+    `; ${list.filter(c => c._checked && !c.live).length} hidden (no live view on their NPS page)`);
+  // A dot you can't view is just frustrating — only show cameras with a live picture or stream
+  return viewable;
+}
+
+// ── USGS Hawaiian Volcano Observatory webcams (public domain, no key) ───────
+// Still images that refresh every few minutes. Checked on first use (and
+// every 6 h): only cameras that actually return an image are shown, and any
+// that don't are logged so the list can be updated.
+const USGS_HVO_CAMS = [
+  ['V1cam', 'Kīlauea — west Halemaʻumaʻu', 19.4085, -155.2890],
+  ['V2cam', 'Kīlauea — east Halemaʻumaʻu', 19.4105, -155.2740],
+  ['V3cam', 'Kīlauea — south Halemaʻumaʻu', 19.4000, -155.2820],
+  ['KWcam', 'Kīlauea caldera — west rim panorama', 19.4100, -155.2905],
+  ['F1cam', 'Kīlauea caldera — thermal (west rim)', 19.4098, -155.2908],
+  ['B1cam', 'Kīlauea caldera — down-dropped block', 19.4080, -155.2680],
+  ['K2cam', 'Kīlauea caldera from Uēkahuna bluff', 19.4205, -155.2880],
+  ['MKcam', 'Mauna Loa from Mauna Kea', 19.8230, -155.4700],
+  ['MSTcam', 'Mauna Loa summit — thermal (south rim)', 19.4600, -155.5950],
+  ['S1cam', 'Kīlauea upper Southwest Rift Zone', 19.3700, -155.3000],
+  ['S2cam', 'Halemaʻumaʻu from the south rim', 19.3950, -155.2830],
+  ['MITDcam', 'Kīlauea Southwest Rift Zone from the Kaʻū Desert', 19.3300, -155.3600],
+  ['B2cam', 'Halemaʻumaʻu from the east rim', 19.4070, -155.2670],
+  ['KOcam', 'Kīlauea upper East Rift Zone from Maunaulu', 19.3600, -155.2100],
+  ['MUcam', 'Maunaulu', 19.3630, -155.2150],
+  ['PWcam', 'Puʻuʻōʻō west flank', 19.3870, -155.1070],
+];
+const _usgs = { list: null, ts: 0, pending: null };
+async function _loadUSGS() {
+  if (_usgs.list && Date.now() - _usgs.ts < 6 * 3600 * 1000) return _usgs.list;
+  if (_usgs.pending) return _usgs.pending;
+  _usgs.pending = (async () => {
+    const checks = await Promise.all(USGS_HVO_CAMS.map(async ([id, name, lat, lng]) => {
+      const imageUrl = `https://volcanoes.usgs.gov/observatories/hvo/cams/${id}/images/M.jpg`;
+      try {
+        const r = await _fetchBinary(imageUrl, { maxBytes: 8 * 1024 * 1024, timeoutMs: 12000 });
+        if (r.status !== 200 || !/image/i.test(r.ct)) throw new Error(`HTTP ${r.status} ${r.ct}`);
+        // An image that hasn't changed in over a day isn't a live camera any more
+        const age = r.lastModified ? Date.now() - Date.parse(r.lastModified) : 0;
+        if (age > 24 * 3600 * 1000) throw new Error(`image not updated since ${r.lastModified}`);
+        return { id: 'usgs-' + id, name: `${name} (${id})`, lat, lng, imageUrl, videoUrl: null, direction: null,
+                 source: 'usgs', pageUrl: `https://www.usgs.gov/observatories/hvo/multimedia/webcams?cam=${id}`, state: 'HI' };
+      } catch (e) { console.warn(`[Cameras] USGS ${id} unavailable: ${e.message}`); return null; }
+    }));
+    const list = checks.filter(Boolean);
+    console.log(`[Cameras] USGS HVO: ${list.length}/${USGS_HVO_CAMS.length} webcams responding`);
+    _usgs.list = list; _usgs.ts = Date.now();
+    return list;
+  })().finally(() => { _usgs.pending = null; });
+  return _usgs.pending;
+}
+
+// ── Community Cams (community-cams.js) ──────────────────────────────────────
+function _stateForPoint(lat, lng) {
+  const inside = _stateOf(lat, lng);
+  if (inside) return inside;
+  // On the water / a beach: nearest state outline within ~8 miles
+  const near = Object.keys(_stateShapes).find(code => _inState(code, lat, lng, 8));
+  if (near) return near;
+  // Outside the US: a world region (order matters where boxes overlap)
+  if (lat >= 10 && lat <= 27.3 && lng >= -86 && lng <= -59.4) return 'CAR';   // Caribbean
+  if (lat >= 5 && lat <= 33 && lng >= -118 && lng <= -77) return 'MEX';       // Mexico & Central America
+  if (lat >= 41.6 && lat <= 84 && lng >= -141 && lng <= -52) return 'CAN';    // Canada
+  if (lat >= -56 && lat <= 13 && lng >= -82 && lng <= -34) return 'SAM';      // South America
+  if (lat >= 34 && lat <= 72 && lng >= -32 && lng <= 45) return 'EUR';        // Europe (incl. Iceland, Turkey)
+  if (lat >= -35 && lat <= 42 && lng >= -20 && lng <= 63) return 'MEA';       // Middle East & Africa
+  if (lat >= -11 && lat <= 78 && lng >= 45 && lng <= 180) return 'ASI';       // Asia
+  if ((lat >= -50 && lat <= 0 && lng >= 110) || (lat >= -30 && lat <= 30 && (lng >= 150 || lng <= -130))) return 'OCE';   // Oceania & Pacific
+  return 'WLD';                                                               // anywhere else
+}
+const community = require('./community-cams')(app, {
+  rGet, rSet, fetchTextOverHttp, youtubeKey: process.env.YOUTUBE_API_KEY, stateFor: _stateForPoint, upstreamCount,
+});
+
+// WeatherStar "Airport Conditions" data (airports.js): weather at the 3 nearest
+// airports, from one FAA Aviation Weather Center download every 10 minutes.
+require('./airports')(app, { rGet, rSet });
+
+// WeatherStar "Tides" and "Marine Forecast" data (marine.js): NOAA tide
+// predictions and NWS marine zone forecasts, cached per station/zone.
+require('./marine')(app);
+
+// Forecast panel "Records & Normals" (records.js): daily record highs/lows,
+// rain/snow records and 1991–2020 normals for every NWS long-record climate
+// site, pulled from ACIS on the server's own daily schedule and kept in Redis.
+require('./records')(app, { rGet, rSet });
+
+// Replaces the old bbox-based endpoint — state-level loading is far more
+// performant than loading thousands of cameras across the whole country
+// and filtering by viewport on every pan/zoom. Users select the state they
+// want to monitor (typically where a storm is active) and see only those
+// cameras, which loads fast and doesn't lock up the map.
+// Every camera for one US state (or world region), merged and de-duplicated.
+// Used by the map (below) and by the camera counter (/api/cameras/stats).
+const _r511CamStates = () => String(process.env.ROAD511_CAMERA_STATES || '').toUpperCase().split(/[\s,]+/).filter(Boolean);
+// Credit shown in the camera viewer: the state's own source name, as Road511's
+// data-sources list asks ("Data provided by …"), plus Road511
+const R511_CREDIT = { TX: 'TxDOT', NJ: 'NJDOT 511NJ', NM: 'NMDOT NMRoads', MS: 'MDOT', SC: 'SCDOT', WY: 'WYDOT', MT: 'MDT', HI: 'HDOT', RI: 'RIDOT', TN: 'TDOT', CT: 'CTDOT', MA: 'MassDOT', KS: 'KDOT', MN: 'MnDOT', SD: 'SDDOT' };
+const _r511Dots = new Map();
+function _r511Dot(code) {
+  if (!_r511Dots.has(code)) _r511Dots.set(code, {
+    id: 'r511-' + code.toLowerCase(), label: `${code} cameras via Road511`, cacheTTL: 6 * 3600 * 1000,
+    load: async () => (await winter.road511Cameras(code)).map(c => ({ ...c, provider: R511_CREDIT[code] ? `${R511_CREDIT[code]} via Road511` : 'Road511' })),
+  });
+  return _r511Dots.get(code);
+}
+async function _camerasFor(code) {
+  const REGION = CAMERA_REGIONS.has(code);   // world regions — Community Cams only
+  // Find the STATE_DOTS entry for this state, if we have one
+  const dot = STATE_DOTS.find(d => d.id.toUpperCase() === code);
+  // DC has no camera feed of its own: borrow the neighbours' DOT and open-feed
+  // cameras that sit in DC or within a few miles of it (Arlington, Alexandria…).
+  const NEAR = { DC: ['va', 'md'] }[code];
+  const dots = NEAR ? STATE_DOTS.filter(d => NEAR.includes(d.id)) : (dot ? [dot] : []);
+  const edgeMi = NEAR ? 3 : 25;
+  // Road511 for states with no feed of their own (ROAD511_CAMERA_STATES, e.g.
+  // "LA,TX"). Louisiana has its own entry above; the rest get one made here.
+  if (!NEAR && code !== 'LA' && _r511CamStates().includes(code)) dots.push(_r511Dot(code));
+
+  const [otcAll, stateDOTraw, windyCams, npsCams, usgsCams, communityCams, calOesCams] = await Promise.all([
+    _loadOTC().catch(() => []),
+    Promise.all(dots.map(d => _loadStateDOT(d).catch(() => []))).then(a => a.flat()),
+    REGION ? Promise.resolve([]) : _loadWindy(code).catch(() => []),   // too large to grid-search
+    REGION ? Promise.resolve([]) : _loadNPS(code).catch(() => []),
+    code === 'HI' ? _loadUSGS().catch(() => []) : Promise.resolve([]),
+    community.forState(code).catch(() => []),
+    REGION ? Promise.resolve([]) : _loadCalOES().then(l => l.filter(c => _inState(code, c.lat, c.lng, 2))).catch(() => []),
+  ]);
+
+  // Drop cameras with impossible coordinates (0,0, swapped lat/lng…). One bad
+  // Georgia camera made the map zoom out to the whole world. DOT cameras may
+  // sit just over a border, so they get ~25 miles of slack.
+  const stateDOT = [...stateDOTraw, ...(code === 'PA' ? _loadPennDOT() : [])]
+    .filter(c => _inState(code, c.lat, c.lng, edgeMi, true));
+  if (stateDOTraw.length && stateDOT.length < stateDOTraw.length) {
+    console.log(`[Cameras] ${code}: dropped ${stateDOTraw.length - stateDOT.length} DOT cameras with coordinates outside the state`);
+  }
+
+  // Filter OTC to this state
+  const otcForState = otcAll.filter(c => c.state === code ||
+    (NEAR && NEAR.includes(String(c.state || '').toLowerCase()) && _inState(code, c.lat, c.lng, edgeMi, true)));
+
+  // Merge priority: STATE_DOTS (traffic) → OTC → Windy (scenic/weather).
+  // Deduplicate at 100m so we don't show two cameras from different sources
+  // that are essentially at the same location.
+  const merged = [...stateDOT];
+  for (const cam of [...communityCams, ...usgsCams, ...calOesCams, ...npsCams, ...otcForState, ...windyCams]) {
+    const tooClose = merged.some(r => _haversineM(cam.lat, cam.lng, r.lat, r.lng) < 100);
+    if (!tooClose) merged.push(cam);
+  }
+
+  const sourceCounts = {};
+  merged.forEach(c => { sourceCounts[c.source] = (sourceCounts[c.source] || 0) + 1; });
+  return { cameras: merged, sources: sourceCounts };
+}
+
+// ── Fronts with "pips" on the right side (/api/fronts) ──────────────────────
+// WPC's map data says what each front is, not which way it moves. A cold front
+// moves toward the warmer air and a warm front into the colder air, so we read
+// the current temperature a little way off each side of every front (one
+// Open-Meteo call) and send which side is warmer. "left" means left of the line
+// as drawn (from its first point to its last).
+const WPC_CHART_URL = 'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/natl_fcst_wx_chart/MapServer/';
+let _fronts = null, _frontsBusy = null;
+async function _frontsWithSides() {
+  if (_fronts && Date.now() - _fronts.ts < 60 * 60 * 1000) return _fronts.data;
+  if (_frontsBusy) return _frontsBusy;
+  _frontsBusy = (async () => {
+    const q = (id) => _camJson(WPC_CHART_URL + id + '/query?where=1%3D1&outFields=feat,idp_filedate&returnGeometry=true&f=geojson', {}, 20000);
+    const [fr, hl] = await Promise.all([q(2), q(1)]);
+    const lines = [];
+    (fr.features || []).forEach(f => {
+      const g = f.geometry || {}; const parts = g.type === 'MultiLineString' ? g.coordinates : g.type === 'LineString' ? [g.coordinates] : [];
+      parts.forEach(c => { if (c.length >= 2) lines.push({ feat: f.properties.feat, coords: c.map(([x, y]) => [+x.toFixed(3), +y.toFixed(3)]) }); });
+    });
+    // Sample points: 3 along each line, ~1.5° off each side
+    const samples = [];
+    lines.forEach((ln, i) => {
+      const c = ln.coords;
+      [0.25, 0.5, 0.75].forEach(frac => {
+        const k = Math.min(c.length - 2, Math.max(0, Math.floor(frac * (c.length - 1))));
+        const [x1, y1] = c[k], [x2, y2] = c[k + 1];
+        const cos = Math.cos(((y1 + y2) / 2) * Math.PI / 180);
+        const e = (x2 - x1) * cos, n = y2 - y1, len = Math.hypot(e, n) || 1;
+        const le = -n / len, ln_ = e / len;                    // left normal (east, north)
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, d = 1.5;
+        samples.push({ i, side: 'L', lat: my + ln_ * d, lon: mx + le * d / cos });
+        samples.push({ i, side: 'R', lat: my - ln_ * d, lon: mx - le * d / cos });
+      });
+    });
+    const temps = new Array(samples.length).fill(null);
+    for (let s0 = 0; s0 < samples.length; s0 += 150) {
+      const ch = samples.slice(s0, s0 + 150);
+      try {
+        const j = await _camJson('https://api.open-meteo.com/v1/gfs?latitude=' + ch.map(p => p.lat.toFixed(2)).join(',') + '&longitude=' + ch.map(p => p.lon.toFixed(2)).join(',')
+          + '&current=temperature_2m&timezone=GMT', {}, 20000);
+        (Array.isArray(j) ? j : [j]).forEach((r, k) => { const t = r && r.current && r.current.temperature_2m; if (Number.isFinite(t)) temps[s0 + k] = t; });
+      } catch (_) {}
+    }
+    lines.forEach((ln, i) => {
+      let l = 0, r = 0, nl = 0, nr = 0;
+      samples.forEach((p, k) => { if (p.i !== i || temps[k] == null) return; if (p.side === 'L') { l += temps[k]; nl++; } else { r += temps[k]; nr++; } });
+      if (nl && nr && Math.abs(l / nl - r / nr) >= 0.3) ln.warmSide = (l / nl > r / nr) ? 'left' : 'right';
+      else {                                                    // no clear difference: the warm side is usually the south
+        const c = ln.coords, e = c[c.length - 1][0] - c[0][0];
+        ln.warmSide = e >= 0 ? 'right' : 'left';
+      }
+    });
+    const data = { at: new Date().toISOString(), lines,
+      centers: (hl.features || []).map(f => ({ type: /high/i.test(f.properties.feat) ? 'H' : 'L', lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] })) };
+    _fronts = { ts: Date.now(), data };
+    return data;
+  })().finally(() => { _frontsBusy = null; });
+  return _frontsBusy;
+}
+app.get('/api/fronts', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=600'); res.json(await _frontsWithSides()); }
+  catch (e) { if (_fronts) return res.json(_fronts.data); res.status(502).json({ error: 'Fronts unavailable' }); }
+});
+
+// ── Jet stream: 250 mb winds on a 4° grid over North America (Open-Meteo GFS) ──
+// ~312 points in 3 requests, refreshed every 3 hours and shared by everyone.
+let _jet = null, _jetBusy = null;
+async function _jetStream() {
+  if (_jet && Date.now() - _jet.ts < 3 * 3600 * 1000) return _jet.data;
+  if (_jetBusy) return _jetBusy;
+  _jetBusy = (async () => {
+    const pts = [];
+    for (let la = 20; la <= 64; la += 4) for (let lo = -150; lo <= -50; lo += 4) pts.push([la, lo]);
+    const out = [];
+    for (let i = 0; i < pts.length; i += 104) {
+      const chunk = pts.slice(i, i + 104);
+      const url = 'https://api.open-meteo.com/v1/gfs?latitude=' + chunk.map(p => p[0]).join(',') + '&longitude=' + chunk.map(p => p[1]).join(',')
+        + '&hourly=wind_speed_250hPa,wind_direction_250hPa&wind_speed_unit=kn&forecast_hours=1&timezone=GMT';
+      const j = await _camJson(url, {}, 30000);
+      (Array.isArray(j) ? j : [j]).forEach((r, k) => {
+        const h = r && r.hourly; if (!h) return;
+        const sp = h.wind_speed_250hPa && h.wind_speed_250hPa[0], dir = h.wind_direction_250hPa && h.wind_direction_250hPa[0];
+        if (Number.isFinite(sp) && Number.isFinite(dir)) out.push([chunk[k][0], chunk[k][1], Math.round(sp), Math.round(dir)]);
+      });
+    }
+    const data = { at: new Date().toISOString(), step: 4, level: '250 mb (~34,000 ft)', points: out };
+    if (out.length > 50) _jet = { ts: Date.now(), data };
+    return data;
+  })().finally(() => { _jetBusy = null; });
+  return _jetBusy;
+}
+app.get('/api/jetstream', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=900'); res.json(await _jetStream()); }
+  catch (e) { if (_jet) return res.json(_jet.data); res.status(502).json({ error: 'Jet stream data unavailable' }); }
+});
+
+// ── El Niño / La Niña: NOAA CPC's ENSO Alert System status (updated monthly) ──
+let _enso = null;
+app.get('/api/enso', async (req, res) => {
+  try {
+    if (!_enso || Date.now() - _enso.ts > 12 * 3600 * 1000) {
+      const html = await fetchTextOverHttp('https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml');
+      const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&ntilde;/g, 'ñ').replace(/&Ntilde;/g, 'Ñ')
+        .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+      const status = (text.match(/ENSO Alert System Status:\s*([A-Za-zñÑ\- ]+?(?:Advisory|Watch|Not Active|Final [A-Za-zñÑ ]+?Advisory))/i) || [])[1];
+      const synopsis = (text.match(/Synopsis:\s*(.+?\.)(?:\s|$)/) || [])[1];
+      const issued = (text.match(/issued by\s+CLIMATE PREDICTION CENTER.*?(\d{1,2}\s+[A-Z][a-z]+\s+\d{4})/i) || text.match(/(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})/) || [])[1];
+      if (!status) throw new Error('status not found');
+      const phase = /ni(ñ|n)a/i.test(status) ? 'la-nina' : /ni(ñ|n)o/i.test(status) ? 'el-nino' : 'neutral';
+      _enso = { ts: Date.now(), data: { status: status.trim(), phase, synopsis: synopsis || null, issued: issued || null,
+        source: 'NOAA Climate Prediction Center', url: 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml' } };
+    }
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json(_enso.data);
+  } catch (e) {
+    if (_enso) return res.json(_enso.data);
+    res.status(502).json({ error: 'ENSO status unavailable' });
+  }
+});
+
+// Sky cams (aurora, meteors, night sky) from the community list, shown with the
+// Aurora Forecast layer. Under /api/cameras so their hosts are learned for the proxies.
+// Plus cameras added by hand on the admin page (any Windy webcam, by its link),
+// minus any hidden there (e.g. a tower "SkyCam" that isn't aimed at the sky).
+const SKY_KEY = 'wt:skycams';
+let _skyExtra = null;                  // { add: [{ windyId, state, name }], hide: [cameraId] }
+async function _skyLoad() {
+  if (_skyExtra) return _skyExtra;
+  let v = null; try { v = await rGet(SKY_KEY); } catch (_) {}
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (_) { v = null; } }
+  _skyExtra = { add: (v && Array.isArray(v.add)) ? v.add : [], hide: (v && Array.isArray(v.hide)) ? v.hide : [] };
+  return _skyExtra;
+}
+async function _skyCams({ withHidden = false } = {}) {
+  const x = await _skyLoad(), hide = new Set(x.hide);
+  const out = (await community.skyCams()).map(c => ({ ...c, skyAuto: true }));
+  for (const a of x.add) {
+    try {
+      const c = (await _loadWindy(a.state)).find(w => String(w.windyId) === String(a.windyId));
+      out.push(c ? { ...c, skyAdded: true } : { id: 'windy-' + a.windyId, name: a.name, skyAdded: true, missing: true });
+    } catch (_) {}
+  }
+  return out.filter(c => withHidden || (!hide.has(c.id) && !c.missing)).map(c => withHidden ? { ...c, hidden: hide.has(c.id) } : c);
+}
+app.get('/api/cameras/sky', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=120'); res.json({ cameras: await _skyCams() }); }
+  catch (e) { res.status(500).json({ error: 'Sky cams unavailable' }); }
+});
+app.post('/api/admin/sky-cams/channel-remove', async (req, res) => {
+  try { await community.unmarkSkyChannel(String((req.body || {}).channelId || '')); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/admin/sky-cams', async (req, res) => {
+  try { res.json({ channels: await community.skyChannels(), cameras: (await _skyCams({ withHidden: true })).map(c => ({ id: c.id, name: c.name, source: c.source || null,
+    auto: !!c.skyAuto, added: !!c.skyAdded, hidden: !!c.hidden, missing: !!c.missing, lat: c.lat, lng: c.lng })) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Add a Windy webcam by its link (windy.com/webcams/<id>) or id
+app.post('/api/admin/sky-cams/add', async (req, res) => {
+  try {
+    let raw = String((req.body || {}).url || '').trim();
+    // YouTube: a channel (all its cams, now and later) or one community cam's stream
+    if (/^@[\w.-]+$/.test(raw)) raw = 'https://www.youtube.com/' + raw;
+    if (/(?:^|\/\/)(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(raw)) {
+      const r = await community.markSky(raw, true);
+      if (r.kind === 'channel') {
+        const x = await _skyLoad();
+        const before = x.hide.length;                              // shown again if it was hidden
+        return res.json({ ok: true, name: `${r.title} (channel): ${r.camsNow} cam${r.camsNow === 1 ? '' : 's'} on the map now` + (r.watched ? ', new streams join automatically once approved' : '. Add the channel to the watch list in the Webcams Control Panel so its new streams get found') });
+      }
+      return res.json({ ok: true, name: r.name });
+    }
+    const m = raw.match(/webcams\/(?:[a-z-]+\/)*?(\d{6,})/i) || raw.match(/^(?:windy-)?(\d{6,})$/);
+    if (!m) throw new Error('Paste a "View on Windy.com" link, or a YouTube channel (@handle) or stream link');
+    const id = m[1];
+    let found = null;
+    for (const [st, e] of _windyCache) { const c = (e && e.cameras || []).find(w => String(w.windyId) === id); if (c) { found = { ...c, state: c.state || st }; break; } }
+    if (!found) throw new Error('That webcam isn\'t loaded yet: open its state\'s cameras on the map, then try again');
+    const x = await _skyLoad();
+    x.hide = x.hide.filter(h => h !== 'windy-' + id);
+    if (!x.add.some(a => String(a.windyId) === id)) x.add.push({ windyId: id, state: found.state, name: found.name });
+    await rSet(SKY_KEY, x);
+    res.json({ ok: true, name: found.name });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// Hand-added: removed from the list. Picked by name: hidden (and shown again with show:true)
+app.post('/api/admin/sky-cams/remove', async (req, res) => {
+  try {
+    const id = String((req.body || {}).id || ''), show = !!(req.body || {}).show;
+    const x = await _skyLoad();
+    const n = x.add.length;
+    if (!show) x.add = x.add.filter(a => 'windy-' + a.windyId !== id);
+    if (show) x.hide = x.hide.filter(h => h !== id);
+    else if (x.add.length === n && !x.hide.includes(id)) x.hide.push(id);
+    await rSet(SKY_KEY, x);
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/cameras/state/:code', async (req, res) => {
+  const code = req.params.code.toUpperCase().replace(/[^A-Z]/g, '');
+  const REGION = CAMERA_REGIONS.has(code);
+  if (code.length !== 2 && !REGION) return res.status(400).json({ error: 'Invalid state code' });
+
+  try {
+    const { cameras: merged, sources: sourceCounts } = await _camerasFor(code);
+
+    if (merged.length === 0) {
+      return res.json({ cameras: [], total: 0, covered: false,
+        message: `No camera feeds available for ${code} yet.` });
+    }
+
+    res.set('Cache-Control', 'no-store');
+    const bb = STATE_BBOX[code];
+    res.json({ cameras: merged, total: merged.length, covered: true, sources: sourceCounts,
+               bounds: bb ? [[bb[2], bb[1]], [bb[0], bb[3]]] : null });
+  } catch (e) {
+    console.error(`[Cameras] State ${code} failed:`, e.message);
+    res.status(500).json({ error: 'Camera data unavailable' });
+  }
+});
+
+// ── Camera counter ───────────────────────────────────────────────────────────
+// GET /api/cameras/stats — how many live cameras the map can show, by US state
+// and world region, by source, and in total (each camera counted once, even if
+// it sits on a border and shows up for two states). Counted in the background
+// a few minutes after start-up and then every 12 hours, one area at a time so
+// the camera feeds aren't hammered. Public: for the site ("30,000+ live
+// cameras") and for spotting states that need more cameras.
+const CAMERA_REGION_NAMES = { CAN: 'Canada', MEX: 'Mexico & Central America', CAR: 'Caribbean', SAM: 'South America',
+  EUR: 'Europe', MEA: 'Middle East & Africa', ASI: 'Asia', OCE: 'Oceania' };
+const CAMERA_SOURCE_NAMES = { dot: 'State DOT', otc: 'Open traffic feeds', windy: 'Windy webcams', nps: 'National Parks',
+  usgs: 'USGS volcano cams', community: 'Community cams', caloes: 'ALERTCalifornia', road511: 'Road511' };
+const _stateNameByCode = Object.fromEntries(Object.entries(OTC_STATE_CODES).map(([n, c]) => [c, n]));
+let _camStats = null, _camStatsRunning = false, _camProgress = null;
+async function _countCameras() {
+  if (_camStatsRunning) return;
+  _camStatsRunning = true;
+  const t0 = Date.now();
+  try {
+    const states = Object.keys(STATE_BBOX).filter(c => c.length === 2).sort();
+    const seen = new Set(), bySource = {};
+    const key = (c) => c.id ? String(c.id) : `${(+c.lat).toFixed(4)},${(+c.lng).toFixed(4)}`;
+    const count = async (code) => {
+      let r = { cameras: [], sources: {} };
+      try { r = await _camerasFor(code); } catch (e) { console.warn(`[CamStats] ${code}:`, e.message); }
+      // State traffic-camera feeds are labelled with the state's own code ("wi",
+      // "fl"…): count them all as "dot" (State DOT) so they add up across states.
+      const src = {};
+      Object.entries(r.sources || {}).forEach(([k, n]) => { const key = /^[a-z]{2}$/.test(k) ? 'dot' : k; src[key] = (src[key] || 0) + n; });
+      r = { ...r, sources: src };
+      let unique = 0;
+      r.cameras.forEach(c => { const k = key(c); if (!seen.has(k)) { seen.add(k); unique++; } });
+      Object.entries(r.sources).forEach(([s, n]) => { bySource[s] = (bySource[s] || 0) + n; });
+      if (_camProgress) _camProgress.done++;
+      await new Promise(ok => setTimeout(ok, 1500));                   // gentle on the feeds
+      return { total: r.cameras.length, unique, sources: r.sources };
+    };
+    const us = [], world = [];
+    _camProgress = { done: 0, total: states.length + Object.keys(CAMERA_REGION_NAMES).length, startedAt: new Date().toISOString() };
+    for (const code of states) { const r = await count(code); us.push({ code, name: _stateNameByCode[code] || code, total: r.total, sources: r.sources }); r.unique && (us.uniq = (us.uniq || 0) + r.unique); }
+    for (const code of Object.keys(CAMERA_REGION_NAMES)) { const r = await count(code); world.push({ code, name: CAMERA_REGION_NAMES[code], total: r.total, sources: r.sources }); r.unique && (world.uniq = (world.uniq || 0) + r.unique); }
+    us.sort((a, b) => b.total - a.total); world.sort((a, b) => b.total - a.total);
+    _camStats = {
+      total: seen.size,
+      us: { total: us.uniq || 0, states: us.map(({ code, name, total, sources }) => ({ code, name, total, sources })) },
+      world: { total: world.uniq || 0, regions: world },
+      bySource: Object.fromEntries(Object.entries(bySource).sort((a, b) => b[1] - a[1])),
+      sourceNames: CAMERA_SOURCE_NAMES,
+      // Weak spots: the states with the fewest cameras, and states with no state-DOT feed
+      fewest: us.filter(s => s.total > 0).slice(-10).reverse().map(s => ({ code: s.code, name: s.name, total: s.total })),
+      none: us.filter(s => !s.total).map(s => s.code),
+      noDotFeed: us.filter(s => !s.sources.dot && !s.sources.otc && !s.sources.road511).map(s => s.code),
+      updatedAt: new Date().toISOString(),
+      tookSeconds: Math.round((Date.now() - t0) / 1000),
+    };
+    rSet('wt:camstats', _camStats);                                   // shown straight away after a restart
+    console.log(`[CamStats] ${_camStats.total} cameras (${_camStats.us.total} US, ${_camStats.world.total} elsewhere) in ${_camStats.tookSeconds}s`);
+  } catch (e) {
+    console.error('[CamStats] count failed:', e.message);
+  } finally {
+    _camStatsRunning = false;
+    _camProgress = null;
+  }
+}
+// After a restart: show the last saved count right away, then count again a minute later
+(async () => { try { const saved = await rGet('wt:camstats'); if (saved && !_camStats) _camStats = typeof saved === 'string' ? JSON.parse(saved) : saved; } catch (_) {} })();
+setTimeout(_countCameras, 60 * 1000);
+setInterval(_countCameras, 12 * 60 * 60 * 1000);
+// Admin: count again now (POST), or check whether a count is running (GET)
+app.post('/api/admin/cameras/recount', (req, res) => {
+  if (!_camStatsRunning) _countCameras();
+  res.json({ running: true });
+});
+app.get('/api/admin/cameras/recount', (req, res) => res.json({ running: _camStatsRunning, progress: _camProgress, updatedAt: _camStats && _camStats.updatedAt }));
+app.get('/api/cameras/stats', (req, res) => {
+  const origin = req.get('Origin') || '';
+  if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin); res.set('Vary', 'Origin');
+  }
+  if (!_camStats) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(202).json({ pending: true, progress: _camProgress, message: 'Counting cameras — try again in a few minutes.' });
+  }
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(_camProgress ? { ..._camStats, recounting: _camProgress } : _camStats);
+});
+
+// GET /api/aqi?lat=&lng=
+// Server-side proxy for AirNow API — keeps AIRNOW_KEY out of client JS.
+// Returns current AQI observations within 250 miles of the given lat/lng.
+// Cached 30 minutes (AirNow data updates hourly; 30min balances freshness
+// vs quota). Set AIRNOW_KEY in Railway environment variables.
+const _aqiCache = new Map();
+const AQI_TTL = 30 * 60 * 1000;
+
+app.get('/api/aqi', async (req, res) => {
+  const key = process.env.AIRNOW_KEY;
+  if (!key) return res.status(503).json({ error: 'AirNow API key not configured' });
+
+  // Accept bounding box (preferred — covers the visible map area) or lat/lng fallback
+  const hasBbox = req.query.south && req.query.west && req.query.north && req.query.east;
+  const south = parseFloat(req.query.south), west  = parseFloat(req.query.west);
+  const north = parseFloat(req.query.north), east  = parseFloat(req.query.east);
+  const lat   = parseFloat(req.query.lat),   lng   = parseFloat(req.query.lng);
+
+  if (hasBbox && [south,west,north,east].some(isNaN)) return res.status(400).json({ error: 'invalid bbox' });
+  if (!hasBbox && (isNaN(lat) || isNaN(lng))) return res.status(400).json({ error: 'lat/lng or bbox required' });
+
+  const cacheKey = hasBbox
+    ? `bbox:${south.toFixed(1)},${west.toFixed(1)},${north.toFixed(1)},${east.toFixed(1)}`
+    : `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  const cached = _aqiCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < AQI_TTL) {
+    res.set('Cache-Control', 'public, max-age=1800');
+    return res.json(cached.data);
+  }
+
+  try {
+    // Bounding box endpoint returns all stations within the viewport — much better for national view
+    const url = hasBbox
+      ? `https://www.airnowapi.org/aq/data/?parameters=PM25,OZONE&BBOX=${west.toFixed(4)},${south.toFixed(4)},${east.toFixed(4)},${north.toFixed(4)}&dataType=A&format=application/json&verbose=1&monitorType=0&includerawconcentrations=0&API_KEY=${key}`
+      : `https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json&latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&distance=250&API_KEY=${key}`;
+    const response = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' } });
+    if (!response.ok) throw new Error(`AirNow returned ${response.status}`);
+    const data = await response.json();
+    _aqiCache.set(cacheKey, { data, ts: Date.now() });
+    if (_aqiCache.size > 50) {
+      const oldest = [..._aqiCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) _aqiCache.delete(oldest[0]);
+    }
+    res.set('Cache-Control', 'public, max-age=1800');
+    res.json(data);
+  } catch(e) {
+    console.error('[AQI] Proxy error:', e.message);
+    res.status(502).json({ error: 'AirNow unavailable', detail: e.message });
+  }
+});
+
+// ── Geographic name restoration ──────────────────────────────────────────────
+// Federal renaming mandates don't belong in weather safety information.
+// Restores traditional geographic names in all NWS text before it reaches
+// users. When federal systems revert, these replacements become no-ops.
+function restoreGeographicNames(text) {
+  if (!text || typeof text !== 'string') return text;
+  return text
+    .replace(/Gulf of America/gi,     'Gulf of Mexico')
+    .replace(/America's Gulf/gi,     'Gulf of Mexico')
+    .replace(/the Gulf of America/gi, 'the Gulf of Mexico')
+    .replace(/Lake America/gi,        'Lake Ontario')
+    .replace(/Mount McKinley/gi,      'Denali'); // restore if reverted
+}
+
+// GET /api/forecast?lat=&lon= (or ?zip=)
+// Merges Open-Meteo (current + 168h hourly + 7-day daily) + NWS narrative.
+//
+// SCALE DESIGN (Sep 2026): Open-Meteo's free tier is ~10,000 calls/day,
+// non-commercial. Upstream calls must scale with PLACES, not USERS:
+//   - Coordinates snap to a shared grid cell (default 0.05° ≈ 5 km; set
+//     FORECAST_GRID_DEG to tune). Everyone in the same cell shares ONE cached
+//     forecast — Open-Meteo's models are 3–13 km anyway, so neighbors within
+//     a cell would get near-identical data. Old key was 0.001° (~110 m), which
+//     made nearly every user a cache miss.
+//   - 15-min TTL (Open-Meteo's own "current" data refreshes every 15 min, so
+//     users see no staler data than before).
+//   - Single-flight: 50 simultaneous misses for one cell = 1 upstream call.
+//   - LRU cache of 1,000 cells (was 30) with O(1) eviction.
+//   - Stale-if-error: if Open-Meteo fails or rate-limits us, serve the last
+//     good forecast for that cell (up to 3h old) instead of an error.
+//   - Zip→coords cached 30 days; NWS /points lookup cached 24h (the forecast
+//     office/grid for a location never changes), halving NWS calls per miss.
+//   - Daily upstream call counters at GET /api/admin/upstream-usage.
+const gazetteer = require('./gazetteer');
+setTimeout(() => gazetteer.loadZips(), 15 * 1000).unref?.();   // warm the US ZIP list after startup
+const _forecastCache = new Map();          // cellKey -> { data, ts }   (insertion order = LRU)
+const _forecastInflight = new Map();       // cellKey -> Promise
+const FORECAST_TTL = 15 * 60 * 1000;
+const FORECAST_STALE_MAX = 3 * 60 * 60 * 1000;
+const FORECAST_MAX = 1000;
+const FORECAST_GRID = Number(process.env.FORECAST_GRID_DEG) || 0.05;
+const _geoCache = new Map();               // zip/query -> { lat, lon, name, ts }
+const GEO_TTL = 30 * 24 * 60 * 60 * 1000;
+const _nwsPointsCache = new Map();         // cellKey -> { forecastUrl, ts }
+const NWS_POINTS_TTL = 24 * 60 * 60 * 1000;
+
+// ── Upstream usage counters (reset daily, UTC) ──
+const _upstream = { day: null };
+function upstreamCount(name, n = 1) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_upstream.day !== today) { for (const k of Object.keys(_upstream)) delete _upstream[k]; _upstream.day = today; }
+  _upstream[name] = (_upstream[name] || 0) + n;
+}
+
+function _lruSet(map, key, value, max) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value);
+}
+
+function _snap(v) { return Math.round(v / FORECAST_GRID) * FORECAST_GRID; }
+
+// ── NWS gridpoint → compact hourly precipitation detail ──
+// The raw grid stores each element as runs: "2026-10-13T00:00:00+00:00/PT6H".
+// We expand the next 7 days to one value per hour (UTC hours from `start`).
+// Amounts (mm over the run) are spread evenly across its hours and converted
+// to inches. Weather entries keep NWS's own words: coverage (slight_chance,
+// chance, likely, definite — or isolated, scattered, numerous, widespread),
+// type (rain_showers, thunderstorms, snow…) and intensity (light…heavy).
+// Every upstream call in the forecast path gets a hard time limit, so one slow
+// provider (the NWS grid endpoint is often slow) can never hang the request.
+function _withTimeout(p, ms, label) {
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${label || 'upstream'} timed out after ${ms}ms`)), ms); })])
+    .finally(() => clearTimeout(t));
+}
+function _isoDurHours(d) {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(d || '');
+  if (!m) return 1;
+  return Math.max(1, (+m[1] || 0) * 24 + (+m[2] || 0) + Math.round((+m[3] || 0) / 60));
+}
+function _gridHourly(g, opts = {}) {
+  const hours = 168;
+  if (!g || !g.probabilityOfPrecipitation) return null;
+  const start = Math.floor(Date.now() / 3600000) * 3600000;
+  const blank = () => new Array(hours).fill(null);
+  const out = { start, hours, pop: blank(), qpf: blank(), snow: blank(), ice: blank(), thunder: blank(), sky: blank(), wx: blank() };
+  const toIn = (v, uom) => (uom && /mm$/.test(uom)) ? v / 25.4 : (uom && /cm$/.test(uom)) ? v / 2.54 : v;
+  function each(el, fn) {
+    for (const r of (el?.values || [])) {
+      const [t0, dur] = String(r.validTime || '').split('/');
+      const t = Date.parse(t0); if (isNaN(t)) continue;
+      const n = _isoDurHours(dur);
+      for (let k = 0; k < n; k++) {
+        const i = Math.round((t + k * 3600000 - start) / 3600000);
+        if (i >= 0 && i < hours) fn(i, r.value, n);
+      }
+    }
+  }
+  const round = (v, d) => v == null ? null : Math.round(v * d) / d;
+  each(g.probabilityOfPrecipitation, (i, v) => { out.pop[i] = v == null ? null : Math.round(v); });
+  each(g.probabilityOfThunder,       (i, v) => { out.thunder[i] = v == null ? null : Math.round(v); });
+  each(g.skyCover,                   (i, v) => { out.sky[i] = v == null ? null : Math.round(v); });
+  each(g.quantitativePrecipitation,  (i, v, n) => { out.qpf[i]  = v == null ? null : round(toIn(v, g.quantitativePrecipitation.uom) / n, 1000); });
+  each(g.snowfallAmount,             (i, v, n) => { out.snow[i] = v == null ? null : round(toIn(v, g.snowfallAmount.uom) / n, 100); });
+  each(g.iceAccumulation,            (i, v, n) => { out.ice[i]  = v == null ? null : round(toIn(v, g.iceAccumulation.uom) / n, 1000); });
+  if (opts.full) {
+    const F = (v, uom) => v == null ? null : /degF/.test(uom || '') ? v : Math.round((v * 9 / 5 + 32) * 10) / 10;
+    const MPH = (v, uom) => v == null ? null : /m_s-1/.test(uom || '') ? Math.round(v * 2.23694 * 10) / 10 : /mi_h|mph/.test(uom || '') ? v : Math.round(v / 1.609344 * 10) / 10;
+    for (const [k, src, fn] of [['temp', 'temperature', F], ['app', 'apparentTemperature', F], ['dew', 'dewpoint', F],
+        ['rh', 'relativeHumidity', v => v], ['wind', 'windSpeed', MPH], ['gust', 'windGust', MPH],
+        ['wdir', 'windDirection', v => v], ['vis', 'visibility', v => v]]) {
+      out[k] = blank();
+      each(g[src], (i, v) => { out[k][i] = v == null ? null : fn(v, g[src].uom); });
+    }
+  }
+  each(g.weather, (i, v) => {
+    const list = (Array.isArray(v) ? v : []).filter(x => x && x.weather)
+      .slice(0, 3).map(x => [x.coverage || null, x.weather, x.intensity || null]);
+    out.wx[i] = list.length ? list : null;
+  });
+  return out;
+}
+
+function _gridClient(G) {
+  if (!G) return null;
+  const { start, hours, pop, qpf, snow, ice, thunder, sky, wx } = G;
+  return { start, hours, pop, qpf, snow, ice, thunder, sky, wx };
+}
+
+// ── Open-Meteo quota guard ──
+// Open-Meteo's free tier limits calls per IP address, and Railway shares its
+// outgoing IPs between many customers, so "our" quota can run out early.
+// When Open-Meteo says the limit is hit, stop calling it until the limit
+// resets (UTC midnight for the daily limit, one hour for the hourly one).
+let _omBlockedUntil = 0;
+function _omBlocked() { return Date.now() < _omBlockedUntil; }
+function _omNoteError(reason) {
+  const r = String(reason || '');
+  if (!/limit/i.test(r)) return;
+  const d = new Date();
+  _omBlockedUntil = /hour/i.test(r) && !/daily/i.test(r)
+    ? Date.now() + 60 * 60 * 1000
+    : Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 60 * 1000;
+  upstreamCount('openMeteoQuotaHit');
+  console.warn(`[Forecast] Open-Meteo limit reached — pausing Open-Meteo until ${new Date(_omBlockedUntil).toISOString()}: ${r}`);
+}
+async function _omGet(url, label) {
+  if (_omBlocked()) throw new Error('Open-Meteo paused (limit reached)');
+  upstreamCount(label);
+  const j = JSON.parse(await _withTimeout(fetchTextOverHttp(url), 15000, 'Open-Meteo'));
+  if (j.error) { _omNoteError(j.reason || j.error); throw new Error(`Open-Meteo: ${j.reason || j.error}`); }
+  return j;
+}
+
+// ── Sunrise / sunset (NOAA sunrise equation) — no API needed ──
+function _sunTimes(lat, lon, y, m, d) {
+  const rad = Math.PI / 180;
+  const jd = Date.UTC(y, m - 1, d, 0) / 86400000 + 2440587.5;   // 00:00 UTC of the date
+  const n = Math.ceil(jd - 2451545.0 + 0.0008);
+  const Js = n - lon / 360;
+  const M = (357.5291 + 0.98560028 * Js) % 360;
+  const C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+  const L = (M + C + 180 + 102.9372) % 360;
+  const Jt = 2451545.0 + Js + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * L * rad);
+  const dec = Math.asin(Math.sin(L * rad) * Math.sin(23.4397 * rad));
+  const cosW = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(dec)) / (Math.cos(lat * rad) * Math.cos(dec));
+  if (cosW > 1 || cosW < -1) return null;               // polar day/night
+  const w = Math.acos(cosW) / rad;
+  const toMs = j => (j - 2440587.5) * 86400000;
+  return { rise: toMs(Jt - w / 360), set: toMs(Jt + w / 360) };
+}
+// UTC offset (seconds) of an IANA zone at a moment — handles DST.
+function _tzOffsetSec(tz, ms) {
+  try {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms));
+    const g = t => +p.find(x => x.type === t).value;
+    return Math.round((Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second')) - Math.floor(ms / 1000) * 1000) / 1000);
+  } catch (_) { return 0; }
+}
+function _tzAbbr(tz, ms) {
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date(ms)).find(x => x.type === 'timeZoneName').value; }
+  catch (_) { return ''; }
+}
+
+// Weather code (WMO, same as Open-Meteo) from an NWS hour, so the page's
+// existing code paths keep working unchanged.
+const _WX_RANK = { hail: 10, thunderstorms: 9, freezing_rain: 8, freezing_drizzle: 7, sleet: 7, ice_pellets: 7,
+  snow: 6, snow_showers: 6, blowing_snow: 5, rain: 4, rain_showers: 3, drizzle: 2 };
+function _wmoFromNws(pop, wx, sky) {
+  let top = null;
+  (wx || []).forEach(x => { if (x && x[1] in _WX_RANK && (!top || _WX_RANK[x[1]] > _WX_RANK[top[1]])) top = x; });
+  if (top && (pop || 0) >= 30) {
+    const i = top[2];
+    const lvl = (a, b, c) => i === 'heavy' ? c : i === 'moderate' ? b : a;
+    switch (top[1]) {
+      case 'thunderstorms': case 'hail': return 95;
+      case 'rain_showers': return lvl(80, 81, 82);
+      case 'rain': return lvl(61, 63, 65);
+      case 'drizzle': return lvl(51, 53, 55);
+      case 'snow_showers': return i === 'heavy' ? 86 : 85;
+      case 'snow': case 'blowing_snow': return lvl(71, 73, 75);
+      case 'freezing_rain': case 'sleet': case 'ice_pellets': return i === 'heavy' ? 67 : 66;
+      case 'freezing_drizzle': return 56;
+    }
+  }
+  if ((wx || []).some(x => x && (x[1] === 'fog' || x[1] === 'freezing_fog'))) return 45;
+  const s = sky == null ? 50 : sky;
+  return s < 15 ? 0 : s < 40 ? 1 : s < 70 ? 2 : 3;
+}
+
+// Build a full forecast (same shape as Open-Meteo's) from the NWS grid.
+// `G` = _gridHourly(props, { full: true }), `props` = raw grid properties.
+function _forecastFromNws(G, props, tz, lat, lon) {
+  const H = G.hours, now = Date.now();
+  const offs = Array.from({ length: H }, (_, i) => _tzOffsetSec(tz, G.start + i * 3600000));
+  const key = i => new Date(G.start + i * 3600000 + offs[i] * 1000).toISOString().slice(0, 16);
+  const time = Array.from({ length: H }, (_, i) => key(i));
+  const localIso = ms => new Date(ms + _tzOffsetSec(tz, ms) * 1000).toISOString().slice(0, 16);
+  // Daylight by date
+  const sunCache = {};
+  const sunFor = date => sunCache[date] || (sunCache[date] = _sunTimes(lat, lon, +date.slice(0, 4), +date.slice(5, 7), +date.slice(8, 10)));
+  const isDay = Array.from({ length: H }, (_, i) => {
+    const ms = G.start + i * 3600000 + 1800000, s = sunFor(time[i].slice(0, 10));
+    return s ? (ms >= s.rise && ms < s.set ? 1 : 0) : 1;
+  });
+  const wcode = Array.from({ length: H }, (_, i) => _wmoFromNws(G.pop[i], G.wx[i], G.sky[i]));
+  const hourly = {
+    time, temperature_2m: G.temp, apparent_temperature: G.app, precipitation_probability: G.pop,
+    precipitation: G.qpf.map(v => v || 0), weather_code: wcode, cloud_cover: G.sky,
+    wind_speed_10m: G.wind, wind_direction_10m: G.wdir, wind_gusts_10m: G.gust, visibility: G.vis,
+    snowfall: G.snow.map(v => v || 0), is_day: isDay, relative_humidity_2m: G.rh, dew_point_2m: G.dew,
+  };
+  // Day highs/lows from the forecasters' own max/min periods
+  const maxBy = {}, minBy = {};
+  const C2F = v => v == null ? null : Math.round((v * 9 / 5 + 32) * 10) / 10;
+  const toF = (v, uom) => /degF/.test(uom || '') ? v : C2F(v);
+  for (const r of (props.maxTemperature?.values || [])) {
+    const [t0] = String(r.validTime).split('/'); const ms = Date.parse(t0);
+    if (!isNaN(ms) && r.value != null) maxBy[localIso(ms).slice(0, 10)] = toF(r.value, props.maxTemperature.uom);
+  }
+  for (const r of (props.minTemperature?.values || [])) {
+    const [t0, dur] = String(r.validTime).split('/'); const ms = Date.parse(t0);
+    if (!isNaN(ms) && r.value != null) minBy[localIso(ms + _isoDurHours(dur) * 3600000).slice(0, 10)] = toF(r.value, props.minTemperature.uom);
+  }
+  const dates = [...new Set(time.map(t => t.slice(0, 10)))].slice(0, 7);
+  const D = { time: dates, weather_code: [], temperature_2m_max: [], temperature_2m_min: [], apparent_temperature_max: [],
+    apparent_temperature_min: [], sunrise: [], sunset: [], daylight_duration: [], uv_index_max: [], precipitation_sum: [],
+    snowfall_sum: [], precipitation_hours: [], precipitation_probability_max: [], wind_speed_10m_max: [],
+    wind_gusts_10m_max: [], wind_direction_10m_dominant: [] };
+  const mx = a => { const v = a.filter(x => x != null); return v.length ? Math.max(...v) : null; };
+  const mn = a => { const v = a.filter(x => x != null); return v.length ? Math.min(...v) : null; };
+  for (const date of dates) {
+    const idx = time.map((t, i) => t.startsWith(date) ? i : -1).filter(i => i >= 0);
+    const pick = arr => idx.map(i => arr[i]);
+    const pops = pick(G.pop), peak = mx(pops) || 0;
+    const iPeak = idx[pops.indexOf(peak)];
+    const dayIdx = idx.filter(i => isDay[i]);
+    const skyAvg = (dayIdx.length ? dayIdx : idx).reduce((a, i) => a + (G.sky[i] || 0), 0) / Math.max(1, (dayIdx.length ? dayIdx : idx).length);
+    D.weather_code.push(peak >= 30 ? _wmoFromNws(peak, G.wx[iPeak], G.sky[iPeak]) : _wmoFromNws(0, [], skyAvg));
+    D.temperature_2m_max.push(maxBy[date] ?? mx(pick(G.temp)));
+    D.temperature_2m_min.push(minBy[date] ?? mn(pick(G.temp)));
+    D.apparent_temperature_max.push(mx(pick(G.app)));
+    D.apparent_temperature_min.push(mn(pick(G.app)));
+    const s = sunFor(date);
+    D.sunrise.push(s ? localIso(s.rise) : null); D.sunset.push(s ? localIso(s.set) : null);
+    D.daylight_duration.push(s ? Math.round((s.set - s.rise) / 1000) : null);
+    D.uv_index_max.push(null);
+    D.precipitation_sum.push(Math.round(pick(G.qpf).reduce((a, v) => a + (v || 0), 0) * 100) / 100);
+    D.snowfall_sum.push(Math.round(pick(G.snow).reduce((a, v) => a + (v || 0), 0) * 10) / 10);
+    D.precipitation_hours.push(pick(G.qpf).filter(v => v > 0).length);
+    D.precipitation_probability_max.push(peak);
+    const winds = pick(G.wind), wMax = mx(winds);
+    D.wind_speed_10m_max.push(wMax); D.wind_gusts_10m_max.push(mx(pick(G.gust)));
+    D.wind_direction_10m_dominant.push(wMax != null ? G.wdir[idx[winds.indexOf(wMax)]] : null);
+  }
+  const c = 0;
+  const current = {
+    time: time[c], temperature_2m: G.temp[c], apparent_temperature: G.app[c], relative_humidity_2m: G.rh[c],
+    dew_point_2m: G.dew[c], precipitation: G.qpf[c] || 0, weather_code: wcode[c], cloud_cover: G.sky[c],
+    wind_speed_10m: G.wind[c], wind_direction_10m: G.wdir[c], wind_gusts_10m: G.gust[c],
+    surface_pressure: null, visibility: G.vis[c], is_day: isDay[c],
+  };
+  return {
+    timezone: tz, timezone_abbreviation: _tzAbbr(tz, now), utc_offset_seconds: _tzOffsetSec(tz, now),
+    current, current_units: {}, hourly, hourly_units: { snowfall: 'inch', precipitation: 'inch' },
+    daily: D, daily_units: { snowfall_sum: 'inch', precipitation_sum: 'inch' },
+  };
+}
+
+// Small Open-Meteo request for the few things NWS doesn't forecast (UV,
+// pressure, storm energy). Six values ≈ one call, vs ~five for the full one.
+// Optional: if it fails or the quota is out, the forecast still works.
+async function _omExtras(gLat, gLon) {
+  return _omGet('https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}&timezone=auto&forecast_days=7`
+    + '&current=surface_pressure&hourly=cape,lifted_index,freezing_level_height,uv_index&daily=uv_index_max', 'openMeteoExtras');
+}
+function _mergeExtras(fc, ex) {
+  if (!ex) return fc;
+  const pos = new Map((ex.hourly?.time || []).map((t, i) => [t, i]));
+  for (const k of ['cape', 'lifted_index', 'freezing_level_height', 'uv_index']) {
+    const src = ex.hourly?.[k]; if (!src) continue;
+    fc.hourly[k] = fc.hourly.time.map(t => pos.has(t) ? src[pos.get(t)] : null);
+  }
+  const dpos = new Map((ex.daily?.time || []).map((t, i) => [t, i]));
+  if (ex.daily?.uv_index_max) fc.daily.uv_index_max = fc.daily.time.map(t => dpos.has(t) ? ex.daily.uv_index_max[dpos.get(t)] : null);
+  if (ex.current?.surface_pressure != null) fc.current.surface_pressure = ex.current.surface_pressure;
+  return fc;
+}
+
+// ── Live "right now" reading from the nearest NWS weather station ──
+// The station list for a spot never changes, so it is kept 24h; the latest
+// reading rides along with the 15-minute forecast cache.
+const _nwsStationCache = new Map();   // cellKey -> { stations:[{id,name}], ts }
+const _obsWords = [
+  [/thunder|t-storm|tstm/i, 95], [/freezing (rain|drizzle)|sleet|ice pellets/i, 66],
+  [/heavy snow/i, 75], [/light snow|flurr/i, 71], [/snow/i, 73],
+  [/heavy (rain|showers)/i, 65], [/light (rain|showers)/i, 61], [/drizzle/i, 51], [/rain|showers/i, 63],
+  [/fog|mist|haze|smoke/i, 45], [/overcast|^cloudy|mostly cloudy/i, 3], [/partly (cloudy|sunny)/i, 2],
+  [/mostly (clear|sunny)|fair/i, 1], [/clear|sunny/i, 0],
+];
+function _obsCode(text) { for (const [re, c] of _obsWords) if (re.test(text || '')) return c; return null; }
+async function _fetchObservation(cellKey, stationsUrl, headers) {
+  if (!stationsUrl) return null;
+  let sc = _nwsStationCache.get(cellKey);
+  if (!sc || Date.now() - sc.ts > NWS_POINTS_TTL) {
+    upstreamCount('nwsStations');
+    const j = JSON.parse(await _withTimeout(fetchTextOverHttp(stationsUrl, headers), 8000, 'NWS stations'));
+    sc = { stations: (j.features || []).slice(0, 3).map(f => ({ id: f.properties?.stationIdentifier, name: f.properties?.name })).filter(x => x.id), ts: Date.now() };
+    _lruSet(_nwsStationCache, cellKey, sc, 5000);
+  }
+  const num = (q) => (q && q.value != null && isFinite(q.value)) ? q.value : null;
+  const F = (q) => { const v = num(q); return v == null ? null : /degF/.test(q.unitCode || '') ? v : Math.round((v * 9 / 5 + 32) * 10) / 10; };
+  const MPH = (q) => { const v = num(q); return v == null ? null : /m_s-1/.test(q.unitCode || '') ? Math.round(v * 22.3694) / 10 : Math.round(v / 1.609344 * 10) / 10; };
+  for (const st of sc.stations.slice(0, 2)) {
+    try {
+      upstreamCount('nwsObservation');
+      const p = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/stations/${st.id}/observations/latest`, headers), 8000, 'NWS observation'))?.properties;
+      const t = F(p?.temperature);
+      if (!p || t == null || Date.now() - Date.parse(p.timestamp) > 2 * 3600 * 1000) continue;   // stale or empty → next station
+      const pa = num(p.barometricPressure) ?? num(p.seaLevelPressure);
+      return {
+        station: st.name || st.id, stationId: st.id, time: p.timestamp, text: p.textDescription || '',
+        temp: t, dew: F(p.dewpoint), rh: num(p.relativeHumidity) != null ? Math.round(num(p.relativeHumidity)) : null,
+        wind: MPH(p.windSpeed), wdir: num(p.windDirection), gust: MPH(p.windGust),
+        pressure: pa != null ? Math.round(pa / 10) / 10 : null, vis: num(p.visibility),
+        feels: F(p.heatIndex) ?? F(p.windChill) ?? t,
+      };
+    } catch (e) { /* try the next station */ }
+  }
+  return null;
+}
+function _mergeObservation(fc, ob) {
+  if (!ob) return fc;
+  const c = fc.current, set = (k, v) => { if (v != null) c[k] = v; };
+  set('temperature_2m', ob.temp); set('apparent_temperature', ob.feels); set('dew_point_2m', ob.dew);
+  set('relative_humidity_2m', ob.rh); set('wind_speed_10m', ob.wind); set('wind_direction_10m', ob.wdir);
+  set('surface_pressure', ob.pressure); set('visibility', ob.vis);
+  if (ob.wind != null) c.wind_gusts_10m = ob.gust;          // no gust reported = no gusts right now
+  const code = _obsCode(ob.text); if (code != null) c.weather_code = code;
+  if (ob.text) c.description = ob.text;
+  c.observed = { station: ob.station, id: ob.stationId, time: ob.time };
+  return fc;
+}
+
+// US: the whole forecast comes from the National Weather Service grid (free,
+// no daily cap, edited by local forecasters), plus one small optional
+// Open-Meteo request for UV/pressure/storm energy. Outside the US, or if the
+// NWS is down, the full Open-Meteo forecast is used.
+async function _fetchForecastCell(gLat, gLon, cellKey) {
+  const NWS_HEADERS = { Accept: 'application/geo+json', 'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)' };
+  let forecastUrl = null, gridUrl = null, tz = null, stationsUrl = null, zone = null, county = null;
+  try {
+    const pc = _nwsPointsCache.get(cellKey);
+    if (pc && Date.now() - pc.ts < NWS_POINTS_TTL && pc.stationsUrl !== undefined && pc.zone !== undefined) {
+      ({ forecastUrl, gridUrl, tz, stationsUrl, zone, county } = pc);
+    } else {
+      upstreamCount('nwsPoints');
+      const pts = JSON.parse(await _withTimeout(fetchTextOverHttp(`https://api.weather.gov/points/${gLat.toFixed(4)},${gLon.toFixed(4)}`, NWS_HEADERS), 8000, 'NWS points'));
+      forecastUrl = pts?.properties?.forecast || null;
+      gridUrl = pts?.properties?.forecastGridData || null;
+      tz = pts?.properties?.timeZone || null;
+      stationsUrl = pts?.properties?.observationStations || null;
+      zone = String(pts?.properties?.forecastZone || '').split('/').pop() || null;      // e.g. WIZ066
+      county = String(pts?.properties?.county || '').split('/').pop() || null;          // e.g. WIC079
+      _lruSet(_nwsPointsCache, cellKey, { forecastUrl, gridUrl, tz, stationsUrl, zone, county, ts: Date.now() }, 5000);
+    }
+  } catch (e) { /* outside the US — Open-Meteo below */ }
+
+  const narrativeP = forecastUrl
+    ? (upstreamCount('nwsForecast'), _withTimeout(fetchTextOverHttp(forecastUrl, NWS_HEADERS), 8000, 'NWS forecast')
+        .then(t => (JSON.parse(t)?.properties?.periods || []).slice(0, 14).map(p => ({
+          name:      restoreGeographicNames(p.name),
+          short:     restoreGeographicNames(p.shortForecast),
+          detail:    restoreGeographicNames(p.detailedForecast),
+          isDaytime: p.isDaytime, temp: p.temperature, icon: p.icon,
+        })))
+        .catch(() => null))
+    : Promise.resolve(null);
+
+  if (gridUrl) {
+    const extrasP = _omExtras(gLat, gLon).catch(e => { console.warn('[Forecast] Open-Meteo extras skipped:', e.message); return null; });
+    const obsP = _fetchObservation(cellKey, stationsUrl, NWS_HEADERS).catch(e => { console.warn('[Forecast] Station reading skipped:', e.message); return null; });
+    try {
+      upstreamCount('nwsGrid');
+      const props = JSON.parse(await _withTimeout(fetchTextOverHttp(gridUrl, NWS_HEADERS), 12000, 'NWS grid'))?.properties;
+      const G = _gridHourly(props, { full: true });
+      if (G && G.temp && G.temp.some(v => v != null)) {
+        const fc = _mergeObservation(_mergeExtras(_forecastFromNws(G, props, tz || 'America/Chicago', gLat, gLon), await extrasP), await obsP);
+        upstreamCount('forecastFromNws');
+        const office = (String(gridUrl).match(/\/gridpoints\/([A-Z]{3})\//) || [])[1] || null;
+        return { ...fc, nws: await narrativeP, grid: _gridClient(G), source: 'nws', office: office ? { id: office, zone, county } : null, generated_at: Date.now() };
+      }
+      throw new Error('NWS grid had no temperatures');
+    } catch (e) {
+      console.warn('[Forecast] NWS grid unavailable, using Open-Meteo:', e.message);
+    }
+  }
+
+  const omUrl = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}`
+    + '&timezone=auto&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch'
+    + '&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,'
+    + 'precipitation,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,'
+    + 'wind_gusts_10m,surface_pressure,visibility,is_day'
+    + '&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,'
+    + 'weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,'
+    + 'visibility,cape,lifted_index,freezing_level_height,snowfall,snow_depth,'
+    + 'uv_index,is_day,relative_humidity_2m,dew_point_2m'
+    + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
+    + 'apparent_temperature_max,apparent_temperature_min,'
+    + 'sunrise,sunset,daylight_duration,uv_index_max,'
+    + 'precipitation_sum,snowfall_sum,precipitation_hours,'
+    + 'precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,'
+    + 'wind_direction_10m_dominant'
+    + '&forecast_days=7';
+
+
+  const om = await _omGet(omUrl, 'openMeteoForecast');
+  const nwsNarrative = await narrativeP;
+  return {
+    timezone: om.timezone, timezone_abbreviation: om.timezone_abbreviation,
+    utc_offset_seconds: om.utc_offset_seconds,
+    current: om.current, current_units: om.current_units,
+    hourly: om.hourly, hourly_units: om.hourly_units,
+    daily: om.daily, daily_units: om.daily_units,
+    nws: nwsNarrative, grid: null, source: 'open-meteo', generated_at: Date.now(),
+  };
+}
+
+// ═══ Marine alerts (Great Lakes & coastal/offshore waters) ═══
+// The map fetches land alerts from NWS itself. Marine alerts are mostly issued for whole marine
+// zones without their own outline, so the server attaches each zone's outline (zones don't change:
+// kept a day, lightly simplified) and serves everything as one GeoJSON file, cached 3 minutes.
+const _marineZoneGeo = new Map();          // zone URL -> { geom, ts }
+const NWS_UA = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com, contact@altruisticapps.com)', Accept: 'application/geo+json' } };
+const _r2 = (n) => Math.round(n * 100) / 100;
+function _simplifyRing(ring, tol) {
+  const rnd = tol >= 0.01 ? _r2 : _r3;                       // ~1 km for zone outlines, ~100 m for warning polygons
+  if (ring.length < 8) return ring.map(([x, y]) => [rnd(x), rnd(y)]);
+  const out = [ring[0]];
+  for (let i = 1; i < ring.length - 1; i++) { const [x, y] = ring[i], [px, py] = out[out.length - 1]; if (Math.abs(x - px) > tol || Math.abs(y - py) > tol) out.push(ring[i]); }
+  out.push(ring[ring.length - 1]);
+  return out.map(([x, y]) => [rnd(x), rnd(y)]).filter((p, i, a) => i === 0 || p[0] !== a[i - 1][0] || p[1] !== a[i - 1][1]);
+}
+function _simplifyGeom(g, tol = 0.02) {
+  if (!g) return null;
+  if (g.type === 'Polygon') return { type: 'Polygon', coordinates: g.coordinates.map(r => _simplifyRing(r, tol)) };
+  if (g.type === 'MultiPolygon') return { type: 'MultiPolygon', coordinates: g.coordinates.map(p => p.map(r => _simplifyRing(r, tol))) };
+  return g;
+}
+async function _marineZone(url) {
+  const c = _marineZoneGeo.get(url);
+  if (c && Date.now() - c.ts < 24 * 3600 * 1000) return c.geom;
+  try {
+    const j = await (await fetch(url, NWS_UA)).json();
+    const geom = _simplifyGeom(j.geometry);
+    _marineZoneGeo.set(url, { geom, ts: Date.now() });
+    return geom;
+  } catch (_) { return c ? c.geom : null; }
+}
+function _mergeGeoms(geoms) {
+  const polys = [];
+  for (const g of geoms) { if (!g) continue; if (g.type === 'Polygon') polys.push(g.coordinates); else if (g.type === 'MultiPolygon') polys.push(...g.coordinates); }
+  return polys.length ? { type: 'MultiPolygon', coordinates: polys } : null;
+}
+const _marineAlerts = _sharedCache(3 * 60 * 1000, async () => {
+  const j = await (await fetch('https://api.weather.gov/alerts/active?status=actual&message_type=alert&region_type=marine', NWS_UA)).json();
+  const feats = j.features || [];
+  const need = [...new Set(feats.filter(f => !f.geometry).flatMap(f => f.properties.affectedZones || []))];
+  // Zone outlines, 6 at a time
+  for (let i = 0; i < need.length; i += 6) await Promise.all(need.slice(i, i + 6).map(_marineZone));
+  // Each zone outline is sent once (in "zones"); alerts list the zones they cover and the map
+  // assembles them. Many alerts share zones, so this keeps the file small.
+  const out = [], zones = {};
+  const zid = (u) => String(u).split('/').pop();
+  for (const f of feats) {
+    let geometry = null, zl = null;
+    if (f.geometry) geometry = _simplifyGeom(f.geometry, 0.002);
+    else {
+      zl = (f.properties.affectedZones || []).filter(u => (_marineZoneGeo.get(u) || {}).geom);
+      if (!zl.length) continue;
+      for (const u of zl) zones[zid(u)] = _marineZoneGeo.get(u).geom;
+      zl = zl.map(zid);
+    }
+    const p = f.properties;
+    out.push({ type: 'Feature', id: f.id, geometry, zones: zl, properties: {
+      id: p.id, event: p.event, headline: p.headline, description: p.description, instruction: p.instruction,
+      areaDesc: p.areaDesc, severity: p.severity, certainty: p.certainty, urgency: p.urgency,
+      sent: p.sent, effective: p.effective, onset: p.onset, expires: p.expires, ends: p.ends,
+      senderName: p.senderName, parameters: p.parameters, marine: true } });
+  }
+  return { type: 'FeatureCollection', features: out, zones, at: new Date().toISOString() };
+});
+app.get('/api/alerts/marine', async (req, res) => {
+  try { res.set('Cache-Control', 'no-store'); res.json(await _marineAlerts()); }
+  catch (e) { res.status(502).json({ error: 'Marine alerts unavailable: ' + e.message }); }
+});
+
+// ═══ Aurora forecast (NOAA Space Weather Prediction Center) ═══
+// OVATION model: chance of aurora overhead on a 1° world grid, updated every ~5 min, plus the
+// current planetary Kp index. Slimmed to cells with a 3%+ chance; shared by all viewers 5 min.
+const _aurora = _sharedCache(5 * 60 * 1000, async () => {
+  const H = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)' } };
+  const [ov, kp] = await Promise.all([
+    fetch('https://services.swpc.noaa.gov/json/ovation_aurora_latest.json', H).then(r => r.ok ? r.json() : Promise.reject(new Error('OVATION ' + r.status))),
+    fetch('https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json', H).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+  const cells = [];
+  for (const c of ov.coordinates || []) {
+    const [lon, lat, v] = c.map(Number);
+    if (!(v >= 3) || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    cells.push([lon > 180 ? lon - 360 : lon, lat, Math.round(v)]);
+  }
+  // Kp: rows of [time_tag, Kp, ...] after a header row (older format) or objects (newer format)
+  let kpNow = null, kpTime = null;
+  if (Array.isArray(kp) && kp.length) {
+    const last = kp[kp.length - 1];
+    if (Array.isArray(last)) { kpNow = Number(last[1]); kpTime = last[0]; }
+    else if (last && typeof last === 'object') { kpNow = Number(last.Kp ?? last.kp_index ?? last.kp); kpTime = last.time_tag; }
+    if (!Number.isFinite(kpNow)) kpNow = null;
+  }
+  return { observed: ov['Observation Time'] || null, forecast: ov['Forecast Time'] || null, cells, kp: kpNow, kpTime };
+});
+app.get('/api/aurora', async (req, res) => {
+  try { res.set('Cache-Control', 'public, max-age=120'); res.json(await _aurora()); }
+  catch (e) { res.status(502).json({ error: 'Aurora forecast unavailable: ' + e.message }); }
+});
+
+// ═══ Local NWS office text: Area Forecast Discussion + Hazardous Weather Outlook ═══
+// Newest product from the office via the NWS API, parsed into sections, cached 10 min per office.
+const _officeText = {};
+async function _nwsLatestProduct(type, office) {
+  const H = { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com, contact@altruisticapps.com)', Accept: 'application/ld+json' } };
+  const list = await (await fetch(`https://api.weather.gov/products/types/${type}/locations/${office}`, H)).json();
+  const item = (list['@graph'] || [])[0];
+  if (!item) return null;
+  const prod = await (await fetch('https://api.weather.gov/products/' + item.id, H)).json();
+  return { issued: item.issuanceTime, text: String(prod.productText || '').replace(/\r/g, '') };
+}
+const _nwsFlat = (t) => t.split(/\n\s*\n/).map(p => p.replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim()).filter(Boolean).join('\n\n');
+const _niceTitle = (t) => t.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\b(And|Through|Of|The|To)\b/g, w => w.toLowerCase());
+function _parseAfd(text) {
+  const office = ((text.match(/National Weather Service ([^\n]+)/) || [])[1] || '').trim();
+  const sections = [];
+  // Sections start with ".TITLE..." at the start of a line and end at "&&" or "$$"
+  // Titles may carry a note: ".DISCUSSION /Through Saturday/..." or ".AVIATION /06Z TAFS/..."
+  const H = String.raw`\n\.([A-Z0-9][A-Z0-9 &\-/]*?[A-Z0-9])(?:\s+\/([^\n]*?)\/)?\.\.\.`;
+  for (const m of text.matchAll(new RegExp(H + String.raw`[ \t]*([^\n]*)\n([\s\S]*?)(?=\n&&|\n\$\$|` + H + ')', 'g'))) {
+    const name = m[1].trim(); let body = (m[3] ? m[3] + '\n' : '') + m[4];
+    const issued = (body.match(/^\s*(?:Issued|Updated) at ([^\n]+)|^\s*Issued ([^\n]+)/m) || []);
+    body = body.replace(/^\s*(?:Issued|Updated) (?:at )?[^\n]+\n/gm, '');
+    if (/PRELIMINARY POINT|TEMPS\/POPS/.test(name)) continue;    // a table of numbers
+    const isKey = /KEY MESSAGES/.test(name);
+    const txt = isKey ? body.split(/\n\s*-\s+/).map(x => x.replace(/^\s*-\s*/, '').replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean) : _nwsFlat(body);
+    if (/WATCHES\/WARNINGS/.test(name)) continue;            // shown elsewhere on the map
+    if ((isKey && txt.length) || (!isKey && txt)) sections.push({ name: _niceTitle(name), note: m[2] ? m[2].trim() : null, key: isKey, text: txt, issued: issued[1] || issued[2] || null });
+  }
+  return { office, sections };
+}
+// UGC line "WIZ046-047-056>060-020600-" -> Set of codes (WIZ046, WIZ047, WIZ056 ... WIZ060)
+function _ugcCodes(line) {
+  const out = new Set(); let prefix = '';
+  for (const tok of line.replace(/\s+/g, '').split('-').filter(Boolean)) {
+    if (/^\d{6}$/.test(tok)) continue;                        // expiry time
+    const m = tok.match(/^([A-Z]{2}[CZ])?(\d{3})(?:>(\d{3}))?$/); if (!m) continue;
+    if (m[1]) prefix = m[1];
+    const a = +m[2], b = m[3] ? +m[3] : a;
+    for (let n = a; n <= b; n++) out.add(prefix + String(n).padStart(3, '0'));
+  }
+  return out;
+}
+function _parseHwo(text, zone, county) {
+  const office = ((text.match(/National Weather Service ([^\n]+)/) || [])[1] || '').trim();
+  const segs = text.split(/\n\$\$/).map(seg => {
+    const ugcLines = (seg.match(/\n((?:[A-Z]{2}[CZ]\d{3}[\d>\-\s]*?)+-\d{6}-)/) || [])[1] || '';
+    return { seg, codes: _ugcCodes(ugcLines) };
+  }).filter(x => x.codes.size);
+  const hit = segs.find(x => (zone && x.codes.has(zone)) || (county && x.codes.has(county)));
+  if (!hit) return { office, found: false };
+  const parts = [];
+  for (const m of hit.seg.matchAll(/\n\.([A-Z][A-Z \-]+?)\.\.\.([^\n]*)\n([\s\S]*?)(?=\n\.[A-Z][A-Z \-]+?\.\.\.|$)/g)) {
+    parts.push({ name: _niceTitle(m[1].trim()), when: m[2].trim(), text: _nwsFlat(m[3]) });
+  }
+  const area = _nwsFlat(((hit.seg.match(/\n(This Hazardous Weather Outlook is for[\s\S]*?)\n\s*\n/) || [])[1]) || '');
+  return { office, found: true, area, parts };
+}
+app.get('/api/nws/office-text', async (req, res) => {
+  const office = String(req.query.office || '').toUpperCase(), type = String(req.query.type || '').toUpperCase();
+  const zone = String(req.query.zone || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+  const county = String(req.query.county || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+  if (!/^[A-Z]{3}$/.test(office) || !['AFD', 'HWO'].includes(type)) return res.status(400).json({ error: 'office=XXX&type=AFD|HWO' });
+  const key = type + ':' + office;
+  _officeText[key] = _officeText[key] || _sharedCache(10 * 60 * 1000, () => _nwsLatestProduct(type, office));
+  try {
+    const p = await _officeText[key]();
+    res.set('Cache-Control', 'no-store');
+    if (!p) return res.json({ office, type, found: false });
+    const parsed = type === 'AFD' ? _parseAfd(p.text) : _parseHwo(p.text, zone, county);
+    res.json({ office, type, issued: p.issued, ...parsed,
+      url: type === 'AFD' ? `https://forecast.weather.gov/product.php?site=${office}&issuedby=${office}&product=AFD&format=txt&version=1&glossary=1`
+                         : `https://forecast.weather.gov/product.php?site=${office}&issuedby=${office}&product=HWO&format=txt&version=1&glossary=1` });
+  } catch (e) { res.status(502).json({ error: 'NWS office text unavailable: ' + e.message }); }
+});
+
+app.get('/api/forecast', async (req, res) => {
+  let lat = parseFloat(req.query.lat);
+  let lon = parseFloat(req.query.lon);
+  let locationName = req.query.name || null;
+
+  if (req.query.zip) {
+    const q = req.query.zip.trim().toLowerCase();
+    const g = _geoCache.get(q);
+    if (g && Date.now() - g.ts < GEO_TTL) {
+      upstreamCount('geocodeHit');
+      lat = g.lat; lon = g.lon; locationName = locationName || g.name;
+    } else {
+      const raw = req.query.zip.trim();
+      let found = null;
+      // 1. US ZIP codes: answered on our own server (GeoNames list, no outside call)
+      if (/^\d{5}(-\d{4})?$/.test(raw)) {
+        try { const z = await gazetteer.lookupUsZip(raw); if (z) { found = { lat: z.lat, lon: z.lon, name: z.name }; upstreamCount('zipLocal'); } }
+        catch (_) {}
+      }
+      // 2. Anything else (city names, world places): Open-Meteo's lookup service
+      if (!found) {
+        try {
+          if (_omBlocked()) throw new Error('Open-Meteo paused (limit reached)');
+          upstreamCount('openMeteoGeocode');
+          const geo = JSON.parse(await _withTimeout(fetchTextOverHttp(
+            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(raw)}&count=1&language=en&format=json`
+          ), 8000, 'Open-Meteo geocoding'));
+          if (geo.error) { _omNoteError(geo.reason || geo.error); throw new Error(geo.reason || geo.error); }
+          const r = geo.results?.[0];
+          if (r) found = { lat: r.latitude, lon: r.longitude, name: [r.name, r.admin1].filter(Boolean).join(', ') };
+        } catch (e) { console.warn('[Forecast] Place lookup via Open-Meteo failed:', e.message); }
+      }
+      // 3. Backup: the offline world place list
+      if (!found) {
+        try {
+          if (await gazetteer.load()) {
+            const g = gazetteer.locate(raw, null);
+            if (g) found = { lat: g.lat, lon: g.lng, name: [g.name, g.region && g.region.replace(/\b\w/g, c => c.toUpperCase())].filter(Boolean).join(', ') };
+          }
+        } catch (_) {}
+      }
+      if (!found) return res.status(404).json({ error: `No location found for "${raw}"` });
+      lat = found.lat; lon = found.lon;
+      const name = restoreGeographicNames(found.name);
+      _lruSet(_geoCache, q, { lat, lon, name, ts: Date.now() }, 5000);
+      locationName = locationName ? restoreGeographicNames(locationName) : name;
+    }
+  }
+
+  if (isNaN(lat) || isNaN(lon)) return res.status(400).json({ error: 'lat/lon or zip required' });
+
+  const gLat = _snap(lat), gLon = _snap(lon);
+  const cellKey = `${gLat.toFixed(3)},${gLon.toFixed(3)}`;
+  const respond = (entry, stale) => {
+    res.set('Cache-Control', stale ? 'public, max-age=120' : 'public, max-age=900');
+    if (stale) res.set('X-Forecast-Stale', '1');
+    res.json({ ...entry.data, location: { lat, lon, name: locationName } });
+  };
+
+  const cached = _forecastCache.get(cellKey);
+  if (cached && Date.now() - cached.ts < FORECAST_TTL) {
+    upstreamCount('forecastCacheHit');
+    _lruSet(_forecastCache, cellKey, cached, FORECAST_MAX); // refresh LRU position
+    return respond(cached, false);
+  }
+
+  try {
+    let p = _forecastInflight.get(cellKey);
+    if (!p) {
+      upstreamCount('forecastCacheMiss');
+      p = _fetchForecastCell(gLat, gLon, cellKey)
+        .then(data => { const entry = { data, ts: Date.now() }; _lruSet(_forecastCache, cellKey, entry, FORECAST_MAX); return entry; })
+        .finally(() => _forecastInflight.delete(cellKey));
+      _forecastInflight.set(cellKey, p);
+    } else {
+      upstreamCount('forecastCoalesced');
+    }
+    respond(await p, false);
+  } catch(e) {
+    if (cached && Date.now() - cached.ts < FORECAST_STALE_MAX) {
+      upstreamCount('forecastStaleServed');
+      console.warn('[Forecast] Upstream failed, serving stale cell', cellKey, '-', e.message);
+      return respond(cached, true);
+    }
+    console.error('[Forecast] Error:', e.message);
+    res.status(502).json({ error: 'Forecast unavailable', detail: e.message });
+  }
+});
+
+// GET /api/forecast/models?lat=&lon=
+// Same spot, eight forecast models side by side (Open-Meteo multi-model).
+// Shares the forecast grid cells (~5 km), cached 60 min — models only update
+// every 6–12 h, so this costs a handful of upstream calls per place per day.
+// Only requested when a user opens "Compare models", never on page load.
+const MM_MODELS = [
+  ['ecmwf_ifs025', 'ECMWF (Euro)'], ['ecmwf_aifs025_single', 'ECMWF AI (AIFS)'],
+  ['gfs_seamless', 'GFS (US)'], ['icon_seamless', 'ICON (Germany)'],
+  ['gem_seamless', 'GEM (Canada)'], ['ukmo_seamless', 'UK Met Office'],
+  ['jma_seamless', 'JMA (Japan)'], ['meteofrance_seamless', 'Météo-France'],
+];
+const _mmCache = new Map();
+const _mmInflight = new Map();
+const MM_TTL = 60 * 60 * 1000;
+
+async function _fetchModelCompare(gLat, gLon, ids) {
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}`
+    + '&timezone=auto&temperature_unit=fahrenheit&precipitation_unit=inch&forecast_days=7'
+    + '&hourly=temperature_2m,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum'
+    + `&models=${ids.join(',')}`;
+  if (_omBlocked()) throw new Error('Model comparison is resting until the Open-Meteo daily limit resets');
+  upstreamCount('openMeteoModels');
+  const j = JSON.parse(await _withTimeout(fetchTextOverHttp(url), 15000, 'Open-Meteo models'));
+  if (j.error) {
+    _omNoteError(j.reason || j.error);
+    // If Open-Meteo rejects a model id (renamed/retired), drop it and retry once
+    const bad = ids.filter(id => String(j.reason || '').includes(id));
+    if (bad.length && bad.length < ids.length) return _fetchModelCompare(gLat, gLon, ids.filter(id => !bad.includes(id)));
+    throw new Error(`Open-Meteo: ${j.reason || j.error}`);
+  }
+  const h = j.hourly || {}, d = j.daily || {};
+  const models = MM_MODELS.filter(([id]) => ids.includes(id)).map(([id, label]) => ({
+    id, label,
+    hourly: { temp: h[`temperature_2m_${id}`] || null, precip: h[`precipitation_${id}`] || null },
+    daily: { max: d[`temperature_2m_max_${id}`] || null, min: d[`temperature_2m_min_${id}`] || null, precip: d[`precipitation_sum_${id}`] || null },
+  })).filter(m => Array.isArray(m.hourly.temp) && m.hourly.temp.some(v => v != null));
+  return { utc_offset_seconds: j.utc_offset_seconds || 0, timezone: j.timezone, hourlyTime: h.time || [], dailyTime: d.time || [], models, generated_at: Date.now() };
+}
+
+app.get('/api/forecast/models', async (req, res) => {
+  const lat = parseFloat(req.query.lat), lon = parseFloat(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return res.status(400).json({ error: 'lat/lon required' });
+  }
+  const gLat = _snap(lat), gLon = _snap(lon);
+  const key = `${gLat.toFixed(3)},${gLon.toFixed(3)}`;
+  const hit = _mmCache.get(key);
+  if (hit && Date.now() - hit.ts < MM_TTL) {
+    res.set('Cache-Control', 'public, max-age=1800');
+    return res.json(hit.data);
+  }
+  try {
+    let p = _mmInflight.get(key);
+    if (!p) {
+      p = _fetchModelCompare(gLat, gLon, MM_MODELS.map(([id]) => id))
+        .then(data => { _lruSet(_mmCache, key, { data, ts: Date.now() }, 500); return data; })
+        .finally(() => _mmInflight.delete(key));
+      _mmInflight.set(key, p);
+    }
+    const data = await p;
+    res.set('Cache-Control', 'public, max-age=1800');
+    res.json(data);
+  } catch (e) {
+    if (hit) return res.json({ ...hit.data, stale: true });
+    console.warn('[ModelCompare]', e.message);
+    res.status(502).json({ error: 'Model comparison unavailable' });
+  }
+});
+
+// GET /api/hms-smoke
+// Proxies NOAA OSPO's current HMS smoke KML and converts it to GeoJSON.
+// NOAA does NOT publish a GeoJSON format — only KML, Shapefile, and GeoTiff.
+// The OSPO KML at ospo.noaa.gov/data/land/fire/smoke.kml is a live-updating
+// file with today's smoke polygons. Cached 2 hours.
+const _hmsSmokeCache = { data: null, ts: 0 };
+const HMS_TTL = 2 * 60 * 60 * 1000;
+const HMS_KML_URL = 'https://www.ospo.noaa.gov/Products/land/hms/data/latest_smoke_final.kml';
+
+function parseHMSKML(kml) {
+  const features = [];
+  const blocks = kml.match(/<Placemark[\s\S]*?<\/Placemark>/g) || [];
+  blocks.forEach(block => {
+    // Density from styleUrl (#Smoke_Light / #Smoke_Medium / #Smoke_Heavy)
+    const styleUrl = (block.match(/<styleUrl>#?([^<]+)<\/styleUrl>/) || [])[1] || '';
+    let density = 'Light';
+    if (/medium/i.test(styleUrl)) density = 'Medium';
+    if (/heavy|thick/i.test(styleUrl)) density = 'Heavy';
+
+    // Parse outer ring coordinates
+    const coordsMatch = block.match(/<coordinates>([\s\S]*?)<\/coordinates>/);
+    if (!coordsMatch) return;
+    const ring = coordsMatch[1].trim().split(/\s+/)
+      .map(t => { const p = t.split(',').map(Number); return p; })
+      .filter(p => p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1]))
+      .map(p => [p[0], p[1]]);
+    if (ring.length < 3) return;
+
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Polygon', coordinates: [ring] },
+      properties: { Density: density },
+    });
+  });
+  return { type: 'FeatureCollection', features };
+}
+
+app.get('/api/hms-smoke', async (req, res) => {
+  if (_hmsSmokeCache.data && Date.now() - _hmsSmokeCache.ts < HMS_TTL) {
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=7200');
+    return res.json(_hmsSmokeCache.data);
+  }
+  try {
+    const kml = await fetchTextOverHttp(HMS_KML_URL);
+    if (!/<kml[\s>]/i.test(kml)) throw new Error('Response is not KML');
+    // A valid KML with no Placemarks just means no smoke has been analyzed yet
+    // (common early in the UTC day, and on smoke-free days) — that's an empty
+    // map, not an error. Cache "no smoke" briefly so new analyses show up soon.
+    const geojson = parseHMSKML(kml);
+    _hmsSmokeCache.data = geojson;
+    _hmsSmokeCache.ts = geojson.features.length ? Date.now() : Date.now() - HMS_TTL + 20 * 60 * 1000;
+    console.log(`[HMS Smoke] Loaded ${geojson.features.length} smoke polygons from OSPO KML`);
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=7200');
+    res.json(geojson);
+  } catch(e) {
+    console.warn('[HMS Smoke] KML proxy failed:', e.message);
+    if (_hmsSmokeCache.data) return res.json(_hmsSmokeCache.data); // serve stale on error
+    res.status(502).json({ error: 'HMS smoke unavailable', type: 'FeatureCollection', features: [] });
+  }
+});
+
+// GET /api/fire-perimeters
+// Proxies NIFC active fire perimeter GeoJSON from WFIGS (Wildland Fire
+// Interagency Geospatial Services). Tries two known NIFC ArcGIS service
+// names since NIFC occasionally renames layers. Cached 30 minutes.
+const _fireCache = { data: null, ts: 0 };
+const FIRE_TTL = 30 * 60 * 1000;
+
+const NIFC_ENDPOINTS = [
+  // Confirmed correct NIFC service name (via NIFC Open Data / Data Basin)
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Current_WildlandFire_Perimeters/FeatureServer/0/query',
+  // YTD perimeters — wider dataset, includes fires from current year
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_YTD/FeatureServer/0/query',
+  // Fallbacks in case NIFC renames the service
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query',
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Active_Fires/FeatureServer/0/query',
+];
+const NIFC_PARAMS = '?where=1%3D1&outFields=IncidentName,GISAcres,PercentContained,FireCause,POOState,FeatureCategory&resultRecordCount=500&f=geojson';
+
+app.get('/api/fire-perimeters', async (req, res) => {
+  if (_fireCache.data && Date.now() - _fireCache.ts < FIRE_TTL) {
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=1800');
+    return res.send(_fireCache.data);
+  }
+
+  let bestResult = null;
+  for (const base of NIFC_ENDPOINTS) {
+    try {
+      const data = await fetchTextOverHttp(base + NIFC_PARAMS);
+      const parsed = JSON.parse(data);
+      const count = (parsed.features || []).length;
+      console.log(`[Fire] ${base.split('/').slice(-3,-1).join('/')} → ${count} features`);
+      if (count > 0) {
+        _fireCache.data = data;
+        _fireCache.ts = Date.now();
+        res.set('Content-Type', 'application/json');
+        res.set('Cache-Control', 'public, max-age=1800');
+        return res.send(data);
+      }
+      if (!bestResult) bestResult = data; // keep first valid (even if empty)
+    } catch(e) {
+      console.warn(`[Fire] ${base.split('/').slice(-3,-1).join('/')} failed:`, e.message);
+    }
+  }
+
+  // All endpoints returned 0 features or failed — send best result (empty GeoJSON)
+  console.warn('[Fire] No active fire perimeters found across all NIFC endpoints');
+  const empty = bestResult || JSON.stringify({ type:'FeatureCollection', features:[] });
+  _fireCache.data = empty;
+  _fireCache.ts = Date.now();
+  res.set('Content-Type', 'application/json');
+  res.send(empty);
+});
+
+// ── Camera proxy: safety + cost controls (Sep 2026) ──────────────────────────
+// DOT camera servers mostly block direct browser access (CORS / http-only),
+// so images and HLS video are relayed through this server. That makes camera
+// viewing the one feature whose Railway egress grows per viewer-minute, so:
+//   1. Host allowlist. The old proxy relayed ANY public URL — an open proxy
+//      anyone could abuse on our bandwidth bill. Allowed hosts are learned
+//      automatically from the camera lists this server hands out
+//      (/api/cameras/*), plus segment hosts from playlists we already allowed,
+//      plus CAMERA_PROXY_HOSTS (comma-separated) for sources the client loads
+//      elsewhere. Learned hosts persist in Redis.
+//      ROLLOUT: starts in REPORT mode (logs unknown hosts, still serves them).
+//      Check GET /api/admin/upstream-usage for `cameraUnknownHosts`, add any
+//      legit ones to CAMERA_PROXY_HOSTS, then set CAMERA_PROXY_ENFORCE=true.
+//   2. Shared fetches. 50 viewers of one camera = 1 upstream fetch per
+//      segment/image (single-flight), not 50.
+//   3. Hard limits: size caps (image 5 MB, playlist 1 MB, segment 15 MB),
+//      15s timeout, max 3 redirects, private-address check on EVERY redirect
+//      hop (old code only checked the first URL — SSRF via redirect).
+//   4. HLS cache bounded by BYTES (48 MB), not entry count — 500 video
+//      segments could previously pin ~1 GB of RAM.
+//   5. Per-IP rate limit (600 proxy requests/min — a normal viewer uses ~30).
+//   6. Bytes served are counted daily (upstream-usage) so the real cost is visible.
+const CAM_HOSTS_KEY = 'wt:camhosts';
+const CAM_ENFORCE = /^(true|1|yes|on)$/i.test(process.env.CAMERA_PROXY_ENFORCE || '');
+const _camHosts = new Set((process.env.CAMERA_PROXY_HOSTS || '').split(',').map(h => h.trim().toLowerCase()).filter(Boolean));
+const _camUnknown = new Map();   // host -> hits (report mode visibility)
+let _camHostsLoaded = null, _camHostsDirty = false;
+
+function _isPrivateHost(hostname) {
+  const h = String(hostname).toLowerCase().replace(/^\[|\]$/g, '');
+  if (h.includes(':')) return /^(::1?$|fc|fd|fe80|::ffff:(127|10|192\.168|169\.254)\.)/.test(h);
+  return /^(localhost$|0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)
+      || h.endsWith('.internal') || h.endsWith('.local') || h.endsWith('.railway.internal');
+}
+
+function _registerCamHost(u) {
+  try {
+    const h = new URL(u).hostname.toLowerCase();
+    if (h && !_isPrivateHost(h) && !_camHosts.has(h)) { _camHosts.add(h); _camHostsDirty = true; }
+  } catch {}
+}
+
+function _collectCamUrls(obj, depth = 0) {
+  if (!obj || depth > 6) return;
+  if (Array.isArray(obj)) { for (const o of obj) _collectCamUrls(o, depth + 1); return; }
+  if (typeof obj !== 'object') return;
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === 'string') { if (/url$/i.test(k) && /^https?:\/\//i.test(v)) _registerCamHost(v); }
+    else if (v && typeof v === 'object') _collectCamUrls(v, depth + 1);
+  }
+}
+
+function _loadCamHosts() {
+  if (!_camHostsLoaded) {
+    _camHostsLoaded = (async () => {
+      try {
+        const saved = await rGet(CAM_HOSTS_KEY);
+        const arr = Array.isArray(saved) ? saved : (typeof saved === 'string' ? JSON.parse(saved) : []);
+        (arr || []).forEach(h => _camHosts.add(String(h).toLowerCase()));
+      } catch (e) { console.warn('[CamProxy] host list load failed:', e.message); }
+    })();
+  }
+  return _camHostsLoaded;
+}
+setInterval(() => {
+  if (!_camHostsDirty) return;
+  _camHostsDirty = false;
+  rSet(CAM_HOSTS_KEY, [..._camHosts]).catch?.(() => {});
+}, 60 * 1000).unref();
+
+async function _camHostAllowed(hostname) {
+  await _loadCamHosts();
+  const h = hostname.toLowerCase();
+  if (_camHosts.has(h)) return true;
+  _camUnknown.set(h, (_camUnknown.get(h) || 0) + 1);
+  if (_camUnknown.size > 500) _camUnknown.delete(_camUnknown.keys().next().value);
+  return !CAM_ENFORCE;
+}
+
+// Per-IP fixed-window rate limit for the camera proxies
+const _camRate = new Map();
+const CAM_RATE_PER_MIN = Number(process.env.CAMERA_PROXY_RATE_PER_MIN) || 600;
+setInterval(() => _camRate.clear(), 60 * 1000).unref();
+function _clientIp(req) {
+  return req.headers['cf-connecting-ip'] || (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+}
+function _camRateOk(req) {
+  const ip = _clientIp(req);
+  const n = (_camRate.get(ip) || 0) + 1;
+  _camRate.set(ip, n);
+  return n <= CAM_RATE_PER_MIN;
+}
+
+// Fetch with redirect re-validation, size cap and timeout
+function _fetchBinary(url, { maxBytes = 5 * 1024 * 1024, timeoutMs = 15000, redirects = 3 } = {}) {
+  return new Promise((resolve, reject) => {
+    let p;
+    try { p = new URL(url); } catch (e) { return reject(e); }
+    if (!['http:', 'https:'].includes(p.protocol)) return reject(new Error('http/https only'));
+    if (_isPrivateHost(p.hostname)) return reject(new Error('private address blocked'));
+    const mod = p.protocol === 'https:' ? require('https') : require('http');
+    // Browser-style headers: several state 511 sites sit behind firewalls that
+    // answer unfamiliar clients with 403/404. Still identifies WeatherTV.
+    const opts = { headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; WeatherTV/1.0; +https://watchweathertv.com)',
+      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      'Referer': p.origin + '/',
+    }, timeout: timeoutMs };
+    const req = mod.get(url, opts, r => {
+      if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
+        r.resume();
+        if (redirects <= 0) return reject(new Error('too many redirects'));
+        const rawLoc = r.headers.location;
+        if (!rawLoc) return reject(new Error('redirect with no location'));
+        let loc;
+        try { loc = new URL(rawLoc, url).href; } catch (_) { return reject(new Error('bad redirect')); }
+        return _fetchBinary(loc, { maxBytes, timeoutMs, redirects: redirects - 1 }).then(resolve, reject);
+      }
+      const declared = Number(r.headers['content-length'] || 0);
+      if (declared > maxBytes) { r.destroy(); return reject(new Error('upstream too large')); }
+      const chunks = []; let total = 0;
+      r.on('data', c => {
+        total += c.length;
+        if (total > maxBytes) { r.destroy(); reject(new Error('upstream too large')); return; }
+        chunks.push(c);
+      });
+      r.on('end', () => resolve({ buf: Buffer.concat(chunks), ct: r.headers['content-type'] || '', status: r.statusCode,
+                                 lastModified: r.headers['last-modified'] || null }));
+      r.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('upstream timeout')));
+    req.on('error', reject);
+  });
+}
+
+// Ohio OHGO cameras: one site can hold several views (directions) — each view
+// becomes its own camera. Field names are read case-insensitively.
+async function _ohgoCams() {
+  const key = (process.env.OHGO_API_KEY || process.env.OH_DOT_KEY || '').trim();
+  if (!key) return [];
+  const j = JSON.parse(await fetchTextOverHttp('https://publicapi.ohgo.com/api/v1/cameras?page-all=true&api-key=' + encodeURIComponent(key)));
+  const rows = Array.isArray(j) ? j : (j.results || j.Results || j.data || []);
+  const g = (o, k) => o == null ? undefined : (o[k] ?? o[k.charAt(0).toUpperCase() + k.slice(1)]);
+  const out = [];
+  for (const r of rows) {
+    const lat = Number(g(r, 'latitude')), lng = Number(g(r, 'longitude'));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (Math.abs(lat) < 1 && Math.abs(lng) < 1)) continue;
+    const views = g(r, 'cameraViews') || [];
+    views.forEach((v, i) => {
+      const img = g(v, 'largeUrl') || g(v, 'smallUrl');
+      if (!img || !/^https?:/i.test(img)) return;
+      const dir = g(v, 'direction');
+      out.push({
+        id: 'oh-' + g(r, 'id') + '-' + i,
+        name: (g(r, 'location') || g(v, 'mainRoute') || g(r, 'description') || 'Ohio camera') + (dir && views.length > 1 && !/ptz/i.test(dir) ? ' (' + dir + ')' : ''),
+        lat, lng, imageUrl: img, videoUrl: null,
+        direction: dir && !/ptz/i.test(dir) ? dir : null, source: 'dot', provider: 'OHGO · Ohio DOT', pageUrl: 'https://www.ohgo.com',
+      });
+    });
+  }
+  return out;
+}
+
+// Oregon TripCheck camera inventory. The key goes in the subscription header,
+// never in the address. Images come straight from TripCheck's servers.
+async function _tripcheckCams() {
+  const key = (process.env.ODOT_API_KEY || '').trim();
+  if (!key) return [];
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 30000);
+  let j;
+  try {
+    const r = await fetch('https://api.odot.state.or.us/tripcheck/Cctv/Inventory', {
+      headers: { 'Ocp-Apim-Subscription-Key': key, Accept: 'application/json', 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)' }, signal: ctl.signal });
+    if (!r.ok) throw new Error('TripCheck HTTP ' + r.status + (r.status === 401 ? ' — key refused (check ODOT_API_KEY and that it is subscribed to the TripCheck product)' : ''));
+    j = await r.json();
+  } finally { clearTimeout(t); }
+  const rows = j.CCTVInventoryRequest || j.cctvInventoryRequest || j['CCTV-inventory'] || [];
+  const out = [];
+  for (const c of rows) {
+    const lat = Number(c.latitude), lng = Number(c.longitude), img = c['cctv-url'];
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (Math.abs(lat) < 1 && Math.abs(lng) < 1) || !/^https?:/i.test(img || '')) continue;
+    out.push({
+      id: 'or-' + c['device-id'], name: c['device-name'] || c['cctv-other'] || 'Oregon camera',
+      lat, lng, imageUrl: img.replace(/^http:/i, 'https:'), videoUrl: null, direction: null,
+      source: 'dot', provider: 'TripCheck · Oregon DOT', pageUrl: 'https://www.tripcheck.com',
+    });
+  }
+  return out;
+}
+
+// CARS Hub camera lists (cars.js). A state without a camera file (404) just
+// returns none, and the admin CARS page says so.
+// New CARS "511x" map sites (511mn.org): the open camera list their map reads.
+// Each camera has views: live video (HLS) and/or a preview picture.
+async function _cars511xCams(st) {
+  const j = await _camJson(`https://api-511x-${st}.carsprogram.org/cameras/map-features`);
+  const feats = Array.isArray(j) ? j : (j && j.features) || [];
+  const out = [];
+  feats.forEach(f => {
+    const p = f.properties || {}, [lng, lat] = (f.geometry && f.geometry.coordinates) || [];
+    if (p.public === false) return;
+    const views = (p.views || []).filter(v => v && !v.broken);
+    const vid = views.find(v => /^https:\/\/.+\.m3u8(\?|$)/i.test(v.url || ''));
+    const pic = views.map(v => v.videoPreviewUrl || (/\.(jpe?g|png)(\?|$)/i.test(v.url || '') ? v.url : null)).find(u => /^https:\/\//i.test(u || ''));
+    if (!vid && !pic) return;
+    out.push({ id: `${st}-${p.id}`, name: String(p.name || p.tooltip || 'Traffic camera').trim(), lat: Number(lat), lng: Number(lng),
+               imageUrl: pic || null, videoUrl: vid ? vid.url : null, direction: null, route: p.route || null, source: st });
+  });
+  return out.filter(_okLatLng);
+}
+async function _carsHubCams(id) {
+  if (!cars.configured(id)) return [];
+  try { return await cars.loadCameras(id); }
+  catch (e) { console.warn(`[Cameras] CARS ${id}: ${e.message}`); return []; }
+}
+// San Diego: how many SANDAG cameras are NEW versus ones the open traffic
+// feeds already have (within 100 m) — tells us whether regional feeds are worth it
+let _sandagStats = null;
+async function _sandagCams() {
+  const cams = await _carsHubCams('sandag');
+  try {
+    const otcCA = (await _loadOTC().catch(() => [])).filter(c => c.state === 'CA');
+    const dup = cams.filter(s => otcCA.some(o => _haversineM(s.lat, s.lng, o.lat, o.lng) < 100)).length;
+    _sandagStats = { at: new Date().toISOString(), sandag: cams.length, alreadyHad: dup, new: cams.length - dup };
+    if (cams.length) console.log(`[Cameras] SANDAG: ${cams.length} cameras — ${cams.length - dup} new, ${dup} already in the California feeds`);
+  } catch (_) {}
+  return cams;
+}
+app.get('/api/admin/cameras/sandag', (req, res) => res.json(_sandagStats || { note: 'Not loaded yet — open the radar on San Diego with cameras on' }));
+
+// ── Louisiana: hide cameras showing 511LA's "image unavailable" card ─────────
+// 511LA serves the same gray placeholder for every camera that's down. Every
+// few hours each Louisiana camera's picture is loaded (from 511LA itself — not
+// Road511, so no API calls), the placeholder is recognized as the picture many
+// cameras share byte-for-byte, and those cameras are left off the map until
+// they send a real picture again. A short history shows WHEN cameras go dark.
+const _laOffline = new Set();               // imageUrl
+let _laSweep = { running: false, lastAt: 0, history: [], placeholder: null };
+// The check history (and which cameras are dark) is kept in Redis so a redeploy doesn't wipe it
+let _laSweepLoaded = false;
+async function _laSweepLoad() {
+  if (_laSweepLoaded) return; _laSweepLoaded = true;
+  try {
+    const saved = await rGet('wt:la-sweep');
+    if (!saved) return;
+    _laSweep.history = Array.isArray(saved.history) ? saved.history : [];
+    if (saved.lastAt && Date.now() - saved.lastAt < 3 * 3600 * 1000) {      // last check is recent: reuse its result
+      _laSweep.lastAt = saved.lastAt; _laSweep.placeholder = saved.placeholder || null;
+      for (const u of saved.offline || []) _laOffline.add(u);
+      _stateDOTCache.delete('la');
+    }
+  } catch (_) {}
+}
+async function _laImageSweep(cams) {
+  await _laSweepLoad();
+  if (_laSweep.running || Date.now() - _laSweep.lastAt < 3 * 3600 * 1000) return;
+  _laSweep.running = true; _laSweep.lastAt = Date.now();
+  try {
+    const hashes = new Map(), byCam = [];
+    let i = 0;
+    const worker = async () => {
+      while (i < cams.length) {
+        const c = cams[i++];
+        if (!c.imageUrl) continue;
+        try {
+          const { buf, status } = await _fetchBinary(c.imageUrl, { maxBytes: 2 * 1024 * 1024, timeoutMs: 15000 });
+          if (status && status >= 400) { byCam.push([c, null]); continue; }
+          const h = crypto.createHash('sha1').update(buf).digest('hex');
+          hashes.set(h, (hashes.get(h) || 0) + 1);
+          byCam.push([c, h]);
+        } catch (_) { byCam.push([c, null]); }
+        await new Promise(r => setTimeout(r, 900));
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    // The placeholder = the one picture shared by 5+ cameras (real cameras never match byte-for-byte)
+    const [ph, n] = [...hashes].sort((a, b) => b[1] - a[1])[0] || [];
+    const placeholder = n >= 5 ? ph : null;
+    _laSweep.placeholder = placeholder;
+    _laOffline.clear();
+    const down = [];
+    for (const [c, h] of byCam) if (placeholder && h === placeholder) { _laOffline.add(c.imageUrl); down.push(c.name); }
+    const now = new Date();
+    _laSweep.history.unshift({ at: now.toISOString(), hourCentral: +now.toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hour12: false }),
+      checked: byCam.length, unavailable: down.length, names: down.slice(0, 80) });
+    _laSweep.history = _laSweep.history.slice(0, 60);
+    rSet('wt:la-sweep', { history: _laSweep.history, offline: [..._laOffline], placeholder, lastAt: _laSweep.lastAt }, 30 * 86400);
+    _stateDOTCache.delete('la');           // next request rebuilds the list without the dark ones
+    console.log(`[Cameras] Louisiana image check: ${down.length}/${byCam.length} showing 511LA's unavailable card — hidden`);
+  } catch (e) {
+    console.warn('[Cameras] Louisiana image check failed:', e.message);
+  } finally { _laSweep.running = false; }
+}
+app.get('/api/admin/cameras/la-offline', (req, res) => res.json({
+  hiddenNow: _laOffline.size, lastCheck: _laSweep.lastAt ? new Date(_laSweep.lastAt).toISOString() : null,
+  checkRunning: _laSweep.running,
+  note: 'Each check loads every Louisiana camera picture from 511LA; "unavailable" = showing 511LA\'s gray placeholder.',
+  history: _laSweep.history,
+}));
+
+// ── Small JSON helper for the camera feeds below ─────────────────────────────
+async function _camJson(url, headers = {}, ms = 30000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: 'application/json', ...headers }, signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+const _okLatLng = (c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && c.lat && c.lng;
+
+// ── Missouri: MoDOT Traveler Information Map ─────────────────────────────────
+// StreamingCams2.json = live video (HLS) cameras; snapshot.json = a few still
+// pictures. Both are the files MoDOT's own map reads (same feed folder as the
+// Missouri work-zone feed in closures.js).
+async function _modotCams() {
+  const [vids, snaps] = await Promise.all([
+    _camJson('https://traveler.modot.org/timconfig/feed/desktop/StreamingCams2.json').catch(e => { console.warn('[Cameras] MoDOT video list:', e.message); return []; }),
+    _camJson('https://traveler.modot.org/map/js/snapshot.json').catch(() => ({ cameras: [] })),
+  ]);
+  const out = [];
+  (Array.isArray(vids) ? vids : []).forEach((c, i) => {
+    const url = String(c && c.html || '');
+    // About a third point at MoDOT's own stream service, which forwards to a
+    // short-lived (1 hour) video link: look that up when the camera is opened.
+    const svc = url.match(/^https:\/\/traveler\.modot\.org\/tisvc\/api\/Tms\/CameraStream\/([\w.-]+)$/i);
+    if (svc) {
+      out.push({ id: 'mo-' + svc[1], name: String(c.location || 'MoDOT camera').trim(), lat: Number(c.y), lng: Number(c.x),
+                 imageUrl: null, videoUrl: null, direction: null, route: null, source: 'dot',
+                 refreshUrl: '/api/cameras/mo/stream/' + encodeURIComponent(svc[1]) });
+      return;
+    }
+    if (!/^https:\/\/[^/]+\/.+\.m3u8(\?|$)/i.test(url)) return;
+    const name = String(c.location || 'MoDOT camera').trim();
+    const m = url.match(/rtplive\/([^/]+)\//);
+    out.push({ id: 'mo-' + (m ? m[1] : i), name, lat: Number(c.y), lng: Number(c.x), imageUrl: null, videoUrl: url.replace(/:443\//, '/'),
+               direction: null, route: null, source: 'dot' });
+  });
+  ((snaps && snaps.cameras) || []).forEach(c => {
+    const lat = Number(c.location && c.location.y), lng = Number(c.location && c.location.x);
+    if (!c.url || out.some(o => _haversineM(o.lat, o.lng, lat, lng) < 80)) return;
+    out.push({ id: 'mo-snap-' + c.id, name: String(c.caption || 'MoDOT camera'), lat, lng,
+               imageUrl: new URL(c.url, 'https://traveler.modot.org/').href, videoUrl: null, direction: null, route: null, source: 'dot' });
+  });
+  return out.filter(_okLatLng);
+}
+
+const _moFresh = new Map();
+app.get('/api/cameras/mo/stream/:id', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^[\w.-]{3,60}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const hit = _moFresh.get(id);
+  if (hit && Date.now() - hit.ts < 30 * 60 * 1000) return res.json(hit.cam);   // links last an hour
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch('https://traveler.modot.org/tisvc/api/Tms/CameraStream/' + encodeURIComponent(id),
+      { redirect: 'follow', headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)' }, signal: ctl.signal });
+    try { r.body && r.body.cancel(); } catch (_) {}
+    if (!r.ok || !/^https:\/\/.+\.m3u8(\?|$)/i.test(r.url)) return res.status(404).json({ error: 'camera offline' });
+    _registerCamHost(r.url);
+    const cam = { videoUrl: r.url };
+    _moFresh.set(id, { ts: Date.now(), cam });
+    if (_moFresh.size > 800) _moFresh.delete(_moFresh.keys().next().value);
+    res.set('Cache-Control', 'private, no-store');
+    res.json(cam);
+  } catch (e) {
+    res.status(502).json({ error: 'MoDOT unavailable' });
+  } finally { clearTimeout(t); }
+});
+
+// ── Oklahoma: OKTraffic ──────────────────────────────────────────────────────
+// The same request OKTraffic's own map makes (its filter goes in a "filter"
+// header): camera poles with their web cameras and live streams. Cameras ODOT
+// marks Out Of Service or blocked from public display (blockAtis) are left out
+// by the filter itself.
+async function _okTrafficCams() {
+  const filter = JSON.stringify({ include: [{ relation: 'mapCameras', scope: { include: 'streamDictionary',
+    where: { status: { neq: 'Out Of Service' }, type: 'Web', blockAtis: { neq: '1' } } } }] });
+  const poles = await _camJson('https://oktraffic.org/api/CameraPoles', { filter });
+  const out = [];
+  (Array.isArray(poles) ? poles : []).forEach(p => (p.mapCameras || []).forEach(c => {
+    const src = String((c.streamDictionary && c.streamDictionary.streamSrc) || '');
+    if (!/^https:\/\/[^/]+\/.+\.m3u8(\?|$)/i.test(src) || String(c.blockAtis) === '1') return;
+    out.push({ id: 'ok-' + c.id, name: String(c.location || p.name || 'OKTraffic camera').trim(),
+               lat: Number(c.latitude), lng: Number(c.longitude), imageUrl: null, videoUrl: src,
+               direction: c.direction || null, route: null, source: 'dot' });
+  }));
+  return out.filter(_okLatLng);
+}
+
+// ── North Dakota: NDDOT travel map camera file (no key) ──────────────────────
+// One point per camera site, each with several views (north/south/east/west).
+// Each view becomes its own camera, nudged a few metres in its direction so the
+// dots don't sit exactly on top of each other.
+async function _ndCams() {
+  const j = await _camJson('https://travelfiles.dot.nd.gov/geojson_nc/cameras.json');
+  const NUDGE = { north: [1, 0], south: [-1, 0], east: [0, 1], west: [0, -1] };
+  const out = [];
+  ((j && j.features) || []).forEach(f => {
+    const [lng, lat] = (f.geometry && f.geometry.coordinates) || [];
+    const views = (f.properties && f.properties.Cameras) || [];
+    views.forEach((v, k) => {
+      const img = String(v.FullPath || v.LinkPath || '').trim().replace(/ /g, '%20').replace(/^http:/i, 'https:');
+      if (!/^https:\/\/.+\.(jpe?g|png)(\?|$)/i.test(img)) return;
+      const n = NUDGE[String(v.Direction || '').toLowerCase()] || [0, 0];
+      out.push({ id: 'nd-' + img.split('/').pop().replace(/\.\w+$/, ''), name: String(v.Description || 'NDDOT camera').replace(/\s*-\s*NDDOT$/i, '').trim(),
+                 lat: Number(lat) + n[0] * 0.00025, lng: Number(lng) + n[1] * 0.00035, imageUrl: img, videoUrl: null,
+                 direction: v.Direction || null, route: null, source: 'dot' });
+    });
+  });
+  return out.filter(_okLatLng);
+}
+
+// ── Michigan: MDOT Mi Drive ──────────────────────────────────────────────────
+// The list has places and names only; each camera's picture address comes from
+// a second call, made when someone opens that camera (refreshUrl), so we don't
+// ask MDOT 800 times every hour.
+const MIDRIVE = 'https://mdotjboss.state.mi.us/MiDrive/camera/';
+async function _miDriveCams() {
+  const list = await _camJson(MIDRIVE + 'AllForMap');
+  return (Array.isArray(list) ? list : []).filter(c => c && Number.isFinite(+c.id)).map(c => ({
+    id: 'mi-' + c.id, name: String(c.title || 'MDOT camera').trim(), lat: Number(c.latitude), lng: Number(c.longitude),
+    imageUrl: null, videoUrl: null, direction: null, route: null, source: 'dot',
+    refreshUrl: '/api/cameras/mi/cam/' + c.id,
+  })).filter(_okLatLng);
+}
+const _miFresh = new Map();
+app.get('/api/cameras/mi/cam/:id', async (req, res) => {
+  const id = String(req.params.id || '');
+  if (!/^\d{1,8}$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const hit = _miFresh.get(id);
+  if (hit && Date.now() - hit.ts < 10 * 60 * 1000) return res.json(hit.cam);
+  try {
+    const c = await _camJson(MIDRIVE + 'getCameraInformation/' + id, {}, 15000);
+    const img = String(c && c.link || '').replace(/^http:/i, 'https:');
+    if (!/^https:\/\//i.test(img)) return res.status(404).json({ error: 'no picture for this camera' });
+    _registerCamHost(img);
+    const cam = { imageUrl: img, direction: c.orientation ? String(c.orientation).replace(/^Traffic closest to camera is traveling /i, '').replace(/\.$/, '') : null };
+    _miFresh.set(id, { ts: Date.now(), cam });
+    if (_miFresh.size > 1500) _miFresh.delete(_miFresh.keys().next().value);
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json(cam);
+  } catch (e) {
+    res.status(502).json({ error: 'MDOT unavailable' });
+  }
+});
+
+// ── Washington: WSDOT ────────────────────────────────────────────────────────
+// Official: Traveler Information API (free access code, WSDOT_ACCESS_CODE).
+// Until that's set: the camera file WSDOT's travel map reads (Web Mercator).
+async function _wsdotCams() {
+  const code = (process.env.WSDOT_ACCESS_CODE || '').trim();
+  if (code) {
+    const list = await _camJson('https://wsdot.wa.gov/Traffic/api/HighwayCameras/HighwayCamerasREST.svc/GetCamerasAsJson?AccessCode=' + encodeURIComponent(code));
+    return (Array.isArray(list) ? list : []).filter(c => c && c.IsActive !== false && /^https?:\/\//i.test(c.ImageURL || '')).map(c => {
+      const loc = c.CameraLocation || {};
+      return { id: 'wa-' + c.CameraID, name: String(c.Title || loc.Description || 'WSDOT camera').trim(),
+               lat: Number(c.DisplayLatitude || loc.Latitude), lng: Number(c.DisplayLongitude || loc.Longitude),
+               imageUrl: c.ImageURL.replace(/^http:/i, 'https:'), videoUrl: null, direction: loc.Direction || null, route: loc.RoadName || null, source: 'dot' };
+    }).filter(_okLatLng);
+  }
+  const j = await _camJson('https://data.wsdot.wa.gov/travelcenter/Cameras.json');
+  const R = 6378137;
+  return ((j && j.features) || []).map(f => {
+    const a = f.attributes || {}, g = f.geometry || {};
+    const lng = g.x / R * 180 / Math.PI, lat = (2 * Math.atan(Math.exp(g.y / R)) - Math.PI / 2) * 180 / Math.PI;
+    return { id: 'wa-' + a.CameraID, name: String(a.CameraTitle || 'WSDOT camera').trim(), lat, lng,
+             imageUrl: String(a.ImageURL || '').replace(/^http:/i, 'https:'), videoUrl: null, direction: a.CompassDirection || null, route: null, source: 'dot' };
+  }).filter(c => c.imageUrl.startsWith('https://') && _okLatLng(c));
+}
+
+// ── Tennessee: TDOT open-data API (TN_TDOT_KEY) ──────────────────────────────
+// Field names are read defensively until we've seen a live reply; the admin
+// page /api/admin/cameras/dot-status shows what came back ("tn").
+let _tdotWay = null;
+async function _tdotCams() {
+  const key = (process.env.TN_TDOT_KEY || '').trim();
+  if (!key) return [];
+  const st = _dotStatus.tn = { label: 'Tennessee (TDOT SmartWay)', at: new Date().toISOString(), host: 'www.tdot.tn.gov' };
+  // TDOT's docs aren't public, so try the usual ways of sending our key, in
+  // order, and remember the one TDOT accepts (shown on the admin status page).
+  const U = 'https://www.tdot.tn.gov/opendata/api/public/RoadwayCameras';
+  const ways = [
+    ['ApiKey header', U, { ApiKey: key }],
+    ['x-api-key header', U, { 'x-api-key': key }],
+    ['Ocp-Apim-Subscription-Key header', U, { 'Ocp-Apim-Subscription-Key': key }],
+    ['apiKey query', U + '?apiKey=' + encodeURIComponent(key), {}],
+    ['key query', U + '?key=' + encodeURIComponent(key), {}],
+  ];
+  if (_tdotWay) ways.unshift(ways.splice(ways.findIndex(w => w[0] === _tdotWay), 1)[0]);
+  let j, errs = [];
+  for (const [name, url, headers] of ways) {
+    try { j = await _camJson(url, headers); _tdotWay = st.keySentAs = name; break; }
+    catch (e) { errs.push(name + ': ' + e.message); if (!/HTTP 40[13]/.test(e.message)) break; }
+  }
+  if (j === undefined) { st.error = errs.join(' | '); throw new Error('TDOT refused every way of sending the key'); }
+  const list = Array.isArray(j) ? j : (j && (j.data || j.Data || j.cameras || j.Cameras || Object.values(j).find(Array.isArray))) || [];
+  st.received = list.length; st.sampleFields = list[0] ? Object.keys(list[0]).slice(0, 30) : [];
+  const pick = (o, re) => { const k = Object.keys(o || {}).find(k => re.test(k) && o[k] != null && o[k] !== ''); return k ? o[k] : undefined; };
+  const out = list.map((c, i) => {
+    // TDOT's reply (seen in public copies of it): location.coordinates.{lat,lng},
+    // title, httpsVideoUrl, thumbnailUrl, active, route, jurisdiction, id
+    const loc0 = c.location || c.Location || {};
+    const loc = loc0.coordinates && !Array.isArray(loc0.coordinates) ? loc0.coordinates : loc0;
+    const lat = Number(pick(c, /^lat(itude)?$/i) ?? pick(loc, /^lat(itude)?$/i));
+    const lng = Number(pick(c, /^(lng|lon|long|longitude)$/i) ?? pick(loc, /^(lng|lon|long|longitude)$/i));
+    const urls = Object.values(c).filter(v => typeof v === 'string' && /^https?:\/\//i.test(v)).map(v => v.replace(/^http:/i, 'https:'));
+    const video = (/^https:\/\//i.test(c.httpsVideoUrl || '') ? c.httpsVideoUrl.replace(/:443\//, '/') : null) || urls.find(u => /\.m3u8(\?|$)/i.test(u) && !/:1935\//.test(u)) || null;
+    const image = urls.find(u => /\.(jpe?g|png)(\?|$)/i.test(u) || /snapshot|thumbnail|image/i.test(u)) || null;
+    const active = pick(c, /^(active|isactive|enabled|status)$/i);
+    if (active === false || /^(false|0)$|offline|inactive|disabled/i.test(String(active ?? ''))) return null;
+    return { id: 'tn-' + (pick(c, /^(id|cameraid|camera_id)$/i) ?? i), name: String(pick(c, /^(title|name|description|location|locationdescription)$/i) || 'TDOT camera').trim(),
+             lat, lng, imageUrl: image, videoUrl: video, direction: pick(c, /direction/i) || null, route: pick(c, /^(route|roadway|road)$/i) || null, source: 'dot' };
+  }).filter(c => c && (c.imageUrl || c.videoUrl) && _okLatLng(c));
+  st.kept = out.length;
+  return out;
+}
+
+// ── Maryland: MDOT SHA CHART camera feed ──────────────────────────────────────
+// Public, no key: chart.maryland.gov/DataFeeds/GetDataFeeds → "Live Traffic
+// Cameras". Each camera's live video is https://<cctvIp>/rtplive/<id>/playlist.m3u8
+// — the same stream CHART's own video page plays. No still pictures in the feed.
+// Cameras CHART marks offline (commMode OFFLINE / COMM_FAILURE) are left out.
+const CHART_MD_CAMERAS = 'https://chartexp1.sha.maryland.gov/CHARTExportClientService/getCameraMapDataJSON.do';
+async function _chartMdCams() {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
+  let j;
+  try {
+    const r = await fetch(CHART_MD_CAMERAS, { headers: { 'User-Agent': 'WeatherTV/1.0 (watchweathertv.com)', Accept: 'application/json' }, signal: ctl.signal });
+    if (!r.ok) throw new Error('CHART HTTP ' + r.status);
+    j = await r.json();
+  } finally { clearTimeout(t); }
+  const list = Array.isArray(j && j.data) ? j.data : [];
+  const ROUTE = { IS: 'I-', US: 'US ', MD: 'MD ' };
+  return list
+    .filter(c => c && c.commMode === 'ONLINE' && c.opStatus !== 'COMM_FAILURE'
+      && /^[\w.-]+\.sha\.maryland\.gov$/i.test(c.cctvIp || '') && /^[a-f0-9]{16,64}$/i.test(c.id || ''))
+    .map(c => ({
+      id: 'md-' + c.id,
+      name: String(c.description || c.name || 'Maryland camera').replace(/\s*\(CAM \d+\)\s*$/i, ''),
+      lat: Number(c.lat), lng: Number(c.lon),
+      imageUrl: null,
+      videoUrl: `https://${c.cctvIp}/rtplive/${c.id}/playlist.m3u8`,
+      direction: null,
+      route: c.routeNumber ? (ROUTE[c.routePrefix] || '') + c.routeNumber : null,
+      source: 'dot',
+    }))
+    .filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lng) && c.lat && c.lng);
+}
+
+// ── VDOT (Virginia) camera API ────────────────────────────────────────────────
+// https://api.vdotcameras.com/2.0/docs — GeoJSON FeatureCollection of streams.
+// Stream links can carry short-lived tokens, so opening a camera asks
+// /api/cameras/va/stream/:id for a fresh link (cached a minute per camera).
+const VDOT_API = 'https://api.vdotcameras.com/2.0';   // 2.0 per Iteris (JSON by default)
+function _vdotGet(pathAndQuery) {
+  const key = (process.env.VA_VDOT_KEY || '').trim();
+  if (!key) return Promise.reject(new Error('VA_VDOT_KEY not set'));
+  return new Promise((resolve, reject) => {
+    const req = https.get(VDOT_API + pathAndQuery, { headers: { 'x-api-key': key, accept: 'application/json', 'user-agent': 'WeatherTV/1.0 (watchweathertv.com)' }, timeout: 30000 }, (r) => {
+      let d = ''; r.setEncoding('utf8');
+      r.on('data', c => { d += c; if (d.length > 30e6) req.destroy(new Error('too large')); });
+      r.on('end', () => {
+        if (r.statusCode >= 400) return reject(new Error('VDOT ' + r.statusCode + ' ' + d.slice(0, 120)));
+        try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('VDOT bad JSON: ' + d.slice(0, 120))); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('VDOT timeout')));
+    req.on('error', reject);
+  });
+}
+async function _vdotStreams() {
+  const j = await _vdotGet('/streams/getAll?format=json&active=1');
+  return Array.isArray(j && j.features) ? j.features : [];
+}
+// Coordinates come as {latitude, longitude} per the schema, but the examples
+// show arrays in both orders — accept all three, using Virginia's shape to tell.
+function _vdotLatLng(g) {
+  const c = g && g.coordinates; if (!c) return null;
+  let lat, lng;
+  if (Array.isArray(c)) {
+    const [a, b] = c.map(Number);
+    if (a < 0 && b > 0) { lng = a; lat = b; } else { lat = a; lng = b; }
+  } else { lat = Number(c.latitude); lng = Number(c.longitude); }
+  return (isFinite(lat) && isFinite(lng) && lat && lng) ? { lat, lng } : null;
+}
+function _vdotCamera(f) {
+  const p = f && f.properties; if (!p || p.active === false) return null;
+  const md = p.metadata || p.custom_properties || {};    // 2.0 keeps direction/route here
+  const ll = _vdotLatLng(f.geometry); if (!ll) return null;
+  const video = p.https_url || p.ios_url || null;
+  return {
+    id: 'va-' + (p.id || p.name), name: p.description || p.name || 'VDOT camera',
+    lat: ll.lat, lng: ll.lng,
+    imageUrl: p.image_url || null,
+    videoUrl: /^https:/i.test(video || '') ? video : null,
+    direction: md.direction || p.direction || null, route: md.route || p.route || null,
+    source: 'dot', attribution: 'vdot',
+    refreshUrl: '/api/cameras/va/stream/' + encodeURIComponent(p.id || p.name),
+  };
+}
+const _vdotFresh = new Map();   // id → { ts, cam }
+app.get('/api/cameras/va/stream/:id', async (req, res) => {
+  const id = String(req.params.id || '').slice(0, 80);
+  if (!/^[\w.\-]+$/.test(id)) return res.status(400).json({ error: 'bad id' });
+  const hit = _vdotFresh.get(id);
+  if (hit && Date.now() - hit.ts < 60 * 1000) return res.json(hit.cam);
+  try {
+    const path = '/streams/getById/' + encodeURIComponent(id) + '?format=json';
+    // tokenExpiration needs a key permission; if ours lacks it, ask without
+    const j = await _vdotGet(path + '&tokenExpiration=1800').catch(() => _vdotGet(path));
+    const f = Array.isArray(j && j.features) ? j.features[0] : (j && j.properties ? j : null);
+    const cam = f && _vdotCamera(f);
+    if (!cam) return res.status(404).json({ error: 'camera not found' });
+    [cam.videoUrl, cam.imageUrl].forEach(u => u && _registerCamHost(u));
+    _vdotFresh.set(id, { ts: Date.now(), cam });
+    if (_vdotFresh.size > 500) _vdotFresh.delete(_vdotFresh.keys().next().value);
+    res.set('Cache-Control', 'private, no-store');
+    res.json(cam);
+  } catch (e) {
+    res.status(502).json({ error: 'VDOT unavailable' });
+  }
+});
+
+// GET /api/camera-hls?url=...
+// HLS stream proxy — routes M3U8 and .ts segment requests through our server
+// so HLS.js XHR calls stay same-origin and never trigger connect-src CSP.
+// M3U8 playlists are rewritten to route all segment URLs through this proxy.
+const _hlsCache = new Map();       // url -> { buf, ct, ts }   (insertion order = oldest first)
+const _hlsInflight = new Map();    // url -> Promise
+let _hlsCacheBytes = 0;
+const HLS_CACHE_MAX_BYTES = 48 * 1024 * 1024;
+const HLS_M3U8_TTL = 4 * 1000;
+const HLS_SEG_TTL  = 30 * 1000;
+
+function _hlsCachePut(url, entry) {
+  const prev = _hlsCache.get(url);
+  if (prev) { _hlsCacheBytes -= prev.buf.length; _hlsCache.delete(url); }
+  _hlsCache.set(url, entry);
+  _hlsCacheBytes += entry.buf.length;
+  while (_hlsCacheBytes > HLS_CACHE_MAX_BYTES && _hlsCache.size) {
+    const [k, v] = _hlsCache.entries().next().value;
+    _hlsCache.delete(k); _hlsCacheBytes -= v.buf.length;
+  }
+}
+
+async function _hlsFetch(rawUrl, isM3U8) {
+  const { buf, ct, status } = await _fetchBinary(rawUrl, { maxBytes: isM3U8 ? 1024 * 1024 : 15 * 1024 * 1024 });
+  if (status && status >= 400) { const e = new Error('upstream ' + status); e.status = status; throw e; }
+  let outBuf = buf, outCt = ct;
+  if (isM3U8) {
+    const baseUrl = rawUrl.substring(0, rawUrl.lastIndexOf('/') + 1);
+    const text = buf.toString('utf8');
+    const rewritten = text.split('\n').map(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return line;
+      let absUrl;
+      try { absUrl = trimmed.startsWith('http') ? trimmed : new URL(trimmed, baseUrl).href; }
+      catch(_) { return line; }
+      _registerCamHost(absUrl);   // segments/variants from an allowed playlist are allowed
+      return `/api/camera-hls?url=${encodeURIComponent(absUrl)}`;
+    }).join('\n');
+    outBuf = Buffer.from(rewritten, 'utf8');
+    outCt  = 'application/vnd.apple.mpegurl';
+  } else if (!outCt || outCt.includes('text/html')) {
+    outCt = 'video/MP2T';
+  }
+  const entry = { buf: outBuf, ct: outCt, ts: Date.now() };
+  _hlsCachePut(rawUrl, entry);
+  return entry;
+}
+
+app.get('/api/camera-hls', async (req, res) => {
+  const rawUrl = (req.query.url || '').trim();
+  if (!rawUrl) return res.status(400).send('url required');
+  let parsedUrl;
+  try { parsedUrl = new URL(rawUrl); } catch { return res.status(400).send('invalid url'); }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) return res.status(400).send('http/https only');
+  if (_isPrivateHost(parsedUrl.hostname)) return res.status(403).send('private addresses not allowed');
+  if (!_camRateOk(req)) { upstreamCount('cameraRateLimited'); return res.status(429).send('slow down'); }
+  if (!(await _camHostAllowed(parsedUrl.hostname))) { upstreamCount('cameraBlocked'); return res.status(403).send('host not allowed'); }
+
+  const isM3U8 = rawUrl.includes('.m3u8') || rawUrl.includes('playlist');
+  const ttl = isM3U8 ? HLS_M3U8_TTL : HLS_SEG_TTL;
+  const send = (entry) => {
+    upstreamCount('cameraHlsBytes', entry.buf.length);
+    res.set('Content-Type', entry.ct);
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', isM3U8 ? 'no-cache' : 'public, max-age=30');
+    res.send(entry.buf);
+  };
+
+  const cached = _hlsCache.get(rawUrl);
+  if (cached && Date.now() - cached.ts < ttl) return send(cached);
+
+  try {
+    let p = _hlsInflight.get(rawUrl);
+    if (!p) {
+      upstreamCount('cameraHlsUpstream');
+      p = _hlsFetch(rawUrl, isM3U8).finally(() => _hlsInflight.delete(rawUrl));
+      _hlsInflight.set(rawUrl, p);
+    }
+    send(await p);
+  } catch(e) {
+    if (e.status) return res.status(e.status).send(e.message);
+    console.warn('[HLS Proxy]', e.message);
+    res.status(502).send('upstream error');
+  }
+});
+
+// GET /api/camera-image?url=...
+// CORS proxy for camera image URLs — almost all DOT servers block direct
+// browser requests with missing CORS headers. We fetch server-side and
+// pipe back the bytes with the correct headers. Nothing is stored in memory;
+// the 25s Cache-Control lets Cloudflare absorb repeat requests.
+const _imgInflight = new Map();
+app.get('/api/camera-image', async (req, res) => {
+  const rawUrl = (req.query.url || '').trim();
+  if (!rawUrl) return res.status(400).send('url required');
+
+  let parsedUrl;
+  try { parsedUrl = new URL(rawUrl); } catch { return res.status(400).send('invalid url'); }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) return res.status(400).send('http/https only');
+  if (_isPrivateHost(parsedUrl.hostname)) return res.status(403).send('private addresses not allowed');
+  if (!_camRateOk(req)) { upstreamCount('cameraRateLimited'); return res.status(429).send('slow down'); }
+  if (!(await _camHostAllowed(parsedUrl.hostname))) { upstreamCount('cameraBlocked'); return res.status(403).send('host not allowed'); }
+
+  const send = (entry) => {
+    upstreamCount('cameraImageBytes', entry.buf.length);
+    res.set('Content-Type', entry.ct || 'image/jpeg');
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=25');
+    res.send(entry.buf);
+  };
+
+  // No server-side copy is kept: Cloudflare caches each frame for 25s via the
+  // Cache-Control header above, so a busy camera is still fetched once.
+  // _imgInflight only shares a fetch that is already in progress.
+  try {
+    let p = _imgInflight.get(rawUrl);
+    if (!p) {
+      upstreamCount('cameraImageUpstream');
+      p = _fetchBinary(rawUrl, { maxBytes: 5 * 1024 * 1024 }).then(r => {
+        if (r.status && r.status >= 400) { const e = new Error('upstream ' + r.status); e.status = r.status; throw e; }
+        return { buf: r.buf, ct: r.ct };
+      }).finally(() => _imgInflight.delete(rawUrl));
+      _imgInflight.set(rawUrl, p);
+    }
+    send(await p);
+  } catch (e) {
+    _noteCamFailure(parsedUrl, e.status || e.message);
+    if (e.status) return res.status(e.status).send(e.message);
+    res.status(502).send('upstream error');
+  }
+});
+
+// Per-host camera failure log — shown at /api/admin/upstream-usage, and the
+// first failure per host+reason is printed to the Railway log, so a broken
+// state feed says exactly what its server answered (404, 403, timeout…).
+const _camFailures = new Map();   // host -> { count, reasons: {reason: n}, example, last }
+function _noteCamFailure(u, reason) {
+  const host = u.hostname;
+  const f = _camFailures.get(host) || { count: 0, reasons: {}, example: '', last: 0 };
+  const r = String(reason);
+  if (!f.reasons[r]) console.warn(`[CameraProxy] ${host} → ${r} (e.g. ${u.pathname}${u.search.replace(/key=[^&]+/i, 'key=…')})`);
+  f.count += 1; f.reasons[r] = (f.reasons[r] || 0) + 1;
+  f.example = u.pathname + u.search.replace(/key=[^&]+/i, 'key=…'); f.last = Date.now();
+  _camFailures.set(host, f);
+  if (_camFailures.size > 200) _camFailures.delete(_camFailures.keys().next().value);
+}
+
+// GET /api/admin/upstream-usage — today's upstream calls, cache efficiency,
+// camera egress, and camera hosts not yet on the allowlist (admin auth).
+app.get('/api/admin/upstream-usage', async (req, res) => {
+  await _loadCamHosts();
+  const mb = (b) => b ? +(b / 1048576).toFixed(1) : 0;
+  res.json({
+    day: _upstream.day,
+    counts: _upstream,
+    cameraEgressMB: { hls: mb(_upstream.cameraHlsBytes), images: mb(_upstream.cameraImageBytes) },
+    forecastCache: { cells: _forecastCache.size, max: FORECAST_MAX, gridDeg: FORECAST_GRID },
+    camera: {
+      enforce: CAM_ENFORCE,
+      allowedHosts: _camHosts.size,
+      unknownHosts: [..._camUnknown.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([host, hits]) => ({ host, hits })),
+      hlsCacheMB: mb(_hlsCacheBytes),
+      // Which camera servers are failing, and what they answered
+      failures: [..._camFailures.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 40)
+        .map(([host, f]) => ({ host, count: f.count, reasons: f.reasons, example: f.example, last: new Date(f.last).toISOString() })),
+    },
+  });
+});
+
+
+
+// Admin — map a Spotter Network chaser ID to one of our channel IDs
+app.post('/api/admin/chasers/map', (req, res) => {
+  const { spotterNetworkId, channelId } = req.body;
+  if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
+  const data = loadData();
+  if (!data.chaserMap) data.chaserMap = {};
+  if (channelId) {
+    data.chaserMap[spotterNetworkId] = channelId;
+  } else {
+    delete data.chaserMap[spotterNetworkId]; // unmap
+  }
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — dismiss a single (spotterNetworkId, channelId) suggestion pair as
+// "not a match." Stored permanently so it never resurfaces in Suggestions
+// again, even though the same name-similarity will keep recomputing on
+// every refresh. Scoped to the pair, not the whole chaser, since the same
+// person might still be a fuzzy match candidate against a DIFFERENT channel
+// later (e.g. if they're later confirmed as someone else entirely).
+app.post('/api/admin/chasers/dismiss-suggestion', (req, res) => {
+  const { spotterNetworkId, channelId } = req.body;
+  if (!spotterNetworkId || !channelId) return res.status(400).json({ error: 'spotterNetworkId and channelId required' });
+  const data = loadData();
+  if (!data.dismissedSuggestions) data.dismissedSuggestions = [];
+  const key = spotterNetworkId + '::' + channelId;
+  if (!data.dismissedSuggestions.includes(key)) data.dismissedSuggestions.push(key);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — dismiss a chaser entirely from "New Chasers Found" (e.g. a
+// self-reported YouTube link that turns out to be unrelated, a duplicate,
+// or just not someone you want to add). Stored permanently — the chaser
+// stays excluded from that list even though they'll keep appearing in the
+// knownChasers registry and the live feed/radar dots.
+app.post('/api/admin/chasers/dismiss-new', (req, res) => {
+  const { spotterNetworkId } = req.body;
+  if (!spotterNetworkId) return res.status(400).json({ error: 'spotterNetworkId required' });
+  const data = loadData();
+  if (!data.dismissedNewChasers) data.dismissedNewChasers = [];
+  if (!data.dismissedNewChasers.includes(spotterNetworkId)) data.dismissedNewChasers.push(spotterNetworkId);
+  saveData(data);
+  res.json({ ok: true });
+});
+
+// Admin — auto-maps every current "exact" tier match in one call. Exact
+// matches are normalized-identical names or full-token-subset matches (see
+// matchConfidence above), which is a low false-positive-risk bar — these
+// don't need a human click each. Fuzzy matches are intentionally excluded
+// and still require manual confirmation in the Suggestions tab.
+app.post('/api/admin/chasers/auto-map-exact', (req, res) => {
+  const data = loadData();
+  if (!data.chaserMap) data.chaserMap = {};
+  const knownChasers = data.knownChasers || {};
+  const allChannels = [];
+  (data.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
+  });
+
+  let mapped = 0;
+  const mappedNames = [];
+  Object.entries(knownChasers).forEach(([spotterNetworkId, c]) => {
+    if (data.chaserMap[spotterNetworkId]) return; // already mapped
+    for (const ch of allChannels) {
+      if (matchConfidence(c.name, ch.name) === 'exact') {
+        data.chaserMap[spotterNetworkId] = ch.id;
+        mapped++;
+        mappedNames.push({ spotterName: c.name, channelName: ch.name });
+        break; // first exact match wins — exact tier is narrow enough that
+                // multiple exact matches for one chaser should be rare
+      }
+    }
+  });
+
+  if (mapped > 0) saveData(data);
+  res.json({ ok: true, mapped, mappedNames });
+});
+
+// Admin — suggested matches: compares Spotter Network names against our
+// existing channel names (case-insensitive substring match) so the admin
+// doesn't have to manually search 400+ chasers for matches by hand.
+// Compares a Spotter Network name against a channel name and returns a
+// confidence tier: 'exact' (normalized names are identical — safe to
+// auto-map), 'fuzzy' (one contains the other, or they share both first and
+// last token — needs human review), or null (no meaningful match).
+// Brand words that say nothing about WHO someone is ("Daryl Weather" vs
+// "BAM Weather" share only "weather"). They're dropped before comparing.
+const NAME_NOISE = new Set(('weather wx storm storms stormchaser stormchasers chaser chasers chasing chase chases tornado tornadoes twister ' +
+  'live tv media channel official the and of extreme severe radar spotter spotters skywarn team crew productions films video videos ' +
+  'photography photo wxchasing chasetv llc inc network news forecast forecasts forecasting meteorology meteorologist jr sr ii iii').split(' '));
+const NICK = [['mike', 'michael'], ['bill', 'william', 'will', 'billy'], ['bob', 'robert', 'rob', 'bobby'], ['dan', 'daniel', 'danny'],
+  ['chris', 'christopher'], ['matt', 'matthew'], ['nick', 'nicholas', 'nicolas'], ['tom', 'thomas', 'tommy'], ['jim', 'james', 'jimmy', 'jamie'],
+  ['joe', 'joseph', 'joey'], ['jon', 'john', 'jonathan', 'johnny'], ['steve', 'steven', 'stephen'], ['dave', 'david'], ['andy', 'andrew', 'drew'],
+  ['tony', 'anthony'], ['rick', 'richard', 'rich', 'dick'], ['ben', 'benjamin'], ['sam', 'samuel', 'samantha'], ['alex', 'alexander', 'alexandra'],
+  ['zach', 'zachary', 'zack'], ['jake', 'jacob'], ['josh', 'joshua'], ['tim', 'timothy'], ['greg', 'gregory'], ['jeff', 'jeffrey', 'geoff'],
+  ['ken', 'kenneth', 'kenny'], ['ed', 'edward', 'eddie'], ['pat', 'patrick'], ['ron', 'ronald'], ['don', 'donald'], ['nate', 'nathan', 'nathaniel'],
+  ['kate', 'katherine', 'katie', 'kathryn'], ['liz', 'elizabeth', 'beth'], ['jen', 'jennifer', 'jenny'], ['abby', 'abigail'], ['charlie', 'charles', 'chuck']];
+const _nickOf = {}; NICK.forEach(g => g.forEach(n => { _nickOf[n] = g[0]; }));
+const _canonFirst = (w) => _nickOf[w] || w;
+function _nameTokens(name) {
+  return String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(w => w && !NAME_NOISE.has(w) && !/^\d+$/.test(w));
+}
+// Compares a Spotter Network name with a channel name. Returns
+//   'exact' — the same full name (first + last, nicknames allowed, brand words
+//             ignored): "John Mckinney" = "John McKinney", "Bill Kranski" =
+//             "William Kranski", "Brandon Copic" = "Brandon Copic Live"
+//   'fuzzy' — first initial + last name: "D. Shaw" / "Daniel Shaw"
+//   null    — anything else. A shared surname alone ("Mark Hill" / "Andy
+//             Hill") or a shared brand word never counts.
+function matchConfidence(spotterName, channelName) {
+  const a = _nameTokens(spotterName), b = _nameTokens(channelName);
+  if (!a.length || !b.length) return null;
+  const glue = (t) => t.join('');
+  if (glue(a).length >= 6 && glue(a) === glue(b)) return 'exact';        // "ConnorCroff" / "Connor Croff"
+  if (a.length < 2 || b.length < 2) return null;                          // one word left = no full name to compare
+  // Look for the spotter's first+last as consecutive words anywhere in the
+  // channel name (and the other way round), so "Brandon Copic Live" matches
+  const pairsOf = (t) => t.slice(0, -1).map((w, i) => [w, t[i + 1]]);
+  const firstLastA = [a[0], a[a.length - 1]], firstLastB = [b[0], b[b.length - 1]];
+  const same = (x, y) => _canonFirst(x[0]) === _canonFirst(y[0]) && x[1] === y[1];
+  if (same(firstLastA, firstLastB) || pairsOf(b).some(p => same(firstLastA, p)) || pairsOf(a).some(p => same(p, firstLastB))) return 'exact';
+  const initial = (x, y) => x[1] === y[1] && x[1].length >= 3 && (x[0].length === 1 || y[0].length === 1) && x[0][0] === y[0][0];
+  if (initial(firstLastA, firstLastB)) return 'fuzzy';
+  return null;
+}
+
+app.get('/api/admin/chasers/suggestions', (req, res) => {
+  const data = loadData();
+  const chaserMap = data.chaserMap || {};
+  const knownChasers = data.knownChasers || {};
+  const dismissed = new Set(data.dismissedSuggestions || []);
+  const allChannels = [];
+  (data.groups || []).forEach(g => {
+    (g.channels || []).forEach(ch => allChannels.push({ id: ch.id, name: ch.name }));
+  });
+
+  const exact = [];
+  const fuzzy = [];
+  Object.entries(knownChasers).forEach(([spotterNetworkId, c]) => {
+    if (chaserMap[spotterNetworkId]) return; // already mapped
+    allChannels.forEach(ch => {
+      if (dismissed.has(spotterNetworkId + '::' + ch.id)) return; // admin already said no
+      let confidence = matchConfidence(c.name, ch.name);
+      if (!confidence) return;
+      // Behaviour check: once the channel has streamed 3+ hours while we were
+      // watching, a tracker that was NEVER out during those streams isn't them
+      const t = chaserTiming.pairStats(spotterNetworkId, ch.id);
+      if (t.channelLiveSlots >= 18 && t.together === 0) return;
+      if (confidence === 'fuzzy' && t.sessions >= 2 && t.coveragePct >= 60) confidence = 'exact';   // initials + they chase together
+      const entry = {
+        spotterNetworkId,
+        spotterName: c.name,
+        channelId: ch.id,
+        channelName: ch.name,
+        lastSeenAt: c.lastSeenAt,
+        reason: (confidence === 'exact' ? 'Same full name' : 'Same first initial + last name')
+          + (t.together ? ` · tracker out during ${t.coveragePct}% of their streams (${t.sessions} chase${t.sessions === 1 ? '' : 's'})` : ''),
+      };
+      if (confidence === 'exact') exact.push(entry); else fuzzy.push(entry);
+    });
+  });
+
+  res.json({ exact, fuzzy, suggestions: fuzzy }); // `suggestions` kept for backward compat — fuzzy tier only
+});
+
+// Admin — chasers with a self-reported YouTube link in their Note field who
+// are NOT yet mapped to one of our channels. Surfaces new chasers to add.
+// Runs against the persisted knownChasers registry, not just the current
+// 2-minute live snapshot, so this accumulates everyone we've ever spotted
+// reporting a link rather than only whoever happens to be active right now.
+app.get('/api/admin/chasers/unmapped-youtube', (req, res) => {
+  const data = loadData();
+  const chaserMap = data.chaserMap || {};
+  const knownChasers = data.knownChasers || {};
+  const dismissedNew = new Set(data.dismissedNewChasers || []);
+
+  const found = Object.entries(knownChasers)
+    .filter(([spotterNetworkId, c]) => c.youtubeUrl && !chaserMap[spotterNetworkId] && !dismissedNew.has(spotterNetworkId))
+    .map(([spotterNetworkId, c]) => {
+      // Pull current live status from the cache if they're active right
+      // now; otherwise fall back to "last seen" since they may not be
+      // broadcasting in this exact poll window.
+      const live = chaserCache.chasers.find(lc => lc.id === spotterNetworkId);
+      return {
+        spotterNetworkId,
+        name: c.name,
+        youtubeUrl: c.youtubeUrl,
+        lat: live ? live.lat : null,
+        lng: live ? live.lng : null,
+        status: live ? live.status : 'offline',
+        lastSeenAt: c.lastSeenAt
+      };
+    });
+
+  res.json({ unmapped: found });
+});
+
+// Resolves a YouTube URL (handle, /channel/UC..., /c/name, /user/name, or a
+// video URL) into a channel ID + display name + thumbnail via the YouTube
+// Data API. Used by the "Add as Channel" button on the New Chasers Found
+// tab, since chasers self-report arbitrary YouTube URL formats in their
+// Spotter Network Note field, not raw channel IDs.
+function parseYouTubeUrlParts(url) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, ''); // strip trailing slash
+
+    let m;
+    if ((m = path.match(/^\/channel\/(UC[\w-]{10,})/))) return { type: 'id', value: m[1] };
+    if ((m = path.match(/^\/@([\w.-]+)/)))              return { type: 'handle', value: '@' + m[1] };
+    if ((m = path.match(/^\/c\/([\w.-]+)/)))             return { type: 'custom', value: m[1] };
+    if ((m = path.match(/^\/user\/([\w.-]+)/)))          return { type: 'legacy', value: m[1] };
+    // Video URL — resolve via the video's channelId instead
+    if (path === '/watch' && u.searchParams.get('v'))   return { type: 'video', value: u.searchParams.get('v') };
+    if (u.hostname.includes('youtu.be'))                 return { type: 'video', value: path.slice(1) };
+  } catch(e) {}
+  return null;
+}
+
+async function resolveYouTubeChannel(url) {
+  const parts = parseYouTubeUrlParts(url);
+  if (!parts) {
+    const err = new Error('Could not parse a recognizable YouTube URL format from: ' + url);
+    err.code = 'unparseable_url';
+    throw err;
+  }
+  const key = getApiKey();
+
+  let apiUrl = null;
+  if (parts.type === 'id') {
+    apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&id=${parts.value}&part=snippet`;
+  } else if (parts.type === 'handle') {
+    apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&forHandle=${encodeURIComponent(parts.value)}&part=snippet`;
+  } else if (parts.type === 'custom' || parts.type === 'legacy') {
+    // Legacy /c/ and /user/ URLs aren't directly resolvable by the v3 API —
+    // fall back to a search, which costs more quota but covers the format.
+    apiUrl = `https://www.googleapis.com/youtube/v3/search?key=${key}&q=${encodeURIComponent(parts.value)}&type=channel&part=snippet&maxResults=1`;
+  } else if (parts.type === 'video') {
+    const videoData = await ytFetch(`https://www.googleapis.com/youtube/v3/videos?key=${key}&id=${parts.value}&part=snippet`);
+    if (checkQuotaError(videoData)) { markQuotaExceeded(true); const e = new Error('quota_exceeded'); e.code = 'quota_exceeded'; throw e; }
+    const channelId = videoData.items && videoData.items[0] && videoData.items[0].snippet.channelId;
+    if (!channelId) {
+      const err = new Error('Video lookup returned no channelId (video may be private, deleted, or ID is wrong). Raw API response: ' + JSON.stringify(videoData).slice(0, 300));
+      err.code = 'video_lookup_empty';
+      throw err;
+    }
+    apiUrl = `https://www.googleapis.com/youtube/v3/channels?key=${key}&id=${channelId}&part=snippet`;
+  }
+
+  if (!apiUrl) {
+    const err = new Error('Internal: no API URL constructed for parsed type "' + parts.type + '"');
+    err.code = 'internal_no_url';
+    throw err;
+  }
+
+  const data = await ytFetch(apiUrl);
+  if (checkQuotaError(data)) { markQuotaExceeded(true); const e = new Error('quota_exceeded'); e.code = 'quota_exceeded'; throw e; }
+
+  // Surface the API's own error payload rather than swallowing it — this is
+  // what was previously hidden behind a generic "Could not resolve" message,
+  // making it impossible to tell a bad handle apart from an API-level
+  // rejection (e.g. forHandle not recognizing a channel that exists but
+  // hasn't claimed a handle, or a transient API error).
+  if (data.error) {
+    const err = new Error('YouTube API error: ' + (data.error.message || JSON.stringify(data.error)));
+    err.code = 'api_error';
+    throw err;
+  }
+
+  const item = data.items && data.items[0];
+  if (!item) {
+    const err = new Error(
+      `No channel found for ${parts.type} "${parts.value}". This can happen if the channel was deleted/suspended, ` +
+      `the handle was never claimed by this exact string, or (for older accounts) the channel has no handle set at all. ` +
+      `Use the channel ID override below if you have it.`
+    );
+    err.code = 'not_found';
+    throw err;
+  }
+
+  const channelId = item.id?.channelId || item.id; // search results nest id.channelId
+  const snippet = item.snippet || {};
+  return {
+    channelId,
+    name: snippet.title || parts.value,
+    thumbnail: snippet.thumbnails?.default?.url || null
+  };
+}
+
+// Admin — resolve a YouTube URL to a channel ID/name without adding it yet.
+// Lets the admin preview what will be added before confirming.
+app.post('/api/admin/chasers/resolve-youtube', async (req, res) => {
+  const { youtubeUrl } = req.body;
+  if (!youtubeUrl) return res.status(400).json({ error: 'youtubeUrl required' });
+  try {
+    const resolved = await resolveYouTubeChannel(youtubeUrl);
+    res.json(resolved);
+  } catch(e) {
+    if (e.code === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
+    res.status(404).json({ error: e.message, code: e.code || 'unknown' });
+  }
+});
+
+// Admin — one-click flow for the New Chasers Found tab: resolves the
+// chaser's self-reported YouTube URL to a channel ID, adds it as a new
+// channel in the Storm Chasers group (alphabetized), and immediately maps
+// the Spotter Network ID to the new channel. All three steps happen
+// server-side in one call so the UI doesn't need multiple round trips.
+//
+// If `manualChannelId` is provided, resolution is skipped entirely and that
+// ID is used directly — this is the workaround for chasers whose handle
+// won't resolve via forHandle (deleted/renamed channel, handle never
+// claimed, transient API quirk, etc.) but whose channel ID the admin found
+// by hand (e.g. via the page source or a third-party ID lookup tool).
+// channelName is required alongside manualChannelId since there's no API
+// call to fetch a display name from in this path.
+app.post('/api/admin/chasers/add-and-map', async (req, res) => {
+  const { spotterNetworkId, youtubeUrl, groupId, manualChannelId, manualChannelName } = req.body;
+  if (!spotterNetworkId) {
+    return res.status(400).json({ error: 'spotterNetworkId required' });
+  }
+  if (!youtubeUrl && !manualChannelId) {
+    return res.status(400).json({ error: 'youtubeUrl or manualChannelId required' });
+  }
+
+  try {
+    let resolved;
+    if (manualChannelId) {
+      const trimmedId = manualChannelId.trim();
+      if (!/^UC[\w-]{10,}$/.test(trimmedId)) {
+        return res.status(400).json({ error: 'That doesn\'t look like a valid YouTube channel ID — it should start with "UC" (e.g. UCcJ8bLvmhJgK_cCGESPjzxQ).' });
+      }
+      if (!manualChannelName || !manualChannelName.trim()) {
+        return res.status(400).json({ error: 'A display name is required when adding by channel ID manually.' });
+      }
+      resolved = { channelId: trimmedId, name: manualChannelName.trim(), thumbnail: null };
+    } else {
+      resolved = await resolveYouTubeChannel(youtubeUrl);
+    }
+
+    const data = loadData();
+    const targetGroupId = groupId || 'chasers';
+    const group = (data.groups || []).find(g => g.id === targetGroupId);
+    if (!group) return res.status(404).json({ error: 'Target group not found: ' + targetGroupId });
+
+    // Skip if this channel ID is already in the group (avoid duplicates)
+    const exists = (group.channels || []).some(ch => ch.id === resolved.channelId);
+    if (!exists) {
+      group.channels = group.channels || [];
+      group.channels.push({
+        id: resolved.channelId,
+        name: resolved.name,
+        hasLive: true,
+        enabled: true
+      });
+      // Re-alphabetize the group by name, case-insensitive — matches the
+      // existing sort order convention used across all channel groups.
+      group.channels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    }
+
+    if (!data.chaserMap) data.chaserMap = {};
+    data.chaserMap[spotterNetworkId] = resolved.channelId;
+
+    saveData(data);
+    res.json({ ok: true, channelId: resolved.channelId, channelName: resolved.name, alreadyExisted: exists });
+  } catch(e) {
+    if (e.code === 'quota_exceeded') return res.status(429).json({ error: 'quota_exceeded' });
+    res.status(404).json({ error: e.message, code: e.code || 'unknown' });
+  }
+});
+
+// Refresh the chaser cache every 45 seconds — close to Spotter Network's own
+// ~30-60s device ping cadence, so we're not adding much extra staleness on
+// top of their source data. This is a public, unauthenticated feed; if
+// Spotter Network ever wants this slowed down they'll let us know (rate
+// limit response, blocked IP, etc.) and we can back off then.
+setInterval(refreshChaserCache, 45 * 1000);
+// Initial fetch shortly after boot
+setTimeout(refreshChaserCache, 5000);
+
+// ── WebSub subscription lease tracker ───────────────────────────────────────
+// Tracks per-channel subscription status and lease expiry.
+const websubLeases = {}; // { channelId: { subscribedAt, expiresAt, status } }
+
+// ── Failed fetch error log ────────────────────────────────────────────────────
+// Circular buffer of last 50 fetch errors — visible in admin panel.
+// ── Event log — captures errors, quota hits, fetches, admin actions ──────────
+// type: 'error' | 'quota' | 'fetch' | 'admin' | 'info'
+// severity: 'error' | 'warn' | 'info'
+const eventLog = [];
+const MAX_EVENT_LOG = 200;
+
+function logEvent({ type = 'info', severity = 'info', source = 'system', channelId = null, channelName = null, message, detail = null }) {
+  const entry = { type, severity, source, channelId, channelName, message, detail, timestamp: Date.now() };
+  eventLog.unshift(entry);
+  if (eventLog.length > MAX_EVENT_LOG) eventLog.pop();
+  if (severity === 'error') console.error(`[WeatherTV][${type}] ${message}`, detail || '');
+  else if (severity === 'warn') console.warn(`[WeatherTV][${type}] ${message}`, detail || '');
+}
+
+// Back-compat shim — existing logFetchError calls still work
+function logFetchError(channelId, channelName, errorMsg) {
+  logEvent({ type: 'error', severity: 'error', source: 'fetch', channelId, channelName, message: errorMsg });
+}
+
+// ── Daily live-check quota tracker ──────────────────────────────────────────
+// Each WebSub-triggered check now uses videos.list (1 unit) not search (100 units).
+// Cap raised to 500 checks/day = ~500 units max (vs old 40 × 100 = 4,000 units).
+// The 100-unit search fallback (no video ID) still counts against this limit.
+const quotaTracker = { date: "", liveChecks: 0 };
+const DAILY_LIVE_CHECK_LIMIT = 2000; // videos.list at 1 unit each — 2,000 max/day uses ~2,000 of 60,000 available units
+
+function getLiveChecksToday() {
+  const today = new Date().toISOString().split('T')[0];
+  if (quotaTracker.date !== today) { quotaTracker.date = today; quotaTracker.liveChecks = 0; }
+  return quotaTracker.liveChecks;
+}
+
+function recordLiveCheck() {
+  const today = new Date().toISOString().split('T')[0];
+  if (quotaTracker.date !== today) { quotaTracker.date = today; quotaTracker.liveChecks = 0; }
+  quotaTracker.liveChecks++;
+}
+
+// ── Channel activity tracking ────────────────────────────────────────────────
+// Tracks per-channel last video upload date and last confirmed live date.
+// Used to assign channels to fetch tiers so quota is spent on active creators.
+
+async function updateChannelActivity(channelId, updates) {
+  const existing = cache.channelActivity[channelId] || {};
+  const updated = { ...existing, ...updates };
+  cache.channelActivity[channelId] = updated;
+  await rSet('wt:activity:' + channelId, updated, REDIS_TTL.channelActivity);
+}
+
+// Tier 1 (fetch daily): last video < 14 days OR hasLive + last live < 30 days
+// Tier 2 (fetch every 14 days): hasLive but not live in 30+ days
+// Tier 3 (fetch every 14 days, offset): no hasLive, last video 14+ days
+function getChannelTier(ch) {
+  const act = cache.channelActivity[ch.id] || {};
+  const now = Date.now();
+  const DAY = 86400000;
+
+  const hasVideoHistory = !!act.lastVideoDate;
+  const hasLiveHistory  = !!act.lastLiveDate;
+
+  // Bootstrap case — no activity data ever recorded for this channel.
+  // Use hasLive as a proxy: live-capable channels are almost certainly active,
+  // non-live channels can wait for a 14-day check without losing much freshness.
+  if (!hasVideoHistory && !hasLiveHistory) {
+    return ch.hasLive ? 1 : 3;
+  }
+
+  const lastVideoAge = hasVideoHistory ? (now - act.lastVideoDate) / DAY : 999;
+  const lastLiveAge  = hasLiveHistory  ? (now - act.lastLiveDate)  / DAY : 999;
+
+  if (lastVideoAge < 14) return 1;              // recently posted video
+  if (ch.hasLive && lastLiveAge < 30) return 1; // recently confirmed live
+  if (ch.hasLive) return 2;                      // has live capability, but inactive
+  return 3;                                      // no live, inactive video poster
+}
+
+// Should a Tier 2/3 channel be fetched today?
+// Tier 2 (inactive live) fetches on days 1,3,5... of a 14-day rolling window
+// Tier 3 (inactive video) fetches on days 8,10,12... (7-day offset from Tier 2)
+// This staggers them so they never both hit on the same day.
+function shouldFetchTodayByTier(ch, tier) {
+  const act = cache.channelActivity[ch.id] || {};
+  if (act.nextFetchDue && Date.now() < act.nextFetchDue) return false;
+  return true; // due date passed or never set — fetch it
+}
+
+// Alternates fetch order daily so different channels get priority when quota runs out
+function getChannelFetchOrder(channels) {
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const reversed = dayOfYear % 2 === 1;
+  return reversed ? [...channels].reverse() : [...channels];
+}
+
+const REDIS_TTL = {
+  recentVideos:         7 * 24 * 60 * 60,  // 7 days  (was 25h — survives quota gaps)
+  recentVideosInactive: 14 * 24 * 60 * 60, // 14 days for inactive-tier channels
+  liveStatus:           5 * 24 * 60 * 60,  // 5 days  (was 24h — keeps last known state)
+  playlist:             49 * 60 * 60,       // 49 hours (unchanged)
+  channelActivity:      60 * 24 * 60 * 60, // 60 days — long-term per-channel activity
+};
+
+async function rSet(key, value, ttl) {
+  if (!redis) return;
+  try {
+    if (ttl) await redis.setex(key, ttl, JSON.stringify(value));
+    else await redis.set(key, JSON.stringify(value));
+  } catch(e) { console.error('[Redis] SET error ' + key + ':', e.message); }
+}
+
+async function rGet(key) {
+  if (!redis) return null;
+  try {
+    const v = await redis.get(key);
+    return v ? JSON.parse(v) : null;
+  } catch(e) { console.error('[Redis] GET error ' + key + ':', e.message); return null; }
+}
+
+async function rDel(key) {
+  if (!redis) return;
+  try { await redis.del(key); } catch(e) {}
+}
+
+async function rKeys(pattern) {
+  if (!redis) return [];
+  try { return await redis.keys(pattern); } catch(e) { return []; }
+}
+
+// Restore cache from Redis on startup — survives deploys and restarts
+async function restoreCacheFromRedis() {
+  if (!redis) return;
+  try {
+    console.log('[Redis] Restoring cache from Redis...');
+
+    // Metadata
+    const lastFetch = await rGet('wt:lastFetch');
+    if (lastFetch) cache.lastRecentFetch = lastFetch;
+    const lastLive = await rGet('wt:lastLive');
+    if (lastLive) cache.lastLiveCheck = lastLive;
+    const lastNotification = await rGet('wt:lastNotification');
+    if (lastNotification) cache.lastNotificationReceived = lastNotification;
+    const websubActive = await rGet('wt:websubActive');
+    if (websubActive !== null) cache.websubActive = websubActive;
+
+    // Live statuses
+    const liveKeys = await rKeys('wt:live:*');
+    for (const key of liveKeys) {
+      const val = await rGet(key);
+      if (val) cache.liveStatuses[key.replace('wt:live:', '')] = val;
+    }
+
+    // Recent videos
+    const recentKeys = await rKeys('wt:recent:*');
+    for (const key of recentKeys) {
+      const val = await rGet(key);
+      if (val) cache.recentVideos[key.replace('wt:recent:', '')] = val;
+    }
+
+    // Playlist
+    const plKeys = await rKeys('wt:playlist:*');
+    for (const key of plKeys) {
+      const val = await rGet(key);
+      if (val) cache.playlist[key.replace('wt:playlist:', '')] = val;
+    }
+
+    // Channel activity (tier tracking)
+    const activityKeys = await rKeys('wt:activity:*');
+    for (const key of activityKeys) {
+      const val = await rGet(key);
+      if (val) cache.channelActivity[key.replace('wt:activity:', '')] = val;
+    }
+
+    console.log('[Redis] Restored — ' + recentKeys.length + ' video caches, ' + liveKeys.length + ' live statuses, ' + activityKeys.length + ' activity records');
+  } catch(e) {
+    console.error('[Redis] Restore error:', e.message);
+  }
+}
+
+// Intervals are configurable via admin panel — stored in channels.json config
+// Defaults shown here, overridden by loadData().config values
+const CACHE_TTL = {
+  recentVideos: 24 * 60 * 60 * 1000,  // 24 hours default
+  playlist:     48 * 60 * 60 * 1000,  // 48 hours (not configurable — rarely changes)
+  liveCheck:    2 * 60 * 60 * 1000,   // 2 hours default — reduce to 15min after quota increase
+};
+
+function getLiveCheckInterval() {
+  try {
+    const cfg = loadData().config;
+    if (cfg.liveCheckIntervalHours) return cfg.liveCheckIntervalHours * 60 * 60 * 1000;
+  } catch(e) {}
+  return CACHE_TTL.liveCheck;
+}
+
+function getRecentFetchHour() {
+  try {
+    const cfg = loadData().config;
+    if (cfg.recentFetchHourEST !== undefined) return cfg.recentFetchHourEST;
+  } catch(e) {}
+  return 12; // noon EST default -- most forecasters have their daily forecast posted by then
+}
+
+// ── Helper: get channels eligible for live check based on time (EST) ──
+// Forecasters: checked 6am-2am EST (stop 2am-6am)
+// Chasers/Creators: checked 6am-midnight EST (stop midnight-6am)
+// allHours: skip the overnight pause. The free live verifier uses it, so chasers in
+// other time zones (Australia streams during the US night) are still caught.
+function getLiveChannels(allHours = false) {
+  const channels = [];
+  try {
+    const data = loadData();
+    if (!data.groups) return channels;
+
+    // Current hour in EST
+    const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const estHour = estNow.getHours(); // 0-23
+
+    // Forecaster group ID — only they get the extended 2am window
+    const FORECASTER_GROUP = 'forecasters';
+
+    data.groups.forEach(g => {
+      g.channels.forEach(ch => {
+        if (!ch.hasLive || ch.enabled === false) return;
+        if (allHours) { channels.push({ ...ch, _group: g.id }); return; }
+
+        if (g.id === FORECASTER_GROUP) {
+          // Forecasters: active 6am-2am EST (pause 2am-6am)
+          const active = estHour >= 6 || estHour < 2;
+          if (active) channels.push({ ...ch, _group: g.id });
+        } else {
+          // All others: active 6am-midnight EST (pause midnight-6am)
+          const active = estHour >= 6 && estHour < 24;
+          if (active) channels.push({ ...ch, _group: g.id });
+        }
+      });
+    });
+  } catch(e) {}
+  return channels;
+}
+
+// ── Helper: get all enabled channels ──
+function getAllChannels() {
+  const channels = [];
+  try {
+    const data = loadData();
+    if (data.groups) {
+      data.groups.forEach(g => {
+        g.channels.forEach(ch => {
+          if (ch.enabled !== false) channels.push(ch);
+        });
+      });
+    }
+  } catch(e) {}
+  return channels;
+}
+
+// ════════════════════════════════════════════
+// LIVE STATUS — channels endpoint (1 unit each vs 100 for search)
+// Uses YouTube's channels API to check if a channel has an active
+// live broadcast — costs 1 unit per channel instead of 100
+// ════════════════════════════════════════════
+async function checkLiveStatus(channelId) {
+  const key = getApiKey();
+  // Use search with eventType=live — the only reliable live detection method
+  // Costs 100 units per channel but is accurate
+  const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+    '&channelId=' + channelId + '&part=id&eventType=live&type=video';
+  const data = await ytFetch(url);
+  if (checkQuotaError(data)) { markQuotaExceeded(true); throw new Error('quota_exceeded'); }
+  if (data.error) throw new Error('YouTube API: ' + (data.error.message || data.error.code));   // not "offline"
+  return !!(data.items && data.items.length > 0);
+}
+
+// ── Scheduled Live Check ──
+// WebSub handles real-time live detection on Railway (zero quota cost)
+// This poll runs every 4 hours as a safety net catch-all
+// Uses search?eventType=live (100 units/channel) — accurate but expensive
+// Time-aware: chasers/creators stop at midnight EST, forecasters at 2am EST
+// IMPORTANT: Submit quota increase request at console.cloud.google.com
+async function scheduledLiveCheck() {
+  if (cache.websubActive) {
+    console.log('[WeatherTV] WebSub active — skipping poll-based live check');
+    return;
+  }
+  if (primaryQuotaExceeded) {
+    console.log('[WeatherTV] Skipping live check — primary key quota exceeded');
+    return;
+  }
+
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return;
+
+  const channels = getLiveChannels();
+  if (channels.length === 0) {
+    console.log('[WeatherTV] No channels configured yet for live check');
+    return;
+  }
+
+  const estHour = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getHours();
+  console.log('[WeatherTV] Running live check (' + channels.length + ' channels, 100 units each = ' + (channels.length * 100) + ' units) — EST hour: ' + estHour + '...');
+  let liveCount = 0;
+
+  for (const ch of channels) {
+    try {
+      const isLive = await checkLiveStatus(ch.id);
+      const liveEntry = { isLive, checkedAt: Date.now(), source: 'poll' };
+      cache.liveStatuses[ch.id] = liveEntry;
+      rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
+      if (isLive) liveCount++;
+      await new Promise(r => setTimeout(r, 100));
+    } catch(e) {
+      if (e.message === 'quota_exceeded') break;
+      console.error('[WeatherTV] Live check error for ' + ch.id + ':', e.message);
+    }
+  }
+
+  cache.lastLiveCheck = Date.now();
+  await rSet('wt:lastLive', cache.lastLiveCheck);
+  console.log('[WeatherTV] Live check complete — ' + liveCount + ' channel(s) live (' + (channels.length * 100) + ' units used)');
+
+  // No automatic rescheduling — this function is called manually via admin panel only
+  // WebSub handles ongoing live detection
+}
+
+// Scheduled live polling removed — WebSub handles real-time live detection at zero quota cost
+// YouTube notifies us instantly when a channel goes live via WebSub push
+// Use the manual 'Check Now' button in admin panel if you need to verify live status
+// The scheduledLiveCheck function is still available for the manual Check Now button
+console.log('[WeatherTV] Live detection via WebSub only — no scheduled polling');
+
+// Startup live check — only checks channels with no cached status in Redis
+// Catches channels that were already live before server subscribed to WebSub
+// Disabled until quota increase approved — set STARTUP_LIVE_CHECK=true to enable
+if (process.env.STARTUP_LIVE_CHECK === 'true') {
+  setTimeout(async () => {
+    if (primaryQuotaExceeded) return;
+    const channels = getLiveChannels();
+    const unchecked = channels.filter(ch => !cache.liveStatuses[ch.id]);
+    if (unchecked.length === 0) {
+      console.log('[WeatherTV] Startup live check — all channels already have cached status');
+      return;
+    }
+    console.log('[WeatherTV] Startup live check for ' + unchecked.length + ' unchecked channels (' + (unchecked.length * 100) + ' units)...');
+    const key = getApiKey();
+    if (!key) return;
+    for (const ch of unchecked) {
+      if (primaryQuotaExceeded) break;
+      try {
+        const isLive = await checkLiveStatus(ch.id);
+        const liveEntry = { isLive, checkedAt: Date.now(), source: 'startup' };
+        cache.liveStatuses[ch.id] = liveEntry;
+        rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
+        if (isLive) console.log('[WeatherTV] Startup check — ' + ch.name + ' is LIVE');
+        await new Promise(r => setTimeout(r, 150));
+      } catch(e) {
+        if (e.message === 'quota_exceeded') break;
+      }
+    }
+    cache.lastLiveCheck = Date.now();
+    rSet('wt:lastLive', cache.lastLiveCheck);
+    console.log('[WeatherTV] Startup live check complete');
+  }, 5000);
+}
+
+// ════════════════════════════════════════════
+// WEBSUB / PUBSUBHUBBUB
+// YouTube pushes notifications when a channel goes live or posts a video
+// Zero quota cost — YouTube calls us instead of us calling YouTube
+// Requires a public URL (Railway) — not available on localhost
+// ════════════════════════════════════════════
+const WEBSUB_HUB = 'https://pubsubhubbub.appspot.com/subscribe';
+const WEBSUB_LEASE = 9 * 24 * 60 * 60; // 9 days in seconds (max is 10)
+const rawBodyParser = express.raw({ type: 'application/atom+xml', limit: '1mb' });
+
+// Subscribe a single channel to WebSub
+async function websubSubscribe(channelId) {
+  const baseUrl = process.env.APP_URL;
+  if (!baseUrl) return; // Not deployed yet
+
+  const callbackUrl = baseUrl + '/websub/callback/' + channelId;
+  const topicUrl = 'https://www.youtube.com/xml/feeds/videos.xml?channel_id=' + channelId;
+
+  const body = new URLSearchParams({
+    'hub.callback':     callbackUrl,
+    'hub.topic':        topicUrl,
+    'hub.verify':       'async',
+    'hub.mode':         'subscribe',
+    'hub.lease_seconds': String(WEBSUB_LEASE),
+    'hub.secret':       process.env.WEBSUB_SECRET || 'weathertv-secret'
+  });
+
+  return new Promise((resolve, reject) => {
+    const postData = body.toString();
+    const opts = {
+      hostname: 'pubsubhubbub.appspot.com',
+      path: '/subscribe',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    const req = https.request(opts, res => {
+      const now = Date.now();
+      const status = res.statusCode >= 200 && res.statusCode < 300 ? 'active' : 'failed';
+      const expiresAt = now + WEBSUB_LEASE * 1000;
+      websubLeases[channelId] = {
+        subscribedAt: now,
+        expiresAt,
+        status,
+        statusCode: res.statusCode,
+      };
+      // Persist expiry so restarts don't re-subscribe still-valid channels
+      if (res.statusCode >= 200 && res.statusCode < 300) rSet('wt:ws:' + channelId, expiresAt);
+      console.log('[WebSub] Subscribe response for ' + channelId + ': ' + res.statusCode);
+      if (status === 'failed') {
+        const ch = getAllChannels().find(c => c.id === channelId);
+        logFetchError(channelId, ch ? ch.name : channelId, 'WebSub subscribe failed — HTTP ' + res.statusCode);
+      }
+      resolve(res.statusCode);
+    });
+    req.on('error', e => {
+      websubLeases[channelId] = { subscribedAt: Date.now(), expiresAt: null, status: 'error', error: e.message };
+      const ch = getAllChannels().find(c => c.id === channelId);
+      logFetchError(channelId, ch ? ch.name : channelId, 'WebSub subscribe error — ' + e.message);
+      reject(e);
+    });
+    req.write(postData);
+    req.end();
+  });
+}
+
+// ── Live Verifier — zero-quota secondary live check ──────────────────────────
+// Loads youtube.com/channel/{id}/live directly to confirm live status, catching
+// streams WebSub misses and clearing stale lives. Uses getLiveChannels(), so it
+// follows the same hasLive flag and overnight quiet hours as the rest of live
+// detection. Admin page: /admin/live-verifier (behind adminAuth via app.use('/admin')).
+// Enable with LIVE_VERIFIER=true; interval via LIVE_VERIFIER_INTERVAL_MIN (default 2).
+// Weather boost: is there active severe weather right now? (live checks + discovery)
+async function _severeWeatherActive() {
+  const w = radar.getActiveWatches ? radar.getActiveWatches() : {};
+  if ((w.tornado || 0) + (w.severe || 0) > 0) return true;
+  const warnings = (radar.getActiveStormWarnings() || {}).list || [];
+  if (warnings.some(x => /^(Tornado|Extreme Wind|Hurricane) Warning$/.test(x.event))) return true;
+  if (warnings.filter(x => x.event === 'Severe Thunderstorm Warning').length >= 3) return true;
+  const nhc = _nhcCache.data && Date.now() - _nhcCache.ts < 6 * 3600 * 1000 ? _nhcCache.data.activeStorms || [] : [];
+  return nhc.some(st => /^al/i.test(st.id || '') && /^(HU|TS)$/i.test(st.classification || ''));
+}
+
+const liveVerifier = createLiveVerifier({
+  // lastLiveDate drives how often each channel is checked (see TIERS in live-verifier.js)
+  getChannels: async () => getLiveChannels(true).map(ch => ({ id: ch.id, name: ch.name, lastLiveDate: (cache.channelActivity[ch.id] || {}).lastLiveDate || null })),
+  isWatched: async (channelId) => { for (const u of _upcoming.values()) if (u.channelId === channelId) return true; return false; },
+  extraStats: async () => ({ upcoming: _upcoming.size, websubSilent: _websubSilent.length }),
+  // Weather boost → recently active channels checked every sweep while there's
+  // any Tornado or Severe Thunderstorm Watch, a Tornado / Extreme Wind /
+  // Hurricane Warning, 3+ Severe Thunderstorm Warnings, or a named Atlantic storm
+  isSevereActive: _severeWeatherActive,
+
+  // "Known" = WTV is already showing THIS stream (same videoId when both are known)
+  isKnownLive: async (channelId, videoId) => {
+    const s = cache.liveStatuses[channelId];
+    return !!(s && s.isLive && (!videoId || !s.videoId || s.videoId === videoId));
+  },
+  // "Primary" = WebSub / Atom / polling found it — not the verifier itself. Used to
+  // decide whether a stream the verifier found first was caught later or missed.
+  isPrimaryLive: async (channelId, videoId) => {
+    const s = cache.liveStatuses[channelId];
+    return !!(s && s.isLive && s.source !== 'verifier' && (!videoId || !s.videoId || s.videoId === videoId));
+  },
+  onLive: async (r) => {
+    const entry = { isLive: true, videoId: r.videoId, checkedAt: Date.now(), source: r.wasKnown ? (cache.liveStatuses[r.channelId]?.source || 'verifier') : 'verifier' };
+    cache.liveStatuses[r.channelId] = entry;   // refreshing checkedAt keeps 12h auto-expiry from killing long streams
+    cache.lastLiveCheck = Date.now();
+    rSet('wt:live:' + r.channelId, entry, REDIS_TTL.liveStatus);
+    rSet('wt:lastLive', cache.lastLiveCheck);
+    if (!r.wasKnown) {
+      updateChannelActivity(r.channelId, { lastLiveDate: Date.now() });
+      console.log('[LiveVerifier] LIVE (missed by WebSub): ' + r.channelId + ' video: ' + r.videoId);
+    }
+  },
+  onOffline: async (channelId) => {
+    const entry = { isLive: false, videoId: null, checkedAt: Date.now(), source: 'verifier' };
+    cache.liveStatuses[channelId] = entry;
+    rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+    console.log('[LiveVerifier] OFFLINE (stale live cleared): ' + channelId);
+  },
+  store: { get: rGet, set: rSet },
+  // YouTube shows cloud servers a "confirm you're not a bot" page that hides the
+  // live flag. When that page still names a video, ask the API about it (1 unit).
+  confirmVideo: async (videoId) => {
+    const key = getApiKey();
+    if (!key || key === 'YOUR_YOUTUBE_API_KEY' || primaryQuotaExceeded || !/^[\w-]{11}$/.test(videoId)) return null;
+    trackBurn(true, 1);
+    const data = await ytFetch('https://www.googleapis.com/youtube/v3/videos?key=' + key + '&id=' + videoId + '&part=liveStreamingDetails&fields=items/liveStreamingDetails');
+    if (checkQuotaError(data)) { markQuotaExceeded(true); return null; }
+    if (data.error) { console.error('[LiveVerifier] API confirm failed: ' + ((data.error.errors || [])[0] || {}).reason + ' ' + (data.error.message || '')); return null; }
+    const d = data.items && data.items[0] && data.items[0].liveStreamingDetails;
+    return !!(d && d.actualStartTime && !d.actualEndTime);
+  },
+  sweepIntervalMs: (Number(process.env.LIVE_VERIFIER_INTERVAL_MIN) || 2) * 60 * 1000,
+});
+liveVerifier.mountAdmin(app); // /admin/live-verifier, /admin/live-verifier/data, /run, /check/:channelId
+// ── Channel discovery (admin: /admin/discover.html) ──
+const channelDiscovery = require('./channel-discovery').createChannelDiscovery(app, {
+  rGet, rSet, ytFetch, getApiKey, isQuotaExceeded: () => primaryQuotaExceeded, markQuotaExceeded, checkQuotaError, trackBurn,
+  loadData, saveData, subscribe: (id) => process.env.APP_URL ? websubSubscribe(id) : Promise.resolve(), isSevereActive: _severeWeatherActive,
+});
+channelDiscovery.start();
+
+// ── Startup sequence ──
+// Restore app data and cache from Redis first
+(async () => {
+  await restoreAppDataFromRedis();  // groups, channels, collections
+  await restoreCacheFromRedis();    // video cache, live statuses
+  try {   // upcoming-stream watchlist + WebSub health survive restarts
+    const up = await rGet('wt:upcoming');
+    const upObj = typeof up === 'string' ? JSON.parse(up) : up;
+    if (upObj) for (const [v, u] of Object.entries(upObj)) _upcoming.set(v, u);
+    const wp = await rGet('wt:websubPush');
+    Object.assign(_websubPush, (typeof wp === 'string' ? JSON.parse(wp) : wp) || {});
+  } catch (e) { console.warn('[WebSub] Could not restore watchlist:', e.message); }
+
+  // Start verifier only after live statuses are restored — otherwise run #1
+  // would count every already-live channel as a WebSub miss
+  // Case-insensitive value: true / TRUE / 1 / yes / on all enable it
+  if (/^(true|1|yes|on)$/i.test((process.env.LIVE_VERIFIER || '').trim())) liveVerifier.start();
+  else console.log('[LiveVerifier] Disabled — LIVE_VERIFIER is "' + (process.env.LIVE_VERIFIER || '(unset)') + '" (variable name must be all caps: LIVE_VERIFIER=true)');
+
+  // Check if today's scheduled fetch was missed
+  // Compare dates not just timestamps to prevent double-fetching on same day
+  const fetchHour = getRecentFetchHour();
+  const estNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const estHour = estNow.getHours();
+  const lastFetch = cache.lastRecentFetch;
+
+  let missedFetch = false;
+  if (estHour >= fetchHour) {
+    if (!lastFetch) {
+      // Never fetched — run now
+      missedFetch = true;
+    } else {
+      // Check if last fetch was before today's scheduled fetch time
+      const lastFetchEST = new Date(new Date(lastFetch).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const fetchedTodayAfterSchedule = 
+        lastFetchEST.toDateString() === estNow.toDateString() && 
+        lastFetchEST.getHours() >= fetchHour;
+      missedFetch = !fetchedTodayAfterSchedule;
+    }
+  }
+
+  if (missedFetch) {
+    console.log('[WeatherTV] Missed scheduled fetch detected — running now (last fetch: ' + (lastFetch ? new Date(lastFetch).toLocaleString() : 'never') + ')');
+    fetchAllRecentVideos(); // don't await — run in background
+  } else {
+    const minsAgo = lastFetch ? Math.round((Date.now() - lastFetch) / 60000) : null;
+    console.log('[WeatherTV] No missed fetch — ' + (minsAgo ? 'last fetch ' + minsAgo + 'm ago' : 'before scheduled time'));
+  }
+  scheduleNextRecentFetch();
+})();
+
+// Subscribe all hasLive channels on startup (only when APP_URL is set)
+// force: re-subscribe every channel even if Redis says its lease is still good
+async function subscribeAllChannels(force = false) {
+  if (!process.env.APP_URL) {
+    console.log('[WebSub] APP_URL not set — WebSub disabled (expected on localhost)');
+    return;
+  }
+
+  // All hours: a restart overnight used to subscribe only the forecasters
+  const channels = getLiveChannels(true);
+  const RENEW_WINDOW = 24 * 60 * 60 * 1000; // re-subscribe if expiring within 24h
+  const now = Date.now();
+
+  // Check Redis for existing valid subscriptions — skip channels that don't
+  // need re-subscribing. This makes restarts after recent deploys near-instant
+  // instead of blocking for 60+ seconds re-subscribing every channel.
+  const toSubscribe = [];
+  let skipped = 0;
+  for (const ch of channels) {
+    if (force === true) { toSubscribe.push(ch); continue; }
+    try {
+      const stored = await rGet('wt:ws:' + ch.id);
+      if (stored !== null && stored !== undefined) {
+        const expiresAt = typeof stored === 'number' ? stored : parseInt(String(stored), 10);
+        if (!isNaN(expiresAt) && expiresAt - now > RENEW_WINDOW) {
+          websubLeases[ch.id] = { subscribedAt: null, expiresAt, status: 'active' };
+          skipped++;
+          continue;
+        }
+      }
+    } catch(_) { /* Redis unavailable — subscribe to be safe */ }
+    toSubscribe.push(ch);
+  }
+
+  if (toSubscribe.length === 0) {
+    cache.websubActive = true;
+    rSet('wt:websubActive', true);
+    console.log(`[WebSub] All ${channels.length} subscriptions still valid — skipped hub calls`);
+    return;
+  }
+
+  console.log(`[WebSub] Subscribing ${toSubscribe.length}/${channels.length} channels (${skipped} still valid)...`);
+
+  for (const ch of toSubscribe) {
+    try {
+      await websubSubscribe(ch.id);
+      await new Promise(r => setTimeout(r, 500));
+    } catch(e) {
+      console.error('[WebSub] Subscribe error for ' + ch.name + ':', e.message);
+    }
+  }
+
+  cache.websubActive = true;
+  rSet('wt:websubActive', true);
+  console.log('[WebSub] Subscription refresh complete — push notifications active');
+  // The hub confirms each subscription by calling us back within seconds. If none
+  // of those calls arrive, the callback address (APP_URL) is wrong or unreachable.
+  const askedAt = Date.now();
+  setTimeout(() => {
+    const confirmed = Object.values(_websubVerified).filter(v => v.at >= askedAt).length;
+    if (confirmed) return;
+    const msg = 'No WebSub subscriptions confirmed 10 min after subscribing ' + toSubscribe.length +
+      ' channels — check APP_URL (' + process.env.APP_URL + ') is the public address of this server';
+    console.warn('[WebSub] ' + msg);
+    logEvent({ type: 'websub', severity: 'error', source: 'websub', message: msg });
+  }, 10 * 60 * 1000).unref();
+}
+
+// WebSub verification handshake — YouTube calls this to confirm subscription
+// Records what the hub actually confirmed: YouTube's hub may grant a shorter
+// lease than we ask for, so the real expiry comes from hub.lease_seconds here.
+const _websubVerified = {};   // channelId -> { at, mode, leaseSeconds }
+app.get('/websub/callback/:channelId', (req, res) => {
+  const challenge = req.query['hub.challenge'];
+  const mode = req.query['hub.mode'];
+  const channelId = req.params.channelId;
+  const lease = parseInt(req.query['hub.lease_seconds'], 10);
+  console.log('[WebSub] Verification for ' + channelId + ' mode=' + mode + (lease ? ' lease=' + lease + 's' : ''));
+  if (!challenge) return res.status(400).send('No challenge');
+  _websubVerified[channelId] = { at: Date.now(), mode, leaseSeconds: lease || null };
+  if (mode === 'subscribe' && lease > 0) {
+    const expiresAt = Date.now() + lease * 1000;
+    websubLeases[channelId] = { ...(websubLeases[channelId] || {}), expiresAt, status: 'verified', verifiedAt: Date.now() };
+    rSet('wt:ws:' + channelId, expiresAt);
+  }
+  res.status(200).type('text/plain').send(challenge);
+});
+
+// Ask the hub itself how a subscription is doing (state, last verification and
+// delivery errors). Runs server-side so the secret never leaves the server.
+async function _hubDetails(channelId) {
+  const cb = process.env.APP_URL + '/websub/callback/' + channelId;
+  const url = 'https://pubsubhubbub.appspot.com/subscription-details?hub.callback=' + encodeURIComponent(cb) +
+    '&hub.topic=' + encodeURIComponent('https://www.youtube.com/xml/feeds/videos.xml?channel_id=' + channelId) +
+    '&hub.secret=' + encodeURIComponent(process.env.WEBSUB_SECRET || 'weathertv-secret');
+  const html = await fetchTextOverHttp(url);
+  const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ');
+  const between = (a, b) => { const m = text.match(new RegExp(a + ' (.*?) ' + b)); return m ? m[1].trim() : null; };
+  const err = text.match(/Error (.*?) These legal/);
+  if (err) return { channelId, error: err[1].trim() };
+  return {
+    channelId, callback: cb,
+    state: between('State', 'Last successful verification'),
+    lastVerified: between('Last successful verification', 'Expiration time'),
+    expires: between('Expiration time', 'Last subscribe request'),
+    lastSubscribeRequest: between('Last subscribe request', 'Last unsubscribe request'),
+    lastVerificationError: between('Last verification error', 'Last delivery error'),
+    lastDeliveryError: between('Last delivery error', 'Aggregate statistics'),
+    stats: between('Aggregate statistics', 'Last item delivered'),
+    lastItemDelivered: between('Content delivered', 'These legal'),
+  };
+}
+app.get('/api/admin/websub/hub-check', async (req, res) => {
+  if (!process.env.APP_URL) return res.status(400).json({ error: 'APP_URL not set' });
+  const n = Math.min(parseInt(req.query.n, 10) || 5, 20);
+  const pick = req.query.channel ? [req.query.channel]
+    : (_websubSilent.length ? _websubSilent.map(c => c.id) : getLiveChannels(true).map(c => c.id)).slice(0, n);
+  const results = [];
+  for (const id of pick) {
+    try { results.push(await _hubDetails(id)); } catch (e) { results.push({ channelId: id, error: e.message }); }
+  }
+  res.json({
+    appUrl: process.env.APP_URL,
+    lastNotificationReceived: cache.lastNotificationReceived ? new Date(cache.lastNotificationReceived).toISOString() : null,
+    verificationsSinceRestart: Object.keys(_websubVerified).length,
+    sampleVerifications: Object.entries(_websubVerified).slice(-5).map(([id, v]) => ({ id, ...v, at: new Date(v.at).toISOString() })),
+    hub: results,
+  });
+});
+
+// WebSub notification — YouTube pushes this when a channel posts or goes live
+// Rate limit: only do API live check if we haven't checked this channel in last 10 minutes
+const websubLastCheck = {}; // channelId -> timestamp
+const WEBSUB_RATE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+
+// Is this push really from the hub? The hub signs every notification with the
+// hub.secret we subscribed with (X-Hub-Signature: sha1=<hmac of the body>).
+function websubSignatureValid(req) {
+  const sig = String(req.headers['x-hub-signature'] || '');
+  const m = sig.match(/^(sha1|sha256)=([0-9a-f]+)$/i);
+  if (!m || !Buffer.isBuffer(req.body)) return false;
+  const want = crypto.createHmac(m[1].toLowerCase(), process.env.WEBSUB_SECRET || 'weathertv-secret').update(req.body).digest('hex');
+  const a = Buffer.from(want), b = Buffer.from(m[2].toLowerCase());
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
+  res.status(200).send('OK'); // Always respond quickly
+
+  const channelId = req.params.channelId;
+  // Only channels WeatherTV actually carries — anything else is ignored, so a
+  // forged request can't add junk entries or spend quota on random channels
+  if (!getAllChannels().some(ch => ch.id === channelId)) return;
+  const body = req.body ? req.body.toString() : '';
+  // Unsigned/forged pushes are never trusted on their own: they skip the instant
+  // "LIVE from the feed" path below and only trigger the normal rate-limited
+  // YouTube check, so nobody can put an arbitrary video on WeatherTV.
+  const signed = websubSignatureValid(req);
+  if (!signed) console.warn('[WebSub] Unsigned or mis-signed push for ' + channelId + ' — verifying with YouTube instead of trusting it');
+
+  // Track that YouTube pushed a notification to us (free, 0 units)
+  cache.lastNotificationReceived = Date.now();
+  rSet('wt:lastNotification', cache.lastNotificationReceived);
+  if (signed) _noteWebsubPush(channelId);
+
+  // Step 1: Parse Atom feed — free, no quota cost
+  // Extract video ID and live status directly from the feed XML
+  const videoIdMatch = body.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+  const feedVideoIdRaw = videoIdMatch ? videoIdMatch[1].trim() : null;
+  const feedVideoId = feedVideoIdRaw && /^[A-Za-z0-9_-]{11}$/.test(feedVideoIdRaw) ? feedVideoIdRaw : null;
+  const feedIsLive     = body.includes('<yt:liveBroadcastContent>live</yt:liveBroadcastContent>');
+  const feedIsUpcoming = body.includes('<yt:liveBroadcastContent>upcoming</yt:liveBroadcastContent>');
+
+  // Step 2: If feed explicitly says LIVE — trust it, mark immediately, no API call (0 units)
+  if (signed && feedIsLive && feedVideoId) {
+    const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+    const wsEntry = { isLive: true, videoId: feedVideoId, checkedAt: Date.now(), source: 'websub_feed' };
+    cache.liveStatuses[channelId] = wsEntry;
+    cache.lastLiveCheck = Date.now();
+    rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
+    rSet('wt:lastLive', cache.lastLiveCheck);
+    updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+    websubLastCheck[channelId] = Date.now();
+    if (!wasLive) console.log('[WebSub] LIVE (feed confirmed, 0 units): ' + channelId + ' video: ' + feedVideoId);
+    delete cache.recentVideos[channelId];
+    rDel('wt:recent:' + channelId);
+    return;
+  }
+
+  // Step 3: If feed says UPCOMING — note it, no API call needed
+  if (signed && feedIsUpcoming) {
+    console.log('[WebSub] ' + channelId + ' has upcoming stream (0 units)');
+    delete cache.recentVideos[channelId];
+    rDel('wt:recent:' + channelId);
+    return;
+  }
+
+  // Step 4: Feed is ambiguous (regular video post, no live indicator)
+  // Invalidate recent video cache — content changed
+  delete cache.recentVideos[channelId];
+  rDel('wt:recent:' + channelId);
+
+  // Step 5: Rate limit — skip confirmation API call if we checked this channel recently
+  // Per video, not per channel: a second notice about a DIFFERENT video (e.g. a
+  // stream set up right after a Short was posted) must not be skipped
+  const checkKey = feedVideoId ? 'v:' + feedVideoId : channelId;
+  if (feedVideoId && _upcoming.has(feedVideoId)) return;   // already on the watchlist
+  const lastCheck = websubLastCheck[checkKey] || 0;
+  const timeSinceCheck = Date.now() - lastCheck;
+  const recentlyChecked = timeSinceCheck < WEBSUB_RATE_LIMIT_MS;
+  if (recentlyChecked) {
+    console.log('[WebSub] ' + channelId + ' posted content (checked ' + Math.round(timeSinceCheck/60000) + 'm ago — skipping confirmation)');
+    return;
+  }
+
+  // Step 6: Ambiguous — use videos.list?part=liveStreamingDetails for 1 unit (not 100)
+  // This checks if the specific video from the notification is an active live stream
+  const liveChecksToday = getLiveChecksToday();
+  if (!primaryQuotaExceeded && liveChecksToday < DAILY_LIVE_CHECK_LIMIT) {
+    const key = getApiKey();
+    if (key && key !== 'YOUR_YOUTUBE_API_KEY' && feedVideoId) {
+      websubLastCheck[checkKey] = Date.now();
+      recordLiveCheck();
+      trackBurn(true, 1); // videos.list costs 1 unit, not 100
+      console.log('[WebSub] Live detail check (1 unit) for ' + channelId + ' video: ' + feedVideoId);
+      const url = 'https://www.googleapis.com/youtube/v3/videos?key=' + key +
+        '&id=' + feedVideoId + '&part=liveStreamingDetails&fields=items/liveStreamingDetails';
+      ytFetch(url).then(data => {
+        if (checkQuotaError(data)) { markQuotaExceeded(true); return; }
+        if (data.error) { console.error('[WebSub] Detail check API error for ' + channelId + ': ' + (((data.error.errors || [])[0] || {}).reason || data.error.code) + ' ' + (data.error.message || '')); return; }
+        const details = data.items && data.items[0] && data.items[0].liveStreamingDetails;
+        // Active live stream: has actualStartTime but no actualEndTime
+        const isLive = !!(details && details.actualStartTime && !details.actualEndTime);
+        const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+        // Scheduled / set up but not started: YouTube sends no second notice when
+        // it goes live, so watch this video until it starts
+        if (details && !details.actualStartTime && !details.actualEndTime) {
+          _watchUpcoming(channelId, feedVideoId, details.scheduledStartTime);
+          return;
+        }
+        // A finished stream or ordinary upload only turns a channel OFF when it's
+        // the very stream we're showing — a Short posted mid-stream must not
+        if (!isLive && wasLive && cache.liveStatuses[channelId].videoId && cache.liveStatuses[channelId].videoId !== feedVideoId) {
+          console.log('[WebSub] ' + channelId + ' posted ' + feedVideoId + ' while live — keeping the live stream');
+          return;
+        }
+        const wsEntry = { isLive, videoId: isLive ? feedVideoId : null, checkedAt: Date.now(), source: 'websub_details' };
+        cache.liveStatuses[channelId] = wsEntry;
+        cache.lastLiveCheck = Date.now();
+        rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
+        rSet('wt:lastLive', cache.lastLiveCheck);
+        if (isLive) updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+        if (isLive && !wasLive)  console.log('[WebSub] LIVE CONFIRMED (1 unit): ' + channelId);
+        else if (!isLive && wasLive) console.log('[WebSub] OFFLINE: ' + channelId + ' stream ended');
+        else console.log('[WebSub] ' + channelId + ' posted content (not live)');
+      }).catch(e => console.error('[WebSub] Detail check error for ' + channelId + ':', e.message));
+    } else if (!feedVideoId) {
+      // No video ID in notification — fall back to search (100 units) as last resort
+      const key = getApiKey();
+      if (key && key !== 'YOUR_YOUTUBE_API_KEY') {
+        websubLastCheck[channelId] = Date.now();
+        recordLiveCheck();
+        trackBurn(true, 100);
+        console.log('[WebSub] No video ID — fallback search check for ' + channelId);
+        const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+          '&channelId=' + channelId + '&part=id&eventType=live&type=video';
+        ytFetch(url).then(data => {
+          if (checkQuotaError(data)) { markQuotaExceeded(true); return; }
+          if (data.error) { console.error('[WebSub] Search API error for ' + channelId + ': ' + (data.error.message || data.error.code)); return; }
+          const isLive = !!(data.items && data.items.length > 0);
+          const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
+          const wasLive = cache.liveStatuses[channelId] && cache.liveStatuses[channelId].isLive;
+          const wsEntry = { isLive, videoId, checkedAt: Date.now(), source: 'websub_search' };
+          cache.liveStatuses[channelId] = wsEntry;
+          cache.lastLiveCheck = Date.now();
+          rSet('wt:live:' + channelId, wsEntry, REDIS_TTL.liveStatus);
+          rSet('wt:lastLive', cache.lastLiveCheck);
+          if (isLive) updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+          if (isLive && !wasLive) console.log('[WebSub] LIVE CONFIRMED (search): ' + channelId);
+          else if (!isLive && wasLive) console.log('[WebSub] OFFLINE: ' + channelId);
+        }).catch(e => console.error('[WebSub] Search error for ' + channelId + ':', e.message));
+      }
+    }
+  } else {
+    console.log('[WebSub] ' + channelId + ' posted — skipping check (daily limit reached or quota exceeded)');
+  }
+});
+
+// ── Upcoming-stream watchlist ────────────────────────────────────────────────
+// WebSub notices arrive when a stream is scheduled or set up, not when it goes
+// live. Those videos wait here and are checked from 3 min before their start
+// time, every 2 min, up to 50 per videos.list call (1 unit per call).
+const _upcoming = new Map();   // videoId -> { channelId, scheduledAt, addedAt }
+const UPCOMING_LEAD_MS = 3 * 60 * 1000;
+const UPCOMING_GIVE_UP_MS = 2 * 3600 * 1000;      // not started 2 h after its start time
+const UPCOMING_NO_TIME_MS = 6 * 3600 * 1000;      // no start time given: watch up to 6 h
+function _saveUpcoming() { rSet('wt:upcoming', Object.fromEntries(_upcoming)).catch?.(() => {}); }
+function _watchUpcoming(channelId, videoId, scheduledStartTime) {
+  if (!videoId || _upcoming.has(videoId)) return;
+  const scheduledAt = Date.parse(scheduledStartTime || '') || null;
+  if (scheduledAt && scheduledAt > Date.now() + 14 * 864e5) return;   // weeks away — a later notice will come
+  _upcoming.set(videoId, { channelId, scheduledAt, addedAt: Date.now() });
+  _saveUpcoming();
+  console.log('[WebSub] Upcoming stream on watchlist: ' + channelId + ' video ' + videoId +
+    (scheduledAt ? ' starts ' + new Date(scheduledAt).toISOString() : ' (no start time)'));
+}
+async function _checkUpcoming() {
+  if (!_upcoming.size || primaryQuotaExceeded) return;
+  const now = Date.now();
+  for (const [vid, u] of _upcoming) {   // drop expired entries
+    const deadline = u.scheduledAt ? u.scheduledAt + UPCOMING_GIVE_UP_MS : u.addedAt + UPCOMING_NO_TIME_MS;
+    if (now > deadline) { _upcoming.delete(vid); console.log('[WebSub] Upcoming ' + vid + ' never started — dropped'); }
+  }
+  const due = [..._upcoming].filter(([, u]) => !u.scheduledAt || now >= u.scheduledAt - UPCOMING_LEAD_MS).map(([v]) => v);
+  if (!due.length) { _saveUpcoming(); return; }
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return;
+  for (let i = 0; i < due.length; i += 50) {
+    const ids = due.slice(i, i + 50);
+    trackBurn(true, 1);
+    let data;
+    try {
+      data = await ytFetch('https://www.googleapis.com/youtube/v3/videos?key=' + key + '&id=' + ids.join(',') +
+        '&part=liveStreamingDetails&fields=items(id,liveStreamingDetails)');
+    } catch (e) { console.error('[WebSub] Upcoming check failed:', e.message); return; }
+    if (checkQuotaError(data)) { markQuotaExceeded(true); return; }
+    if (data.error) { console.error('[WebSub] Upcoming check API error: ' + (data.error.message || data.error.code)); return; }
+    const found = new Map((data.items || []).map(it => [it.id, it.liveStreamingDetails || {}]));
+    for (const vid of ids) {
+      const u = _upcoming.get(vid); if (!u) continue;
+      const d = found.get(vid);
+      if (!d || d.actualEndTime) { _upcoming.delete(vid); continue; }          // deleted, private, or already over
+      if (d.scheduledStartTime) u.scheduledAt = Date.parse(d.scheduledStartTime) || u.scheduledAt;   // rescheduled
+      if (d.actualStartTime) {
+        _upcoming.delete(vid);
+        const entry = { isLive: true, videoId: vid, checkedAt: Date.now(), source: 'websub_upcoming' };
+        cache.liveStatuses[u.channelId] = entry;
+        cache.lastLiveCheck = Date.now();
+        rSet('wt:live:' + u.channelId, entry, REDIS_TTL.liveStatus);
+        rSet('wt:lastLive', cache.lastLiveCheck);
+        updateChannelActivity(u.channelId, { lastLiveDate: Date.now() });
+        console.log('[WebSub] LIVE (upcoming stream started): ' + u.channelId + ' video: ' + vid);
+      }
+    }
+  }
+  _saveUpcoming();
+}
+setInterval(() => { _checkUpcoming().catch(e => console.error('[WebSub] Upcoming watch error:', e.message)); }, 2 * 60 * 1000).unref();
+
+// ── WebSub health: which channels actually send us notices ────────────────────
+// A channel that streams often but hasn't sent a notice in 7 days probably has a
+// broken subscription — re-subscribe just that one (at most once a day each).
+const _websubPush = {};        // channelId -> last signed notice (ms)
+const _websubResub = {};       // channelId -> last health re-subscribe (ms)
+let _websubSilent = [];
+let _pushSaveTimer = null;
+function _noteWebsubPush(channelId) {
+  _websubPush[channelId] = Date.now();
+  if (!_pushSaveTimer) _pushSaveTimer = setTimeout(() => { _pushSaveTimer = null; rSet('wt:websubPush', _websubPush); }, 60 * 1000);
+}
+async function _websubHealth() {
+  if (!process.env.APP_URL) return;
+  const counts = await liveVerifier.streamCounts(7);
+  const week = Date.now() - 7 * 864e5;
+  _websubSilent = getLiveChannels(true)
+    .filter(ch => (counts[ch.id] || 0) >= 2 && (_websubPush[ch.id] || 0) < week)
+    .map(ch => ({ id: ch.id, name: ch.name, streams7d: counts[ch.id] }));
+  for (const ch of _websubSilent) {
+    if (Date.now() - (_websubResub[ch.id] || 0) < 864e5) continue;
+    _websubResub[ch.id] = Date.now();
+    console.log('[WebSub] Health: ' + ch.name + ' streamed ' + ch.streams7d + 'x this week with no notices — re-subscribing');
+    await websubSubscribe(ch.id).catch(e => console.error('[WebSub] Health re-subscribe failed for ' + ch.name + ':', e.message));
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+setTimeout(() => {
+  _websubHealth().catch(() => {});
+  setInterval(() => _websubHealth().catch(e => console.error('[WebSub] Health check error:', e.message)), 6 * 3600 * 1000).unref();
+}, 30 * 60 * 1000).unref();   // first run 30 min after start, once notices have had time to arrive
+app.get('/api/admin/websub/health', (req, res) => res.json({
+  silent: _websubSilent, upcoming: [..._upcoming].map(([videoId, u]) => ({ videoId, ...u })),
+  lastPush: _websubPush,
+}));
+
+// Re-subscribe all channels every 8 days (before 9-day lease expires)
+setInterval(() => {
+  if (process.env.APP_URL) {
+    console.log('[WebSub] Renewing subscriptions...');
+    subscribeAllChannels();
+  }
+}, 8 * 24 * 60 * 60 * 1000);
+
+// Admin endpoint to manually trigger re-subscription
+app.post('/api/admin/websub/subscribe', async (req, res) => {
+  if (!process.env.APP_URL) {
+    return res.status(400).json({ error: 'APP_URL not configured — WebSub requires a public URL' });
+  }
+  subscribeAllChannels(true).catch(e => console.error('[WebSub] Forced renewal failed:', e.message));
+  res.json({ ok: true, message: 'Re-subscribing every channel with YouTube now (takes a few minutes)' });
+});
+
+// Admin endpoint to resubscribe a single channel — for fixing one FAILED row
+// in the WebSub Health panel without resubscribing all 200+ channels (each
+// full resubscribe takes ~500ms/channel and risks rate limiting from the hub).
+app.post('/api/admin/websub/subscribe/:channelId', async (req, res) => {
+  if (!process.env.APP_URL) {
+    return res.status(400).json({ error: 'APP_URL not configured — WebSub requires a public URL' });
+  }
+  const { channelId } = req.params;
+  try {
+    const statusCode = await websubSubscribe(channelId);
+    const lease = websubLeases[channelId];
+    res.json({ ok: true, statusCode, status: lease ? lease.status : 'unknown' });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Start WebSub subscriptions after boot (10s delay)
+setTimeout(subscribeAllChannels, 10000);
+
+// Watchdog: 200+ channels post something every few hours, so 12 hours with no
+// push at all means the subscriptions have quietly lapsed. Re-subscribe them all.
+let _websubHealAt = 0;
+setInterval(() => {
+  if (!process.env.APP_URL) return;
+  const now = Date.now();
+  const last = cache.lastNotificationReceived || 0;
+  if (now - SERVER_START_TIME < 60 * 60 * 1000 || now - last < 12 * 3600 * 1000 || now - _websubHealAt < 12 * 3600 * 1000) return;
+  _websubHealAt = now;
+  const hrs = last ? Math.round((now - last) / 3600000) + 'h' : 'ever';
+  console.warn('[WebSub] No YouTube push in ' + hrs + ' — re-subscribing every channel');
+  logEvent({ type: 'websub', severity: 'warning', source: 'watchdog', message: 'No WebSub push in ' + hrs + ' — forced re-subscribe of all channels' });
+  subscribeAllChannels(true).catch(e => console.error('[WebSub] Watchdog renewal failed:', e.message));
+}, 30 * 60 * 1000);
+
+// ════════════════════════════════════════════
+// SCHEDULED RECENT VIDEO FETCHER
+// Runs twice daily (noon + 6pm EST) — fetches recent videos for all channels.
+// Uses playlistItems.list at 1 unit/channel (vs. search.list at 100 units).
+// At 146 channels: ~146 units per run × 2 runs = ~292 units/day on primary.
+// Archive key (YOUTUBE_API_KEY_2) activates only if primary quota is exceeded.
+// All users served from cache — zero additional quota per request.
+// ════════════════════════════════════════════
+
+// Derive a channel's uploads playlist ID from its channel ID.
+// YouTube uploads playlist is always 'UU' + channelId.slice(2)
+// e.g. UCxxxxxx → UUxxxxxx — no extra API call required.
+// Channels marked "Weather videos only" (mixed channels: chasing plus fishing,
+// vlogs, gaming…) fetch their newest 50 uploads (still 1 quota unit) and show
+// only the weather ones, newest 10. Everyone else: their newest 10 as before.
+const WEATHER_VIDEO = /\b(tornado(e?s)?|tornadic|storms?|stormy|severe|weather|forecasts?|forecasting|hurricanes?|tropic(s|al)|cyclones?|typhoons?|hail(storm)?|supercells?|chas(e|es|ing|er|ers)|intercept(ed)?|radar|blizzards?|snow(storm|fall)?|winter storm|ice storm|flood(s|ing|ed)?|flash flood|derecho|lightning|thunder(storms?)?|wind ?storm|damaging winds?|heat ?wave|outlook|spc|nws|el ni[ñn]o|la ni[ñn]a|meteorolog\w*|wx|funnel|wall cloud|shelf cloud|dryline|squall|monsoon|nor'?easter|atmospheric river|polar vortex|aurora|wildfire|dust storm|haboob|waterspout)\b|tormenta|tempestad|unwetter|gewitter|orage/i;
+function _isWeatherOnly(channelId) {
+  for (const g of (loadData().groups || [])) for (const c of g.channels) if (c.id === channelId) return !!c.weatherOnly;
+  return false;
+}
+function _recentMax(channelId) { return _isWeatherOnly(channelId) ? 50 : 10; }
+// Big named events people title videos by, with no weather word in the title
+const WEATHER_EVENT = /\b(joplin|el reno|greensburg|tuscaloosa|hackleburg|mayfield|rolling fork|vilonia|pilger|bassfield|jarrell|bridge creek|super outbreak|xenia|picher|parkersburg|katrina|helene|milton|camille|galveston 1900|labor day hurricane|palm sunday outbreak|april 27(th)?,? 2011|may 3(rd)?,? 1999)\b/i;   // only names that aren't also everyday first names or towns (Moore, Ian, Michael, Laura… need a weather word too)
+const _isWxText = (t) => WEATHER_VIDEO.test(t) || WEATHER_EVENT.test(t);
+function _filterRecent(items, channelId) {
+  if (!_isWeatherOnly(channelId)) return items;
+  // Lines a channel pastes under every video (links, "I'm a storm chaser and
+  // fisherman…") would make every upload look like weather — skip lines that
+  // appear in half or more of this batch's descriptions
+  const lineCount = new Map();
+  const linesOf = (d) => [...new Set(String(d || '').split(/\n+/).map(l => l.trim()).filter(l => l.length > 3))];
+  items.forEach(it => linesOf(it.snippet && it.snippet.description).forEach(l => lineCount.set(l, (lineCount.get(l) || 0) + 1)));
+  const boiler = Math.max(3, Math.ceil(items.length / 2));
+  return items.filter(it => {
+    const sn = it.snippet || {};
+    if (sn.liveBroadcastContent === 'live') return true;
+    if (_isWxText(sn.title || '')) return true;
+    const body = linesOf(sn.description).filter(l => (lineCount.get(l) || 0) < boiler).join('\n');
+    return _isWxText(body);
+  }).slice(0, 10);
+}
+
+function getUploadsPlaylistId(channelId) {
+  if (!channelId || !channelId.startsWith('UC')) return null;
+  return 'UU' + channelId.slice(2);
+}
+
+async function fetchAllRecentVideos() {
+  // Each key's quotaExceeded flag auto-clears via its own midnight-Pacific
+  // timer (set in markQuotaExceeded). If BOTH keys are currently exhausted,
+  // there's nothing this cycle can do -- reschedule for next time.
+  if (primaryQuotaExceeded && archiveQuotaExceeded) {
+    console.log('[WeatherTV] Skipping recent video fetch -- both API keys exhausted');
+    scheduleNextRecentFetch();
+    return;
+  }
+
+  const primaryKey = getApiKey();
+  const archiveKey = getArchiveApiKey();
+
+  const allChannels = getAllChannels();
+  if (allChannels.length === 0) return;
+
+  // Assign tiers
+  const tier1 = [], tier2 = [], tier3 = [];
+  for (const ch of allChannels) {
+    const tier = getChannelTier(ch);
+    if (tier === 1) tier1.push(ch);
+    else if (tier === 2) tier2.push(ch);
+    else tier3.push(ch);
+  }
+
+  // Stagger Tier 2 and Tier 3 using day of year -- 7-day natural offset between them
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const fetchTier2Today = dayOfYear % 2 === 0;
+  const fetchTier3Today = dayOfYear % 2 === 1;
+
+  const tier2Due = fetchTier2Today ? tier2.filter(ch => shouldFetchTodayByTier(ch, 2)) : [];
+  const tier3Due = fetchTier3Today ? tier3.filter(ch => shouldFetchTodayByTier(ch, 3)) : [];
+
+  // Extend TTL on inactive channels not being fetched today
+  const notFetchingToday = [
+    ...(fetchTier2Today ? [] : tier2),
+    ...(fetchTier3Today ? [] : tier3),
+    ...(fetchTier2Today ? tier2.filter(ch => !shouldFetchTodayByTier(ch, 2)) : []),
+    ...(fetchTier3Today ? tier3.filter(ch => !shouldFetchTodayByTier(ch, 3)) : []),
+  ];
+  for (const ch of notFetchingToday) {
+    if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items) {
+      await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], REDIS_TTL.recentVideosInactive);
+    }
+  }
+
+  // Tier 1 first (priority), then due Tier 2 and 3 -- alternate A-Z / Z-A daily
+  const priorityChannels = getChannelFetchOrder([...tier1, ...tier2Due, ...tier3Due]);
+
+  console.log('[WeatherTV] Fetch -- Tier1: ' + tier1.length +
+    ', Tier2 today: ' + tier2Due.length + '/' + tier2.length +
+    ', Tier3 today: ' + tier3Due.length + '/' + tier3.length +
+    ' | Order: ' + (dayOfYear % 2 === 0 ? 'A to Z' : 'Z to A'));
+
+  let fetched = 0, skipped = 0;
+  const fetchedIds = new Set();
+
+  for (let i = 0; i < priorityChannels.length; i++) {
+    const ch = priorityChannels[i];
+
+    // Use primary key; fall back to archive key if primary is exhausted
+    let useKey = null;
+    let isPrimary = true;
+    if (!primaryQuotaExceeded && primaryKey && primaryKey !== 'YOUR_YOUTUBE_API_KEY') {
+      useKey = primaryKey;
+      isPrimary = true;
+    } else if (!archiveQuotaExceeded && archiveKey && archiveKey !== 'YOUR_YOUTUBE_API_KEY' && archiveKey !== primaryKey) {
+      useKey = archiveKey;
+      isPrimary = false;
+      if (i === 0) console.warn('[WeatherTV] Primary key exhausted — falling back to archive key for recent fetch');
+    }
+
+    if (!useKey) {
+      skipped++;
+      continue;
+    }
+
+    // Use playlistItems.list (1 unit) via the channel's uploads playlist
+    // instead of search.list (100 units) — 100x more efficient.
+    const playlistId = getUploadsPlaylistId(ch.id);
+    if (!playlistId) {
+      skipped++;
+      console.warn('[WeatherTV] Cannot derive uploads playlist for ' + ch.id + ' — skipping');
+      continue;
+    }
+
+    try {
+      const url = 'https://www.googleapis.com/youtube/v3/playlistItems?key=' + useKey +
+        '&playlistId=' + playlistId + '&part=snippet&maxResults=' + _recentMax(ch.id);
+      const data = await ytFetch(url);
+
+      if (checkQuotaError(data)) {
+        markQuotaExceeded(isPrimary);
+        skipped++;
+        console.warn('[WeatherTV] ' + (isPrimary ? 'Primary' : 'Archive') + ' key quota hit at channel ' + (i + 1) + '/' + priorityChannels.length);
+        continue;
+      }
+
+      trackBurn(isPrimary, 1); // playlistItems.list costs 1 unit (vs. 100 for search.list)
+
+      const rawItems = data.items || [];
+
+      // Normalize playlistItems snippet to match the shape search.list returned,
+      // so downstream cache consumers (recent video panel, etc.) don't need changes.
+      // playlistItems snippet.resourceId.videoId → simulate id.videoId
+      const newItems = rawItems.map(item => ({
+        id: { videoId: item.snippet?.resourceId?.videoId || '' },
+        snippet: {
+          title: item.snippet?.title || '',
+          description: item.snippet?.description || '',
+          publishedAt: item.snippet?.publishedAt || '',
+          channelTitle: item.snippet?.channelTitle || '',
+          channelId: item.snippet?.channelId || ch.id,
+          liveBroadcastContent: item.snippet?.liveBroadcastContent || 'none',
+          thumbnails: item.snippet?.thumbnails || {},
+        },
+      }));
+
+      // Free live detection from snippet data (same as before)
+      const liveItem = newItems.find(item => item.snippet && item.snippet.liveBroadcastContent === 'live');
+      if (liveItem) {
+        const videoId = liveItem.id && liveItem.id.videoId ? liveItem.id.videoId : null;
+        const liveEntry = { isLive: true, videoId, checkedAt: Date.now(), source: 'recent_fetch' };
+        cache.liveStatuses[ch.id] = liveEntry;
+        rSet('wt:live:' + ch.id, liveEntry, REDIS_TTL.liveStatus);
+        updateChannelActivity(ch.id, { lastLiveDate: Date.now() });
+        console.log('[WeatherTV] Live detected during fetch: ' + ch.id + (videoId ? ' (' + videoId + ')' : ''));
+      }
+
+      // Update last video date for tier tracking
+      if (newItems.length > 0 && newItems[0].snippet && newItems[0].snippet.publishedAt) {
+        const lastVideoDate = new Date(newItems[0].snippet.publishedAt).getTime();
+        await updateChannelActivity(ch.id, { lastVideoDate });
+      }
+
+      const tier = getChannelTier(ch);
+      const ttl = tier === 1 ? REDIS_TTL.recentVideos : REDIS_TTL.recentVideosInactive;
+
+      const shown = _filterRecent(newItems, ch.id);   // weather-only channels: just their weather videos
+      if (shown.length > 0) {
+        cache.recentVideos[ch.id] = { items: shown, cachedAt: Date.now() };
+        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], ttl);
+        if (tier !== 1) await updateChannelActivity(ch.id, { nextFetchDue: Date.now() + 14 * 86400000 });
+        fetched++;
+        fetchedIds.add(ch.id);
+      } else if (cache.recentVideos[ch.id] && cache.recentVideos[ch.id].items && cache.recentVideos[ch.id].items.length > 0) {
+        cache.recentVideos[ch.id].cachedAt = Date.now();
+        await rSet('wt:recent:' + ch.id, cache.recentVideos[ch.id], ttl);
+        if (tier !== 1) await updateChannelActivity(ch.id, { nextFetchDue: Date.now() + 14 * 86400000 });
+        fetched++;
+        fetchedIds.add(ch.id);
+      } else {
+        console.log('[WeatherTV] No videos found for ' + ch.id + ' -- may have wrong channel ID or empty uploads playlist');
+        fetchedIds.add(ch.id);
+      }
+
+      await new Promise(r => setTimeout(r, 100)); // lighter stagger since 1-unit calls are far cheaper
+    } catch(e) {
+      console.error('[WeatherTV] Fetch error for ' + ch.id + ':', e.message);
+      logFetchError(ch.id, ch.name, e.message);
+    }
+  }
+
+  cache.lastRecentFetch = Date.now();
+  await rSet('wt:lastFetch', cache.lastRecentFetch);
+
+  // Preserve caches for any channel we didn't reach this cycle
+  for (const ch of priorityChannels) {
+    if (!fetchedIds.has(ch.id)) {
+      const cached = cache.recentVideos[ch.id];
+      if (cached && cached.items && cached.items.length > 0) {
+        await rSet('wt:recent:' + ch.id, cached, REDIS_TTL.recentVideosInactive);
+      }
+    }
+  }
+
+  if (skipped > 0) {
+    console.log('[WeatherTV] Fetch complete -- ' + fetched + '/' + priorityChannels.length + ' updated, ' + skipped + ' skipped (key quota), caches preserved');
+  } else {
+    console.log('[WeatherTV] Fetch complete -- ' + fetched + '/' + priorityChannels.length + ' channels updated (~' + fetched + ' units used)');
+  }
+
+  scheduleNextRecentFetch();
+}
+function getSecondFetchHour() {
+  try {
+    const cfg = loadData().config;
+    if (cfg.recentFetchHour2EST !== undefined) return cfg.recentFetchHour2EST;
+  } catch(e) {}
+  return 18; // 6pm EST default -- catches afternoon/evening storm content and late daily forecasts
+}
+
+function scheduleNextRecentFetch() {
+  const fetchHour1 = getRecentFetchHour();  // noon EST (default)
+  const fetchHour2 = getSecondFetchHour();  // 6pm EST (default)
+
+  const now = new Date();
+  const estNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+
+  // Build candidate times for today
+  const next1 = new Date(estNow); next1.setHours(fetchHour1, 0, 0, 0);
+  const next2 = new Date(estNow); next2.setHours(fetchHour2, 0, 0, 0);
+
+  // Find the next upcoming fetch time; if both have passed today, use noon tomorrow
+  let nextFetch = null;
+  if (estNow < next1) {
+    nextFetch = next1;
+  } else if (estNow < next2) {
+    nextFetch = next2;
+  } else {
+    nextFetch = new Date(next1);
+    nextFetch.setDate(nextFetch.getDate() + 1);
+  }
+
+  const msUntilNext = nextFetch - estNow;
+  const minsUntilNext = Math.round(msUntilNext / 60000);
+  console.log('[WeatherTV] Next recent video fetch in ' + minsUntilNext + ' minutes (' + nextFetch.getHours() + ':00 EST)');
+  setTimeout(fetchAllRecentVideos, msUntilNext);
+}
+
+
+
+// ── API Routes ──
+
+// Live status — served from cache, no API call per request
+app.get('/api/yt/live/:channelId', (req, res) => {
+  const cached = cache.liveStatuses[req.params.channelId];
+  if (cached) {
+    return res.json({
+      items: cached.isLive ? [{ id: cached.videoId || 'live' }] : [],
+      _cached: true,
+      _checkedAt: cached.checkedAt
+    });
+  }
+  res.json({ items: [], _cached: false });
+});
+
+// All live statuses at once — lets frontend get everything in one call
+app.get('/api/yt/live-all', (req, res) => {
+  const LIVE_STATUS_MAX_AGE = 12 * 60 * 60 * 1000; // 12 hours
+  const now = Date.now();
+
+  // Auto-expire stale live statuses — YouTube does not notify us when streams end.
+  // Any isLive:true status older than 12 hours is assumed ended.
+  // Active streams get checkedAt refreshed by WebSub notifications and the daily recent-videos fetch.
+  Object.entries(cache.liveStatuses).forEach(([channelId, status]) => {
+    if (status.isLive && status.checkedAt && (now - status.checkedAt) > LIVE_STATUS_MAX_AGE) {
+      const hoursOld = Math.round((now - status.checkedAt) / 3600000);
+      console.log('[WeatherTV] Auto-expiring stale live status for ' + channelId + ' (' + hoursOld + 'h old)');
+      const expired = { isLive: false, videoId: null, checkedAt: now, source: 'auto_expired' };
+      cache.liveStatuses[channelId] = expired;
+      rSet('wt:live:' + channelId, expired, REDIS_TTL.liveStatus);
+    }
+  });
+
+  res.json({
+    statuses: cache.liveStatuses,
+    lastChecked: cache.lastLiveCheck,
+    lastNotification: cache.lastNotificationReceived,
+    quotaExceeded: primaryQuotaExceeded // live status uses the primary key
+  });
+});
+
+// Recent videos — serve from cache whenever possible; only fetch when cache is empty and quota is available
+app.get('/api/yt/recent/:channelId', async (req, res) => {
+  const channelId = req.params.channelId;
+  // Only channels WeatherTV carries — otherwise anyone could spend our quota
+  // (and fill the cache) by requesting random channel IDs
+  if (!getAllChannels().some(ch => ch.id === channelId)) return res.status(404).json({ error: 'Unknown channel' });
+  const cached = cache.recentVideos[channelId];
+
+  // Rule: old data is always better than no data.
+  // Serve cached data immediately if we have it, regardless of age or quota status.
+  if (cached && cached.items && cached.items.length > 0) {
+    const cacheAge = Date.now() - cached.cachedAt;
+    const stale = cacheAge > CACHE_TTL.recentVideos;
+    // If cache is fresh or quota is exceeded, just serve it — no API call needed
+    if (!stale || archiveQuotaExceeded) {
+      return res.json({ items: cached.items, _cached: true, _stale: stale });
+    }
+    // Cache is stale but quota is available — fall through to fetch fresh data below
+    // We'll still serve stale if the fresh fetch fails
+  }
+
+  // No usable cache or stale cache with quota available — try fetching fresh
+  if (archiveQuotaExceeded) {
+    // Empty cache, quota exceeded — nothing we can do
+    return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
+  }
+
+  const key = getArchiveApiKey();
+  if (!key) return res.status(500).json({ error: 'No API key configured' });
+  // Which pool this call draws from: the archive key when it's set, otherwise
+  // the primary. A quota hit must pause only THAT pool — it used to always mark
+  // the primary as exhausted, which also paused WebSub live confirmations.
+  const usingPrimary = key === getApiKey();
+  const playlistId = getUploadsPlaylistId(channelId);
+  if (!playlistId) return res.json({ items: (cached && cached.items) || [] });
+
+  try {
+    // playlistItems.list on the uploads playlist: 1 unit (search.list was 100),
+    // the same call the scheduled fetch uses
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=${_recentMax(channelId)}`;
+    const raw = await ytFetch(url);
+    if (!checkQuotaError(raw)) trackBurn(usingPrimary, 1);
+    // Same shape search.list returned, so the app's Recent panel is unchanged
+    const data = checkQuotaError(raw) ? raw : { items: (raw.items || []).map(item => ({
+      id: { videoId: item.snippet?.resourceId?.videoId || '' },
+      snippet: {
+        title: item.snippet?.title || '',
+        description: item.snippet?.description || '',
+        publishedAt: item.snippet?.publishedAt || '',
+        channelTitle: item.snippet?.channelTitle || '',
+        channelId: item.snippet?.channelId || channelId,
+        liveBroadcastContent: item.snippet?.liveBroadcastContent || 'none',
+        thumbnails: item.snippet?.thumbnails || {},
+      },
+    })).filter(it => it.id.videoId) };
+    if (data.items) data.items = _filterRecent(data.items, channelId);
+    if (checkQuotaError(data)) {
+      markQuotaExceeded(usingPrimary);
+      // Serve stale cache if available rather than returning an error
+      if (cached && cached.items && cached.items.length > 0) {
+        return res.json({ items: cached.items, _cached: true, _stale: true });
+      }
+      return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
+    }
+    const newItems = data.items || [];
+    if (newItems.length > 0) {
+      const entry = { items: newItems, cachedAt: Date.now() };
+      cache.recentVideos[channelId] = entry;
+      await rSet('wt:recent:' + channelId, entry, REDIS_TTL.recentVideos);
+      res.json(data);
+    } else if (cached && cached.items && cached.items.length > 0) {
+      res.json({ items: cached.items, _cached: true, _preserved: true });
+    } else {
+      res.json({ items: [] });
+    }
+  } catch(e) {
+    // Serve stale cache on any error rather than failing completely
+    if (cached && cached.items && cached.items.length > 0) {
+      return res.json({ items: cached.items, _cached: true, _stale: true });
+    }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Playlist items — cached for 6 hours
+app.get('/api/yt/playlist/:playlistId', async (req, res) => {
+  const playlistId = req.params.playlistId;
+
+  // Serve from cache if fresh
+  const cached = cache.playlist[playlistId];
+  if (cached && (Date.now() - cached.cachedAt) < CACHE_TTL.playlist) {
+    return res.json({ items: cached.items, _cached: true });
+  }
+
+  if (archiveQuotaExceeded) {
+    return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
+  }
+
+  const key = getApiKey();
+  if (!key) return res.status(500).json({ error: 'No API key configured' });
+
+  try {
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=50`;
+    const data = await ytFetch(url);
+    if (checkQuotaError(data)) {
+      markQuotaExceeded();
+      return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
+    }
+    // Filter out deleted and private videos — they return with generic titles
+    const allItems = data.items || [];
+    const validItems = allItems.filter(item => {
+      const title = item.snippet && item.snippet.title;
+      if (!title) return false;
+      if (title === 'Deleted video' || title === 'Private video') return false;
+      // Also filter if thumbnail is missing (another sign of deleted/private)
+      const thumb = item.snippet && item.snippet.thumbnails;
+      if (!thumb || Object.keys(thumb).length === 0) return false;
+      return true;
+    });
+    if (allItems.length !== validItems.length) {
+      console.log('[WeatherTV] Playlist: filtered ' + (allItems.length - validItems.length) + ' deleted/private videos (' + validItems.length + ' valid)');
+    }
+    const plEntry = { items: validItems, cachedAt: Date.now() };
+    cache.playlist[playlistId] = plEntry;
+    rSet('wt:playlist:' + playlistId, plEntry, REDIS_TTL.playlist);
+    res.json({ ...data, items: validItems });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Quota status
+app.get('/api/yt/quota-status', (req, res) => {
+  res.json({
+    quotaExceeded: primaryQuotaExceeded || archiveQuotaExceeded, // combined, for back-compat
+    primaryQuotaExceeded,
+    archiveQuotaExceeded,
+    lastLiveCheck: cache.lastLiveCheck,
+    lastNotificationReceived: cache.lastNotificationReceived,
+    lastRecentFetch: cache.lastRecentFetch,
+    liveChecksToday: getLiveChecksToday(),
+    liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+    archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
+    archiveKeyRole: 'emergency-standby',
+    primaryQuotaLimit: 60000,
+    archiveQuotaLimit: 10000,
+  });
+});
+
+// "Check Now": a free sweep of every live channel's /live page (any hour, no quota).
+// The old API poll did nothing while WebSub was active, so the button looked broken.
+app.post('/api/admin/trigger-live-check', async (req, res) => {
+  const n = getLiveChannels(true).length;
+  res.json({ ok: true, message: 'Checking ' + n + ' channels\' /live pages (free) — results in the Live Verifier panel in about a minute' });
+  liveVerifier.sweep('manual-all').catch(e => console.error('[LiveVerifier] manual sweep failed:', e.message));
+});
+
+// Manual trigger for live status check
+app.post('/api/admin/trigger-live-check', async (req, res) => {
+  if (primaryQuotaExceeded) {
+    return res.status(429).json({ error: 'quota_exceeded', message: 'Primary key quota exceeded — resets at midnight Pacific' });
+  }
+  const channels = getLiveChannels();
+  const cost = channels.length * 100;
+  res.json({ ok: true, message: 'Live check started for ' + channels.length + ' channels (~' + cost + ' units)' });
+  scheduledLiveCheck(); // run in background, don't await
+});
+
+// Manual trigger for recent video fetch — use from admin panel after deploys
+app.post('/api/admin/trigger-recent-fetch', async (req, res) => {
+  if (primaryQuotaExceeded && archiveQuotaExceeded) {
+    return res.status(429).json({ error: 'quota_exceeded', message: 'Both API keys exhausted — resets at midnight Pacific. Try again tomorrow.' });
+  }
+  // Double-check by testing a single API call before committing to full fetch
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') {
+    return res.status(500).json({ error: 'No API key configured' });
+  }
+  logEvent({ type: 'admin', severity: 'info', source: 'admin-panel', message: 'Manual recent video fetch triggered via admin panel' });
+  res.json({ ok: true, message: 'Recent video fetch started — check cache status in ~1 minute' });
+  fetchAllRecentVideos(); // don't await — let it run in background
+});
+
+// Manual live override — mark a channel live when you know the video ID
+// Use when a stream has been live for hours and WebSub didn't catch it
+
+// ── Diagnostic endpoints ──────────────────────────────────────────────────────
+
+// Server info — uptime, start time, Node version
+app.get('/api/admin/server-info', (req, res) => {
+  res.json({
+    startTime: SERVER_START_TIME,
+    uptimeMs: Date.now() - SERVER_START_TIME,
+    nodeVersion: process.version,
+    platform: process.platform,
+    memoryMB: Math.round(process.memoryUsage().rss / 1048576),
+  });
+});
+
+// Quota burn rate — units used today per key
+app.get('/api/admin/quota-burn', (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  res.json({
+    date: burnTracker.date || today,
+    primaryUnits: burnTracker.date === today ? burnTracker.primaryUnits : 0,
+    archiveUnits: burnTracker.date === today ? burnTracker.archiveUnits : 0,
+    primaryLimit: 10000,
+    archiveLimit: process.env.YOUTUBE_API_KEY_2 ? 10000 : 0,
+    liveChecksToday: getLiveChecksToday(),
+    liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+  });
+});
+
+// WebSub health — per-channel subscription status and lease expiry
+app.get('/api/admin/websub-health', (req, res) => {
+  const channels = getAllChannels().filter(ch => ch.hasLive);
+  const now = Date.now();
+  const leases = channels.map(ch => {
+    const lease = websubLeases[ch.id];
+    const hoursUntilExpiry = lease && lease.expiresAt ? (lease.expiresAt - now) / 3600000 : null;
+    return {
+      id: ch.id, name: ch.name,
+      status: lease ? lease.status : 'unknown',
+      subscribedAt: lease ? lease.subscribedAt : null,
+      expiresAt: lease ? lease.expiresAt : null,
+      hoursUntilExpiry: hoursUntilExpiry !== null ? Math.round(hoursUntilExpiry * 10) / 10 : null,
+      expiringSoon: hoursUntilExpiry !== null && hoursUntilExpiry < 24,
+      expired: hoursUntilExpiry !== null && hoursUntilExpiry < 0,
+    };
+  });
+  leases.sort((a, b) => (a.hoursUntilExpiry ?? 999) - (b.hoursUntilExpiry ?? 999));
+  res.json({
+    total: channels.length,
+    active: leases.filter(l => l.status === 'active').length,
+    failed: leases.filter(l => l.status === 'failed' || l.status === 'error').length,
+    unknown: leases.filter(l => l.status === 'unknown').length,
+    expiringSoon: leases.filter(l => l.expiringSoon && !l.expired).length,
+    leases,
+  });
+});
+
+// Event log (errors, quota hits, fetches, admin actions)
+app.get('/api/admin/fetch-errors', (req, res) => {
+  const { type, severity } = req.query;
+  let entries = eventLog;
+  if (type) entries = entries.filter(e => e.type === type);
+  if (severity) entries = entries.filter(e => e.severity === severity);
+  // Back-compat: also expose as `errors` for old callers
+  res.json({ errors: entries, events: entries, total: entries.length });
+});
+
+// View recent videos cache without triggering a fetch
+app.get('/api/admin/cache/recent/view', (req, res) => {
+  const summary = [];
+  for (const [channelId, data] of Object.entries(cache.recentVideos)) {
+    if (!data || !data.items) continue;
+    const ch = getAllChannels().find(c => c.id === channelId);
+    summary.push({
+      channelId,
+      channelName: ch ? ch.name : channelId,
+      group: ch ? ch.group : 'unknown',
+      videoCount: data.items.length,
+      cachedAt: data.cachedAt || null,
+      videos: data.items.slice(0, 3).map(v => ({ id: v.id?.videoId || v.id, title: v.snippet?.title, published: v.snippet?.publishedAt })),
+    });
+  }
+  summary.sort((a, b) => (b.cachedAt || 0) - (a.cachedAt || 0));
+  res.json({ channels: summary, total: summary.length, generatedAt: Date.now() });
+});
+
+// Redis memory usage
+app.get('/api/admin/redis-memory', async (req, res) => {
+  if (!redis) return res.json({ available: false, message: 'Redis not configured' });
+  try {
+    const info = await redis.info('memory');
+    const lines = info.split('\r\n');
+    const get = key => { const l = lines.find(x => x.startsWith(key + ':')); return l ? l.split(':')[1].trim() : null; };
+    res.json({
+      available: true,
+      usedMemoryHuman: get('used_memory_human'),
+      usedMemoryPeakHuman: get('used_memory_peak_human'),
+      usedMemoryBytes: parseInt(get('used_memory') || '0'),
+      maxMemoryBytes: parseInt(get('maxmemory') || '0'),
+      maxMemoryHuman: get('maxmemory_human'),
+      keyCount: await redis.dbsize(),
+    });
+  } catch(e) { res.json({ available: false, error: e.message }); }
+});
+
+// Channel ID validator
+app.post('/api/admin/validate-channel', async (req, res) => {
+  const { channelId } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return res.status(500).json({ error: 'No API key configured' });
+  try {
+    trackBurn(true, 1);
+    const url = 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
+      '&id=' + channelId + '&part=snippet&fields=items/snippet/title,items/snippet/thumbnails,items/snippet/customUrl';
+    const data = await ytFetch(url);
+    if (checkQuotaError(data)) { markQuotaExceeded(); return res.status(429).json({ error: 'quota_exceeded' }); }
+    if (!data.items || data.items.length === 0) return res.json({ valid: false, error: 'Channel not found — check the channel ID' });
+    const s = data.items[0].snippet;
+    res.json({ valid: true, name: s.title, customUrl: s.customUrl || null,
+      thumbnail: s.thumbnails ? (s.thumbnails.default || s.thumbnails.medium || {}).url : null });
+  } catch(e) { res.json({ valid: false, error: e.message }); }
+});
+
+// Live stream lookup — check if a channel is currently live and optionally mark it
+app.post('/api/admin/lookup-live', async (req, res) => {
+  const { channelId, markLive } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const key = getApiKey();
+  if (!key || key === 'YOUR_YOUTUBE_API_KEY') return res.status(500).json({ error: 'No API key configured' });
+  if (primaryQuotaExceeded) return res.status(429).json({ error: 'quota_exceeded' });
+  try {
+    trackBurn(true, 100);
+    recordLiveCheck();
+    const url = 'https://www.googleapis.com/youtube/v3/search?key=' + key +
+      '&channelId=' + channelId + '&part=id,snippet&eventType=live&type=video&maxResults=1';
+    const data = await ytFetch(url);
+    if (checkQuotaError(data)) { markQuotaExceeded(); return res.status(429).json({ error: 'quota_exceeded' }); }
+    // Any other API error (bad/rotated key, API not enabled) is NOT "offline": say so, change nothing
+    if (data.error) return res.json({ isLive: false, error: 'YouTube API: ' + (((data.error.errors || [])[0] || {}).reason || data.error.code) + ' — ' + (data.error.message || '') });
+    const isLive = !!(data.items && data.items.length > 0);
+    const videoId = isLive && data.items[0].id ? data.items[0].id.videoId : null;
+    const title = isLive && data.items[0].snippet ? data.items[0].snippet.title : null;
+    if (markLive && isLive && videoId) {
+      const entry = { isLive: true, videoId, checkedAt: Date.now(), source: 'admin_lookup' };
+      cache.liveStatuses[channelId] = entry;
+      await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+      await updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+      cache.lastLiveCheck = Date.now();
+      rSet('wt:lastLive', cache.lastLiveCheck);
+    } else if (!isLive) {
+      const entry = { isLive: false, videoId: null, checkedAt: Date.now(), source: 'admin_lookup' };
+      cache.liveStatuses[channelId] = entry;
+      await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+      cache.lastLiveCheck = Date.now();
+      rSet('wt:lastLive', cache.lastLiveCheck);
+    }
+    res.json({ isLive, videoId, title, channelId, marked: !!(markLive && isLive) });
+  } catch(e) { res.json({ isLive: false, error: e.message }); }
+});
+
+app.post('/api/admin/mark-live', async (req, res) => {
+  const { channelId, videoId } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const entry = { isLive: true, videoId: videoId || null, checkedAt: Date.now(), source: 'manual' };
+  cache.liveStatuses[channelId] = entry;
+  await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+  await updateChannelActivity(channelId, { lastLiveDate: Date.now() });
+  console.log('[Admin] Manually marked live: ' + channelId + (videoId ? ' video: ' + videoId : ''));
+  res.json({ ok: true, channelId, videoId, message: 'Channel marked live' });
+});
+
+// Manual clear-live — mark a channel offline
+app.post('/api/admin/mark-offline', async (req, res) => {
+  const { channelId } = req.body || {};
+  if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const entry = { isLive: false, videoId: null, checkedAt: Date.now(), source: 'manual' };
+  cache.liveStatuses[channelId] = entry;
+  await rSet('wt:live:' + channelId, entry, REDIS_TTL.liveStatus);
+  console.log('[Admin] Manually marked offline: ' + channelId);
+  res.json({ ok: true, channelId, message: 'Channel marked offline' });
+});
+
+// Channel health report — full per-channel diagnostic for admin panel
+app.get('/api/admin/channel-health', (req, res) => {
+  const channels = getAllChannels();
+  const now = Date.now();
+
+  const report = channels.map(ch => {
+    const act = cache.channelActivity[ch.id] || {};
+    const live = cache.liveStatuses[ch.id] || {};
+    const recent = cache.recentVideos[ch.id] || {};
+    const tier = getChannelTier(ch);
+    const onSkip = tier !== 1 && act.nextFetchDue && now < act.nextFetchDue;
+
+    return {
+      id: ch.id,
+      name: ch.name,
+      group: ch.group || '',
+      hasLive: !!ch.hasLive,
+      tier,
+      lastLiveDate: act.lastLiveDate || null,
+      lastVideoDate: act.lastVideoDate || null,
+      lastFetchDate: recent.cachedAt || null,
+      lastLiveCheck: live.checkedAt || null,
+      liveCheckSource: live.source || null,
+      nextFetchDue: act.nextFetchDue || null,
+      isCurrentlyLive: !!live.isLive,
+      onLiveSkip: tier === 2 && onSkip,
+      onVideoSkip: tier === 3 && onSkip,
+      hasRecentCache: !!(recent.items && recent.items.length > 0),
+    };
+  });
+
+  report.sort((a, b) => a.name.localeCompare(b.name));
+  res.json({
+    channels: report,
+    generatedAt: now,
+    summary: {
+      total: report.length,
+      tier1: report.filter(c => c.tier === 1).length,
+      tier2: report.filter(c => c.tier === 2).length,
+      tier3: report.filter(c => c.tier === 3).length,
+      live: report.filter(c => c.isCurrentlyLive).length,
+      noCache: report.filter(c => !c.hasRecentCache).length,
+      liveChecksToday: getLiveChecksToday(),
+      liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+      quotaExceeded: primaryQuotaExceeded || archiveQuotaExceeded,
+      primaryQuotaExceeded,
+      archiveQuotaExceeded,
+      lastNotification: cache.lastNotificationReceived,
+      lastLiveCheck: cache.lastLiveCheck,
+      lastVideoFetch: cache.lastRecentFetch,
+      archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
+    }
+  });
+});
+app.get('/api/admin/test-connectivity', async (req, res) => {
+  const testUrl = key => 'https://www.googleapis.com/youtube/v3/channels?key=' + key +
+    '&id=UCvBVK2ymNzPLRJrgip2GeQQ&part=snippet&fields=items/snippet/title';
+  const primaryKey = getApiKey();
+  const archiveKey = process.env.YOUTUBE_API_KEY_2;
+  const testKey = async (key, label) => {
+    if (!key || key === 'YOUR_YOUTUBE_API_KEY') return { ok: false, label, error: 'Not configured' };
+    try {
+      const data = await ytFetch(testUrl(key));
+      if (checkQuotaError(data)) return { ok: false, label, error: 'Quota exceeded' };
+      const title = data.items && data.items[0] && data.items[0].snippet && data.items[0].snippet.title;
+      return { ok: true, label, channel: title || 'Connected' };
+    } catch(e) { return { ok: false, label, error: e.message }; }
+  };
+  const [primary, archive] = await Promise.all([
+    testKey(primaryKey, 'Primary (Live)'),
+    archiveKey
+      ? testKey(archiveKey, 'Archive (Videos)')
+      : Promise.resolve({ ok: null, label: 'Archive (Videos)', error: 'YOUTUBE_API_KEY_2 not set — using primary key as fallback' }),
+  ]);
+  res.json({ primary, archive });
+});
+
+// Cache management — admin only
+app.post('/api/admin/cache/clear-playlist', async (req, res) => {
+  cache.playlist = {};
+  const plKeys = await rKeys('wt:playlist:*');
+  for (const key of plKeys) await rDel(key);
+  console.log('[WeatherTV] Playlist cache cleared by admin');
+  res.json({ ok: true, message: 'Playlist cache cleared — will fetch fresh on next request' });
+});
+
+app.post('/api/admin/cache/clear-recent', async (req, res) => {
+  cache.recentVideos = {};
+  const keys = await rKeys('wt:recent:*');
+  for (const key of keys) await rDel(key);
+  console.log('[WeatherTV] Recent videos cache cleared by admin');
+  res.json({ ok: true, message: 'Recent videos cache cleared — will fetch fresh on next request' });
+});
+
+function getCacheStatus() {
+  const playlistCached = Object.keys(cache.playlist).length;
+  const recentCached = Object.keys(cache.recentVideos).length;
+  const liveCached = Object.keys(cache.liveStatuses).length;
+
+  // Derive lastFetch from most recently cached video if global timestamp is missing
+  let lastFetch = cache.lastRecentFetch;
+  if (!lastFetch && recentCached > 0) {
+    const timestamps = Object.values(cache.recentVideos)
+      .map(v => v.cachedAt).filter(Boolean);
+    if (timestamps.length > 0) lastFetch = Math.max(...timestamps);
+  }
+
+  // Derive lastLiveCheck from most recently checked live status if global is missing
+  let lastLiveCheck = cache.lastLiveCheck;
+  if (!lastLiveCheck && liveCached > 0) {
+    const timestamps = Object.values(cache.liveStatuses)
+      .map(v => v.checkedAt).filter(Boolean);
+    if (timestamps.length > 0) lastLiveCheck = Math.max(...timestamps);
+  }
+
+  return {
+    playlist: { entries: playlistCached, ttlHours: 48 },
+    recentVideos: { entries: recentCached, ttlHours: 168, lastFetch },
+    liveStatuses: {
+      entries: liveCached,
+      lastChecked: lastLiveCheck,
+      lastNotification: cache.lastNotificationReceived,
+    },
+    websubActive: cache.websubActive,
+    quotaExceeded: primaryQuotaExceeded || archiveQuotaExceeded,
+    primaryQuotaExceeded,
+    archiveQuotaExceeded,
+    liveChecksToday: getLiveChecksToday(),
+    liveCheckLimit: DAILY_LIVE_CHECK_LIMIT,
+    archiveKeyConfigured: !!(process.env.YOUTUBE_API_KEY_2),
+  };
+}
+
+app.get('/api/admin/cache/status', (req, res) => {
+  res.json(getCacheStatus());
+});
+
+// Public, read-only mirror of the cache status above — the main site's
+// status bar (live/video update times, notification time) polls this on
+// every page load. It MUST NOT be under /api/admin: that path requires
+// HTTP Basic Auth, and a 401 response with WWW-Authenticate triggers the
+// browser's native login prompt on first page load for ALL visitors.
+// Same read-only data, no admin actions exposed.
+app.get('/api/cache/status', (req, res) => {
+  res.json(getCacheStatus());
+});
+
+// ── WS4KP static data — must be before catch-all ──
+// WS4KP fetches these as absolute paths (/data/..., /scripts/...)
+// regardless of where it's hosted, so we intercept here.
+app.use('/data', express.static(path.join(__dirname, 'public', 'weatherstar', 'data')));
+app.use('/scripts', express.static(path.join(__dirname, 'public', 'weatherstar', 'scripts')));
+
+// ── WS4KP Local Radar background tiles ─────────────────────────────────────
+// radar-tiles.mjs is the ONE place in WS4KP that uses an ABSOLUTE path
+// (`/images/maps/radar/...`) instead of a relative one. Every other image
+// reference is relative (resolves correctly to /weatherstar/images/...).
+// This absolute path resolves to the site ROOT instead, hitting the
+// ── Lightning Strike Relay ─────────────────────────────────────────────────────
+// Maintains a single persistent WebSocket connection to lightningmaps.org
+// (Blitzortung network). Clients poll /api/lightning — no Blitzortung servers
+// are ever hit by browsers. Rolling 10-minute buffer, max 10,000 strikes.
+// Attribution: Lightning data © Blitzortung.org and contributors (CC BY-SA 4.0)
+
+// Blitzortung WebSocket relay — updated protocol (2024+):
+//   URL:       wss://ws{N}.blitzortung.org  (port 443, standard)
+//   Handshake: send {"a": 111} on open — without this, server sends nothing
+//   Encoding:  LZW-compressed — must decode before JSON.parse
+// Server IDs confirmed active: 1, 2, 7, 8
+// Source: https://www.gkbrk.com/blitzortung + https://www.limaps.org/live-data.html
+const LIGHTNING_SERVER_IDS = [1, 2, 7, 8];
+const LIGHTNING_MAX_AGE_MS = 10 * 60 * 1000;
+const LIGHTNING_MAX_STRIKES = 10000;
+
+let _lightningBuffer = [];
+let _lightningConnected = false;
+let _lightningWS = null;
+
+// LZW decompression — Blitzortung obfuscates their WebSocket stream with this.
+// Ported from the Python decoder at https://www.gkbrk.com/blitzortung
+function blitzortungDecode(raw) {
+  const str = Buffer.isBuffer(raw) ? raw.toString() : String(raw);
+  if (!str.length) return null;
+  const d = [...str];
+  const e = {};
+  let c = d[0], f = c;
+  const g = [c];
+  const h = 256;
+  let o = h;
+  for (let i = 1; i < d.length; i++) {
+    const code = d[i].charCodeAt(0);
+    let a = code < h ? d[i] : (e[code] !== undefined ? e[code] : f + c);
+    g.push(a);
+    c = a[0];
+    e[o++] = f + c;
+    f = a;
+  }
+  return g.join('');
+}
+
+function startLightningRelay() {
+  function connect() {
+    const id = LIGHTNING_SERVER_IDS[Math.floor(Math.random() * LIGHTNING_SERVER_IDS.length)];
+    const url = `wss://ws${id}.blitzortung.org/`;
+    console.log(`[Lightning] Connecting to ${url}`);
+
+    _lightningWS = new WebSocket(url, {
+      headers: {
+        'User-Agent': 'WeatherTV/1.0 (+https://watchweathertv.com)',
+        'Origin': 'https://www.blitzortung.org',
+      },
+    });
+
+    _lightningWS.on('open', () => {
+      _lightningConnected = true;
+      console.log('[Lightning] Connected — streaming strikes');
+      // Required handshake — server sends nothing until it receives this
+      _lightningWS.send(JSON.stringify({ a: 111 }));
+    });
+
+    _lightningWS.on('message', raw => {
+      try {
+        const decoded = blitzortungDecode(raw);
+        if (!decoded) return;
+        const msg = JSON.parse(decoded);
+        const now = Date.now();
+
+        if (msg.lat !== undefined && msg.lon !== undefined) {
+          const lat = +msg.lat, lon = +msg.lon;
+          if (!isNaN(lat) && !isNaN(lon)) {
+            _lightningBuffer.push({ ts: now, lat, lon });
+            const cutoff = now - LIGHTNING_MAX_AGE_MS;
+            if (_lightningBuffer.length > LIGHTNING_MAX_STRIKES ||
+                (_lightningBuffer[0]?.ts ?? now) < cutoff) {
+              _lightningBuffer = _lightningBuffer.filter(s => s.ts > cutoff);
+              if (_lightningBuffer.length > LIGHTNING_MAX_STRIKES) {
+                _lightningBuffer = _lightningBuffer.slice(-LIGHTNING_MAX_STRIKES);
+              }
+            }
+          }
+        }
+      } catch(e) { /* ignore malformed / non-strike messages */ }
+    });
+
+    _lightningWS.on('close', (code, reason) => {
+      _lightningConnected = false;
+      const delay = 5000 + Math.random() * 5000;
+      console.log(`[Lightning] Disconnected (code=${code}) from ${url} — retrying in ${Math.round(delay / 1000)}s`);
+      setTimeout(connect, delay);
+    });
+
+    _lightningWS.on('error', e => {
+      console.warn(`[Lightning] WS error on ${url}:`, e.message, e.code || '');
+    });
+  }
+
+  connect();
+}
+
+// Start relay immediately on server startup
+startLightningRelay();
+
+// GET /api/lightning — GeoJSON FeatureCollection of recent strikes
+// Each feature's `age` property (ms) drives the client-side fade animation.
+app.get('/api/lightning', (req, res) => {
+  const now = Date.now();
+  const cutoff = now - LIGHTNING_MAX_AGE_MS;
+  const strikes = _lightningBuffer.filter(s => s.ts > cutoff);
+
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    type: 'FeatureCollection',
+    connected: _lightningConnected,
+    count: strikes.length,
+    generatedAt: now,
+    features: strikes.map(s => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+      properties: { ts: s.ts, age: now - s.ts },
+    })),
+  });
+});
+
+// catch-all and returning index.html — hence the broken map tiles on the
+// Local Radar display. Map it directly to where the files actually live.
+app.use('/images/maps/radar', express.static(path.join(__dirname, 'public', 'weatherstar', 'images', 'maps', 'radar')));
+
+// ── WeatherStar missing-image handler ─────────────────────────────────────────
+// WeatherStar 3000/4000 are fully self-hosted. This used to redirect missing
+// images to netbymatt.com; now a missing file is a plain 404 and gets logged
+// once, so it can be added to /public/weatherstar/images instead.
+const _wsMissingLogged = new Set();
+app.get(['/weatherstar/images/*', '/weatherstar3000/images/*'], (req, res) => {
+  if (!_wsMissingLogged.has(req.path) && _wsMissingLogged.size < 200) {
+    _wsMissingLogged.add(req.path);
+    console.warn('[WeatherStar] Missing image (add it to public):', req.path);
+  }
+  res.status(404).send('Not found');
+});
+
+// ── Serve index for all other routes ──
+// Mount radar push notification routes BEFORE the catch-all —
+// radar.js registers GET routes that would otherwise be swallowed by app.get('*')
+radar.routes(app);
+winter.routes(app);
+nec.routes(app);
+cars.routes(app);
+
+// ── Shop (Fourthwall Storefront API) ─────────────────────────────────────────
+// GET /api/shop/products — the public product list for /shop.html, cached 10
+// min (and at Cloudflare's edge). Checkout happens on Fourthwall, so buyers'
+// names, addresses and payment details never touch WeatherTV.
+// Env: FOURTHWALL_STOREFRONT_TOKEN (required), FOURTHWALL_SHOP_DOMAIN (e.g.
+// weathertv.fourthwall.com — used for the checkout link), FOURTHWALL_COLLECTION
+// (collection handle to show, e.g. "weathertv"; defaults to "all"). The
+// Fourthwall store is the shared Altruistic Apps shop, so each app's site
+// shows only its own collection.
+const FW_API = 'https://storefront-api.fourthwall.com/v1';
+let _shopCache = { data: null, ts: 0 };
+const SHOP_TTL = 10 * 60 * 1000;
+const SIZE_ORDER = ['XXS','XS','S','M','L','XL','XXL','2XL','XXXL','3XL','4XL','5XL'];
+
+function _fwText(html, max = 400) {
+  const t = String(html || '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\n{3,}/g, '\n\n').trim();
+  return t.length > max ? t.slice(0, max - 1).trimEnd() + '…' : t;
+}
+function _fwMoney(m) { const v = m && (m.value ?? m.amount); return typeof v === 'number' ? v : (v != null ? Number(v) : null); }
+function _fwProduct(p) {
+  // Every product photo, including Fourthwall's model/lifestyle previews, plus
+  // any extra per-variant photos (deduped). Capped so one product can't bloat the list.
+  const images = [...new Set([
+    ...(p.images || []).map(i => i.transformedUrl || i.url),
+    ...(p.variants || []).flatMap(v => (v.images || []).map(i => i.transformedUrl || i.url)),
+  ].filter(Boolean))].slice(0, 16);
+  const variants = (p.variants || []).map(v => {
+    const stock = v.stock || {};
+    return {
+      id: v.id,
+      name: v.name || '',
+      size: v.attributes?.size?.name || null,
+      color: v.attributes?.color?.name || null,
+      swatch: v.attributes?.color?.swatch || null,
+      price: _fwMoney(v.unitPrice || v.price),
+      currency: (v.unitPrice || v.price || {}).currency || 'USD',
+      available: !(stock.type === 'LIMITED' && Number(stock.inStock ?? stock.quantity ?? 0) <= 0),
+      image: (v.images || [])[0]?.url || null,
+    };
+  }).filter(v => v.id);
+  variants.sort((a, b) => (SIZE_ORDER.indexOf((a.size || '').toUpperCase()) - SIZE_ORDER.indexOf((b.size || '').toUpperCase())));
+  const prices = variants.map(v => v.price).filter(n => Number.isFinite(n));
+  return {
+    slug: p.slug, name: p.name || 'WeatherTV merch', description: _fwText(p.description),
+    images, variants,
+    minPrice: prices.length ? Math.min(...prices) : null, maxPrice: prices.length ? Math.max(...prices) : null,
+    currency: variants[0]?.currency || 'USD',
+  };
+}
+async function _fwShopDomain(token) {
+  if (process.env.FOURTHWALL_SHOP_DOMAIN) return process.env.FOURTHWALL_SHOP_DOMAIN.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  try {   // fall back to the shop info endpoint if the variable isn't set
+    const shop = JSON.parse(await fetchTextOverHttp(`${FW_API}/shop?storefront_token=${encodeURIComponent(token)}`));
+    const d = shop.publicDomain || shop.domain || shop.primaryDomain || (shop.url || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    return d || null;
+  } catch (_) { return null; }
+}
+// Fourthwall's Storefront API can keep listing a product's OLD photos after a
+// design is updated, while the store itself shows the new mockups. So the
+// photos come from the product's public store page (its gallery's zoom
+// images, server-rendered), falling back to the API's list if that fails.
+// Runs only on the server's 10-minute refresh — never per viewer.
+const _fwEncId = (u) => (String(u).match(/\/enc\/([^/]+)\//) || [])[1] || u;
+async function _fwStorePageImages(domain, slug) {
+  if (!domain || !slug) return [];
+  try {
+    const html = await Promise.race([
+      fetchTextOverHttp(`https://${domain}/products/${encodeURIComponent(slug)}`, { Accept: 'text/html' }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+    ]);
+    const urls = [...String(html).matchAll(/data-zoom-image="(https:\/\/imgproxy\.fourthwall\.dev\/[^"]+)"/g)].map(m => m[1].replace(/&amp;/g, '&'));
+    const seen = new Set();
+    return urls.filter(u => { const k = _fwEncId(u); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 16);
+  } catch (e) {
+    console.warn(`[Shop] store page photos for "${slug}":`, e.message);
+    return [];
+  }
+}
+app.get('/api/shop/products', async (req, res) => {
+  // The Altruistic Apps site (altruisticapps.com/shop.html) shows the same shirts
+  const origin = req.get('Origin') || '';
+  if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  const token = process.env.FOURTHWALL_STOREFRONT_TOKEN;
+  if (!token) return res.json({ enabled: false, products: [] });
+  if (_shopCache.data && Date.now() - _shopCache.ts < SHOP_TTL) {
+    res.set('Cache-Control', 'public, max-age=600');
+    return res.json(_shopCache.data);
+  }
+  try {
+    const products = [];
+    for (let page = 0; page < 10; page++) {
+      const coll = encodeURIComponent((process.env.FOURTHWALL_COLLECTION || 'all').trim().toLowerCase());
+      const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections/${coll}/products?storefront_token=${encodeURIComponent(token)}&page=${page}&size=50`));
+      if (!j.results && j.code) console.warn(`[Shop] Fourthwall: collection "${decodeURIComponent(coll)}" — ${j.code} (does it exist and is it public?)`);
+      (j.results || []).forEach(p => products.push(_fwProduct(p)));
+      if (!j.paging || !j.paging.hasNextPage) break;
+    }
+    const shopDomain = await _fwShopDomain(token);
+    // Use the photos the store page actually shows (see _fwStorePageImages)
+    await Promise.all(products.map(async (p) => {
+      const imgs = await _fwStorePageImages(shopDomain, p.slug);
+      if (!imgs.length) return;
+      const current = new Set(imgs.map(_fwEncId));
+      p.images = imgs;
+      // A variant photo the store no longer shows is an old design — drop it
+      p.variants.forEach(v => { if (v.image && !current.has(_fwEncId(v.image))) v.image = null; });
+    }));
+    const data = { enabled: true, shopDomain, collection: process.env.FOURTHWALL_COLLECTION || 'all', products, fetchedAt: Date.now() };
+    // An empty result is usually a setup issue (collection missing / not public) —
+    // cache it for 1 minute only, so fixing it in Fourthwall shows up quickly.
+    const ttl = products.length ? SHOP_TTL : 60 * 1000;
+    _shopCache = { data, ts: Date.now() - (SHOP_TTL - ttl) };
+    res.set('Cache-Control', `public, max-age=${Math.round(ttl / 1000)}`);
+    res.json(data);
+  } catch (e) {
+    console.warn('[Shop] Fourthwall fetch failed:', e.message);
+    if (_shopCache.data) return res.json({ ..._shopCache.data, stale: true });
+    res.status(502).json({ enabled: true, error: 'Shop temporarily unavailable', products: [] });
+  }
+});
+
+// GET /api/shop/collections — every public Fourthwall collection with its
+// products, for the Altruistic Apps shop page (one section per app). The
+// catch-all "all" collection is skipped, and so is any collection with no
+// products yet, so a new collection shows up on its own once it has merch.
+let _shopCollCache = { data: null, ts: 0 };
+app.get('/api/shop/collections', async (req, res) => {
+  const origin = req.get('Origin') || '';
+  if (/^https:\/\/(www\.)?altruisticapps\.com$|^https:\/\/altruisticapps\.up\.railway\.app$/.test(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  const token = process.env.FOURTHWALL_STOREFRONT_TOKEN;
+  if (!token) return res.json({ enabled: false, collections: [] });
+  if (_shopCollCache.data && Date.now() - _shopCollCache.ts < SHOP_TTL) {
+    res.set('Cache-Control', 'public, max-age=600');
+    return res.json(_shopCollCache.data);
+  }
+  const tk = encodeURIComponent(token);
+  try {
+    const list = [];
+    for (let page = 0; page < 5; page++) {
+      const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections?storefront_token=${tk}&page=${page}&size=50`));
+      const rows = Array.isArray(j) ? j : (j.results || []);
+      rows.forEach(c => { if (c && c.slug && c.slug.toLowerCase() !== 'all') list.push(c); });
+      if (Array.isArray(j) || !j.paging || !j.paging.hasNextPage) break;
+    }
+    const shopDomain = await _fwShopDomain(token);
+    const photoCache = new Map();   // a product in two collections is only fetched once
+    const collections = [];
+    for (const c of list) {
+      const products = [];
+      for (let page = 0; page < 10; page++) {
+        const j = JSON.parse(await fetchTextOverHttp(`${FW_API}/collections/${encodeURIComponent(c.slug)}/products?storefront_token=${tk}&page=${page}&size=50`));
+        (j.results || []).forEach(p => products.push(_fwProduct(p)));
+        if (!j.paging || !j.paging.hasNextPage) break;
+      }
+      if (!products.length) continue;
+      await Promise.all(products.map(async (p) => {
+        if (!photoCache.has(p.slug)) photoCache.set(p.slug, _fwStorePageImages(shopDomain, p.slug));
+        const imgs = await photoCache.get(p.slug);
+        if (!imgs.length) return;
+        const current = new Set(imgs.map(_fwEncId));
+        p.images = imgs;
+        p.variants.forEach(v => { if (v.image && !current.has(_fwEncId(v.image))) v.image = null; });
+      }));
+      collections.push({ slug: c.slug, name: c.name || c.slug, description: _fwText(c.description, 240), products });
+    }
+    const data = { enabled: true, shopDomain, collections, fetchedAt: Date.now() };
+    const ttl = collections.length ? SHOP_TTL : 60 * 1000;
+    _shopCollCache = { data, ts: Date.now() - (SHOP_TTL - ttl) };
+    res.set('Cache-Control', `public, max-age=${Math.round(ttl / 1000)}`);
+    res.json(data);
+  } catch (e) {
+    console.warn('[Shop] Fourthwall collections fetch failed:', e.message);
+    if (_shopCollCache.data) return res.json({ ..._shopCollCache.data, stale: true });
+    res.status(502).json({ enabled: true, error: 'Shop temporarily unavailable', collections: [] });
+  }
+});
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ── HTTP server + Lightning WebSocket proxy ────────────────────────────────
+// Blitzortung's policy requires third-party apps to proxy data through their
+// own server rather than having browsers connect to Blitzortung directly.
+// We maintain ONE upstream Blitzortung connection and fan strike data out to
+// all connected WeatherTV browsers simultaneously.
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/lightning' });
+
+let blitzSocket = null;
+let blitzPending = false;
+let blitzClients = new Set();
+let blitzEndpointIdx = 0;
+let blitzRetryTimer = null;
+
+const BLITZ_ENDPOINTS = [
+  'wss://ws.blitzortung.org/',
+  'wss://ws1.blitzortung.org/',
+  'wss://ws8.blitzortung.org/',
+];
+
+function connectBlitz() {
+  if (blitzSocket || blitzPending) return;
+  if (blitzClients.size === 0) return;
+  blitzPending = true;
+  const url = BLITZ_ENDPOINTS[blitzEndpointIdx % BLITZ_ENDPOINTS.length];
+  console.log(`[Lightning] Connecting to ${url} (${blitzClients.size} clients waiting)`);
+  try {
+    const ws = new WebSocket(url);
+    ws.on('open', () => {
+      blitzPending = false;
+      blitzSocket = ws;
+      blitzEndpointIdx = 0;
+      ws.send(JSON.stringify({ a: 111 }));
+      console.log('[Lightning] Connected to Blitzortung');
+    });
+    ws.on('message', (data) => {
+      const msg = data.toString();
+      blitzClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+          try { client.send(msg); } catch(e) {}
+        }
+      });
+    });
+    ws.on('error', (err) => {
+      blitzPending = false;
+      blitzSocket = null;
+      console.warn('[Lightning] Blitzortung error:', err.message);
+      scheduleBlitzReconnect();
+    });
+    ws.on('close', () => {
+      blitzPending = false;
+      blitzSocket = null;
+      if (blitzClients.size > 0) {
+        console.log('[Lightning] Blitzortung disconnected — reconnecting');
+        scheduleBlitzReconnect();
+      }
+    });
+  } catch(e) {
+    blitzPending = false;
+    scheduleBlitzReconnect();
+  }
+}
+
+function scheduleBlitzReconnect() {
+  if (blitzRetryTimer) return;
+  blitzEndpointIdx++;
+  const delay = Math.min(30000, 3000 * Math.pow(1.5, Math.min(blitzEndpointIdx, 8)));
+  blitzRetryTimer = setTimeout(() => { blitzRetryTimer = null; connectBlitz(); }, delay);
+}
+
+function disconnectBlitz() {
+  if (blitzRetryTimer) { clearTimeout(blitzRetryTimer); blitzRetryTimer = null; }
+  if (blitzSocket) { try { blitzSocket.close(); } catch(e) {} blitzSocket = null; }
+  blitzPending = false;
+}
+
+wss.on('connection', (clientWs) => {
+  blitzClients.add(clientWs);
+  console.log(`[Lightning] Browser connected (${blitzClients.size} total)`);
+  connectBlitz();
+  clientWs.on('close', () => {
+    blitzClients.delete(clientWs);
+    console.log(`[Lightning] Browser disconnected (${blitzClients.size} remaining)`);
+    if (blitzClients.size === 0) {
+      console.log('[Lightning] No clients — closing Blitzortung connection');
+      disconnectBlitz();
+    }
+  });
+  clientWs.on('error', () => blitzClients.delete(clientWs));
+});
+
+// Errors thrown inside routes get a clean JSON reply instead of an HTML stack page
+applyErrorHandler(app);
+
+// One failed background job (a feed timing out, Redis blinking) must not take
+// the whole site down. Node exits on an unhandled promise rejection by default,
+// which restarts the server on Railway and drops every viewer.
+process.on('unhandledRejection', (reason) => {
+  console.error('[WeatherTV] Unhandled promise rejection (server kept running):', reason && reason.stack || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[WeatherTV] Uncaught exception:', err && err.stack || err);
+  // Can't open the port at all → exit so Railway restarts us cleanly
+  if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) process.exit(1);
+});
+
+// Listen on 0.0.0.0 so Railway can reach the server
+server.listen(PORT, '0.0.0.0', async () => {
+  console.log(`WeatherTV server running on port ${PORT}`);
+  console.log(`App: http://localhost:${PORT}`);
+  console.log(`Admin: http://localhost:${PORT}/admin`);
+
+  // Init radar module with Redis client once server is up
+  winter.init(redis);
+  if (redis) {
+    radar.init(redis);
+  } else {
+    console.warn('[Radar] Redis not available — push notifications disabled');
+  }
+});
