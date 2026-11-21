@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-11-21 build.1795251600 -->
+<!-- WeatherTV Radar — updated 2026-11-21 build.1795254300 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -8991,7 +8991,9 @@ function renderForecast(data) {
   document.getElementById('fp-clouds').textContent     = clouds != null ? clouds + '%'              : '—';
 
   // UV from today's daily max or first hourly
-  const uvNow = d.uv_index_max?.[0] ?? h.uv_index?.[0];
+  // (if the daily max is missing, use the highest hourly value for today)
+  const _uvToday = (h.time || []).map((t, i) => String(t).startsWith(d.time?.[0] || '~') ? h.uv_index?.[i] : null).filter(v => v != null);
+  const uvNow = d.uv_index_max?.[0] ?? (_uvToday.length ? Math.max(..._uvToday) : null);
   document.getElementById('fp-uv').textContent = uvLabel(uvNow);
 
   // Wind + compass

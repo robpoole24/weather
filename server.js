@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-21T09:00:00Z build.1795251600
+// WeatherTV Server — updated 2026-11-21T09:45:00Z build.1795254300
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -3651,6 +3651,23 @@ async function _omExtras(gLat, gLon) {
     + `?latitude=${gLat.toFixed(4)}&longitude=${gLon.toFixed(4)}&timezone=auto&forecast_days=7`
     + '&current=surface_pressure&hourly=cape,lifted_index,freezing_level_height,uv_index&daily=uv_index_max', 'openMeteoExtras');
 }
+// Last good extras per forecast cell, so one failed Open-Meteo call doesn't blank
+// UV / pressure / storm energy for that spot. Values are matched by time, so a
+// few-hours-old copy still lines up with the new forecast.
+const _omExtrasLast = new Map();          // cellKey -> { ex, ts }
+const OM_EXTRAS_KEEP = 12 * 60 * 60 * 1000;
+async function _omExtrasKept(gLat, gLon, cellKey) {
+  try {
+    const ex = await _omExtras(gLat, gLon);
+    if (ex) _lruSet(_omExtrasLast, cellKey, { ex, ts: Date.now() }, 5000);
+    return ex;
+  } catch (e) {
+    const last = _omExtrasLast.get(cellKey);
+    if (last && Date.now() - last.ts < OM_EXTRAS_KEEP) { upstreamCount('openMeteoExtrasReused'); return last.ex; }
+    console.warn('[Forecast] Open-Meteo extras skipped:', e.message);
+    return null;
+  }
+}
 function _mergeExtras(fc, ex) {
   if (!ex) return fc;
   const pos = new Map((ex.hourly?.time || []).map((t, i) => [t, i]));
@@ -3755,7 +3772,7 @@ async function _fetchForecastCell(gLat, gLon, cellKey) {
     : Promise.resolve(null);
 
   if (gridUrl) {
-    const extrasP = _omExtras(gLat, gLon).catch(e => { console.warn('[Forecast] Open-Meteo extras skipped:', e.message); return null; });
+    const extrasP = _omExtrasKept(gLat, gLon, cellKey);
     const obsP = _fetchObservation(cellKey, stationsUrl, NWS_HEADERS).catch(e => { console.warn('[Forecast] Station reading skipped:', e.message); return null; });
     try {
       upstreamCount('nwsGrid');
