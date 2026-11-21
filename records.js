@@ -1,4 +1,4 @@
-// WeatherTV daily records module — updated 2026-11-21T09:00:00Z build.1795251600
+// WeatherTV daily records module — updated 2026-11-21T09:35:00Z build.1795253700
 // Daily climate records and normals for the forecast panel, from the Regional
 // Climate Centers' ACIS service (data.rcc-acis.org, free, no key).
 //
@@ -35,6 +35,7 @@ const RADIUS_MI = 120;                // farther than this, the records don't de
 const KEY = (sid) => `acis:records:v1:${sid}`;
 
 const mem = new Map();                // sid -> { ts, days: [366 rows] }
+const wanted = new Set();             // stations viewers are waiting on, pulled first
 const status = { started: null, lastSweepDone: null, stationsCached: 0, ok: 0, failed: 0, lastError: null, total: 0 };
 
 function miles(lat1, lon1, lat2, lon2) {
@@ -154,7 +155,11 @@ module.exports = function records(app, { rGet, rSet }) {
       // Oldest first, so a restart resumes where the last sweep left off
       const due = STATIONS.filter(st => { const h = mem.get(st.sid); return !h || Date.now() - h.ts > REFRESH_MS; })
         .sort((a, b) => ((mem.get(a.sid) || {}).ts || 0) - ((mem.get(b.sid) || {}).ts || 0));
-      for (const st of due) {
+      for (let k = 0; k < due.length; k++) {
+        // Anyone waiting on a station jumps the queue
+        const w = due.findIndex((x, i) => i >= k && wanted.has(x.sid));
+        if (w > k) { const [x] = due.splice(w, 1); due.splice(k, 0, x); }
+        const st = due[k]; wanted.delete(st.sid);
         try {
           const data = await pullStation(st.sid);
           mem.set(st.sid, data);
@@ -186,15 +191,19 @@ module.exports = function records(app, { rGet, rSet }) {
     if (isNaN(start)) return res.status(400).json({ error: 'start=YYYY-MM-DD' });
     const nDays = Math.min(Math.max(parseInt(req.query.days, 10) || 1, 1), 14);
 
-    // Nearest station that has data
+    // Nearest station, whether or not it's been pulled yet — never stand in a farther city's records
     let best = null, bestMi = Infinity;
     for (const st of STATIONS) {
-      if (!mem.has(st.sid)) continue;
       const d = miles(lat, lon, st.lat, st.lon);
       if (d < bestMi) { bestMi = d; best = st; }
     }
+    if (!best || bestMi > RADIUS_MI) { res.set('Cache-Control', 'public, max-age=1800'); return res.json({ found: false, reason: STATIONS.length ? 'no_station_nearby' : 'warming_up' }); }
+    if (!mem.has(best.sid)) {
+      wanted.add(best.sid);                       // viewers are waiting on this one: the sweep takes it next
+      res.set('Cache-Control', 'no-store');
+      return res.json({ found: false, reason: 'warming_up' });
+    }
     res.set('Cache-Control', 'public, max-age=1800');
-    if (!best || bestMi > RADIUS_MI) return res.json({ found: false, reason: mem.size ? 'no_station_nearby' : 'warming_up' });
 
     const rows = mem.get(best.sid).days, out = [];
     for (let i = 0; i < nDays; i++) {
