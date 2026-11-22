@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-21T10:00:00Z build.1795255200
+// WeatherTV Server — updated 2026-11-22T21:42:37Z build.1795383757
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -3614,7 +3614,13 @@ function _forecastFromNws(G, props, tz, lat, lon) {
     const skyAvg = (dayIdx.length ? dayIdx : idx).reduce((a, i) => a + (G.sky[i] || 0), 0) / Math.max(1, (dayIdx.length ? dayIdx : idx).length);
     D.weather_code.push(peak >= 30 ? _wmoFromNws(peak, G.wx[iPeak], G.sky[iPeak]) : _wmoFromNws(0, [], skyAvg));
     D.temperature_2m_max.push(maxBy[date] ?? mx(pick(G.temp)));
-    D.temperature_2m_min.push(minBy[date] ?? mn(pick(G.temp)));
+    // Calendar-day low (midnight to midnight), the same day the climate records use.
+    // NWS's min period ends in the morning, so on its own it's LAST NIGHT's low; on a
+    // cold-front day that's far warmer than where the day ends up (e.g. 51° while it's
+    // already 46° and heading for the 30s). Take the lower of it and the hourly temps
+    // for the rest of the date.
+    { const lows = [minBy[date], mn(pick(G.temp))].filter(v => v != null);
+      D.temperature_2m_min.push(lows.length ? Math.min(...lows) : null); }
     D.apparent_temperature_max.push(mx(pick(G.app)));
     D.apparent_temperature_min.push(mn(pick(G.app)));
     const s = sunFor(date);
