@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-22T22:24:43Z build.1795386283 -->
+<!-- WeatherTV App — updated 2026-11-22T23:20:01Z build.1795389601 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1349,6 +1349,15 @@
 </script>
 </head>
 <body>
+<script>
+  // Opened from the Channel Guide (/guide): the guide's bottom bar replaces the
+  // channel-group bar and status bar, so only the player and its menu show.
+  if (new URLSearchParams(location.search).get('embed') === 'guide') document.documentElement.classList.add('embed-guide');
+</script>
+<style>
+  html.embed-guide #main-nav, html.embed-guide #search-suggestions, html.embed-guide #status-bar,
+  html.embed-guide .skip-link, html.embed-guide #channel-hint { display:none !important; }
+</style>
 
 <div class="sr-only">
   <h1>WeatherTV — Free Live Storm Chasers, Weather Forecasters &amp; Live Radar</h1>
@@ -1889,7 +1898,8 @@ async function init() {
   loadHighlights();
   loadPlaylists();
   // Channel Guide (Ch 2 WeatherStar) opens the WeatherStar menu with ?ws=1
-  if (new URLSearchParams(location.search).has('ws')) { try { launchWeatherStar(); } catch (e) {} }
+  // (showPanel opens the WeatherStar menu and starts WeatherStar)
+  if (new URLSearchParams(location.search).has('ws')) { try { showPanel('weatherstar'); } catch (e) { try { launchWeatherStar(); } catch (_) {} } }
   // ...and About / Get the App from the guide's bottom bar
   if (new URLSearchParams(location.search).has('about')) { try { showAbout(); } catch (e) {} }
   if (new URLSearchParams(location.search).has('getapp')) { try { showGetApp(); } catch (e) {} }

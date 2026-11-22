@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-22T23:00:00Z build.1795388400 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T00:00:00Z build.1795392000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -27,7 +27,7 @@ button{font-family:inherit}
 #slate b{font-size:44px;color:var(--num);line-height:1}
 #slate span{font-size:22px;color:#fff;font-weight:600}
 #slate small{font-size:16px}
-#pvbug{position:absolute;left:12px;bottom:8px;z-index:7;display:flex;gap:8px;align-items:baseline;text-shadow:0 2px 4px #000;pointer-events:none}
+#pvbug{position:absolute;left:24px;top:262px;z-index:7;display:flex;gap:8px;align-items:baseline;text-shadow:0 2px 4px #000;pointer-events:none}
 #pvbug b{font-size:30px;color:var(--num)}#pvbug span{font-size:18px;font-weight:600;color:#fff}
 #info{flex:1 1 0;min-width:0;box-sizing:border-box;background:var(--panel);border:3px solid var(--frame);border-radius:var(--r);padding:14px 26px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px}
 #i-block{font-size:18px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
@@ -98,6 +98,13 @@ button{font-family:inherit}
 #osd b{font-size:34px;color:var(--num);margin-right:12px}#osd span{font-size:24px;font-weight:600}
 #osd div{font-size:20px;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+#stage:not(.guiding) #pvbug{display:none}
+/* Forecast, Live Radar, WeatherStar, About…: a page opened above the bottom bar (the frame
+   sits outside the scaled stage so the page renders at the screen's real size) */
+#stage.apping #guide,#stage.apping #watch,#stage.apping #player{display:none}
+#appframe{position:fixed;z-index:5;border:0;display:none;background:#0a0e14}
+#bar .btn.on{outline:3px solid var(--selb);outline-offset:-3px}
+#bar .btn.green.on{outline-color:#fff}
 /* ── Bottom bar: always there (except true full screen) ── */
 #bar{position:absolute;left:0;right:0;bottom:0;height:46px;z-index:8;background:var(--bar);border-top:2px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 12px;box-sizing:border-box;gap:10px}
 #bar .k{display:flex;gap:8px;align-items:center;min-width:0}
@@ -182,19 +189,19 @@ button{font-family:inherit}
   <div id="bar">
     <div class="k">
       <button type="button" class="btn" id="guidebtn">GUIDE</button>
-      <a class="btn green" href="/radar.html">LIVE RADAR</a>
-      <a class="btn ghost" href="/radar.html?forecast=1">FORECAST</a>
-      <a class="btn ghost" href="/?ws=1">WEATHERSTAR</a>
+      <button type="button" class="btn green" data-app="radar">LIVE RADAR</button>
+      <button type="button" class="btn ghost" data-app="forecast">FORECAST</button>
+      <button type="button" class="btn ghost" data-app="wstar">WEATHERSTAR</button>
       <button type="button" class="chip" id="r-info" hidden>▴ INFO</button>
       <button type="button" class="chip" id="r-side" hidden>▴ MAP · CHAT</button>
       <button type="button" class="btn ghost" id="fullbtn" hidden>⛶ FULL</button>
     </div>
     <div class="k">
-      <a id="wx" href="/radar.html?forecast=1" title="Your forecast"></a>
+      <a id="wx" href="#" data-app="forecast" title="Your forecast"></a>
       <span id="barclock"></span>
-      <a class="btn ghost" href="/?getapp=1">GET THE APP</a>
-      <a class="btn ghost" href="/shop.html">SUPPORT</a>
-      <a class="btn ghost" href="/?about=1">ABOUT</a>
+      <button type="button" class="btn ghost" data-app="getapp">GET THE APP</button>
+      <button type="button" class="btn ghost" data-app="support">SUPPORT</button>
+      <button type="button" class="btn ghost" data-app="about">ABOUT</button>
     </div>
   </div>
 
@@ -203,6 +210,7 @@ button{font-family:inherit}
   <div id="ticker" role="status" aria-live="polite"><span id="tk-label"></span><div id="tk-wrap"><span id="tk-text"></span></div></div>
   <div id="loading">Loading the guide…</div>
 </div>
+<iframe id="appframe" title="Weather TV" allow="autoplay; encrypted-media; fullscreen; geolocation; picture-in-picture" allowfullscreen></iframe>
 <script>
 (function () {
   'use strict';
@@ -224,11 +232,14 @@ button{font-family:inherit}
   let watchBlock = null, tab = null, chasers = {}, map = null, marker = null, osdT = null, pvT = null;
 
   // ── Stage: a 1280×720 TV screen scaled to the window ──
+  let scale = 1, stageX = 0, stageY = 0;
   function fit() {
     const s = Math.min(innerWidth / 1280, innerHeight / 720);
+    scale = s; stageX = Math.max(0, (innerWidth - 1280 * s) / 2); stageY = Math.max(0, (innerHeight - 720 * s) / 2);
     stage.style.transform = 'scale(' + s + ')';
-    stage.style.left = Math.max(0, (innerWidth - 1280 * s) / 2) + 'px';
-    stage.style.top = Math.max(0, (innerHeight - 720 * s) / 2) + 'px';
+    stage.style.left = stageX + 'px';
+    stage.style.top = stageY + 'px';
+    if (typeof placeApp === 'function') placeApp();
   }
   addEventListener('resize', fit); fit();
 
@@ -484,22 +495,73 @@ button{font-family:inherit}
   }
   function setPanel(k, v) { panels[k] = v; LS.set('wtvGuidePanels', panels); layout(); updateBar(); }
   function updateBar() {
-    const w = mode === 'watch';
+    const w = mode === 'watch' || mode === 'app';
     $('guidebtn').textContent = w ? 'GUIDE' : (watched ? '◀ BACK TO CH ' + watched.n : 'GUIDE');
     $('guidebtn').disabled = !w && !watched;
     $('guidebtn').style.opacity = !w && !watched ? '0.5' : '1';
+    document.querySelectorAll('#bar [data-app]').forEach((b) => b.classList.toggle('on', mode === 'app' && b.dataset.app === app));
     $('r-info').hidden = !(w && !panels.info);
     $('r-side').hidden = !(w && !panels.side);
-    $('fullbtn').hidden = !w;
+    $('fullbtn').hidden = mode !== 'watch';
   }
+
+  // ── Pages that open above the bottom bar: Forecast, Live Radar, WeatherStar, About… ──
+  const APPS = {
+    radar: '/radar.html?embed=guide',
+    forecast: '/radar.html?embed=guide&view=forecast',
+    wstar: '/?ws=1&embed=guide',
+    about: '/?about=1&embed=guide',
+    getapp: '/?getapp=1&embed=guide',
+    support: '/shop.html?embed=guide',
+  };
+  let app = null;
+  function placeApp() {
+    const f = $('appframe');
+    if (!f || mode !== 'app') return;
+    const h = 720 - 46 - (ticking ? 30 : 0);                     // everything above the bottom bar (and ticker)
+    f.style.left = stageX + 'px'; f.style.top = stageY + 'px';
+    f.style.width = Math.round(1280 * scale) + 'px'; f.style.height = Math.round(h * scale) + 'px';
+  }
+  function openApp(name) {
+    if (!APPS[name]) return;
+    closeNav(); clearTimeout(pvT);
+    stopPlayer();                                                 // the channel stops; Back to Ch … returns to it
+    $('chatf').src = 'about:blank';
+    full = false; mode = 'app'; app = name;
+    stage.classList.remove('guiding', 'watching', 'full'); stage.classList.add('apping');
+    const f = $('appframe');
+    if (f.dataset.app !== name) { f.dataset.app = name; f.src = APPS[name]; }
+    f.style.display = 'block';
+    placeApp(); updateBar();
+    try { f.focus(); } catch (e) {}
+  }
+  function closeApp() {
+    const f = $('appframe');
+    f.style.display = 'none'; f.src = 'about:blank'; f.dataset.app = '';
+    app = null; mode = 'guide';
+    stage.classList.remove('apping'); stage.classList.add('guiding');
+    if (watched) {
+      const r = flat.findIndex((it) => it.ch && it.b.id === watched.b && it.ch.id === watched.id);
+      if (r >= 0) { select(r, watched.c); return updateBar(); }
+    }
+    keepVisible(); updateInfo(); schedulePreview(); updateBar();
+  }
+  document.getElementById('bar').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-app]'); if (!b) return;
+    e.preventDefault();
+    if (mode === 'app' && app === b.dataset.app) return;
+    openApp(b.dataset.app);
+  });
+  // The radar's "Live Radar ✕" on phones asks to close: back to the guide
+  addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.action === 'minimizeRadar' && mode === 'app') closeApp(); });
 
   // ── Guide ⇄ watching ──
   function activate() {
     closeNav();
     const cur = current();
     if (!cur) return;
-    if (cur.ch.kind === 'forecast') { location.href = '/radar.html?forecast=1'; return; }
-    if (cur.ch.kind === 'wstar') { location.href = '/?ws=1'; return; }
+    if (cur.ch.kind === 'forecast') { openApp('forecast'); return; }
+    if (cur.ch.kind === 'wstar') { openApp('wstar'); return; }
     if (!cur.c) return;
     clearTimeout(pvT);
     mode = 'watch';
@@ -511,6 +573,7 @@ button{font-family:inherit}
     layout(); renderSide(true); renderBanner(); updateBar();
   }
   function openGuide() {
+    if (mode === 'app') { closeApp(); return; }
     if (mode !== 'watch') return;
     mode = 'guide'; full = false;
     stage.classList.remove('watching', 'full'); stage.classList.add('guiding');
@@ -697,6 +760,7 @@ button{font-family:inherit}
       else return;
       e.preventDefault(); return;
     }
+    if (mode === 'app') { if (k === 'Escape' || k === 'GoBack' || k === 'g' || k === 'G') { e.preventDefault(); closeApp(); } return; }
     if (/^[0-9]$/.test(k)) { digit(k); e.preventDefault(); return; }
     if (mode === 'guide') {
       if (k === 'ArrowUp') moveRow(-1);
@@ -742,7 +806,7 @@ button{font-family:inherit}
   $('r-info').onclick = () => setPanel('info', true);
   $('r-side').onclick = () => { setPanel('side', true); renderSide(false); };
   $('i-go').onclick = activate;
-  $('guidebtn').onclick = () => { if (mode === 'watch') openGuide(); else backToWatched(); };
+  $('guidebtn').onclick = () => { if (mode === 'watch' || mode === 'app') openGuide(); else backToWatched(); };
   function toggleFull() { full = !full; stage.classList.toggle('full', full); if (!full) $('osd').classList.remove('on'); else flashOsd(); layout(); }
   $('fullbtn').onclick = toggleFull;
   stage.addEventListener('dblclick', (e) => { if (mode === 'watch' && full) toggleFull(); });
@@ -837,7 +901,7 @@ button{font-family:inherit}
         el.style.animationDuration = Math.max(18, Math.round(txt.length / 5)) + 's';
       }
     } else tkKey = '';
-    if (was !== ticking) { layout(); if (mode === 'guide') keepVisible(); }
+    if (was !== ticking) { layout(); placeApp(); if (mode === 'guide') keepVisible(); }
   }
 
   updateBar();

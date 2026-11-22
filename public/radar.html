@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-11-22T22:52:59Z build.1795387979 -->
+<!-- WeatherTV Radar — updated 2026-11-22T23:19:53Z build.1795389593 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -969,6 +969,33 @@
 </style>
 </head>
 <body>
+<script>
+  // Opened from the Channel Guide (/guide): the guide's bottom bar and ticker replace
+  // this page's own warning banner; view=forecast shows only the forecast, full screen.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    if (q.get('embed') === 'guide') document.documentElement.classList.add('embed-guide');
+    if (q.get('view') === 'forecast') document.documentElement.classList.add('fc-full');
+  })();
+</script>
+<style>
+  html.embed-guide #warning-banner { display:none !important; }
+  html.embed-guide #map.banner-visible { bottom:0 !important; }
+  /* Full-screen forecast: the forecast panel fills the page and its sections flow into columns */
+  html.fc-full #radar-toolbar, html.fc-full #map, html.fc-full #layers-fab, html.fc-full #forecast-fab,
+  html.fc-full #forecast-backdrop, html.fc-full #radar-legend, html.fc-full #temp-legend,
+  html.fc-full #storm-eta, html.fc-full #lnw-chip, html.fc-full #lnw-panel { display:none !important; }
+  html.fc-full #forecast-panel { position:fixed; inset:0; width:auto; max-width:none; transform:none; transition:none;
+    z-index:2500; display:block; overflow-y:auto; border:0; backdrop-filter:none; background:var(--bg, #0a0e14); }
+  html.fc-full #forecast-panel .lp-head-btn { display:none; }
+  html.fc-full #forecast-panel .lp-head { position:sticky; top:0; z-index:2; background:var(--bg, #0a0e14); }
+  html.fc-full #fp-content { overflow:visible; padding:0 1rem 2rem; }
+  @media (min-width: 760px) {
+    html.fc-full .fp-search { max-width:560px; }
+    html.fc-full #fp-content { column-width:380px; column-gap:1.4rem; column-fill:balance; }
+    html.fc-full #fp-content > * { break-inside:avoid; -webkit-column-break-inside:avoid; margin-bottom:0.9rem; }
+  }
+</style>
 
 <div id="radar-toolbar">
   <div class="radar-label" id="radar-minimize-btn" data-tv-notop onclick="minimizeRadar()" title="Back to Weather TV" style="cursor:pointer;">
@@ -10582,7 +10609,7 @@ function applySharedView() {
   }
 }
 // Channel Guide (Ch 1 Your Forecast) opens the forecast panel with ?forecast=1
-if (_shareParams.has('forecast')) setTimeout(() => { try { toggleForecastPanel(true); } catch (e) {} }, 600);
+if (_shareParams.has('forecast') || _shareParams.get('view') === 'forecast') setTimeout(() => { try { toggleForecastPanel(true); } catch (e) {} }, _shareParams.get('view') === 'forecast' ? 50 : 600);
 if (_shareParams.has('at') || _shareParams.has('layers') || _shareParams.has('base')) {
   try { applySharedView(); } catch (e) { console.warn('[Share] Could not apply shared view:', e.message); }
 }
