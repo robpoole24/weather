@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-11-22T22:56:16Z build.1795388176 -->
+<!-- WeatherTV Radar — updated 2026-11-22T22:52:59Z build.1795387979 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -10581,6 +10581,8 @@ function applySharedView() {
     else setRadarMode('forecast');
   }
 }
+// Channel Guide (Ch 1 Your Forecast) opens the forecast panel with ?forecast=1
+if (_shareParams.has('forecast')) setTimeout(() => { try { toggleForecastPanel(true); } catch (e) {} }, 600);
 if (_shareParams.has('at') || _shareParams.has('layers') || _shareParams.has('base')) {
   try { applySharedView(); } catch (e) { console.warn('[Share] Could not apply shared view:', e.message); }
 }

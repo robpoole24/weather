@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-10-12 build.1792103400 -->
+<!-- WeatherTV Admin — updated 2026-11-22T22:40:08Z build.1795387208 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -651,6 +651,25 @@
       ? `<strong style="color:var(--gold)">${n}</strong> weather channels waiting for review (${live} stream live) · ${d.today.searches}/${d.today.of} searches today`
       : `Nothing waiting · ${d.today.searches}/${d.today.of} searches today`;
   }).catch(() => { document.getElementById('disc-summary').textContent = 'Not available yet — deploy the new server.'; });
+  </script>
+
+  <!-- Channel Guide 2.0 — its own page: /admin/guide.html -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">📺 Channel Guide</div>
+      <a class="btn btn-primary btn-sm" href="/admin/guide.html" style="text-decoration:none">Blocks &amp; numbers →</a>
+    </div>
+    <div class="section-body">
+      <div id="guide-summary" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
+    </div>
+  </div>
+  <script>
+  fetch('/api/admin/guide').then(r => r.json()).then(d => {
+    const fresh = d.channels.filter(c => !c.saved).length;
+    document.getElementById('guide-summary').innerHTML = d.channels.length + ' channels in ' + d.blocks.filter(b => b.count).length + ' blocks · '
+      + (fresh ? '<strong style="color:var(--gold)">' + fresh + '</strong> without a fixed number' : 'every channel has a fixed number')
+      + ' · <a href="/guide" target="_blank" style="color:var(--accent)">open the guide ↗</a>';
+  }).catch(() => { document.getElementById('guide-summary').textContent = 'Not available yet — deploy the new server.'; });
   </script>
 
   <!-- Community Cams — managed on its own page: /admin/cams.html -->

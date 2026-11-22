@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-22T21:42:37Z build.1795383757
+// WeatherTV Server — updated 2026-11-22T22:40:08Z build.1795387208
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2924,6 +2924,12 @@ require('./marine')(app);
 // rain/snow records and 1991–2020 normals for every NWS long-record climate
 // site, pulled from ACIS on the server's own daily schedule and kept in Redis.
 require('./records')(app, { rGet, rSet });
+
+// Channel Guide 2.0 prototype (guide.js + public/guide.html): cable-style guide
+// built only from cached data — no quota per request. Unlisted page at /guide.
+// Admin: /admin/guide.html (block, number and tag for every channel; saved in data.guide)
+require('./guide')(app, { loadData, saveData, cache, filterRecent: _filterRecent });
+app.get('/guide', (req, res) => res.sendFile(path.join(__dirname, 'public', 'guide.html')));
 
 // Replaces the old bbox-based endpoint — state-level loading is far more
 // performant than loading thousands of cameras across the whole country
