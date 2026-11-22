@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-11-21 build.1795255200 -->
+<!-- WeatherTV Radar — updated 2026-11-22T22:52:59Z build.1795387979 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -2829,6 +2829,7 @@ function toggleOverlayFromToolbar(id) {
   const on = !overlayState[id];
   overlayState[id] = on;
   applyOverlay(id, on);
+  saveBannerPref(id, on);
   renderPanel();
 }
 function syncMesoButtons() {
@@ -10075,6 +10076,10 @@ const OVERLAY_ITEMS=SEASONAL_ITEMS.concat(ALERT_ITEMS).concat(MESO_ITEMS).concat
 let overlayState={};
 function lpDefaults(){ activePaint='reflectivity'; OVERLAY_ITEMS.forEach(o=>overlayState[o.id]=o.def); }
 lpDefaults();
+// The Warning Banner switch is remembered on this device (the Channel Guide's
+// watch/warning ticker follows it too). Shared links with ?layers= don't change it.
+try { if (localStorage.getItem('wtv-warning-banner') === 'off') overlayState.banner = false; } catch (_) {}
+function saveBannerPref(id, on) { if (id === 'banner') try { localStorage.setItem('wtv-warning-banner', on ? 'on' : 'off'); } catch (_) {} }
 
 // Wire camera overlay close button
 document.getElementById('camera-overlay-close').addEventListener('click', closeCameraOverlay);
@@ -10189,7 +10194,7 @@ document.getElementById('layer-panel').addEventListener('click',(e)=>{
   const id=row.dataset.id, kind=row.dataset.kind;
   const hadHighlight = row.classList.contains('tv-focus') || document.activeElement === row;
   if (kind==='paint'){ togglePaint(id); }
-  else { overlayState[id]=!overlayState[id]; applyOverlay(id,overlayState[id]); }
+  else { overlayState[id]=!overlayState[id]; applyOverlay(id,overlayState[id]); saveBannerPref(id,overlayState[id]); }
   renderPanel();
   // The panel is redrawn: keep the TV highlight / keyboard focus on the same row
   if (hadHighlight) {
@@ -10209,6 +10214,7 @@ document.getElementById('layer-panel').addEventListener('keydown',(e)=>{
 function resetLayers(){
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,false); });
   lpDefaults(); setPaint('reflectivity');
+  try { localStorage.removeItem('wtv-warning-banner'); } catch (_) {}
   OVERLAY_ITEMS.forEach(o=>{ if(overlayState[o.id]) applyOverlay(o.id,true); });
   renderPanel();
 }
@@ -10575,6 +10581,8 @@ function applySharedView() {
     else setRadarMode('forecast');
   }
 }
+// Channel Guide (Ch 1 Your Forecast) opens the forecast panel with ?forecast=1
+if (_shareParams.has('forecast')) setTimeout(() => { try { toggleForecastPanel(true); } catch (e) {} }, 600);
 if (_shareParams.has('at') || _shareParams.has('layers') || _shareParams.has('base')) {
   try { applySharedView(); } catch (e) { console.warn('[Share] Could not apply shared view:', e.message); }
 }

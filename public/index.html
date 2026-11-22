@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-10-12 build.1792118900 -->
+<!-- WeatherTV App — updated 2026-11-22T22:24:43Z build.1795386283 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1888,6 +1888,11 @@ async function init() {
   await checkAllLiveStatuses();
   loadHighlights();
   loadPlaylists();
+  // Channel Guide (Ch 2 WeatherStar) opens the WeatherStar menu with ?ws=1
+  if (new URLSearchParams(location.search).has('ws')) { try { launchWeatherStar(); } catch (e) {} }
+  // ...and About / Get the App from the guide's bottom bar
+  if (new URLSearchParams(location.search).has('about')) { try { showAbout(); } catch (e) {} }
+  if (new URLSearchParams(location.search).has('getapp')) { try { showGetApp(); } catch (e) {} }
 }
 
 // Load all group/channel data from the server API

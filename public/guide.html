@@ -1,0 +1,857 @@
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-22T23:00:00Z build.1795388400 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Weather TV — Channel Guide (preview)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/js/wtv-alert-catalog.js?v=1793530700"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Noto+Sans+Bengali:wght@500;600&display=swap');
+body.classic{--bg:#050a2e;--frame:#8fa6ff;--panel:#1a2fb0;--chan:#14228a;--cell:#1b2a9c;--sel:#3352f0;--selb:#ffe63b;--line:#8fa6ff;--head:#2a44d6;--headt:#ffe63b;--title:#ffe63b;--sub:#ffe63b;--num:#ffe63b;--band:#0b1460;--bandt:#ffffff;--text:#ffffff;--muted:#c9d4ff;--live:#e11d2e;--btn:#ffe63b;--btnt:#0b1460;--tab:#14228a;--bar:#0b1460;--r:0px}
+body.wtv{--bg:#03101b;--frame:#22d3ee;--panel:#0a2236;--chan:#061827;--cell:#0a1d2f;--sel:#173a55;--selb:#ff8a1f;--line:#1b6b80;--head:#0c2a40;--headt:#22d3ee;--title:#ffa24a;--sub:#7fe3f3;--num:#ffa24a;--band:#05253a;--bandt:#22d3ee;--text:#f1f8ff;--muted:#a9cadb;--live:#e11d2e;--btn:#ff8a1f;--btnt:#03101b;--tab:#061827;--bar:#061827;--r:6px}
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+body{font-family:'Barlow Condensed','Noto Sans Bengali',sans-serif}
+button{font-family:inherit}
+#stage{position:absolute;left:0;top:0;width:1280px;height:720px;transform-origin:0 0;background:var(--bg);color:var(--text);overflow:hidden}
+
+/* ── Guide ── */
+#guide{display:none}
+#stage.guiding #guide{display:block}
+#top{position:absolute;left:12px;top:12px;width:1256px;height:300px;display:flex;gap:8px}
+#pv{width:533px;height:300px;flex:none;box-sizing:border-box;border:3px solid var(--frame);border-radius:var(--r);background:radial-gradient(120% 90% at 30% 35%,#2b3746 0%,#141b25 55%,#07090d 100%);position:relative;overflow:hidden}
+#slate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:4px;padding:20px;color:var(--muted)}
+#slate b{font-size:44px;color:var(--num);line-height:1}
+#slate span{font-size:22px;color:#fff;font-weight:600}
+#slate small{font-size:16px}
+#pvbug{position:absolute;left:12px;bottom:8px;z-index:7;display:flex;gap:8px;align-items:baseline;text-shadow:0 2px 4px #000;pointer-events:none}
+#pvbug b{font-size:30px;color:var(--num)}#pvbug span{font-size:18px;font-weight:600;color:#fff}
+#info{flex:1 1 0;min-width:0;box-sizing:border-box;background:var(--panel);border:3px solid var(--frame);border-radius:var(--r);padding:14px 26px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px}
+#i-block{font-size:18px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#i-title{font-size:30px;line-height:1.1;font-weight:700;color:var(--title);max-width:640px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#i-creator{font-size:22px;font-weight:600}
+#i-status{font-size:20px;font-weight:600}
+#i-status.live{color:#ff6b6b}
+#i-next{font-size:17px;color:var(--muted);max-width:640px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btns{display:flex;gap:10px;margin-top:6px;flex-wrap:wrap;justify-content:center}
+.btn{border:0;background:var(--btn);color:var(--btnt);font-weight:700;font-size:18px;letter-spacing:.06em;padding:7px 18px;border-radius:var(--r);cursor:pointer;text-decoration:none;display:inline-block;white-space:nowrap}
+.btn.ghost{background:transparent;color:var(--text);border:2px solid var(--line);padding:5px 16px}
+.btn.green{background:#15803d;color:#fff}
+#grid{position:absolute;left:12px;top:320px;width:1256px;height:348px;box-sizing:border-box;border:2px solid var(--line);border-radius:var(--r);background:var(--line);display:flex;flex-direction:column;gap:2px;overflow:hidden}
+#ghead{display:flex;gap:2px;height:28px;flex:none}
+#ghead div{background:var(--head);color:var(--headt);font-size:18px;font-weight:700;letter-spacing:.08em;display:flex;align-items:center;justify-content:center}
+#clock{width:150px;flex:none;color:#fff !important}
+#rows{flex:1 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:2px}
+.row{display:flex;gap:2px;height:38px;flex:none}
+.chan{width:150px;flex:none;background:var(--chan);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
+.chan b{font-size:19px;color:var(--num)}.chan span{font-size:14px;font-weight:600;margin-top:2px;letter-spacing:.04em}
+.cell{flex:1 1 0;min-width:0;margin:0;box-sizing:border-box;border:2px solid transparent;border-radius:0;background:var(--cell);color:var(--text);text-align:left;padding:1px 8px;display:flex;flex-direction:column;justify-content:center;cursor:pointer}
+.cell .l{display:flex;align-items:center;min-width:0}
+.cell .t{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell .s{font-size:13px;font-weight:500;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell.sel{background:var(--sel);border-color:var(--selb)}
+.cell.empty{cursor:default;color:var(--muted);font-size:14px;justify-content:center}
+.live{font-style:normal;background:var(--live);color:#fff;font-weight:700;font-size:11px;padding:0 4px;margin-right:6px;letter-spacing:.08em;flex:none}
+.band{height:22px;flex:none;background:var(--band);color:var(--bandt);display:flex;justify-content:space-between;align-items:center;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.12em}
+.band span:last-child{color:var(--muted);font-weight:600}
+
+/* ── Watching (the main player screen) ── */
+#watch{display:none}
+#stage.watching #watch{display:block}
+#player{position:absolute;z-index:6;left:12px;top:12px;width:533px;height:300px;box-sizing:border-box;border:3px solid var(--frame);border-radius:var(--r);background:#000;overflow:hidden;transition:left .35s ease,top .35s ease,width .35s ease,height .35s ease}
+#player.hide{visibility:hidden}
+#player iframe{width:100%;height:100%;border:0;display:block}
+#stage.full #player{border:0;border-radius:0}
+#side{position:absolute;left:900px;top:12px;width:368px;box-sizing:border-box;border:3px solid var(--frame);border-radius:var(--r);background:var(--panel);display:flex;flex-direction:column;overflow:hidden}
+#tabs{display:flex;gap:2px;background:var(--line);flex:none}
+#tabs button{flex:1 1 0;height:40px;border:0;margin:0;font-size:18px;font-weight:700;letter-spacing:.1em;cursor:pointer;background:var(--tab);color:var(--text)}
+#tabs button.on{background:var(--btn);color:var(--btnt)}
+#tabs button.min{flex:none;width:44px;font-size:22px}
+.pane{flex:1 1 0;min-height:0;display:none;position:relative}
+.pane.on{display:block}
+#map{position:absolute;inset:0;background:#132119}
+#maplabel{position:absolute;left:10px;top:10px;right:10px;z-index:500;background:rgba(0,0,0,.65);padding:3px 10px;font-size:16px;font-weight:600;color:#fff}
+#mapnote{position:absolute;left:10px;bottom:10px;z-index:500;background:rgba(0,0,0,.6);padding:2px 8px;font-size:13px;color:#d6e2da}
+#chatf{width:100%;height:100%;border:0;background:#fff}
+#recent{position:absolute;inset:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;background:var(--line)}
+#recent button{flex:none;border:0;margin:0;text-align:left;background:var(--cell);color:var(--text);padding:8px 12px;cursor:pointer}
+#recent button.cur{background:var(--sel)}
+#recent .t{display:block;font-size:17px;font-weight:600;line-height:1.15}
+#recent .s{font-size:14px;color:var(--sub)}
+#banner{position:absolute;left:12px;top:528px;width:1256px;height:140px;box-sizing:border-box;display:flex;gap:2px;background:var(--line);border:2px solid var(--line);border-radius:var(--r);overflow:hidden}
+#b-chan{width:150px;flex:none;background:var(--chan);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
+#b-chan b{font-size:44px;color:var(--num)}#b-chan span{font-size:20px;font-weight:600;margin-top:4px}
+#b-mid{flex:1 1 0;min-width:0;background:var(--panel);padding:10px 20px;display:flex;flex-direction:column;justify-content:center;gap:4px}
+#b-block{font-size:16px;font-weight:600;letter-spacing:.1em;color:var(--muted);text-transform:uppercase}
+#b-title{font-size:28px;font-weight:700;line-height:1.05;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#b-status{font-size:19px;font-weight:600}
+#b-next{width:330px;flex:none;background:var(--cell);padding:10px 16px;display:flex;flex-direction:column;justify-content:center;gap:4px;position:relative}
+#b-next small{font-size:15px;font-weight:700;letter-spacing:.1em;color:var(--headt)}
+#b-next span{font-size:19px;font-weight:600;line-height:1.15;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#b-next em{font-style:normal;font-size:14px;color:var(--sub)}
+#b-min{position:absolute;right:6px;top:6px;width:34px;height:30px;border:0;background:var(--tab);color:var(--text);font-size:20px;font-weight:700;cursor:pointer;border-radius:var(--r)}
+#osd{position:absolute;left:24px;bottom:64px;z-index:9;background:rgba(5,10,46,.88);border:2px solid var(--frame);padding:10px 18px;display:none;max-width:900px}
+#osd.on{display:block}
+#osd b{font-size:34px;color:var(--num);margin-right:12px}#osd span{font-size:24px;font-weight:600}
+#osd div{font-size:20px;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── Bottom bar: always there (except true full screen) ── */
+#bar{position:absolute;left:0;right:0;bottom:0;height:46px;z-index:8;background:var(--bar);border-top:2px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 12px;box-sizing:border-box;gap:10px}
+#bar .k{display:flex;gap:8px;align-items:center;min-width:0}
+#bar .btn{font-size:16px;padding:4px 12px}
+#bar .btn.ghost{padding:2px 10px}
+#bar .chip{background:transparent;color:var(--headt);border:2px dashed var(--line);font-weight:700;font-size:15px;padding:2px 10px;border-radius:var(--r);cursor:pointer}
+#wx{font-size:18px;font-weight:700;white-space:nowrap;color:var(--text);text-decoration:none}
+#wx b{color:var(--num);font-size:22px;margin-right:6px}
+#barclock{font-size:18px;font-weight:600;color:var(--muted);white-space:nowrap}
+#stage.full #bar{display:none}
+#numbox{position:absolute;right:24px;top:20px;z-index:10;background:var(--panel);border:3px solid var(--selb);font-size:40px;font-weight:700;color:var(--num);padding:2px 18px;display:none}
+/* Blocks menu: opens over the left of the grid */
+#nav{position:absolute;left:12px;top:320px;width:330px;height:348px;z-index:9;box-sizing:border-box;background:var(--panel);border:3px solid var(--selb);border-radius:var(--r);display:none;flex-direction:column;box-shadow:12px 0 30px rgba(0,0,0,.55)}
+#nav.on{display:flex}
+#nav h3{margin:0;padding:8px 14px 4px;font-size:22px;letter-spacing:.1em;color:var(--title)}
+#nav p{margin:0;padding:0 14px 6px;font-size:14px;color:var(--muted)}
+#navlist{flex:1 1 0;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;background:var(--line);border-top:2px solid var(--line)}
+.nv{display:flex;align-items:center;gap:10px;background:var(--cell);padding:0 10px 0 6px;height:34px;flex:none;cursor:pointer;border:2px solid transparent}
+.nv.foc{border-color:var(--selb);background:var(--sel)}
+.nv.off .nl{opacity:.45;text-decoration:line-through}
+.nv .ck{width:26px;height:26px;flex:none;border:2px solid var(--line);background:transparent;color:var(--btn);font-size:18px;font-weight:700;line-height:20px;padding:0;cursor:pointer;border-radius:var(--r)}
+.nl{flex:1 1 0;min-width:0;font-size:17px;font-weight:600;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nv small{font-size:14px;color:var(--muted);flex:none}
+#navkeys{padding:5px 12px;font-size:13px;color:var(--muted);letter-spacing:.04em}
+#navkeys b{color:var(--text)}
+/* Watch / warning ticker: the very bottom of the screen, under the bar */
+#ticker{position:absolute;left:0;right:0;bottom:0;height:30px;z-index:12;display:none;background:var(--tk,#d4a017);color:#fff;overflow:hidden}
+#stage.ticking #ticker{display:flex}
+#stage.ticking #bar{bottom:30px}
+#stage.ticking #grid,#stage.ticking #nav{height:318px}
+#tk-label{flex:none;background:rgba(0,0,0,.45);padding:0 12px;display:flex;align-items:center;font-size:17px;font-weight:700;letter-spacing:.1em;white-space:nowrap}
+#tk-wrap{flex:1 1 0;min-width:0;overflow:hidden;display:flex;align-items:center}
+#tk-text{display:inline-block;white-space:nowrap;font-size:18px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;text-shadow:0 1px 2px rgba(0,0,0,.6);animation:tk 40s linear infinite;will-change:transform}
+@keyframes tk{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+#loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;color:var(--muted);z-index:30;background:var(--bg)}
+</style>
+</head>
+<body class="classic">
+<div id="stage" class="guiding">
+  <div id="guide">
+    <div id="top">
+      <div id="pv">
+        <div id="slate"><b id="sl-n"></b><span id="sl-name"></span><small id="sl-sub"></small></div>
+      </div>
+      <div id="info" aria-live="polite">
+        <div id="i-block"></div>
+        <div id="i-title"></div>
+        <div id="i-creator"></div>
+        <div id="i-status"></div>
+        <div id="i-next"></div>
+        <div class="btns">
+          <button type="button" class="btn" id="i-go">OK · WATCH</button>
+          <button type="button" class="btn ghost" id="i-cust">☰ BLOCKS</button>
+          <button type="button" class="btn ghost" id="skinbtn">LOOK: CLASSIC</button>
+        </div>
+      </div>
+    </div>
+    <div id="grid">
+      <div id="ghead"><div id="clock"></div><div id="h1" style="flex:1 1 0">ON NOW · NEWEST</div><div id="h2" style="flex:3 1 0">EARLIER UPLOADS ›››</div></div>
+      <div id="rows"></div>
+    </div>
+  </div>
+
+  <div id="watch">
+    <div id="side">
+      <div id="tabs"></div>
+      <div class="pane" id="p-map"><div id="map"></div><div id="maplabel"></div><div id="mapnote">Chaser position · Spotter Network</div></div>
+      <div class="pane" id="p-chat"><iframe id="chatf" title="YouTube live chat"></iframe></div>
+      <div class="pane" id="p-recent"><div id="recent"></div></div>
+    </div>
+    <div id="banner">
+      <div id="b-chan"><b id="b-n"></b><span id="b-call"></span></div>
+      <div id="b-mid"><div id="b-block"></div><div id="b-title"></div><div id="b-status"></div></div>
+      <div id="b-next"><button type="button" id="b-min" title="Minimize the info bar" aria-label="Minimize the info bar">–</button><small id="b-nexth">NEXT ›</small><span id="b-nextt"></span><em id="b-nexts"></em></div>
+    </div>
+  </div>
+
+  <div id="player" class="hide"><iframe id="yt" title="Video player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>
+  <div id="pvbug"><b id="pv-n"></b><span id="pv-call"></span></div>
+  <div id="osd"><b id="o-n"></b><span id="o-name"></span><div id="o-title"></div></div>
+
+  <div id="bar">
+    <div class="k">
+      <button type="button" class="btn" id="guidebtn">GUIDE</button>
+      <a class="btn green" href="/radar.html">LIVE RADAR</a>
+      <a class="btn ghost" href="/radar.html?forecast=1">FORECAST</a>
+      <a class="btn ghost" href="/?ws=1">WEATHERSTAR</a>
+      <button type="button" class="chip" id="r-info" hidden>▴ INFO</button>
+      <button type="button" class="chip" id="r-side" hidden>▴ MAP · CHAT</button>
+      <button type="button" class="btn ghost" id="fullbtn" hidden>⛶ FULL</button>
+    </div>
+    <div class="k">
+      <a id="wx" href="/radar.html?forecast=1" title="Your forecast"></a>
+      <span id="barclock"></span>
+      <a class="btn ghost" href="/?getapp=1">GET THE APP</a>
+      <a class="btn ghost" href="/shop.html">SUPPORT</a>
+      <a class="btn ghost" href="/?about=1">ABOUT</a>
+    </div>
+  </div>
+
+  <div id="numbox"></div>
+  <div id="nav" role="dialog" aria-label="Blocks"><h3>BLOCKS</h3><p>Jump to a block, or untick the ones you don’t want in the guide. Saved on this device only.</p><div id="navlist"></div><div id="navkeys"><b>▲▼</b> MOVE · <b>OK / ▶</b> JUMP · <b>SPACE</b> SHOW / HIDE · <b>◀</b> CLOSE</div></div>
+  <div id="ticker" role="status" aria-live="polite"><span id="tk-label"></span><div id="tk-wrap"><span id="tk-text"></span></div></div>
+  <div id="loading">Loading the guide…</div>
+</div>
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const LS = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+  };
+  const NCOL = 4;
+  const stage = $('stage'), rowsEl = $('rows'), yt = $('yt'), player = $('player');
+
+  let G = null, flat = [], sel = { r: -1, c: 0 }, off = 0, mode = 'guide', full = false;
+  let skin = LS.get('wtvGuideSkin', 'classic');
+  let hidden = new Set(LS.get('wtvGuideHidden', []));
+  let panels = Object.assign({ side: true, info: true }, LS.get('wtvGuidePanels', {}));
+  let loaded = { key: null, muted: true };
+  let watched = null;            // { b, id, c } — the channel the player is on
+  let watchBlock = null, tab = null, chasers = {}, map = null, marker = null, osdT = null, pvT = null;
+
+  // ── Stage: a 1280×720 TV screen scaled to the window ──
+  function fit() {
+    const s = Math.min(innerWidth / 1280, innerHeight / 720);
+    stage.style.transform = 'scale(' + s + ')';
+    stage.style.left = Math.max(0, (innerWidth - 1280 * s) / 2) + 'px';
+    stage.style.top = Math.max(0, (innerHeight - 720 * s) / 2) + 'px';
+  }
+  addEventListener('resize', fit); fit();
+
+  function applySkin() {
+    document.body.className = skin;
+    $('skinbtn').textContent = 'LOOK: ' + (skin === 'classic' ? 'CLASSIC' : 'WEATHER TV');
+  }
+  applySkin();
+
+  function ago(iso) {
+    if (!iso) return '';
+    const m = (Date.now() - Date.parse(iso)) / 60000;
+    if (!isFinite(m)) return '';
+    if (m < 60) return Math.max(1, Math.round(m)) + 'm ago';
+    if (m < 1440) return Math.round(m / 60) + 'h ago';
+    return Math.round(m / 1440) + 'd ago';
+  }
+  function tick() {
+    const t = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    $('clock').textContent = t.replace(/ [AP]M$/, '');
+    $('barclock').textContent = t.replace(/:\d\d (?=[AP]M)/, ' ');
+  }
+  setInterval(tick, 1000); tick();
+
+  // ── Your temperature + place (from the place saved on Live Radar's forecast; this device only) ──
+  async function loadWx() {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
+    if (!p || !isFinite(p.lat) || !isFinite(p.lon)) { $('wx').innerHTML = 'SET YOUR LOCATION ›'; return; }
+    try {
+      const j = await (await fetch('/api/forecast?lat=' + (+p.lat).toFixed(4) + '&lon=' + (+p.lon).toFixed(4) + (p.label ? '&name=' + encodeURIComponent(p.label) : ''), { cache: 'no-cache' })).json();
+      const t = j && j.current && j.current.temperature_2m;
+      const name = (p.label || (j.location && j.location.name) || '').split(',').slice(0, 2).join(',');
+      $('wx').innerHTML = (isFinite(t) ? '<b>' + Math.round(t) + '°</b>' : '') + esc(name);
+    } catch (e) { $('wx').textContent = (p.label || '').split(',')[0]; }
+  }
+
+  // ── Data ──
+  async function load(first) {
+    try {
+      const r = await fetch('/api/guide', { cache: 'no-cache' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      G = await r.json();
+      rebuild();
+      $('loading').style.display = 'none';
+    } catch (e) {
+      if (first) $('loading').textContent = 'The guide could not load. Try again in a minute.';
+    }
+  }
+  async function loadChasers() {
+    try {
+      const j = await (await fetch('/api/chasers')).json();
+      const m = {};
+      (j.chasers || []).forEach((c) => { if (c.channelId && isFinite(c.lat) && isFinite(c.lng)) m[c.channelId] = c; });
+      chasers = m;
+      if (mode === 'watch') renderSide(false);
+    } catch (e) {}
+  }
+
+  function rebuild() {
+    const prev = flat[sel.r];
+    const keep = prev && prev.ch ? { b: prev.b.id, id: prev.ch.id } : null;
+    flat = [];
+    G.blocks.forEach((b) => {
+      if (!b.channels || !b.channels.length) return;
+      if (hidden.has(b.id) && b.id !== 'wtv') return;
+      flat.push({ band: true, b });
+      b.channels.forEach((ch) => flat.push({ b, ch }));
+    });
+    let r = keep ? flat.findIndex((it) => it.ch && it.b.id === keep.b && it.ch.id === keep.id) : -1;
+    if (r < 0) r = flat.findIndex((it) => it.ch);
+    sel.r = r;
+    renderGrid();
+    select(r, keep ? sel.c : 0, true);
+  }
+
+  // ── Grid ──
+  function cellSub(it, c, k) {
+    const ch = it.ch;
+    if (ch.kind === 'forecast') return 'Opens your forecast';
+    if (ch.kind === 'wstar') return 'Opens the WeatherStar menu';
+    if (ch.kind === 'list') return (ch.n === 3 ? 'Clip ' + (k + 1) : (k + 1) + ' of ' + ch.cells.length);
+    if (c.live) return 'Live now';
+    return ago(c.at);
+  }
+  function rowHTML(it, i) {
+    const ch = it.ch;
+    let cells = '';
+    for (let k = off; k < off + NCOL; k++) {
+      const c = ch.cells[k];
+      if (!c) {
+        const msg = k === 0 ? (ch.needsFetch ? 'Loading playlist…' : 'No recent uploads yet') : '';
+        cells += '<div class="cell empty">' + esc(msg) + '</div>';
+        continue;
+      }
+      const more = k === off + NCOL - 1 && ch.cells.length > k + 1 ? '  ››' : '';
+      const isSel = i === sel.r && k === sel.c;
+      cells += '<button type="button" class="cell' + (isSel ? ' sel' : '') + '" data-r="' + i + '" data-c="' + k + '">'
+        + '<span class="l">' + (c.live ? '<i class="live">LIVE</i>' : '') + '<span class="t">' + esc(c.t) + '</span></span>'
+        + '<span class="s">' + esc(cellSub(it, c, k) + more) + '</span></button>';
+    }
+    return '<div class="row" id="r' + i + '"><div class="chan"><b>' + ch.n + '</b><span>' + esc(ch.call) + '</span></div>' + cells + '</div>';
+  }
+  function renderGrid() {
+    rowsEl.innerHTML = flat.map((it, i) => it.band
+      ? '<div class="band" id="r' + i + '"><span>' + esc(it.b.label) + '</span><span>' + esc(it.b.range) + '</span></div>'
+      : rowHTML(it, i)).join('');
+    $('h1').textContent = off === 0 ? 'ON NOW · NEWEST' : '‹‹‹ NEWER';
+    keepVisible();
+  }
+  function keepVisible() {
+    const el = $('r' + sel.r);
+    if (!el || mode !== 'guide') return;
+    const top = el.offsetTop - rowsEl.offsetTop, h = rowsEl.clientHeight;
+    const want = flat[sel.r - 1] && flat[sel.r - 1].band ? top - 24 : top;
+    if (want < rowsEl.scrollTop + 40) rowsEl.scrollTop = Math.max(0, want - 40);
+    else if (top + el.offsetHeight > rowsEl.scrollTop + h - 40) rowsEl.scrollTop = top + el.offsetHeight - h + 40;
+  }
+
+  function current() { const it = flat[sel.r]; return it && it.ch ? { it, ch: it.ch, c: it.ch.cells[sel.c] } : null; }
+
+  function select(r, c, force) {
+    const it = flat[r];
+    if (!it || !it.ch) return;
+    const n = it.ch.cells.length;
+    c = Math.max(0, Math.min(c, Math.max(0, n - 1)));
+    const prevOff = off;
+    if (c < off) off = c;
+    if (c > off + NCOL - 1) off = c - NCOL + 1;
+    const old = rowsEl.querySelector('.cell.sel');
+    sel = { r, c };
+    if (off !== prevOff || force) renderGrid();
+    else {
+      if (old) old.classList.remove('sel');
+      const btn = rowsEl.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]');
+      if (btn) btn.classList.add('sel');
+      keepVisible();
+    }
+    if (it.ch.needsFetch && !it.ch._fetching) fetchPlaylist(it.ch);
+    updateInfo();
+    if (mode === 'guide') schedulePreview();
+  }
+
+  async function fetchPlaylist(ch) {
+    ch._fetching = true;
+    try {
+      const j = await (await fetch('/api/yt/playlist/' + encodeURIComponent(ch.playlistId))).json();
+      ch.cells = (j.items || []).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((c) => c.v);
+      ch.needsFetch = false;
+      renderGrid(); updateInfo(); if (mode === 'guide') schedulePreview();
+    } catch (e) { ch._fetching = false; }
+  }
+
+  function blockLabel(it) { return it.ch.block || it.b.label.replace(/ · .*$/, ''); }
+  function describe(it, c, k) {
+    const ch = it.ch;
+    const nxt = ch.cells[k + 1];
+    let status = '', next = nxt ? 'Next on this channel: ' + nxt.t : '', action = 'WATCH', live = false;
+    if (ch.kind === 'forecast') { status = 'Opens your full forecast'; next = 'Hourly · 7-day · alerts · records'; action = 'OPEN FORECAST'; }
+    else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
+    else if (ch.kind === 'list') { status = 'Plays straight through · ' + cellSub(it, c, k); }
+    else if (c && c.live) { status = 'LIVE now'; live = true; }
+    else if (c) { status = 'Uploaded ' + ago(c.at); }
+    return { status, next, action, live };
+  }
+  function updateInfo() {
+    const cur = current();
+    if (!cur) return;
+    const { it, ch, c } = cur;
+    const d = describe(it, c, sel.c);
+    $('i-block').textContent = blockLabel(it) + ' · Channel ' + ch.n;
+    $('i-title').textContent = c ? '“' + c.t + '”' : ch.name;
+    $('i-creator').textContent = ch.name;
+    $('i-status').textContent = d.status;
+    $('i-status').className = d.live ? 'live' : '';
+    $('i-next').textContent = d.next;
+    $('i-go').textContent = 'OK · ' + d.action;
+    $('pv-n').textContent = ch.n; $('pv-call').textContent = ch.call;
+  }
+
+  // ── Player: one iframe that moves between the guide's preview box and the watch frame ──
+  function ytCmd(func, args) {
+    try { yt.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: args || [] }), '*'); } catch (e) {}
+  }
+  yt.addEventListener('load', () => {
+    try {
+      yt.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 'wtvguide', channel: 'widget' }), '*');
+      ytCmd('addEventListener', ['onStateChange']);
+    } catch (e) {}
+    if (!loaded.muted) setTimeout(() => { ytCmd('unMute'); ytCmd('setVolume', [90]); }, 400);
+  });
+  let lastEnd = 0;
+  addEventListener('message', (e) => {
+    if (!/^https:\/\/www\.youtube(-nocookie)?\.com$/.test(e.origin)) return;
+    let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch (x) { return; }
+    if (!d) return;
+    const ended = (d.event === 'onStateChange' && d.info === 0) || (d.event === 'infoDelivery' && d.info && d.info.playerState === 0);
+    if (ended && Date.now() - lastEnd > 3000) { lastEnd = Date.now(); onEnded(); }
+  });
+
+  function keyOf(ch, c) { return c ? (c.v || ('live:' + (c.ch || ch.id))) : null; }
+  function srcOf(ch, c, muted) {
+    const q = 'autoplay=1&mute=' + (muted ? 1 : 0) + '&enablejsapi=1&playsinline=1&rel=0&origin=' + encodeURIComponent(location.origin);
+    return c.v ? 'https://www.youtube.com/embed/' + encodeURIComponent(c.v) + '?' + q
+               : 'https://www.youtube.com/embed/live_stream?channel=' + encodeURIComponent(c.ch || ch.id) + '&' + q;
+  }
+  function play(ch, c, muted) {
+    if (!c || ch.kind === 'forecast' || ch.kind === 'wstar') { showSlate(ch); return; }
+    const key = keyOf(ch, c);
+    player.classList.remove('hide');
+    $('slate').style.display = 'none';
+    if (loaded.key === key) {
+      if (loaded.muted !== muted) { ytCmd(muted ? 'mute' : 'unMute'); if (!muted) ytCmd('setVolume', [90]); ytCmd('playVideo'); loaded.muted = muted; }
+      return;
+    }
+    loaded = { key, muted };
+    yt.src = srcOf(ch, c, muted);
+  }
+  function stopPlayer() { loaded = { key: null, muted: true }; yt.src = 'about:blank'; player.classList.add('hide'); }
+  function showSlate(ch) {
+    stopPlayer();
+    $('slate').style.display = 'flex';
+    $('sl-n').textContent = ch ? ch.n : '';
+    $('sl-name').textContent = ch ? ch.name : '';
+    $('sl-sub').textContent = ch && (ch.kind === 'forecast' || ch.kind === 'wstar') ? 'Press OK to open' : 'Nothing to preview yet';
+    updateBar();
+  }
+  function schedulePreview() {
+    clearTimeout(pvT);
+    const cur = current();
+    if (!cur) return;
+    if (!cur.c || cur.ch.kind === 'forecast' || cur.ch.kind === 'wstar') { showSlate(cur.ch); return; }
+    if (loaded.key === keyOf(cur.ch, cur.c)) return;   // keep what's playing (and its sound)
+    pvT = setTimeout(() => { const now = current(); if (now && mode === 'guide') play(now.ch, now.c, true); }, 650);
+  }
+
+  // ── Layout: video, side panel and info bar, any of them minimized ──
+  function layout() {
+    const P = player.style;
+    if (mode === 'guide') { P.left = '12px'; P.top = '12px'; P.width = '533px'; P.height = '300px'; return; }
+    const tk = ticking ? 30 : 0;                                 // the warning ticker takes the bottom 30px
+    if (full) { P.left = '0px'; P.top = '0px'; P.width = '1280px'; P.height = (720 - tk) + 'px'; return; }
+    const side = panels.side, info = panels.info;
+    const avail = 656 - tk;                                       // area above the bottom bar
+    const W = side ? 880 : 1256, H = info ? avail - 148 : avail;
+    let w = Math.min(W, Math.round(H * 16 / 9)), h = Math.round(w * 9 / 16);
+    P.left = (12 + Math.round((W - w) / 2)) + 'px'; P.top = '12px'; P.width = w + 'px'; P.height = h + 'px';
+    $('side').style.display = side ? 'flex' : 'none';
+    $('side').style.height = H + 'px';
+    $('banner').style.display = info ? 'flex' : 'none';
+    $('banner').style.top = (12 + H + 8) + 'px';
+    if (side && tab === 'MAP' && map) setTimeout(() => map.invalidateSize(), 400);
+  }
+  function setPanel(k, v) { panels[k] = v; LS.set('wtvGuidePanels', panels); layout(); updateBar(); }
+  function updateBar() {
+    const w = mode === 'watch';
+    $('guidebtn').textContent = w ? 'GUIDE' : (watched ? '◀ BACK TO CH ' + watched.n : 'GUIDE');
+    $('guidebtn').disabled = !w && !watched;
+    $('guidebtn').style.opacity = !w && !watched ? '0.5' : '1';
+    $('r-info').hidden = !(w && !panels.info);
+    $('r-side').hidden = !(w && !panels.side);
+    $('fullbtn').hidden = !w;
+  }
+
+  // ── Guide ⇄ watching ──
+  function activate() {
+    closeNav();
+    const cur = current();
+    if (!cur) return;
+    if (cur.ch.kind === 'forecast') { location.href = '/radar.html?forecast=1'; return; }
+    if (cur.ch.kind === 'wstar') { location.href = '/?ws=1'; return; }
+    if (!cur.c) return;
+    clearTimeout(pvT);
+    mode = 'watch';
+    watchBlock = cur.it.b.id;
+    watched = { b: cur.it.b.id, id: cur.ch.id, c: sel.c, n: cur.ch.n };
+    stage.classList.remove('guiding'); stage.classList.add('watching');
+    play(cur.ch, cur.c, false);
+    tab = null;
+    layout(); renderSide(true); renderBanner(); updateBar();
+  }
+  function openGuide() {
+    if (mode !== 'watch') return;
+    mode = 'guide'; full = false;
+    stage.classList.remove('watching', 'full'); stage.classList.add('guiding');
+    $('chatf').src = 'about:blank';
+    layout(); keepVisible(); updateInfo(); updateBar();
+  }
+  function backToWatched() {
+    if (mode !== 'guide' || !watched) return;
+    const r = flat.findIndex((it) => it.ch && it.b.id === watched.b && it.ch.id === watched.id);
+    if (r < 0) return;
+    select(r, watched.c);
+    activate();
+  }
+  function surf(dir) {
+    const rows = [];
+    flat.forEach((it, i) => { if (it.ch && it.b.id === watchBlock && it.ch.cells.length && it.ch.kind !== 'forecast' && it.ch.kind !== 'wstar') rows.push(i); });
+    if (!rows.length) return;
+    let p = rows.indexOf(sel.r);
+    p = (p + dir + rows.length) % rows.length;
+    sel = { r: rows[p], c: 0 }; off = 0;
+    renderGrid(); updateInfo();
+    const cur = current();
+    watched = { b: cur.it.b.id, id: cur.ch.id, c: 0, n: cur.ch.n };
+    play(cur.ch, cur.c, false);
+    tab = null;
+    renderSide(true); renderBanner(); flashOsd(); layout();
+  }
+  function onEnded() {
+    if (mode !== 'watch') return;
+    const cur = current();
+    if (!cur) return;
+    const nxt = cur.ch.cells[sel.c + 1];
+    if (!nxt || nxt.live) return;
+    select(sel.r, sel.c + 1);
+    watched.c = sel.c;
+    play(cur.ch, nxt, false);
+    renderSide(false); renderBanner(); flashOsd();
+  }
+  function flashOsd() {
+    if (!full && panels.info) return;
+    const cur = current(); if (!cur) return;
+    $('o-n').textContent = cur.ch.n; $('o-name').textContent = cur.ch.name; $('o-title').textContent = cur.c ? cur.c.t : '';
+    $('osd').classList.add('on'); clearTimeout(osdT); osdT = setTimeout(() => $('osd').classList.remove('on'), 4000);
+  }
+  function renderBanner() {
+    const cur = current(); if (!cur) return;
+    const { it, ch, c } = cur, d = describe(it, c, sel.c);
+    $('b-n').textContent = ch.n; $('b-call').textContent = ch.call;
+    $('b-block').textContent = blockLabel(it) + ' · ' + ch.name;
+    $('b-title').textContent = c ? '“' + c.t + '”' : '';
+    $('b-status').innerHTML = d.live ? '<b style="color:#ff6b6b">LIVE now</b>' : esc(d.status);
+    const nxt = ch.cells[sel.c + 1];
+    $('b-nexth').textContent = 'NEXT ON CH ' + ch.n + ' ›';
+    $('b-nextt').textContent = nxt ? nxt.t : 'That’s the oldest one we have';
+    $('b-nexts').textContent = nxt ? (nxt.at ? ago(nxt.at) + ' · ' : '') + (c && c.live ? 'in RECENT any time' : 'plays when this one ends') : '';
+  }
+
+  // ── Side panel: MAP · CHAT · RECENT ──
+  function tabsFor(ch, c) {
+    const t = [];
+    if (chasers[ch.id]) t.push('MAP');
+    if (c && c.live && c.v) t.push('CHAT');
+    t.push('RECENT');
+    return t;
+  }
+  function renderSide(reset) {
+    const cur = current(); if (!cur) return;
+    const { ch, c } = cur;
+    const tabs = tabsFor(ch, c);
+    if (reset || !tabs.includes(tab)) tab = tabs[0];
+    $('tabs').innerHTML = tabs.map((t) => '<button type="button" data-tab="' + t + '" class="' + (t === tab ? 'on' : '') + '">' + t + '</button>').join('')
+      + '<button type="button" class="min" data-min="1" title="Minimize this panel" aria-label="Minimize this panel">–</button>';
+    $('r-side').textContent = '▴ ' + tabs.join(' · ');
+    ['map', 'chat', 'recent'].forEach((p) => $('p-' + p).classList.toggle('on', tab === p.toUpperCase()));
+    if (tab === 'MAP') showMap(ch);
+    if (tab === 'CHAT' && panels.side) {
+      const want = 'https://www.youtube.com/live_chat?v=' + encodeURIComponent(c.v) + '&embed_domain=' + encodeURIComponent(location.hostname);
+      if ($('chatf').src !== want) $('chatf').src = want;
+    } else if ($('chatf').src && $('chatf').src !== 'about:blank') $('chatf').src = 'about:blank';
+    if (tab === 'RECENT') {
+      $('recent').innerHTML = ch.cells.map((x, k) => '<button type="button" data-k="' + k + '" class="' + (k === sel.c ? 'cur' : '') + '"><span class="t">' + (x.live ? '<i class="live">LIVE</i>' : '') + esc(x.t) + '</span><span class="s">' + esc(x.live ? 'Live now' : (x.at ? ago(x.at) : (k + 1) + ' of ' + ch.cells.length)) + '</span></button>').join('');
+    }
+  }
+  function showMap(ch) {
+    const cz = chasers[ch.id]; if (!cz || typeof L === 'undefined') return;
+    if (!map) {
+      map = L.map('map', { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false });
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap', maxZoom: 19, zIndex: 1, pane: 'tilePane' }).addTo(map);
+      L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png', { opacity: 0.65, zIndex: 5 }).addTo(map);
+    }
+    map.setView([cz.lat, cz.lng], 9);
+    if (marker) marker.remove();
+    marker = L.circleMarker([cz.lat, cz.lng], { radius: 9, color: '#ffffff', weight: 3, fillColor: '#e11d2e', fillOpacity: 1 }).addTo(map);
+    $('maplabel').textContent = (cz.channelName || ch.name) + (cz.movement ? ' · heading ' + cz.movement : '');
+    $('mapnote').textContent = 'Chaser position · Spotter Network' + (cz.positionTime ? ' · ' + cz.positionTime : '');
+    setTimeout(() => map.invalidateSize(), 60);
+  }
+
+  // ── Blocks menu: jump to a block; tick / untick to show or hide it (saved on this device) ──
+  let navOpen = false, navIdx = 0;
+  function navBlocks() { return G ? G.blocks.filter((b) => b.channels && b.channels.length) : []; }
+  function currentBlockId() { const it = flat[sel.r]; return it ? it.b.id : null; }
+  function openNav() {
+    if (mode !== 'guide' || !G) return;
+    const list = navBlocks();
+    navIdx = Math.max(0, list.findIndex((b) => b.id === currentBlockId()));
+    navOpen = true; $('nav').classList.add('on'); renderNav();
+  }
+  function closeNav() { navOpen = false; $('nav').classList.remove('on'); }
+  function renderNav() {
+    const list = navBlocks();
+    $('navlist').innerHTML = list.map((b, i) => {
+      const on = !hidden.has(b.id), locked = b.id === 'wtv';
+      return '<div class="nv' + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
+        + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(b.label) + '">' + (on ? '✓' : '') + '</button>')
+        + '<span class="nl">' + esc(b.label.replace(/ · \d+ CHANNELS?$/, '')) + '</span>'
+        + '<small>' + esc(b.id === 'live' ? b.channels.length + ' live' : b.range.replace(/^CH /, '')) + '</small></div>';
+    }).join('');
+    const foc = $('navlist').querySelector('.foc'); if (foc) foc.scrollIntoView({ block: 'nearest' });
+  }
+  function toggleBlock(i) {
+    const b = navBlocks()[i]; if (!b || b.id === 'wtv') return;
+    if (hidden.has(b.id)) hidden.delete(b.id); else hidden.add(b.id);
+    LS.set('wtvGuideHidden', [...hidden]);
+    rebuild(); renderNav();
+  }
+  function jumpTo(i) {
+    const b = navBlocks()[i]; if (!b) return;
+    if (hidden.has(b.id)) { hidden.delete(b.id); LS.set('wtvGuideHidden', [...hidden]); rebuild(); }
+    const r = flat.findIndex((it) => it.ch && it.b.id === b.id);
+    closeNav();
+    if (r >= 0) { select(r, 0); const band = $('r' + (r - 1)); if (band) rowsEl.scrollTop = Math.max(0, band.offsetTop - rowsEl.offsetTop); }
+  }
+  $('navlist').addEventListener('click', (e) => {
+    const ck = e.target.closest('[data-ck]'); if (ck) { navIdx = +ck.dataset.ck; toggleBlock(navIdx); return; }
+    const row = e.target.closest('.nv[data-i]'); if (row) jumpTo(+row.dataset.i);
+  });
+  $('i-cust').onclick = openNav;
+  rowsEl.addEventListener('click', (e) => { if (e.target.closest('.band')) openNav(); });
+
+  // ── Channel number entry ──
+  let numBuf = '', numT = null;
+  function digit(d) {
+    numBuf = (numBuf + d).slice(-4);
+    $('numbox').textContent = 'CH ' + numBuf; $('numbox').style.display = 'block';
+    clearTimeout(numT);
+    numT = setTimeout(goNumber, numBuf.length >= 3 ? 500 : 1300);
+  }
+  function goNumber() {
+    $('numbox').style.display = 'none';
+    const n = parseInt(numBuf, 10); numBuf = '';
+    let r = flat.findIndex((it) => it.ch && it.b.id !== 'live' && it.ch.n === n);
+    if (r < 0) r = flat.findIndex((it) => it.ch && it.ch.n === n);
+    if (r < 0) return;
+    if (mode === 'watch') { select(r, 0); activate(); flashOsd(); }
+    else select(r, 0);
+  }
+
+  // ── Input ──
+  function moveRow(dir) {
+    let r = sel.r;
+    do { r += dir; } while (flat[r] && !flat[r].ch);
+    if (flat[r]) select(r, sel.c);
+  }
+  function jumpBlock(dir) {
+    let r = sel.r;
+    if (dir > 0) { do { r++; } while (flat[r] && !flat[r].band); r++; }
+    else {
+      let b = sel.r; while (b > 0 && !flat[b].band) b--;
+      let p = b - 1; while (p > 0 && !flat[p].band) p--;
+      r = p + 1;
+    }
+    if (flat[r] && flat[r].ch) select(r, 0);
+  }
+  addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (navOpen) {
+      const n = navBlocks().length;
+      if (k === 'ArrowUp') { navIdx = (navIdx - 1 + n) % n; renderNav(); }
+      else if (k === 'ArrowDown') { navIdx = (navIdx + 1) % n; renderNav(); }
+      else if (k === 'Enter' || k === 'ArrowRight') jumpTo(navIdx);
+      else if (k === ' ') toggleBlock(navIdx);
+      else if (k === 'ArrowLeft' || k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'b' || k === 'B') closeNav();
+      else return;
+      e.preventDefault(); return;
+    }
+    if (/^[0-9]$/.test(k)) { digit(k); e.preventDefault(); return; }
+    if (mode === 'guide') {
+      if (k === 'ArrowUp') moveRow(-1);
+      else if (k === 'ArrowDown') moveRow(1);
+      else if (k === 'ArrowLeft') { if (sel.c === 0) openNav(); else select(sel.r, sel.c - 1); }
+      else if (k === 'ArrowRight') select(sel.r, sel.c + 1);
+      else if (k === 'PageUp' || k === 'ChannelUp') jumpBlock(-1);
+      else if (k === 'PageDown' || k === 'ChannelDown') jumpBlock(1);
+      else if (k === 'Enter' || k === ' ') activate();
+      else if ((k === 'Escape' || k === 'Backspace' || k === 'GoBack') && watched) backToWatched();
+      else if (k === 's' || k === 'S') toggleSkin();
+      else if (k === 'b' || k === 'B' || k === 'c' || k === 'C') openNav();
+      else return;
+    } else {
+      if (k === 'ArrowUp' || k === 'PageUp' || k === 'ChannelUp') surf(-1);
+      else if (k === 'ArrowDown' || k === 'PageDown' || k === 'ChannelDown') surf(1);
+      else if ((k === 'ArrowLeft' || k === 'ArrowRight') && panels.side) { const cur = current(); const t = tabsFor(cur.ch, cur.c); tab = t[(t.indexOf(tab) + (k === 'ArrowRight' ? 1 : -1) + t.length) % t.length]; renderSide(false); }
+      else if (k === 'Escape' || k === 'Backspace' || k === 'GoBack') { if (full) toggleFull(); else openGuide(); }
+      else if (k === 'g' || k === 'G' || k === 'Enter') openGuide();
+      else if (k === 'f' || k === 'F') toggleFull();
+      else if (k === 'i' || k === 'I') setPanel('info', !panels.info);
+      else if (k === 'm' || k === 'M') setPanel('side', !panels.side);
+      else return;
+    }
+    e.preventDefault();
+  });
+  rowsEl.addEventListener('click', (e) => {
+    const b = e.target.closest('.cell[data-r]'); if (!b) return;
+    const r = +b.dataset.r, c = +b.dataset.c;
+    if (r === sel.r && c === sel.c) activate(); else select(r, c);
+  });
+  rowsEl.addEventListener('wheel', (e) => { e.preventDefault(); moveRow(e.deltaY > 0 ? 1 : -1); }, { passive: false });
+  $('tabs').addEventListener('click', (e) => {
+    if (e.target.closest('button[data-min]')) { setPanel('side', false); return; }
+    const b = e.target.closest('button[data-tab]'); if (b) { tab = b.dataset.tab; renderSide(false); }
+  });
+  $('recent').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-k]'); if (!b) return;
+    const cur = current(); const k = +b.dataset.k;
+    select(sel.r, k); watched.c = k; play(cur.ch, cur.ch.cells[k], false); renderSide(false); renderBanner();
+  });
+  $('b-min').onclick = () => setPanel('info', false);
+  $('r-info').onclick = () => setPanel('info', true);
+  $('r-side').onclick = () => { setPanel('side', true); renderSide(false); };
+  $('i-go').onclick = activate;
+  $('guidebtn').onclick = () => { if (mode === 'watch') openGuide(); else backToWatched(); };
+  function toggleFull() { full = !full; stage.classList.toggle('full', full); if (!full) $('osd').classList.remove('on'); else flashOsd(); layout(); }
+  $('fullbtn').onclick = toggleFull;
+  stage.addEventListener('dblclick', (e) => { if (mode === 'watch' && full) toggleFull(); });
+  function toggleSkin() { skin = skin === 'classic' ? 'wtv' : 'classic'; LS.set('wtvGuideSkin', skin); applySkin(); }
+  $('skinbtn').onclick = toggleSkin;
+
+  // ── Watch / warning ticker for your location (NWS; location stays on this device) ──
+  // Same order as the radar page's warning banner
+  const TK_ORDER = ['Tornado Warning', 'Flash Flood Emergency', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning',
+    'Flood Warning', 'Tornado Watch', 'Severe Thunderstorm Watch', 'Flash Flood Watch', 'Flood Watch', 'Winter Storm Warning',
+    'Blizzard Warning', 'Ice Storm Warning', 'High Wind Warning', 'Red Flag Warning', 'Extreme Heat Warning', 'Special Weather Statement',
+    'Hurricane Warning', 'Storm Surge Warning', 'Tropical Storm Warning', 'Hurricane Watch', 'Winter Storm Watch'];
+  const TK_COLOR = [[/Tornado (Warning|Emergency)/, '#c8102e'], [/Tornado Watch/, '#a68a00'], [/Severe Thunderstorm Warning/, '#d35400'],
+    [/Severe Thunderstorm Watch/, '#9c6b00'], [/Flash Flood|Flood Warning/, '#1e7d32'], [/Flood Watch/, '#2e6b4a'],
+    [/Hurricane|Tropical|Storm Surge/, '#b0306f'], [/Blizzard|Ice Storm|Winter|Snow|Freez/, '#2d5fb8'], [/Heat/, '#b3412f'],
+    [/Red Flag|Fire/, '#a83224'], [/Wind/, '#8a6d3b']];
+  let ticking = false, tkKey = '';
+
+  // ── The same alert preferences the radar page uses (saved on this device) ──
+  //   wtv-warning-banner = 'off'  → the person switched the Warning Banner off: no ticker
+  //   wtv-alert-types              → Alert Types filter; hidden types stay off the ticker,
+  //                                  except life-safety warnings (same rule as the radar banner)
+  const CAT = window.WTV_ALERT_CATALOG || { ALERT_CATALOG: [], ALERT_ALIASES: {}, ALERT_EXCLUDED: [] };
+  const TYPE_KEYS = CAT.ALERT_CATALOG.map((t) => t.event);
+  const MAP_OFF = new Set(CAT.ALERT_CATALOG.filter((t) => t.mapOff).map((t) => t.event));
+  const EXCLUDED = new Set(CAT.ALERT_EXCLUDED || []);
+  const FIRST_STYLE_KEYS = ['Tornado Warning', 'Tornado Watch', 'Severe Thunderstorm Warning', 'Severe Thunderstorm Watch', 'Flash Flood Warning',
+    'Flash Flood Watch', 'Flash Flood Emergency', 'Flood Warning', 'Flood Watch', 'Flood Advisory', 'Extreme Wind Warning', 'Winter Storm Warning',
+    'Winter Storm Watch', 'Winter Weather Advisory', 'Blizzard Warning', 'Ice Storm Warning', 'Freezing Rain Advisory', 'Wind Advisory',
+    'High Wind Warning', 'High Wind Watch', 'Dense Fog Advisory', 'Heat Advisory', 'Excessive Heat Warning', 'Excessive Heat Watch',
+    'Fire Weather Watch', 'Red Flag Warning', 'Dust Storm Warning', 'Dust Advisory', 'Special Marine Warning', 'Special Weather Statement',
+    'Air Quality Alert', 'Dense Smoke Advisory', 'Smoke Advisory', 'Air Stagnation Advisory', 'Hazardous Air Quality Warning', 'Hazardous Weather Outlook'];
+  const BANNER_ALWAYS = new Set(['Tornado Warning', 'Extreme Wind Warning', 'Severe Thunderstorm Warning', 'Flash Flood Warning',
+    'Tsunami Warning', 'Hurricane Warning', 'Typhoon Warning', 'Storm Surge Warning', 'Snow Squall Warning', 'Flash Flood Emergency', 'Earthquake Warning']);
+  function bannerOn() { try { return localStorage.getItem('wtv-warning-banner') !== 'off'; } catch (e) { return true; } }
+  function enabledTypes() {
+    let on = new Set(TYPE_KEYS.filter((t) => !MAP_OFF.has(t)));
+    try {
+      const saved = JSON.parse(localStorage.getItem('wtv-alert-types') || 'null');
+      if (Array.isArray(saved) && saved.length) {
+        const known = JSON.parse(localStorage.getItem('wtv-alert-types-known') || 'null') || FIRST_STYLE_KEYS;
+        on = new Set([...saved.filter((t) => TYPE_KEYS.includes(t)), ...TYPE_KEYS.filter((t) => !known.includes(t) && !MAP_OFF.has(t))]);
+      }
+    } catch (e) {}
+    return on;
+  }
+  function eventOf(a) {
+    let ev = (CAT.ALERT_ALIASES || {})[a.event] || a.event;
+    if (ev === 'Flash Flood Warning' && ((a.parameters && a.parameters.flashFloodDamageThreat) || [])[0] === 'CATASTROPHIC') ev = 'Flash Flood Emergency';
+    return ev;
+  }
+  function tickerAllows(ev, on) {
+    if (EXCLUDED.has(ev)) return false;
+    if (!TYPE_KEYS.length || !TYPE_KEYS.includes(ev)) return true;      // unknown types fail open, like the radar
+    return on.has(ev) || BANNER_ALWAYS.has(ev);
+  }
+  function tkLocation() {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem('wtv-alert-location') || 'null'); } catch (e) {}
+    if (!p || !isFinite(p.lat)) { try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {} }
+    return p && isFinite(p.lat) && isFinite(p.lon) ? p : null;
+  }
+  async function loadTicker() {
+    const p = bannerOn() ? tkLocation() : null;
+    let alerts = [];
+    if (p) {
+      try {
+        const j = await (await fetch('https://api.weather.gov/alerts/active?status=actual&message_type=alert,update&point=' + (+p.lat).toFixed(4) + ',' + (+p.lon).toFixed(4), { headers: { Accept: 'application/geo+json' } })).json();
+        const on = enabledTypes();
+        alerts = (j.features || []).map((f) => f.properties || {}).filter((a) => a.event && !/^Test/i.test(a.event))
+          .map((a) => Object.assign({}, a, { event: eventOf(a) })).filter((a) => tickerAllows(a.event, on));
+      } catch (e) { return; }                                     // keep what's showing if NWS doesn't answer
+    }
+    const rank = (ev) => { const i = TK_ORDER.indexOf(ev); return i < 0 ? 99 : i; };
+    alerts.sort((a, b) => rank(a.event) - rank(b.event));
+    const was = ticking;
+    ticking = alerts.length > 0;
+    stage.classList.toggle('ticking', ticking);
+    if (ticking) {
+      const top = alerts[0];
+      const col = (TK_COLOR.find(([re]) => re.test(top.event)) || [0, '#b7791f'])[1];
+      $('ticker').style.setProperty('--tk', col);
+      $('tk-label').textContent = (alerts.length > 1 ? alerts.length + ' ALERTS · ' : '') + top.event.toUpperCase();
+      const parts = alerts.map((a) => a.event.toUpperCase() + (a.areaDesc ? ' · ' + a.areaDesc.split(';')[0].trim() : '') + ' — ' + (a.headline || '') + (a.expires ? ' · UNTIL ' + new Date(a.expires).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''));
+      const key = parts.join('|');
+      if (key !== tkKey) {
+        tkKey = key;
+        const txt = parts.join('   ●   ') + '   ●   ●   ●   ';
+        const el = $('tk-text');
+        el.textContent = txt + txt;                               // two copies: scrolling -50% loops seamlessly
+        el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '';
+        el.style.animationDuration = Math.max(18, Math.round(txt.length / 5)) + 's';
+      }
+    } else tkKey = '';
+    if (was !== ticking) { layout(); if (mode === 'guide') keepVisible(); }
+  }
+
+  updateBar();
+  loadTicker();
+  setInterval(loadTicker, 2 * 60 * 1000);
+  // Changed the Warning Banner or Alert Types on the radar in another tab? Follow it right away.
+  addEventListener('storage', (e) => { if (/^wtv-(warning-banner|alert-types|alert-location|radar-place)/.test(e.key || '')) loadTicker(); });
+  load(true);
+  loadChasers();
+  loadWx();
+  setInterval(() => { if (mode === 'guide') load(false); }, 2 * 60 * 1000);
+  setInterval(loadChasers, 60 * 1000);
+  setInterval(loadWx, 15 * 60 * 1000);
+})();
+</script>
+</body>
+</html>
