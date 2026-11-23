@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T02:30:00Z build.1795401000 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T04:00:00Z build.1795406400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,7 +71,10 @@
   .row .pin { width:1rem; flex:none; font-size:.8rem; }
   .row .nm { flex:1; min-width:0; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row .by { font-size:.7rem; color:var(--muted); width:5.8rem; flex:none; white-space:nowrap; }
-  .row .by.you { color:#7fdcf0; } .row .by.code { color:#8fe0b8; } .row .by.collection { color:var(--gold); }
+  .row .by.you { color:#7fdcf0; } .row .by.code { color:#8fe0b8; } .row .by.collection { color:var(--gold); } .row .by.creator { color:#c9a6ff; }
+  .row .net { font-size:.68rem; color:var(--muted); margin-left:.45rem; white-space:nowrap; }
+  table.src select.ty { min-width:9.5rem; }
+  table.src .note { color:var(--muted); font-size:.78rem; }
   .row select { max-width:10.5rem; }
   .dragging { opacity:.35; }
   .drop-before { box-shadow:inset 0 3px 0 var(--gold); }
@@ -104,7 +107,8 @@
   </div></div>
 
   <details class="panel" id="src-panel">
-    <summary><h2>Groups &amp; collections → blocks <small>Send everyone in a group or collection to a block at once. This is also how the original layout's groups line up with the guide.</small></h2></summary>
+    <summary><h2>Groups &amp; collections → blocks <small>Send everyone in a group or collection to a block at once. This is also how the original layout's groups line up with the guide.
+      A channel's own collections can instead be a <strong>Network</strong> (members get its badge and stay put — “… Chasers” by default) or <strong>Same creator</strong> (sister channels sit right after the lead — “… Channels” by default).</small></h2></summary>
     <table class="src"><tbody id="sources"></tbody></table>
   </details>
 
@@ -144,7 +148,8 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const BY = { you: 'by you', collection: 'by collection', code: 'by code', group: 'by group' };
+  const BY = { you: 'by you', collection: 'by collection', code: 'by code', group: 'by group', creator: 'with creator' };
+  const TYPE_LABEL = { block: 'Send to block', network: 'Network (badge)', creator: 'Same creator' };
   let V = null;          // the layout as the server works it out (saved or draft)
   let draft = null;      // { blocks, map, channels } being edited
   let dirty = false, seq = 0;
@@ -158,6 +163,7 @@
     } catch (e) { $('stats').textContent = 'Could not load the guide (' + e.message + ').'; return; }
     draft = {
       blocks: {}, map: {}, channels: JSON.parse(JSON.stringify((V.config && V.config.channels) || {})),
+      types: Object.assign({}, (V.config && V.config.types) || {}),
     };
     V.blocks.forEach((b, i) => { draft.blocks[b.id] = { label: b.label, start: b.start, end: b.end, order: i, custom: b.custom }; });
     V.sources.forEach((s) => { draft.map[s.key] = s.block || ''; });
@@ -183,7 +189,7 @@
   function payload() {
     const blocks = {};
     Object.entries(draft.blocks).forEach(([id, b]) => { blocks[id] = { label: b.label, start: b.start, end: b.end, order: b.order }; });
-    return { blocks, map: draft.map, channels: draft.channels };
+    return { blocks, map: draft.map, channels: draft.channels, types: draft.types };
   }
   function ch(id) { return (draft.channels[id] = draft.channels[id] || {}); }
   function chansOf(bid) { return V.channels.filter((c) => c.block === bid); }
@@ -204,8 +210,16 @@
     // Sources
     const opts = (sel, withNone, noneLabel) => (withNone ? '<option value=""' + (!sel ? ' selected' : '') + '>' + noneLabel + '</option>' : '')
       + V.blocks.map((b) => '<option value="' + esc(b.id) + '"' + (b.id === sel ? ' selected' : '') + '>' + esc(b.label) + ' (' + b.start + '–' + b.end + ')</option>').join('');
-    $('sources').innerHTML = V.sources.map((s) => '<tr><td class="k">' + (s.kind === 'group' ? 'Group' : 'Collection') + '</td><td>' + esc(s.label) + '</td><td class="c">' + s.count + '</td>'
-      + '<td><select data-src="' + esc(s.key) + '">' + opts(draft.map[s.key] || (s.kind === 'group' ? s.block : ''), s.kind !== 'group', '— Stay with their group / code —') + '</select></td></tr>').join('');
+    const nameOf = {}; V.channels.forEach((c) => { nameOf[c.id] = c.name; });
+    $('sources').innerHTML = V.sources.map((s) => {
+      const t = s.type || 'block';
+      const ty = s.kind === 'group' ? '<span class="note">Group</span>' : !s.lead ? '<span class="note">Send to block</span>'
+        : '<select class="ty" data-ty="' + esc(s.key) + '" aria-label="Collection type">' + ['block', 'network', 'creator'].map((v) => '<option value="' + v + '"' + (v === t ? ' selected' : '') + '>' + TYPE_LABEL[v] + (v === s.defType ? ' ·' : '') + '</option>').join('') + '</select>';
+      const where = t === 'network' ? '<span class="note">Badge only · members stay in their own blocks</span>'
+        : t === 'creator' ? '<span class="note">Kept right after ' + esc(nameOf[s.lead] || 'the lead') + '</span>'
+        : '<select data-src="' + esc(s.key) + '">' + opts(draft.map[s.key] || (s.kind === 'group' ? s.block : ''), s.kind !== 'group', '— Stay with their group / code —') + '</select>';
+      return '<tr><td class="k">' + (s.kind === 'group' ? 'Group' : 'Collection') + '</td><td>' + esc(s.label) + '</td><td class="c">' + s.count + '</td><td>' + ty + '</td><td>' + where + '</td></tr>';
+    }).join('');
 
     // Blocks
     const ids = blockIds();
@@ -259,7 +273,7 @@
           + '<span class="pin">' + (c.fixed || c.conflict ? '📌' : '') + '</span>'
           + '<input type="text" class="tag" maxlength="7" data-t="' + esc(c.id) + '" value="' + esc(c.call || '') + '" placeholder="' + esc(c.autoCall) + '" aria-label="Tag">'
           + '<input type="text" class="code" maxlength="6" data-a="' + esc(c.id) + '" value="' + esc(c.area || '') + '" placeholder="Code" aria-label="Country or state code" title="Country (IN, GB, AU…) or US state (US-WI)">'
-          + '<span class="nm" title="' + esc(groupLabel[c.group] || '') + '">' + esc(c.name) + (c.live ? '<span class="live">● LIVE</span>' : '') + '</span>'
+          + '<span class="nm" title="' + esc(groupLabel[c.group] || '') + '">' + esc(c.name) + (c.live ? '<span class="live">● LIVE</span>' : '') + (c.nets && c.nets.length ? '<span class="net">' + esc(c.nets.join(' · ')) + '</span>' : '') + '</span>'
           + '<span class="by ' + c.by + '">' + BY[c.by] + '</span>'
           + '<button class="ib" data-up="' + esc(c.id) + '" aria-label="Move up"' + (i && bid !== 'none' ? '' : ' disabled') + '>▲</button>'
           + '<button class="ib" data-dn="' + esc(c.id) + '" aria-label="Move down"' + (i < list.length - 1 && bid !== 'none' ? '' : ' disabled') + '>▼</button>'
@@ -297,7 +311,11 @@
   }
 
   // ── Inputs ──
-  $('sources').addEventListener('change', (e) => { const k = e.target.dataset.src; if (k) { draft.map[k] = e.target.value; change(); } });
+  $('sources').addEventListener('change', (e) => {
+    const k = e.target.dataset.src; if (k) { draft.map[k] = e.target.value; change(); return; }
+    const t = e.target.dataset.ty;
+    if (t) { const s = V.sources.find((x) => x.key === t); if (s && e.target.value === s.defType) delete draft.types[t]; else draft.types[t] = e.target.value; change(); }
+  });
   $('list').addEventListener('click', (e) => {
     const t = e.target;
     const step = (id, d) => { const c = V.channels.find((x) => x.id === id), list = chansOf(c.block).map((x) => x.id); place(id, c.block, list.indexOf(id) + d); };

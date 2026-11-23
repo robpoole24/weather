@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T02:30:00Z build.1795401000
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T04:00:00Z build.1795406400
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -20,6 +20,11 @@
 //   4. its group's block (Forecasters → Forecasters…)
 // Inside a block: channels you've ordered, then the rest (regional blocks sort those
 // by code). Numbers: fixed numbers first; everyone else counts up from the block's start.
+//
+// Each collection has a type (set in admin; the default comes from its name):
+//   block    — sends its channels to a block (regional collections)
+//   network  — "… Chasers": members get the network's badge; nothing moves
+//   creator  — "… Channels": the creator's other channels sit right after the lead
 
 const MAX_CELLS = 10;
 const LIVE_MAX_AGE = 12 * 3600 * 1000;
@@ -84,6 +89,23 @@ const cleanTag = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9+&'-]/g, 
 const cleanLabel = (s) => String(s || '').replace(/[<>]/g, '').trim().slice(0, 40);
 const cleanCode = (s) => { const c = String(s || '').toUpperCase().trim(); return /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/.test(c) ? c : ''; };
 const ID_RE = /^[A-Za-z0-9:_-]{1,90}$/;
+const TYPES = ['block', 'network', 'creator'];
+// Default type from the collection's name. Only a channel's own collections can be a
+// network or a creator's channels; group collections (regions, radar…) send to a block.
+const defaultType = (label, lead) => (!lead ? 'block' : /chasers?\b/i.test(label || '') ? 'network' : /channels\b/i.test(label || '') ? 'creator' : 'block');
+const fs = require('fs');
+const path = require('path');
+const IMG_DIR = path.join(__dirname, 'public', 'images');
+// Badge logo: public/images/<name>.webp (WeatherWise → weatherwise or weather-wise)
+function logoFor(name) {
+  const base = String(name || '').replace(/[^A-Za-z0-9 ]/g, '').trim();
+  const tries = [base.replace(/\s+/g, '').toLowerCase(), base.replace(/([a-z])([A-Z])/g, '$1-$2').replace(/\s+/g, '-').toLowerCase()];
+  for (const t of tries) for (const ext of ['webp', 'png', 'svg']) {
+    try { if (t && fs.existsSync(path.join(IMG_DIR, t + '.' + ext))) return '/images/' + t + '.' + ext; } catch (e) {}
+  }
+  return null;
+}
+const netName = (label) => cleanLabel(String(label || '').replace(/\s*(chasers?|network)\s*$/i, '')) || cleanLabel(label);
 const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Math.round(+v); return Number.isFinite(n) ? n : null; };
 
 module.exports = function guide(app, { loadData, saveData, cache, filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError }) {
@@ -111,7 +133,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     if (st.checkedAt && Date.now() - st.checkedAt > LIVE_MAX_AGE) return null;
     return st;
   }
-  function channelRow(ch, n, call, area) {
+  function channelRow(ch, n, call, area, nets, fam) {
     let cells = videoCells(ch.id);
     const st = liveOf(ch.id);
     let live = false;
@@ -122,7 +144,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       cells = cells.filter((c) => c.v !== vid);
       cells.unshift({ v: vid, t: (known && known.t) || 'Live now', at: (known && known.at) || null, live: true, ch: vid ? null : ch.id });
     }
-    return { n, id: ch.id, name: ch.name, call, area: area || undefined, live, cells: cells.slice(0, MAX_CELLS) };
+    return { n, id: ch.id, name: ch.name, call, area: area || undefined, nets: nets && nets.length ? nets : undefined, fam: fam || undefined, live, cells: cells.slice(0, MAX_CELLS) };
   }
 
   const configOf = (data) => (data.guide && data.guide.v === 2 ? data.guide : {});
@@ -130,7 +152,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   // ── Lay out every block and channel (no videos). Shared by the guide and admin. ──
   function layout(data, cfgIn) {
     const cfg = cfgIn || configOf(data);
-    const bcfg = cfg.blocks || {}, map = cfg.map || {}, ccfg = cfg.channels || {};
+    const bcfg = cfg.blocks || {}, map = cfg.map || {}, ccfg = cfg.channels || {}, tcfg = cfg.types || {};
     const groups = data.groups || [];
 
     // Blocks: defaults (renamable / resizable) + blocks made in admin
@@ -160,6 +182,8 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       new Set([...(ch.collectionIds || []), ...(ch.collectionId ? [ch.collectionId] : [])]).forEach((k) => { (members[k] = members[k] || []).push(ch.id); });
     }));
     const has = (k) => Object.prototype.hasOwnProperty.call(map, k);
+    const typeOf = (key, label, lead) => (TYPES.includes(tcfg[key]) && (lead || tcfg[key] === 'block') ? tcfg[key] : defaultType(label, lead));
+    const networks = {}, netsOf = {}, families = [];
     const target = (key, def) => (has(key) ? (map[key] && meta[map[key]] ? map[key] : null) : def);
     groups.forEach((g) => {
       let def = DEFAULT_GROUP_BLOCK[g.id] || null;
@@ -169,21 +193,31 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         if (!(meta[id].end >= meta[id].start)) meta[id].end = meta[id].start + 99;
         def = id;
       }
-      sources.push({ key: 'g:' + g.id, label: g.label || g.id, kind: 'group', count: (g.channels || []).filter((c) => c.enabled !== false).length, def, block: target('g:' + g.id, def) || def });
+      sources.push({ key: 'g:' + g.id, label: g.label || g.id, kind: 'group', type: 'block', defType: 'block', count: (g.channels || []).filter((c) => c.enabled !== false).length, def, block: target('g:' + g.id, def) || def });
       (g.collections || []).forEach((col) => {
         if (col.enabled === false) return;
         const k = 'group:' + g.id + '::' + col.id;
         const hit = DEFAULT_COLLECTION_BLOCK.find(([re]) => re.test(col.label || ''));
         const d = hit ? hit[1] : null;
-        sources.push({ key: 'c:' + k, label: (g.label || g.id) + ' › ' + (col.label || col.id), kind: 'collection', count: (members[k] || []).length, def: d, block: target('c:' + k, d) });
+        sources.push({ key: 'c:' + k, label: (g.label || g.id) + ' › ' + (col.label || col.id), kind: 'collection', type: typeOf('c:' + k, col.label, null), defType: 'block', count: (members[k] || []).length, def: d, block: target('c:' + k, d) });
       });
       (g.channels || []).forEach((lead) => (lead.collections || []).forEach((col) => {
         if (col.enabled === false) return;
         const k = lead.id + '::' + col.id;
-        sources.push({ key: 'c:' + k, label: (lead.name || '') + ' › ' + (col.label || col.id), kind: 'collection', count: (members[k] || []).length, def: null, block: target('c:' + k, null) });
+        const type = typeOf('c:' + k, col.label, lead);
+        const ids = [...new Set([lead.id, ...(members[k] || [])])];
+        sources.push({ key: 'c:' + k, label: (lead.name || '') + ' › ' + (col.label || col.id), kind: 'collection', type, defType: defaultType(col.label, lead), lead: lead.id, count: (members[k] || []).length, def: null, block: target('c:' + k, null) });
+        if (type === 'network') {
+          const name = netName(col.label);
+          networks['c:' + k] = { name, label: cleanLabel(col.label), lead: lead.id, logo: logoFor(name) };
+          ids.forEach((id) => { (netsOf[id] = netsOf[id] || []).push('c:' + k); });
+        } else if (type === 'creator') {
+          families.push({ key: 'c:' + k, lead: lead.id, ids: ids.filter((id) => id !== lead.id) });
+        }
       }));
     });
-    const srcBlock = {}; sources.forEach((s) => { srcBlock[s.key] = s.block; });
+    // Only "block" collections place channels; networks and creator collections don't
+    const srcBlock = {}; sources.forEach((s) => { if (s.type === 'block' || s.kind === 'group') srcBlock[s.key] = s.block; });
 
     // Place every channel
     const lists = {}; Object.keys(meta).forEach((id) => { lists[id] = []; });
@@ -203,9 +237,22 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const reg = area ? regionOfCode(area) : null;
       if (!block && reg && meta[reg]) { block = reg; by = 'code'; }
       if (!block) { block = srcBlock['g:' + groupOf[ch.id].id] || 'creators'; by = 'group'; }
-      info[ch.id] = { area, by, own: by === 'you', call: cleanTag(c.call) || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) };
-      if (block === 'none') hidden.push(ch); else lists[block].push(ch);
+      info[ch.id] = { block, area, by, own: by === 'you', call: cleanTag(c.call) || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) };
     });
+    // A creator's other channels go where the lead is (unless you placed them yourself)
+    const leadOf = {};
+    families.forEach((f) => {
+      const L = info[f.lead];
+      if (!L) return;
+      f.ids.forEach((id) => {
+        const I = info[id];
+        if (!I || leadOf[id]) return;
+        leadOf[id] = f.lead;
+        if (I.by !== 'you' && L.block !== 'none') { I.block = L.block; I.by = 'creator'; }
+      });
+    });
+    const famOf = (id) => (leadOf[id] && info[leadOf[id]] ? leadOf[id] : families.some((f) => f.lead === id && f.ids.some((x) => info[x])) ? id : null);
+    channels.forEach((ch) => { if (info[ch.id].block === 'none') hidden.push(ch); else lists[info[ch.id].block].push(ch); });
 
     // Order inside each block
     Object.keys(lists).forEach((bid) => {
@@ -218,6 +265,14 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         if (regional && A.area !== Bb.area) return (A.area || '~').localeCompare(Bb.area || '~');
         return adminIdx[a.id] - adminIdx[b.id];
       });
+      // …then each creator's other channels (not ordered by you) right after the lead
+      const list = lists[bid];
+      const kids = list.filter((ch) => leadOf[ch.id] && info[ch.id].pos == null && list.some((x) => x.id === leadOf[ch.id]));
+      if (kids.length) {
+        const rest = list.filter((ch) => !kids.includes(ch));
+        kids.slice().reverse().forEach((k) => { const at = rest.findIndex((x) => x.id === leadOf[k.id]); rest.splice(at + 1, 0, k); });
+        lists[bid] = rest;
+      }
     });
 
     // Block order: saved order first, then the rest by starting number
@@ -238,16 +293,22 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     }));
     const blocks = ordered.map((m) => {
       let n = m.start;
+      const numOf = {};
       const chans = lists[m.id].map((ch) => {
         let v = fixedOf[ch.id];
+        const L = leadOf[ch.id];
+        if (v == null && L && numOf[L] != null && info[ch.id].by !== 'you') {      // a creator's other channel: the next free number after the lead
+          v = numOf[L] + 1; while (used.has(v)) v++; used.add(v);
+        }
         if (v == null) { while (used.has(n) || n <= RESERVED_MAX) n++; used.add(n); v = n++; }
+        numOf[ch.id] = v;
         const i = info[ch.id];
-        return { ch, n: v, fixed: fixedOf[ch.id] != null, conflict: conflict.has(ch.id), call: i.call, area: i.area, by: i.by, own: i.own, group: groupOf[ch.id].id };
+        return { ch, n: v, fixed: fixedOf[ch.id] != null, conflict: conflict.has(ch.id), call: i.call, area: i.area, by: i.by, own: i.own, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id) };
       }).sort((a, b) => a.n - b.n);
       const overflow = chans.some((c) => c.n > m.end || c.n < m.start);
       return { ...m, chans, overflow };
     });
-    return { blocks, sources, hidden: hidden.map((ch) => ({ ch, n: null, fixed: false, conflict: false, call: info[ch.id].call, area: info[ch.id].area, by: 'you', own: true, group: groupOf[ch.id].id })) };
+    return { blocks, sources, networks, hidden: hidden.map((ch) => ({ ch, n: null, fixed: false, conflict: false, call: info[ch.id].call, area: info[ch.id].area, by: 'you', own: true, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id) })) };
   }
 
   function rangeOf(chans) {
@@ -258,10 +319,10 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
 
   function build() {
     const data = loadData() || {};
-    const { blocks } = layout(data);
+    const { blocks, networks } = layout(data);
     const out = blocks.filter((b) => b.chans.length).map((b) => ({
       id: b.id, label: b.label, range: rangeOf(b.chans), regional: /^reg-/.test(b.id),
-      channels: b.chans.map((c) => channelRow(c.ch, c.n, c.call, c.area)),
+      channels: b.chans.map((c) => channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam)),
     }));
 
     // Weather TV (2–10); Live Now is channel 1 (the block at the top)
@@ -281,6 +342,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }));
     return {
       generatedAt: new Date().toISOString(),
+      networks,
       blocks: [
         { id: 'live', label: 'LIVE NOW · ' + liveRows.length + (liveRows.length === 1 ? ' CHANNEL' : ' CHANNELS'), range: 'CH 1 · UNDER THEIR HOME NUMBERS', n: 1, channels: liveRows },
         { id: 'wtv', label: 'WEATHER TV', range: 'CH 2–' + wtv[wtv.length - 1].n, channels: wtv },
@@ -304,7 +366,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   function sanitize(body, data) {
     const known = new Set();
     (data.groups || []).forEach((g) => (g.channels || []).forEach((ch) => known.add(ch.id)));
-    const blocks = {}, map = {}, channels = {};
+    const blocks = {}, map = {}, channels = {}, types = {};
     Object.entries((body && body.blocks) || {}).forEach(([id, b]) => {
       if (!ID_RE.test(id) || !b) return;
       const start = num(b.start), end = num(b.end), order = num(b.order);
@@ -314,6 +376,9 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     Object.entries((body && body.map) || {}).forEach(([key, b]) => {
       if (!/^[gc]:[A-Za-z0-9:_-]{1,120}$/.test(key)) return;
       map[key] = b && ID_RE.test(b) ? b : '';                      // '' = this collection doesn't send its channels anywhere
+    });
+    Object.entries((body && body.types) || {}).forEach(([key, t]) => {
+      if (/^c:[A-Za-z0-9:_-]{1,120}$/.test(key) && TYPES.includes(t)) types[key] = t;
     });
     Object.entries((body && body.channels) || {}).forEach(([id, c]) => {
       if (!known.has(id) || !c) return;
@@ -325,16 +390,16 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const area = cleanCode(c.area); if (area) e.area = area;
       if (Object.keys(e).length) channels[id] = e;
     });
-    return { v: 2, blocks, map, channels };
+    return { v: 2, blocks, map, channels, types };
   }
   function adminView(data, cfg) {
-    const { blocks, sources, hidden } = layout(data, cfg);
-    const row = (c, block) => ({ id: c.ch.id, name: c.ch.name, group: c.group, block, n: c.n, fixed: c.fixed, conflict: c.conflict, call: c.call, autoCall: callSign(c.ch.name), area: c.area, by: c.by, own: c.own, live: !!liveOf(c.ch.id) });
+    const { blocks, sources, hidden, networks } = layout(data, cfg);
+    const row = (c, block) => ({ id: c.ch.id, name: c.ch.name, group: c.group, block, n: c.n, fixed: c.fixed, conflict: c.conflict, call: c.call, autoCall: callSign(c.ch.name), area: c.area, by: c.by, own: c.own, live: !!liveOf(c.ch.id), nets: (c.nets || []).map((k) => networks[k] && networks[k].name).filter(Boolean), fam: c.fam || null });
     return {
       reserved: RESERVED_MAX,
       groups: (data.groups || []).map((g) => ({ id: g.id, label: g.label })),
       blocks: blocks.map((b, i) => ({ id: b.id, label: b.label, start: b.start, end: b.end, order: i, custom: b.custom, count: b.chans.length, overflow: b.overflow })),
-      sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, count: s.count, block: s.block || '', def: s.def || '' })),
+      sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, type: s.type, defType: s.defType, lead: s.lead || null, count: s.count, block: s.block || '', def: s.def || '' })),
       channels: [...blocks.flatMap((b) => b.chans.map((c) => row(c, b.id))), ...hidden.map((c) => row(c, 'none'))],
       config: cfg || configOf(data),
     };
@@ -355,6 +420,34 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     memo = { at: 0, body: null };
     res.json({ ok: true, saved: Object.keys(cfg.channels).length });
   });
+
+  // ── Backfill: any channel with no saved video list gets one, in the background ──
+  // The scheduled fetch checks quiet channels only every few days, and new or long-
+  // quiet channels can have no list saved at all, which left empty guide rows. On the
+  // server's own schedule (never because someone opened the guide), up to 25 such
+  // channels every 30 minutes go through /api/yt/recent (1 unit each), which saves
+  // the list the same way as everywhere else. A channel that comes back empty is
+  // not tried again for a day.
+  const PORT = process.env.PORT || 3000;
+  const tried = new Map();
+  async function backfill() {
+    try {
+      const data = loadData() || {};
+      const ids = [...new Set((data.groups || []).flatMap((g) => (g.channels || []).filter((c) => c.enabled !== false).map((c) => c.id)))];
+      const missing = ids.filter((id) => {
+        const e = cache.recentVideos[id];
+        return !(e && Array.isArray(e.items)) && Date.now() - (tried.get(id) || 0) > 24 * 3600 * 1000;
+      }).slice(0, 25);
+      for (const id of missing) {
+        tried.set(id, Date.now());
+        try { await fetch('http://127.0.0.1:' + PORT + '/api/yt/recent/' + encodeURIComponent(id)); } catch (e) {}
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      if (missing.length) { memo = { at: 0, body: null }; console.log('[Guide] Filled in video lists for ' + missing.length + ' channels'); }
+    } catch (e) { console.warn('[Guide] Backfill failed:', e.message); }
+  }
+  const t1 = setTimeout(backfill, 3 * 60 * 1000); if (t1.unref) t1.unref();
+  const t2 = setInterval(backfill, 30 * 60 * 1000); if (t2.unref) t2.unref();
 
   // Suggested country codes from each channel's YouTube "country" (channels.list, 50 per call = 1 unit)
   app.post('/api/admin/guide/countries', async (req, res) => {
