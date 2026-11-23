@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-11-23T15:30:00Z build.1795447800 -->
+<!-- WeatherTV Admin — updated 2026-11-23T16:00:00Z build.1795449600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -75,8 +75,11 @@
   }
   .channel-row:hover { border-color:var(--border); }
   .channel-row.drag-over-row { background:rgba(0,180,216,0.08); border-color:var(--accent); border-top:2px solid var(--accent); }
-  .ch-name { flex:1; font-size:0.875rem; }
-  .ch-id { font-size:0.7rem; color:var(--muted); font-family:monospace; flex:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ch-name { flex:1 1 9rem; min-width:7rem; font-size:0.875rem; }
+  .ch-id { font-size:0.7rem; color:var(--muted); font-family:monospace; flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Row buttons keep one line and their size; the ID shrinks first */
+  .channel-row > .btn, .channel-row > select, .channel-row > .toggle { flex-shrink:0; white-space:nowrap; }
+  .channel-row > select.grp-move { width:2.4rem; padding-left:.35rem; padding-right:.1rem; text-overflow:clip; }
   .order-btns { display:flex; flex-direction:column; gap:2px; flex-shrink:0; }
   .order-btn { background:transparent; border:1px solid var(--border); color:var(--muted); font-size:0.6rem; padding:1px 4px; cursor:pointer; border-radius:2px; line-height:1; }
   .order-btn:hover { border-color:var(--accent); color:var(--accent); }
@@ -1342,12 +1345,12 @@ function renderChannelRow(groupId, ch) {
     '</label>' +
     '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;' + (ch.weatherOnly ? 'border-color:var(--gold);color:var(--gold);' : 'opacity:0.55;') + '"' +
       ' title="For MIXED channels only (chasing + fishing, vlogs, gaming…): hide their non-weather uploads and show just their weather videos, newest 10. Turning it on also turns Has Live off, since we can\'t tell what they\'ll stream. Leave all-weather channels (even ones with vague titles) on All videos."' +
-      ' onclick="toggleWeatherOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.weatherOnly ? '🌪 Filter: weather only' : '🎞 All videos') + '</button>' +
+      ' onclick="toggleWeatherOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.weatherOnly ? '🌪 Weather only' : '🎞 All videos') + '</button>' +
     '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;' + (ch.guideOnly ? 'border-color:#7fdcf0;color:#7fdcf0;' : 'opacity:0.55;') + '"' +
       ' title="Guide only: show this channel in the Channel Guide (/guide) but not in the original layout"' +
-      ' onclick="toggleGuideOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.guideOnly ? '📺 Guide only' : '📺+🗂 Both') + '</button>' +
-    '<select class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;max-width:7.5rem;" title="Move this channel to another group (keeps its collections, live and video settings)" onchange="moveChannelToGroup(this,\'' + groupId + '\',\'' + ch.id + '\')">' +
-      '<option value="" selected>⇄ Group…</option>' +
+      ' onclick="toggleGuideOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.guideOnly ? '📺 Guide only' : '📺') + '</button>' +
+    '<select class="btn btn-ghost btn-sm grp-move" style="font-size:0.7rem;" title="Move this channel to another group (keeps its collections, live and video settings)" onchange="moveChannelToGroup(this,\'' + groupId + '\',\'' + ch.id + '\')">' +
+      '<option value="" selected>⇄</option>' +
       (appData.groups || []).filter(g => g.id !== groupId).map(g => '<option value="' + g.id + '">' + g.label.replace(/</g, '&lt;') + '</option>').join('') +
     '</select>' +
     '<label class="toggle" title="Enabled">' +
@@ -1355,8 +1358,8 @@ function renderChannelRow(groupId, ch) {
       '<span class="toggle-slider"></span>' +
     '</label>' +
     '<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:0.2rem 0.5rem;" ' +
-      'data-group-id="' + groupId + '" data-ch-id="' + ch.id + '" onclick="openEditChannel(this)">✎ Edit</button>' +
-    '<button class="btn btn-gold btn-sm" onclick="openColManager(\'' + groupId + '\',\'' + ch.id + '\')">+ Collection</button>' +
+      'data-group-id="' + groupId + '" data-ch-id="' + ch.id + '" onclick="openEditChannel(this)" title="Edit channel">✎</button>' +
+    '<button class="btn btn-gold btn-sm" onclick="openColManager(\'' + groupId + '\',\'' + ch.id + '\')" title="Add a collection to this channel">+ 📁</button>' +
     '<button class="btn btn-danger btn-sm" ' +
       'data-group-id="' + groupId + '" data-ch-id="' + ch.id + '" ' +
       'data-ch-name="' + ch.name.replace(/"/g, '&quot;').replace(/'/g, '&#39;') + '" ' +
@@ -1603,7 +1606,7 @@ async function toggleWeatherOnly(btn, groupId, channelId) {
     const live = btn.parentElement && btn.parentElement.querySelector('label[title="Has Live Stream"] input');
     if (live) live.checked = false;
   }
-  btn.textContent = ch.weatherOnly ? '🌪 Filter: weather only' : '🎞 All videos';
+  btn.textContent = ch.weatherOnly ? '🌪 Weather only' : '🎞 All videos';
   btn.style.borderColor = ch.weatherOnly ? 'var(--gold)' : ''; btn.style.color = ch.weatherOnly ? 'var(--gold)' : ''; btn.style.opacity = ch.weatherOnly ? '' : '0.55';
   showToast(ch.weatherOnly ? 'Filtering to weather videos — Has Live turned off' : 'Showing all videos (turn Has Live back on if you want their streams)');
 }
@@ -1663,7 +1666,7 @@ async function toggleGuideOnly(btn, groupId, channelId) {
   if (!ch) return;
   ch.guideOnly = !ch.guideOnly;                 // keep the page's copy in step, so Save all doesn't undo it
   await updateChannel(groupId, channelId, { guideOnly: ch.guideOnly });
-  btn.textContent = ch.guideOnly ? '📺 Guide only' : '📺+🗂 Both';
+  btn.textContent = ch.guideOnly ? '📺 Guide only' : '📺';
   btn.style.borderColor = ch.guideOnly ? '#7fdcf0' : ''; btn.style.color = ch.guideOnly ? '#7fdcf0' : ''; btn.style.opacity = ch.guideOnly ? '' : '0.55';
   showToast(ch.guideOnly ? ch.name + ' is now guide only' : ch.name + ' shows in the original layout again');
 }
