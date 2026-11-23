@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-11-23T05:30:00Z build.1795411800 -->
+<!-- WeatherTV Admin — updated 2026-11-23T14:30:00Z build.1795444200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1078,7 +1078,8 @@ async function saveAll() {
     // Exclude auto-populated / ephemeral fields that don't need to be saved:
     //   knownChasers — 500KB+ of Spotter Network data, rebuilt automatically on server start
     //   dismissedSuggestions — ephemeral UI state, not user channel data
-    const { knownChasers, dismissedSuggestions, ...saveData } = appData;
+    //   guide — the Channel Guide setup, saved from its own page (sending this page's older copy would undo it)
+    const { knownChasers, dismissedSuggestions, guide, ...saveData } = appData;
     const res = await fetch('/api/admin/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1341,6 +1342,13 @@ function renderChannelRow(groupId, ch) {
     '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;' + (ch.weatherOnly ? 'border-color:var(--gold);color:var(--gold);' : 'opacity:0.55;') + '"' +
       ' title="For MIXED channels only (chasing + fishing, vlogs, gaming…): hide their non-weather uploads and show just their weather videos, newest 10. Turning it on also turns Has Live off, since we can\'t tell what they\'ll stream. Leave all-weather channels (even ones with vague titles) on All videos."' +
       ' onclick="toggleWeatherOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.weatherOnly ? '🌪 Filter: weather only' : '🎞 All videos') + '</button>' +
+    '<button class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;' + (ch.guideOnly ? 'border-color:#7fdcf0;color:#7fdcf0;' : 'opacity:0.55;') + '"' +
+      ' title="Guide only: show this channel in the Channel Guide (/guide) but not in the original layout"' +
+      ' onclick="toggleGuideOnly(this,\'' + groupId + '\',\'' + ch.id + '\')">' + (ch.guideOnly ? '📺 Guide only' : '📺+🗂 Both') + '</button>' +
+    '<select class="btn btn-ghost btn-sm" style="font-size:0.7rem;flex-shrink:0;max-width:7.5rem;" title="Move this channel to another group (keeps its collections, live and video settings)" onchange="moveChannelToGroup(this,\'' + groupId + '\',\'' + ch.id + '\')">' +
+      '<option value="" selected>⇄ Group…</option>' +
+      (appData.groups || []).filter(g => g.id !== groupId).map(g => '<option value="' + g.id + '">' + g.label.replace(/</g, '&lt;') + '</option>').join('') +
+    '</select>' +
     '<label class="toggle" title="Enabled">' +
       '<input type="checkbox" ' + (ch.enabled !== false ? 'checked' : '') + ' onchange="updateChannel(\'' + groupId + '\',\'' + ch.id + '\',{enabled:this.checked})" />' +
       '<span class="toggle-slider"></span>' +
@@ -1604,6 +1612,37 @@ async function updateChannel(groupId, channelId, fields) {
     body: JSON.stringify(fields)
   });
   showToast('Saved');
+}
+
+// Guide only: in the Channel Guide but not the original layout
+async function toggleGuideOnly(btn, groupId, channelId) {
+  const g = (appData.groups || []).find(x => x.id === groupId);
+  const ch = g && g.channels.find(c => c.id === channelId);
+  if (!ch) return;
+  ch.guideOnly = !ch.guideOnly;                 // keep the page's copy in step, so Save all doesn't undo it
+  await updateChannel(groupId, channelId, { guideOnly: ch.guideOnly });
+  btn.textContent = ch.guideOnly ? '📺 Guide only' : '📺+🗂 Both';
+  btn.style.borderColor = ch.guideOnly ? '#7fdcf0' : ''; btn.style.color = ch.guideOnly ? '#7fdcf0' : ''; btn.style.opacity = ch.guideOnly ? '' : '0.55';
+  showToast(ch.guideOnly ? ch.name + ' is now guide only' : ch.name + ' shows in the original layout again');
+}
+
+// Move a channel to another group in one step (keeps its collections and settings)
+async function moveChannelToGroup(sel, groupId, channelId) {
+  const toId = sel.value; if (!toId) return;
+  const from = (appData.groups || []).find(x => x.id === groupId);
+  const to = (appData.groups || []).find(x => x.id === toId);
+  const ch = from && from.channels.find(c => c.id === channelId);
+  if (!from || !to || !ch) return;
+  if (!confirm('Move ' + ch.name + ' from ' + from.label + ' to ' + to.label + '?')) { sel.value = ''; return; }
+  const r = await fetch('/api/admin/groups/' + groupId + '/channels/' + channelId + '/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toGroupId: toId })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { showToast('⚠ ' + (j.error || 'Move failed')); sel.value = ''; return; }
+  from.channels.splice(from.channels.indexOf(ch), 1);
+  (to.channels = to.channels || []).push(ch);
+  showToast(ch.name + ' moved to ' + to.label + ' (at the end — drag it where you want it)');
+  renderGroups();
 }
 
 // Turn "Has Live Stream" on or off for a whole group at once

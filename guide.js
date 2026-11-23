@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T06:00:00Z build.1795413600
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T15:00:00Z build.1795446000
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -10,9 +10,13 @@
 //   PUT  /api/admin/guide                 save the setup (data.guide, v2)
 //   POST /api/admin/guide/countries       suggested country codes from YouTube (1 unit per 50 channels)
 //
-// Channels 1–10 are Weather TV's own: 1 Live Now, 2 Forecast, 3 Live Radar,
-// 4 WeatherStar, 5 Highlights, 6–10 playlists. Channel 9999 is WeatherStar Radio
-// (the music in public/weatherstar/music/default, nonstop) in the Audio Channels block.
+// Saving with syncGroups: a channel you put in a group's block (Forecasters,
+// Storm Chasers, Other Weather Creators…) also moves to that group on the original site.
+//
+// Channel 1 is Live Now. Weather TV's own channels are built in and sit in ordinary
+// blocks that work like the rest (move, renumber, add YouTube channels to them):
+//   WEATHER TV (2–10): 2 Forecast, 3 Live Radar, 4 WeatherStar, 5 Highlights, then playlists
+//   AUDIO CHANNELS (9900–9999): 9999 WeatherStar Radio (public/weatherstar/music/default, nonstop)
 //
 // Which block a channel is in (first match wins):
 //   1. you placed it there in admin
@@ -30,9 +34,12 @@
 const MAX_CELLS = 10;
 const LIVE_MAX_AGE = 12 * 3600 * 1000;
 const MEMO_MS = 30 * 1000;
-const RESERVED_MAX = 10;   // 1–10: Weather TV's own channels
+const RESERVED_MAX = 1;    // channel 1 is Live Now; every other number is a normal channel number
+// 2000–2099: each viewer's own favorites (YOUR FAVORITES, kept in their browser). No channel is ever numbered there.
+const FAV_RANGE = [2000, 2099];
 
 const DEFAULT_BLOCKS = [
+  ['wtv', 'WEATHER TV', 2, 10],
   ['forecasters', 'FORECASTERS', 11, 199],
   ['chasers', 'STORM CHASERS', 200, 499],
   ['creators', 'OTHER WEATHER CREATORS', 500, 699],
@@ -44,7 +51,11 @@ const DEFAULT_BLOCKS = [
   ['reg-samerica', 'REGIONAL SOUTH AMERICA', 1200, 1299],
   ['reg-africa', 'REGIONAL AFRICA', 1300, 1399],
   ['radar', 'WEATHER RADAR CHANNELS', 1400, 1600],
+  ['audio', 'AUDIO CHANNELS', 9900, 9999],
 ];
+// YouTube channels that start in a particular block (until moved in admin)
+const DEFAULT_CHANNEL_BLOCK = { UCUEQ5cxsnSpYL1VoTqbhsDw: 'wtv' };   // Altruistic Apps → Weather TV
+const WTV_GROUP = { id: 'wtv', label: 'Weather TV (built in)' };
 const DEFAULT_GROUP_BLOCK = { forecasters: 'forecasters', chasers: 'chasers', creators: 'creators', react: 'react', reacts: 'react' };
 // Collections that go to a block unless changed in admin (matched by name)
 const DEFAULT_COLLECTION_BLOCK = [
@@ -120,6 +131,18 @@ function radioTracks() {
     return fs.readdirSync(MUSIC_DIR).filter((f) => /\.(mp3|m4a|ogg)$/i.test(f)).sort()
       .map((f) => ({ t: trackTitle(f), src: '/weatherstar/music/default/' + encodeURIComponent(f) }));
   } catch (e) { return []; }
+}
+// Weather TV's own channels, laid out like any other channel
+function builtins(data) {
+  const out = [
+    { id: 'forecast', name: 'Your Forecast', call: 'FCST', kind: 'forecast', block: 'wtv', n: 2 },
+    { id: 'radar', name: 'Live Radar', call: 'RADAR', kind: 'radar', block: 'wtv', n: 3 },
+    { id: 'weatherstar', name: 'WeatherStar', call: 'WSTAR', kind: 'wstar', block: 'wtv', n: 4 },
+    { id: 'highlights', name: 'Weather TV Highlights', call: 'HILITE', kind: 'list', block: 'wtv', n: 5 },
+  ];
+  ((data && data.playlists) || []).forEach((p) => { if (p && p.playlistId) out.push({ id: 'pl-' + p.playlistId, name: p.title || 'Playlist', call: callSign(p.title), kind: 'list', block: 'wtv', playlistId: p.playlistId }); });
+  out.push({ id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', block: 'audio', n: 9999 });
+  return out.map((b) => ({ ...b, builtin: true }));
 }
 const netName = (label) => cleanLabel(String(label || '').replace(/\s*(chasers?|network)\s*$/i, '')) || cleanLabel(label);
 const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Math.round(+v); return Number.isFinite(n) ? n : null; };
@@ -197,6 +220,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       if (!groupOf[ch.id]) { groupOf[ch.id] = g; adminIdx[ch.id] = channels.length; channels.push(ch); }
       new Set([...(ch.collectionIds || []), ...(ch.collectionId ? [ch.collectionId] : [])]).forEach((k) => { (members[k] = members[k] || []).push(ch.id); });
     }));
+    builtins(data).forEach((b) => { if (!groupOf[b.id]) { groupOf[b.id] = WTV_GROUP; adminIdx[b.id] = channels.length; channels.push(b); } });
     const has = (k) => Object.prototype.hasOwnProperty.call(map, k);
     const typeOf = (key, label, lead) => (TYPES.includes(tcfg[key]) && (lead || tcfg[key] === 'block') ? tcfg[key] : defaultType(label, lead));
     const networks = {}, netsOf = {}, families = [];
@@ -245,6 +269,8 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       let block = null, by = null;
       if (c.block === 'none') { block = 'none'; by = 'you'; }
       else if (c.block && meta[c.block]) { block = c.block; by = 'you'; }
+      else if (ch.builtin) { block = meta[ch.block] ? ch.block : 'wtv'; by = 'builtin'; }
+      else if (DEFAULT_CHANNEL_BLOCK[ch.id] && meta[DEFAULT_CHANNEL_BLOCK[ch.id]]) { block = DEFAULT_CHANNEL_BLOCK[ch.id]; by = 'builtin'; }
       if (!block) {
         const keys = [...new Set([...(ch.collectionIds || []), ...(ch.collectionId ? [ch.collectionId] : [])])];
         const k = keys.find((key) => srcBlock['c:' + key]);
@@ -253,7 +279,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const reg = area ? regionOfCode(area) : null;
       if (!block && reg && meta[reg]) { block = reg; by = 'code'; }
       if (!block) { block = srcBlock['g:' + groupOf[ch.id].id] || 'creators'; by = 'group'; }
-      info[ch.id] = { block, area, by, own: by === 'you', call: cleanTag(c.call) || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) };
+      info[ch.id] = { block, area, by, own: by === 'you', call: cleanTag(c.call) || ch.call || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) != null ? num(c.n) : (ch.builtin && ch.n && block === ch.block ? ch.n : null) };
     });
     // A creator's other channels go where the lead is (unless you placed them yourself)
     const leadOf = {};
@@ -278,6 +304,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         if (A.pos != null && Bb.pos != null) return A.pos - Bb.pos || adminIdx[a.id] - adminIdx[b.id];
         if (A.pos != null) return -1;
         if (Bb.pos != null) return 1;
+        if (!!a.builtin !== !!b.builtin) return a.builtin ? -1 : 1;   // Weather TV's own channels first, then channels added to the block
         if (regional && A.area !== Bb.area) return (A.area || '~').localeCompare(Bb.area || '~');
         return adminIdx[a.id] - adminIdx[b.id];
       });
@@ -301,9 +328,11 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
 
     // Numbers: fixed numbers first (first claim wins; a duplicate is marked), then count up from each start
     const used = new Set(), fixedOf = {}, conflict = new Set();
+    for (let f = FAV_RANGE[0]; f <= FAV_RANGE[1]; f++) used.add(f);   // viewers' favorites
     ordered.forEach((m) => lists[m.id].forEach((ch) => {
       const f = info[ch.id].fixed;
       if (!(f > RESERVED_MAX && f < 100000)) return;
+      if (ch.builtin && num((ccfg[ch.id] || {}).n) == null && used.has(f)) return;   // a built-in's usual number is taken: it counts up instead
       if (used.has(f)) { conflict.add(ch.id); return; }
       used.add(f); fixedOf[ch.id] = f;
     }));
@@ -319,7 +348,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         if (v == null) { while (used.has(n) || n <= RESERVED_MAX) n++; used.add(n); v = n++; }
         numOf[ch.id] = v;
         const i = info[ch.id];
-        return { ch, n: v, fixed: fixedOf[ch.id] != null, conflict: conflict.has(ch.id), call: i.call, area: i.area, by: i.by, own: i.own, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id) };
+        return { ch, n: v, fixed: fixedOf[ch.id] != null && num((ccfg[ch.id] || {}).n) != null, conflict: conflict.has(ch.id), call: i.call, area: i.area, by: i.by, own: i.own, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id) };
       }).sort((a, b) => a.n - b.n);
       const overflow = chans.some((c) => c.n > m.end || c.n < m.start);
       return { ...m, chans, overflow };
@@ -333,31 +362,26 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     return 'CH ' + lo + (hi > lo ? '–' + hi : '');
   }
 
+  // A built-in channel's row: what it opens or plays
+  function builtinRow(c, data) {
+    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind };
+    if (ch.kind === 'forecast') return { ...base, cells: ['Current Conditions', 'Hourly', '7-Day Forecast', 'Records & Normals'].map((t) => ({ t })) };
+    if (ch.kind === 'radar') return { ...base, cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) };
+    if (ch.kind === 'wstar') return { ...base, cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) };
+    if (ch.kind === 'radio') return { ...base, cells: radioTracks() };
+    if (ch.id === 'highlights') return { ...base, cells: (data.highlights || []).slice(0, 30).map((h) => ({ v: h.videoId, t: h.title || '' })) };
+    const pl = cache.playlist[ch.playlistId];
+    const cells = ((pl && pl.items) || []).slice(0, 50).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
+    return { ...base, playlistId: ch.playlistId, cells, needsFetch: !cells.length };
+  }
+
   function build() {
     const data = loadData() || {};
     const { blocks, networks } = layout(data);
     const out = blocks.filter((b) => b.chans.length).map((b) => ({
       id: b.id, label: b.label, range: rangeOf(b.chans), regional: /^reg-/.test(b.id),
-      channels: b.chans.map((c) => channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam)),
+      channels: b.chans.map((c) => (c.ch.builtin ? builtinRow(c, data) : channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam))),
     }));
-
-    // Weather TV (2–10); Live Now is channel 1 (the block at the top)
-    const wtv = [
-      { n: 2, id: 'forecast', name: 'Your Forecast', call: 'FCST', kind: 'forecast', cells: ['Current Conditions', 'Hourly', '7-Day Forecast', 'Records & Normals'].map((t) => ({ t })) },
-      { n: 3, id: 'radar', name: 'Live Radar', call: 'RADAR', kind: 'radar', cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) },
-      { n: 4, id: 'weatherstar', name: 'WeatherStar', call: 'WSTAR', kind: 'wstar', cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) },
-      { n: 5, id: 'highlights', name: 'Weather TV Highlights', call: 'HILITE', kind: 'list', cells: (data.highlights || []).slice(0, 30).map((h) => ({ v: h.videoId, t: h.title || '' })) },
-    ];
-    (data.playlists || []).slice(0, 5).forEach((p, i) => {
-      const pl = cache.playlist[p.playlistId];
-      const cells = ((pl && pl.items) || []).slice(0, 50).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((c) => c.v);
-      wtv.push({ n: 6 + i, id: 'pl-' + p.playlistId, name: p.title, call: callSign(p.title), kind: 'list', playlistId: p.playlistId, cells, needsFetch: !cells.length });
-    });
-
-    const radio = radioTracks();
-    const audio = radio.length ? [{ id: 'audio', label: 'AUDIO CHANNELS', range: 'CH 9999', channels: [
-      { n: 9999, id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', cells: radio },
-    ] }] : [];
     const liveRows = [];
     out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }));
     return {
@@ -365,9 +389,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       networks,
       blocks: [
         { id: 'live', label: 'LIVE NOW · ' + liveRows.length + (liveRows.length === 1 ? ' CHANNEL' : ' CHANNELS'), range: 'CH 1 · UNDER THEIR HOME NUMBERS', n: 1, channels: liveRows },
-        { id: 'wtv', label: 'WEATHER TV', range: 'CH 2–' + wtv[wtv.length - 1].n, channels: wtv },
         ...out,
-        ...audio,
       ],
     };
   }
@@ -387,6 +409,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   function sanitize(body, data) {
     const known = new Set();
     (data.groups || []).forEach((g) => (g.channels || []).forEach((ch) => known.add(ch.id)));
+    builtins(data).forEach((b) => known.add(b.id));
     const blocks = {}, map = {}, channels = {}, types = {};
     Object.entries((body && body.blocks) || {}).forEach(([id, b]) => {
       if (!ID_RE.test(id) || !b) return;
@@ -415,10 +438,10 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   }
   function adminView(data, cfg) {
     const { blocks, sources, hidden, networks } = layout(data, cfg);
-    const row = (c, block) => ({ id: c.ch.id, name: c.ch.name, group: c.group, block, n: c.n, fixed: c.fixed, conflict: c.conflict, call: c.call, autoCall: callSign(c.ch.name), area: c.area, by: c.by, own: c.own, live: !!liveOf(c.ch.id), nets: (c.nets || []).map((k) => networks[k] && networks[k].name).filter(Boolean), fam: c.fam || null });
+    const row = (c, block) => ({ id: c.ch.id, builtin: !!c.ch.builtin, guideOnly: !!c.ch.guideOnly, name: c.ch.name, group: c.group, block, n: c.n, fixed: c.fixed, conflict: c.conflict, call: c.call, autoCall: c.ch.call || callSign(c.ch.name), area: c.area, by: c.by, own: c.own, live: !!liveOf(c.ch.id), nets: (c.nets || []).map((k) => networks[k] && networks[k].name).filter(Boolean), fam: c.fam || null });
     return {
       reserved: RESERVED_MAX,
-      groups: (data.groups || []).map((g) => ({ id: g.id, label: g.label })),
+      groups: [WTV_GROUP, ...(data.groups || []).map((g) => ({ id: g.id, label: g.label }))],
       blocks: blocks.map((b, i) => ({ id: b.id, label: b.label, start: b.start, end: b.end, order: i, custom: b.custom, count: b.chans.length, overflow: b.overflow })),
       sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, type: s.type, defType: s.defType, lead: s.lead || null, count: s.count, block: s.block || '', def: s.def || '' })),
       channels: [...blocks.flatMap((b) => b.chans.map((c) => row(c, b.id))), ...hidden.map((c) => row(c, 'none'))],
@@ -437,9 +460,26 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     const data = loadData() || {};
     const cfg = sanitize(req.body, data);
     data.guide = { ...cfg, updatedAt: new Date().toISOString() };
+    const moved = [];
+    if (req.body && req.body.syncGroups) {
+      // Which group each block belongs to (Forecasters → forecasters…), as set under Groups & collections
+      const groupOfBlock = {};
+      layout(data, cfg).sources.forEach((src) => { if (src.kind === 'group' && src.block && !groupOfBlock[src.block]) groupOfBlock[src.block] = src.key.slice(2); });
+      Object.entries(cfg.channels).forEach(([id, c]) => {
+        const gid = c.block && groupOfBlock[c.block];
+        if (!gid) return;
+        const from = (data.groups || []).find((g) => (g.channels || []).some((x) => x.id === id));
+        const to = (data.groups || []).find((g) => g.id === gid);
+        if (!from || !to || from === to || (to.channels || []).some((x) => x.id === id)) return;
+        const [chObj] = from.channels.splice(from.channels.findIndex((x) => x.id === id), 1);
+        (to.channels = to.channels || []).push(chObj);
+        moved.push({ id, name: chObj.name, from: from.label, to: to.label });
+      });
+      if (moved.length) data.groupsRev = (data.groupsRev || 0) + 1;   // an admin page open from before must reload
+    }
     saveData(data);
     memo = { at: 0, body: null };
-    res.json({ ok: true, saved: Object.keys(cfg.channels).length });
+    res.json({ ok: true, saved: Object.keys(cfg.channels).length, moved });
   });
 
   // ── Backfill: any channel with no saved video list gets one, in the background ──

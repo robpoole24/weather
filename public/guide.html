@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T07:00:00Z build.1795417200 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T15:00:00Z build.1795446000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,6 +71,9 @@ button{font-family:inherit}
 #chm-fam button{font:inherit;font-size:16px;font-weight:600;background:var(--chan);color:inherit;border:2px solid transparent;border-radius:var(--r);padding:4px 10px;cursor:pointer}
 #chm-fam button:hover,#chm-fam button:focus{border-color:var(--selb);outline:none}
 #chm-net:empty,#chm-fam:empty{display:none}
+/* Favorites (♥): marked in the channel cell; they get their own block, channels 2000–2099 */
+.chan .fv{color:#ff5a7a;margin-right:3px}
+#chm-fav.on{background:#ff5a7a;color:#fff;border-color:#ff5a7a}
 /* Channel details (click the number / tag, or press I) */
 #chm{position:absolute;inset:0;z-index:22;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center}
 #chm.on{display:flex}
@@ -276,6 +279,7 @@ button{font-family:inherit}
     <div class="btns">
       <button type="button" class="btn" id="chm-watch">OK · WATCH</button>
       <a class="btn ghost" id="chm-yt" href="#" target="_blank" rel="noopener">YOUTUBE CHANNEL ↗</a>
+      <button type="button" class="btn ghost" id="chm-fav">♡ FAVORITE</button>
       <button type="button" class="btn ghost" id="chm-close">CLOSE</button>
     </div>
   </div></div>
@@ -395,6 +399,43 @@ button{font-family:inherit}
     } catch (e) {}
   }
 
+  // ── Favorites ♥ ── shared with the original site (same list on this device), shown
+  // as YOUR FAVORITES, channels 2000–2099 in the order you added them (up to 100)
+  const FAV_KEY = 'wtv-favorites', FAV_MAX = 100, FAV_START = 2000;
+  function favList() { try { const a = JSON.parse(localStorage.getItem(FAV_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+  function isFav(id) { return favList().includes(id); }
+  function toast(t) { const nb = $('numbox'); nb.textContent = t; nb.style.display = 'block'; clearTimeout(numT); numT = setTimeout(() => { nb.style.display = 'none'; }, 2200); }
+  function toggleFav(ch) {
+    if (!ch || !ch.id) return;
+    const id = ch.homeId || ch.id;
+    const favs = favList(), i = favs.indexOf(id);
+    if (i >= 0) favs.splice(i, 1);
+    else {
+      const fb = allBlocks().find((b) => b.id === 'favs');
+      if (fb && fb.channels.length >= FAV_MAX) { toast('Favorites are full (' + FAV_MAX + ')'); return; }
+      favs.push(id);
+    }
+    try { localStorage.setItem(FAV_KEY, JSON.stringify(favs)); } catch (e) {}
+    rebuild();
+    const row = i >= 0 ? null : flat.find((it) => it.b.id === 'favs' && it.ch && it.ch.homeId === id);
+    toast(i >= 0 ? '♡ Removed' : '♥ CH ' + (row ? row.ch.n : ''));
+    if (chmOpen) openChm(sel.r);
+  }
+  // The guide's blocks, with YOUR FAVORITES right under Live Now
+  function allBlocks() {
+    if (!G) return [];
+    const favs = favList().slice(0, FAV_MAX);
+    if (!favs.length) return G.blocks;
+    const home = {};
+    G.blocks.forEach((b) => { if (b.id === 'live') return; (b.channels || []).forEach((ch) => { if (!home[ch.id]) home[ch.id] = { ch, b }; }); });
+    const rows = [];
+    favs.forEach((id) => { const h = home[id]; if (h) rows.push(Object.assign({}, h.ch, { n: FAV_START + rows.length, homeN: h.ch.n, homeId: h.ch.id, block: h.b.label.replace(/ · .*$/, ''), home: h.b.id })); });
+    if (!rows.length) return G.blocks;
+    const fb = { id: 'favs', label: 'YOUR FAVORITES · ' + rows.length + (rows.length === 1 ? ' CHANNEL' : ' CHANNELS'), range: 'CH ' + FAV_START + (rows.length > 1 ? '–' + (FAV_START + rows.length - 1) : ''), channels: rows };
+    const i = G.blocks.findIndex((b) => b.id === 'live');
+    return [...G.blocks.slice(0, i + 1), fb, ...G.blocks.slice(i + 1)];
+  }
+
   // A hidden block's channels leave Live Now too (a channel only ever lives in one block)
   function visibleChannels(b) {
     const list = b.channels || [];
@@ -404,7 +445,7 @@ button{font-family:inherit}
     const prev = flat[sel.r];
     const keep = prev && prev.ch ? { b: prev.b.id, id: prev.ch.id } : null;
     flat = [];
-    G.blocks.forEach((b) => {
+    allBlocks().forEach((b) => {
       const chans = visibleChannels(b);
       if (!chans.length) return;
       if (hidden.has(b.id) && b.id !== 'wtv') return;
@@ -413,6 +454,7 @@ button{font-family:inherit}
       chans.forEach((ch) => flat.push({ b: bb, ch }));
     });
     let r = keep ? flat.findIndex((it) => it.ch && it.b.id === keep.b && it.ch.id === keep.id) : -1;
+    if (r < 0 && keep) r = flat.findIndex((it) => it.ch && (it.ch.homeId || it.ch.id) === keep.id && it.b.id !== 'live');   // e.g. un-favorited: stay on the channel
     if (r < 0) r = flat.findIndex((it) => it.ch);
     sel.r = r;
     renderGrid();
@@ -450,7 +492,7 @@ button{font-family:inherit}
     const nets = netsOf(ch);
     const badges = nets.slice(0, 2).map((n, j) => '<span class="nb n' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(n.name.slice(0, 4).toUpperCase()) + '</i>') + '</span>').join('');
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
-    return '<div class="row" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + badges + '<b>' + ch.n + '</b><span>' + esc(ch.call + code) + '</span></button>' + cells + '</div>';
+    return '<div class="row" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + badges + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span></button>' + cells + '</div>';
   }
   function renderGrid() {
     rowsEl.innerHTML = flat.map((it, i) => it.band
@@ -540,7 +582,7 @@ button{font-family:inherit}
     if (!cur) return;
     const { it, ch, c } = cur;
     const d = describe(it, c, sel.c);
-    $('i-block').textContent = blockLabel(it) + ' · Channel ' + ch.n + (ch.area && ch.area !== 'US' ? ' · ' + ch.area : '');
+    $('i-block').textContent = (isFav(ch.homeId || ch.id) ? '♥ ' : '') + blockLabel(it) + ' · Channel ' + ch.n + (ch.homeN ? ' (' + ch.homeN + ')' : '') + (ch.area && ch.area !== 'US' ? ' · ' + ch.area : '');
     $('i-title').textContent = c ? '“' + c.t + '”' : ch.name;
     const nets = netsOf(ch);
     $('i-creator').textContent = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
@@ -893,7 +935,7 @@ button{font-family:inherit}
 
   // ── Blocks menu: jump to a block; tick / untick to show or hide it (saved on this device) ──
   let navOpen = false, navIdx = 0;
-  function navBlocks() { return G ? G.blocks.filter((b) => visibleChannels(b).length || (b.id !== 'live' && b.channels && b.channels.length)) : []; }
+  function navBlocks() { return G ? allBlocks().filter((b) => visibleChannels(b).length || (b.id !== 'live' && b.channels && b.channels.length)) : []; }
   function currentBlockId() { const it = flat[sel.r]; return it ? it.b.id : null; }
   function openNav() {
     if (mode !== 'guide' || !G) return;
@@ -975,6 +1017,7 @@ button{font-family:inherit}
   addEventListener('keydown', (e) => {
     const k = e.key;
     if (chmOpen) {
+      if (k === 'f' || k === 'F' || k === 'h' || k === 'H') { e.preventDefault(); const it = flat[chmRow]; if (it && it.ch) toggleFav(it.ch); return; }
       if (k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'i' || k === 'I') closeChm();
       else if (k === 'Enter') { e.preventDefault(); chmWatch(); return; }
       else return;
@@ -1005,6 +1048,7 @@ button{font-family:inherit}
       else if (k === 'Enter' || k === ' ') activate();
       else if ((k === 'Escape' || k === 'Backspace' || k === 'GoBack') && watched) backToWatched();
       else if (k === 's' || k === 'S') toggleSkin();
+      else if (k === 'f' || k === 'F' || k === 'h' || k === 'H') { const cur = current(); if (cur) toggleFav(cur.ch); }
       else if (k === 'b' || k === 'B' || k === 'c' || k === 'C') openNav();
       else return;
     } else {
@@ -1014,6 +1058,7 @@ button{font-family:inherit}
       else if (k === 'Escape' || k === 'Backspace' || k === 'GoBack') { if (full) toggleFull(); else openGuide(); }
       else if (k === 'g' || k === 'G' || k === 'Enter') openGuide();
       else if (k === 'f' || k === 'F') toggleFull();
+      else if (k === 'h' || k === 'H') { const cur = current(); if (cur) toggleFav(cur.ch); }
       else if (k === 'i' || k === 'I') setPanel('info', !panels.info);
       else if (k === 'm' || k === 'M') setPanel('side', !panels.side);
       else return;
@@ -1051,12 +1096,18 @@ button{font-family:inherit}
     if (yt) $('chm-yt').href = 'https://www.youtube.com/channel/' + ch.id;
     $('chm-watch').textContent = isPage(ch) ? 'OK · OPEN' : 'OK · WATCH';
     $('chm-watch').disabled = !isPage(ch) && !ch.cells.length;
+    const fav = isFav(ch.homeId || ch.id);
+    $('chm-fav').textContent = fav ? '♥ FAVORITE' : '♡ FAVORITE';
+    $('chm-fav').classList.toggle('on', fav);
+    $('chm-fav').title = fav ? 'Remove from your favorites (F)' : 'Add to your favorites, channels ' + FAV_START + '–' + (FAV_START + FAV_MAX - 1) + ' (F)';
+    if (ch.homeN) $('chm-line').textContent += ' · home channel ' + ch.homeN;
     $('chm').classList.add('on');
     try { $('chm-watch').focus(); } catch (e) {}
   }
   function closeChm() { chmOpen = false; $('chm').classList.remove('on'); }
   function chmWatch() { const r = chmRow; closeChm(); if (!engaged) engaged = true; select(r, 0); activate(); }
   $('chm-close').onclick = closeChm;
+  $('chm-fav').onclick = () => { const it = flat[chmRow]; if (it && it.ch) toggleFav(it.ch); };
   $('chm-fam').addEventListener('click', (e) => {
     const b = e.target.closest('[data-fam]'); if (!b) return;
     const r = +b.dataset.fam; closeChm(); if (!engaged) engaged = true; select(r, 0);
@@ -1226,7 +1277,8 @@ button{font-family:inherit}
   // Changed the Warning Banner or Alert Types on the radar in another tab? Follow it right away.
   addEventListener('storage', (e) => {
     if (/^wtv-(warning-banner|alert-types|alert-location|radar-place)/.test(e.key || '')) loadTicker();
-    if (e.key === 'wtv-radar-place') loadWx();                    // a new ZIP in Radar, Forecast or WeatherStar: new temp + place
+    if (e.key === 'wtv-radar-place') loadWx();
+    if (e.key === FAV_KEY && G) rebuild();                          // favorites changed on the original site                    // a new ZIP in Radar, Forecast or WeatherStar: new temp + place
   });
   load(true);
   loadChasers();

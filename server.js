@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-23T05:30:00Z build.1795411800
+// WeatherTV Server — updated 2026-11-23T14:30:00Z build.1795444200
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -381,10 +381,16 @@ function getDefaultData() {
 // ── API Routes ──
 
 // Get all data
+// "Guide only" channels live in the Channel Guide (/guide) but not in the
+// original layout, so the public channel lists leave them out
+function publicGroups(groups) {
+  return (groups || []).map(g => ({ ...g, channels: (g.channels || []).filter(ch => !ch.guideOnly) }));
+}
+
 app.get('/api/data', (req, res) => {
   const data = loadData();
   // Strip API key from public response
-  const safe = { ...data, config: { ...data.config, apiKey: '***' } };
+  const safe = { ...data, groups: publicGroups(data.groups), config: { ...data.config, apiKey: '***' } };
   res.json(safe);
 });
 
@@ -416,7 +422,14 @@ app.post('/api/admin/restore', async (req, res) => {
   // match" choices to keep the upload small — keep the server's copies, or
   // every Save wiped them (and dismissed suggestions came back)
   const current = loadData() || {};
-  for (const k of ['knownChasers', 'dismissedSuggestions']) {
+  // The Channel Guide admin can move channels between groups. An admin page
+  // loaded before that would put them back with its old copy, so it has to reload first.
+  if (current.groupsRev && data.groupsRev !== undefined && data.groupsRev !== current.groupsRev) {
+    return res.status(409).json({ error: 'Channels were moved between groups in the Channel Guide admin since this page loaded — reload the page (your unsaved changes here will be lost) and try again.' });
+  }
+  if (data.groupsRev === undefined && current.groupsRev !== undefined) data.groupsRev = current.groupsRev;
+  // The Channel Guide setup is saved from its own page: keep the server's copy unless a backup brings one
+  for (const k of ['knownChasers', 'dismissedSuggestions', 'guide']) {
     if (data[k] === undefined && current[k] !== undefined) data[k] = current[k];
   }
   // Update in-memory immediately
@@ -443,7 +456,7 @@ app.put('/api/admin/config', (req, res) => {
 
 // Get all groups
 app.get('/api/groups', (req, res) => {
-  res.json(loadData().groups);
+  res.json(publicGroups(loadData().groups));
 });
 
 // ── Highlights routes ──
@@ -631,7 +644,10 @@ app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
   if (!group) return res.status(404).json({ error: 'Group not found' });
   const idx = group.channels.findIndex(c => c.id === req.params.channelId);
   if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
-  group.channels[idx] = { ...group.channels[idx], ...req.body };
+  // _guide: the change came from the Channel Guide admin, so a main admin page open from before must reload
+  const { _guide, ...fields } = req.body || {};
+  group.channels[idx] = { ...group.channels[idx], ...fields };
+  if (_guide) data.groupsRev = (data.groupsRev || 0) + 1;
   saveData(data);
   if (req.body && req.body.hasLive === false) {         // live checks off: drop any live status right away
     delete cache.liveStatuses[req.params.channelId];
@@ -641,6 +657,22 @@ app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
     delete cache.recentVideos[req.params.channelId];
     rDel('wt:recent:' + req.params.channelId);
   }
+  res.json({ ok: true });
+});
+
+// Move a channel to another group, keeping everything about it (collections, live, filters…)
+app.post('/api/admin/groups/:groupId/channels/:channelId/move', (req, res) => {
+  const data = loadData();
+  const from = data.groups.find(g => g.id === req.params.groupId);
+  const to = data.groups.find(g => g.id === (req.body && req.body.toGroupId));
+  if (!from || !to) return res.status(404).json({ error: 'Group not found' });
+  if (from === to) return res.json({ ok: true });
+  const idx = from.channels.findIndex(c => c.id === req.params.channelId);
+  if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
+  if ((to.channels || []).some(c => c.id === req.params.channelId)) return res.status(409).json({ error: 'That channel is already in ' + to.label });
+  const [ch] = from.channels.splice(idx, 1);
+  (to.channels = to.channels || []).push(ch);
+  saveData(data);
   res.json({ ok: true });
 });
 

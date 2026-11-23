@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T05:00:00Z build.1795410000 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T15:00:00Z build.1795446000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -79,9 +79,12 @@
   .row .pin { width:1rem; flex:none; font-size:.8rem; }
   .row .nm { flex:1; min-width:0; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row .by { font-size:.7rem; color:var(--muted); width:5.8rem; flex:none; white-space:nowrap; }
-  .row .by.you { color:#7fdcf0; } .row .by.code { color:#8fe0b8; } .row .by.collection { color:var(--gold); } .row .by.creator { color:#c9a6ff; }
+  .row .by.you { color:#7fdcf0; } .row .by.code { color:#8fe0b8; } .row .by.collection { color:var(--gold); } .row .by.creator { color:#c9a6ff; } .row .by.builtin { color:#9fb4c8; }
   .row a.yt { flex:none; font-size:.72rem; font-weight:700; color:#ff6b6b; text-decoration:none; border:1px solid rgba(255,107,107,.45); border-radius:4px; padding:.05rem .35rem; white-space:nowrap; }
   .row a.yt:hover, .row a.yt:focus-visible { background:rgba(255,107,107,.15); outline:none; }
+  .savebar .sync { font-size:.8rem; color:var(--muted); display:flex; align-items:center; gap:.35rem; cursor:pointer; white-space:nowrap; }
+  .row button.go { flex:none; font-size:.68rem; font-weight:700; background:none; color:var(--muted); border:1px solid rgba(159,180,200,.35); border-radius:4px; padding:.05rem .35rem; cursor:pointer; white-space:nowrap; }
+  .row button.go.on { color:#7fdcf0; border-color:#7fdcf0; }
   .row .net { font-size:.68rem; color:var(--muted); margin-left:.45rem; white-space:nowrap; }
   table.src select.ty { min-width:9.5rem; }
   table.src .note { color:var(--muted); font-size:.78rem; }
@@ -111,7 +114,7 @@
   <div class="panel"><div class="help">
     <strong>Where a channel goes</strong> (first match wins): where <strong>you</strong> put it → its <strong>collection</strong>'s block → its <strong>country / state code</strong>
     (IN, PK, BD → Asia · GB → Europe · AU → Australia · <em>US-WI</em> style state codes → Regional United States; a plain US stays put) → its <strong>group</strong>'s block.
-    Channels 1–10 are Weather TV's own (1 Live Now, 2 Forecast, 3 Live Radar, 4 WeatherStar, 5 Highlights, 6–10 playlists).<br>
+    Channel 1 is Live Now. Weather TV's own channels (2 Forecast, 3 Live Radar, 4 WeatherStar, 5 Highlights, playlists, 9999 WeatherStar Radio) are in the <strong>Weather TV</strong> and <strong>Audio Channels</strong> blocks and work like any other channel — and you can add YouTube channels to those blocks too. <strong>2000–2099</strong> is kept free for each viewer's own <em>Your Favorites</em> block (♥ in the guide), so no channel can be numbered there.<br>
     <strong>Drag</strong> or use <strong>▲▼</strong> to order a block; numbers count up from its start. <strong>Type a number</strong> to fix one (📌) — it sorts into place;
     two channels on one number show red until you change one. <strong>Move to</strong> puts a channel somewhere by hand; <em>↺ Automatic</em> undoes that.
   </div></div>
@@ -125,12 +128,12 @@
   <div class="cols">
     <div class="panel" id="blocks-panel">
       <h2>Blocks <small>Drag to reorder · click a count to jump</small></h2>
-      <div class="bk fixed" style="margin:.4rem .4rem 0"><span class="handle">🔒</span><span style="flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:700;letter-spacing:.06em;font-size:.85rem">1–10 · LIVE NOW &amp; WEATHER TV</span></div>
+      <div class="bk fixed" style="margin:.4rem .4rem 0"><span class="handle">🔒</span><span style="flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:700;letter-spacing:.06em;font-size:.85rem">1 · LIVE NOW</span></div>
       <div id="blocks"></div>
       <div class="addb">
         <input type="text" id="nb-label" placeholder="New block (e.g. REGIONAL CANADA)" maxlength="40">
-        <input type="number" id="nb-start" placeholder="From" min="11">
-        <input type="number" id="nb-end" placeholder="To" min="11">
+        <input type="number" id="nb-start" placeholder="From" min="2">
+        <input type="number" id="nb-end" placeholder="To" min="2">
         <button class="btn btn-ghost" id="nb-add">+ Add</button>
       </div>
     </div>
@@ -150,6 +153,7 @@
 <div class="savebar" id="savebar">
   <strong id="dirtyc" style="color:var(--gold)">Unsaved changes</strong>
   <span class="msg" id="msg"></span>
+  <label class="sync" title="When you move a channel into Forecasters, Storm Chasers, Other Weather Creators (or any block a group is sent to), it also moves to that group on the original site"><input type="checkbox" id="syncg"> Also move them between groups on the original site</label>
   <button class="btn btn-ghost" id="discard" style="margin-left:auto">Discard</button>
   <button class="btn btn-primary" id="save">Save layout</button>
 </div>
@@ -158,7 +162,7 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const BY = { you: 'by you', collection: 'by collection', code: 'by code', group: 'by group', creator: 'with creator' };
+  const BY = { you: 'by you', collection: 'by collection', code: 'by code', group: 'by group', creator: 'with creator', builtin: 'by default' };
   const TYPE_LABEL = { block: 'Send to block', network: 'Network (badge)', creator: 'Same creator' };
   let V = null;          // the layout as the server works it out (saved or draft)
   let draft = null;      // { blocks, map, channels } being edited
@@ -199,7 +203,7 @@
   function payload() {
     const blocks = {};
     Object.entries(draft.blocks).forEach(([id, b]) => { blocks[id] = { label: b.label, start: b.start, end: b.end, order: b.order }; });
-    return { blocks, map: draft.map, channels: draft.channels, types: draft.types };
+    return { blocks, map: draft.map, channels: draft.channels, types: draft.types, syncGroups: !!($('syncg') && $('syncg').checked) };
   }
   function ch(id) { return (draft.channels[id] = draft.channels[id] || {}); }
   function chansOf(bid) { return V.channels.filter((c) => c.block === bid); }
@@ -238,9 +242,9 @@
       return '<div class="bk' + (b.count ? '' : ' empty') + '" draggable="true" data-bk="' + esc(id) + '">'
         + '<span class="handle" title="Drag to reorder">⠿</span>'
         + '<input type="text" data-bl="' + esc(id) + '" value="' + esc(d.label) + '" maxlength="40" aria-label="Block name">'
-        + '<input type="number" data-bs="' + esc(id) + '" value="' + esc(d.start) + '" min="11" aria-label="First channel number">'
+        + '<input type="number" data-bs="' + esc(id) + '" value="' + esc(d.start) + '" min="2" aria-label="First channel number">'
         + '<span class="dash">–</span>'
-        + '<input type="number" data-be="' + esc(id) + '" value="' + esc(d.end) + '" min="11" aria-label="Last channel number">'
+        + '<input type="number" data-be="' + esc(id) + '" value="' + esc(d.end) + '" min="2" aria-label="Last channel number">'
         + (b.overflow ? '<span class="warn" title="Some of its channels are outside its range: more channels than room, or numbers taken by a block above">⚠</span>' : '')
         + '<span class="cnt" data-jump="' + esc(id) + '" title="Jump to this block">' + b.count + '</span>'
         + '<button class="ib" data-bup="' + i + '" aria-label="Move block up"' + (i ? '' : ' disabled') + '>▲</button>'
@@ -278,13 +282,14 @@
         html += '<div class="row" draggable="true" data-id="' + esc(c.id) + '">'
           + '<span class="handle" title="Drag to move">⠿</span>'
           + (bid === 'none' ? '<span style="width:4.6rem;text-align:right" class="muted">—</span>'
-            : '<input type="number" class="numin' + (c.fixed ? ' fixed' : '') + (c.conflict ? ' clash' : '') + '" data-n="' + esc(c.id) + '" value="' + esc(c.n) + '" min="11" aria-label="Channel number" title="'
+            : '<input type="number" class="numin' + (c.fixed ? ' fixed' : '') + (c.conflict ? ' clash' : '') + '" data-n="' + esc(c.id) + '" value="' + esc(c.n) + '" min="2" aria-label="Channel number" title="'
               + (c.conflict ? 'Another channel already has the number you set' : c.fixed ? 'Fixed number · clear it to go back to automatic' : 'Automatic · type a number to fix it') + '">')
           + '<span class="pin">' + (c.fixed || c.conflict ? '📌' : '') + '</span>'
           + '<input type="text" class="tag" maxlength="7" data-t="' + esc(c.id) + '" value="' + esc(c.call || '') + '" placeholder="' + esc(c.autoCall) + '" aria-label="Tag">'
           + '<input type="text" class="code" maxlength="40" autocomplete="off" spellcheck="false" data-a="' + esc(c.id) + '" value="' + esc(c.area || '') + '" placeholder="Code" aria-label="Country or state code" title="' + esc(c.area ? codeName(c.area) : 'Type a country or US state — a code (IN, US-WI) or a name (India, Wisconsin)') + '">'
           + '<span class="nm" title="' + esc(groupLabel[c.group] || '') + '">' + esc(c.name) + (c.live ? '<span class="live">● LIVE</span>' : '') + (c.nets && c.nets.length ? '<span class="net">' + esc(c.nets.join(' · ')) + '</span>' : '') + '</span>'
           + (/^UC[\w-]{22}$/.test(c.id) ? '<a class="yt" draggable="false" href="https://www.youtube.com/channel/' + esc(c.id) + '/about" target="_blank" rel="noopener noreferrer" title="Open ' + esc(c.name) + ' on YouTube (About page: country, description, links)">YT ↗</a>' : '')
+          + (c.builtin ? '' : '<button type="button" class="go' + (c.guideOnly ? ' on' : '') + '" data-go="' + esc(c.id) + '" data-g="' + esc(c.group) + '" title="' + (c.guideOnly ? 'Guide only: not shown in the original layout. Click to show it there too.' : 'Shown in the guide and the original layout. Click to make it guide only.') + '">' + (c.guideOnly ? '📺 GUIDE ONLY' : '📺+🗂') + '</button>')
           + '<span class="by ' + c.by + '">' + BY[c.by] + '</span>'
           + '<button class="ib" data-up="' + esc(c.id) + '" aria-label="Move up"' + (i && bid !== 'none' ? '' : ' disabled') + '>▲</button>'
           + '<button class="ib" data-dn="' + esc(c.id) + '" aria-label="Move down"' + (i < list.length - 1 && bid !== 'none' ? '' : ' disabled') + '>▼</button>'
@@ -407,7 +412,7 @@
       else place(id, v, null);
     } else if (t.dataset.n) {
       const v = parseInt(t.value, 10);
-      if (t.value.trim() === '' || !(v > 10)) delete ch(t.dataset.n).n; else ch(t.dataset.n).n = v;
+      if (t.value.trim() === '' || !(v > 1)) delete ch(t.dataset.n).n; else ch(t.dataset.n).n = v;
       change();
     } else if (t.dataset.t) {
       const v = t.value.toUpperCase().replace(/[^A-Z0-9+&'-]/g, '').slice(0, 7);
@@ -438,15 +443,15 @@
     if (!id) return;
     const b = draft.blocks[id];
     if (t.dataset.bl) b.label = t.value.trim().toUpperCase().slice(0, 40) || b.label;
-    else if (t.dataset.bs) { const v = parseInt(t.value, 10); if (v > 10) b.start = v; }
-    else { const v = parseInt(t.value, 10); if (v > 10) b.end = v; }
+    else if (t.dataset.bs) { const v = parseInt(t.value, 10); if (v > 1) b.start = v; }
+    else { const v = parseInt(t.value, 10); if (v > 1) b.end = v; }
     change();
   });
   $('nb-add').onclick = () => {
     const label = $('nb-label').value.trim().toUpperCase().slice(0, 40), start = parseInt($('nb-start').value, 10);
     let end = parseInt($('nb-end').value, 10);
     if (!label) { $('nb-label').focus(); return; }
-    if (!(start > 10)) { $('nb-start').focus(); return; }
+    if (!(start > 1)) { $('nb-start').focus(); return; }
     if (!(end >= start)) end = start + 99;
     let id = 'blk-' + label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
     while (draft.blocks[id]) id += '-2';
@@ -539,6 +544,23 @@
   });
 
   // ── Save ──
+  // "Also move between groups" is remembered on this computer (on unless you turn it off)
+  try { $('syncg').checked = localStorage.getItem('wtvGuideSyncGroups') !== '0'; } catch (e) { $('syncg').checked = true; }
+  $('syncg').onchange = () => { try { localStorage.setItem('wtvGuideSyncGroups', $('syncg').checked ? '1' : '0'); } catch (e) {} };
+  // Guide only: saved straight away (it's a channel setting, not part of the layout)
+  $('list').addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-go]'); if (!b) return;
+    const c = V.channels.find((x) => x.id === b.dataset.go); if (!c) return;
+    const on = !c.guideOnly;
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/admin/groups/' + encodeURIComponent(b.dataset.g) + '/channels/' + encodeURIComponent(c.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guideOnly: on, _guide: true }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      V.channels.filter((x) => x.id === c.id).forEach((x) => { x.guideOnly = on; });
+      render();
+      $('msg').className = 'msg ok'; $('msg').textContent = c.name + (on ? ' is now guide only.' : ' shows in the original layout again.');
+    } catch (err) { $('msg').className = 'msg err'; $('msg').textContent = 'Could not change ' + c.name + ': ' + err.message; b.disabled = false; }
+  });
   $('discard').onclick = () => { if (!dirty || confirm('Throw away your changes?')) load(); };
   $('save').onclick = async () => {
     $('save').disabled = true; $('msg').className = 'msg'; $('msg').textContent = 'Saving…';
@@ -548,7 +570,9 @@
       if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
       await load();
       $('savebar').classList.add('on');
-      $('msg').className = 'msg ok'; $('msg').textContent = 'Saved. The guide shows the new layout now.';
+      $('msg').className = 'msg ok';
+      $('msg').textContent = 'Saved. The guide shows the new layout now.' + (j.moved && j.moved.length
+        ? ' Moved on the original site: ' + j.moved.map((m) => m.name + ' → ' + m.to).join(', ') + '. Reload any open main admin tab before saving there.' : '');
       setTimeout(() => { if (!dirty) $('savebar').classList.remove('on'); }, 3500);
     } catch (e) {
       $('msg').className = 'msg err'; $('msg').textContent = 'Not saved: ' + e.message;
