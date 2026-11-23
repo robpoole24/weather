@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-22T23:37:31Z build.1795390651 -->
+<!-- WeatherTV App — updated 2026-11-23T04:30:00Z build.1795408200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -160,7 +160,7 @@
      Fullscreen, Support, Help and About all fit without sideways scrolling */
   @media (max-width: 479px) {
     #status-bar > .status-item:not(#notification-status), #status-bar > .status-divider { display: none !important; }
-    #fullscreen-btn .fs-label, .get-app-btn .fs-label { display: none; }
+    #fullscreen-btn .fs-label, .get-app-btn .fs-label, .guide-btn .fs-label { display: none; }
     #status-bar .about-btn { padding: 0.3rem 0.45rem; }
   }
   /* Phones (landscape): very little height — keep rows compact */
@@ -1357,6 +1357,8 @@
 <style>
   html.embed-guide #main-nav, html.embed-guide #search-suggestions, html.embed-guide #status-bar,
   html.embed-guide .skip-link, html.embed-guide #channel-hint { display:none !important; }
+  /* The Channel Guide is web-only for now: no Guide button inside the Android / Xbox / Windows / TV apps */
+  html.native-app .guide-btn, html.in-app .guide-btn { display:none !important; }
 </style>
 
 <div class="sr-only">
@@ -1543,6 +1545,7 @@
     <!-- Live Chat button injected here by showChatButton() — sits left of About -->
     <span id="chat-btn-slot" style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;flex-shrink:0;"></span>
     <button type="button" class="about-btn" id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen" aria-label="Fullscreen">⛶<span class="fs-label"> Fullscreen</span></button>
+    <a class="about-btn guide-btn" href="/guide" title="Switch to the Channel Guide" aria-label="Channel Guide" style="text-decoration:none">📺<span class="fs-label"> Guide</span></a>
     <button type="button" class="about-btn get-app-btn" onclick="showGetApp()" title="Get Weather TV for Windows, Xbox or Android" aria-label="Get the app">📲<span class="fs-label"> Get the App</span></button>
     <a class="about-btn" href="/shop.html" title="Every dollar goes to servers & new features" style="text-decoration:none">👕 Support</a>
     <button type="button" class="about-btn" onclick="showHelp()">Help</button>
