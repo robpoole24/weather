@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T06:00:00Z build.1795413600 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T07:00:00Z build.1795417200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -158,6 +158,7 @@ button{font-family:inherit}
 #appframe{position:fixed;z-index:5;border:0;display:none;background:#0a0e14}
 #bar .btn.on{outline:3px solid var(--selb);outline-offset:-3px}
 #bar .btn.green.on{outline-color:#fff}
+#musicbtn.on{border-style:solid;border-color:#f0c040;color:#f0c040}
 /* ── Bottom bar: always there (except true full screen) ── */
 #bar{position:absolute;left:0;right:0;bottom:0;height:46px;z-index:8;background:var(--bar);border-top:2px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 12px;box-sizing:border-box;gap:10px}
 #bar .k{display:flex;gap:8px;align-items:center;min-width:0}
@@ -253,6 +254,7 @@ button{font-family:inherit}
       <button type="button" class="chip" id="r-side" hidden>▴ MAP · CHAT</button>
       <button type="button" class="btn ghost" id="fullbtn" hidden>⛶ FULL</button>
       <a class="btn ghost" id="origbtn" href="/" title="Switch back to the original Weather TV layout">ORIGINAL</a>
+      <button type="button" class="chip" id="musicbtn" title="WeatherStar Radio (channel 9999) playing behind the guide">♪ MUSIC: OFF</button>
     </div>
     <div class="k">
       <a id="wx" href="#" data-app="forecast" title="Your forecast"></a>
@@ -302,7 +304,7 @@ button{font-family:inherit}
   let loaded = { key: null, muted: true };
   let watched = null;            // { b, id, c } — the channel the player is on
   let engaged = false;           // false until the viewer picks or browses a channel (logo shows until then)
-  function engage() { if (engaged) return; engaged = true; updateInfo(); schedulePreview(); }
+  function engage() { if (engaged) return; engaged = true; updateInfo(); schedulePreview(); if (musicPref && !radioOn && typeof startRadio === 'function') startRadio(0); }
   let watchBlock = null, tab = null, chasers = {}, map = null, marker = null, osdT = null, pvT = null;
 
   // ── Stage: a 1280×720 TV screen scaled to the window ──
@@ -377,6 +379,7 @@ button{font-family:inherit}
       G = await r.json();
       shuffleRadio();
       rebuild();
+      musicUi();
       $('loading').style.display = 'none';
     } catch (e) {
       if (first) $('loading').textContent = 'The guide could not load. Try again in a minute.';
@@ -517,7 +520,7 @@ button{font-family:inherit}
     else if (ch.kind === 'radar') { status = 'Opens Live Radar'; next = 'Radar · warnings · chasers on the map'; action = 'OPEN RADAR'; }
     else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
     else if (ch.kind === 'list') { status = 'Plays straight through · ' + cellSub(it, c, k); }
-    else if (ch.kind === 'radio') { status = 'Nonstop music from the WeatherStar · ' + cellSub(it, c, k); next = 'Next song: ' + (nxt || ch.cells[0] || {}).t; action = 'LISTEN'; }
+    else if (ch.kind === 'radio') { status = 'Nonstop music from the WeatherStar · plays while you browse the guide'; next = 'Next song: ' + (nxt || ch.cells[0] || {}).t; action = 'LISTEN'; }
     else if (c && c.live) { status = 'LIVE now'; live = true; }
     else if (c) { status = 'Uploaded ' + ago(c.at); }
     return { status, next, action, live };
@@ -574,57 +577,90 @@ button{font-family:inherit}
     return c.v ? 'https://www.youtube.com/embed/' + encodeURIComponent(c.v) + '?' + q
                : 'https://www.youtube.com/embed/live_stream?channel=' + encodeURIComponent(c.ch || ch.id) + '&' + q;
   }
-  // ── WeatherStar Radio: an audio player behind a WeatherStar-style screen ──
+  // ── WeatherStar Radio (channel 9999) ──
+  // The music is separate from the video player, like the old cable guide channel:
+  // it keeps playing while you browse (previews are muted) and over Forecast and
+  // Live Radar, and stops when you start watching another channel's video, open
+  // WeatherStar (which has its own music), or press ♪ MUSIC. On by default; your
+  // choice is remembered on this device. The music starts when you start using the guide.
+  let radioOn = false, radioIdx = 0;
+  let musicPref = LS.get('wtvGuideMusic', true);               // on by default, like the original guide channel
+  function radioCh() { let ch = null; ((G && G.blocks) || []).forEach((b) => (b.channels || []).forEach((x) => { if (x.kind === 'radio' && x.cells.length) ch = x; })); return ch; }
+  function startRadio(k) {
+    const ch = radioCh(); if (!ch) return;
+    radioIdx = ((k % ch.cells.length) + ch.cells.length) % ch.cells.length;
+    const src = ch.cells[radioIdx].src;
+    if (aud.getAttribute('src') !== src) aud.src = src;
+    aud.muted = false; aud.volume = 0.9;
+    const p = aud.play(); if (p && p.catch) p.catch(() => {});
+    radioOn = true; musicUi();
+  }
+  function stopRadioAudio() {
+    if (!radioOn) return;
+    radioOn = false; aud.pause(); musicUi();
+  }
+  function musicUi() {
+    const b = $('musicbtn'); if (!b) return;
+    b.hidden = !radioCh();
+    b.textContent = '♪ MUSIC: ' + (radioOn ? 'ON' : 'OFF');
+    b.classList.toggle('on', radioOn);
+    if (!$('radio').hidden) radioScreen();
+  }
   function radioScreen() {
-    const cur = current(); const r = $('radio');
-    const c = cur && cur.ch.kind === 'radio' ? cur.c : null;
+    const ch = radioCh(); const r = $('radio');
+    const c = ch ? (radioOn ? ch.cells[radioIdx] : (current() && current().ch.kind === 'radio' ? current().c : ch.cells[0])) : null;
+    $('rd-now').textContent = radioOn ? 'NOW PLAYING' : 'UP NEXT';
     $('rd-title').textContent = c ? c.t : '';
     $('rd-wx').innerHTML = wxNow ? (wxNow.t != null ? '<b>' + wxNow.t + '°</b>' : '') + esc([wxNow.sky, wxNow.name].filter(Boolean).join(' · ')) : 'Set your location for local conditions';
-    $('rd-hint').textContent = loaded.muted ? 'Press OK to listen' : '';
-    r.classList.toggle('paused', loaded.muted || aud.paused);
-    const d = new Date();
-    $('rd-clock').textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    $('rd-hint').textContent = radioOn ? '' : 'Press OK to listen';
+    r.classList.toggle('paused', !radioOn || aud.paused);
+    $('rd-clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
   }
   setInterval(() => { if (!$('radio').hidden) radioScreen(); }, 1000);
+  // The radio's screen in the player (only while channel 9999 is on screen); the music is separate
   function stopRadio() {
     if ($('radio').hidden) return;
-    aud.pause(); aud.removeAttribute('src'); try { aud.load(); } catch (e) {}
     $('radio').hidden = true; yt.style.display = '';
   }
   function playRadio(ch, c, muted) {
-    const key = 'radio:' + c.src;
     player.classList.remove('hide');
     $('slate').style.display = 'none';
     if (!String(loaded.key || '').startsWith('radio:')) yt.src = 'about:blank';
     yt.style.display = 'none';
     $('radio').hidden = false;
-    if (loaded.key !== key) { aud.pause(); aud.removeAttribute('src'); }
-    loaded = { key, muted };
-    if (muted) { aud.pause(); }                                    // the guide's preview shows the screen; music starts on OK
-    else {
-      if (aud.getAttribute('src') !== c.src) aud.src = c.src;
-      aud.muted = false; aud.volume = 0.9;
-      const p = aud.play(); if (p && p.catch) p.catch(() => {});
+    loaded = { key: 'radio:' + c.src, muted };
+    if (!muted) {                                                  // OK on a song: play that one (or keep the one playing)
+      const k = ch.cells.indexOf(c);
+      if (!radioOn || k !== radioIdx) startRadio(k);
     }
     radioScreen();
   }
   aud.addEventListener('ended', () => {
-    if (mode === 'watch') { onEnded(); return; }
-    // Browsing the guide (the radio playing in the preview box): keep the music going
-    let ch = null; (G.blocks || []).forEach((b) => (b.channels || []).forEach((x) => { if (x.kind === 'radio') ch = x; }));
-    if (!ch || !ch.cells.length) return;
-    const i = ch.cells.findIndex((c) => 'radio:' + c.src === loaded.key);
-    const k = (i + 1) % ch.cells.length;
-    if (watched && watched.id === ch.id) watched.c = k;
+    const ch = radioCh(); if (!ch || !radioOn) return;
+    startRadio(radioIdx + 1);                                      // the radio never stops
     const cur = current();
-    if (cur && cur.ch.id === ch.id) select(sel.r, k);
-    playRadio(ch, ch.cells[k], false);
+    if (cur && cur.ch.id === ch.id) {                              // on channel 9999: follow along in the grid
+      select(sel.r, radioIdx);
+      loaded.key = 'radio:' + ch.cells[radioIdx].src;
+      if (mode === 'watch') { if (watched) watched.c = radioIdx; renderSide(false); renderBanner(); flashOsd(); }
+    }
+    radioScreen();
   });
-  aud.addEventListener('play', radioScreen); aud.addEventListener('pause', radioScreen);
+  aud.addEventListener('play', () => { if (!$('radio').hidden) radioScreen(); });
+  aud.addEventListener('pause', () => { if (!$('radio').hidden) radioScreen(); });
+  $('musicbtn').onclick = () => {
+    if (radioOn) stopRadioAudio();
+    else {
+      if (!loaded.muted && !String(loaded.key || '').startsWith('radio:')) { ytCmd('mute'); loaded.muted = true; }   // a video with sound: the music takes over
+      startRadio(radioIdx);
+    }
+    musicPref = radioOn; LS.set('wtvGuideMusic', musicPref);
+  };
 
   function play(ch, c, muted) {
     if (ch && ch.kind === 'radio' && c) { playRadio(ch, c, muted); return; }
     stopRadio();
+    if (!muted && c && !isPage(ch)) stopRadioAudio();               // watching another channel's video: the music stops
     if (!c || isPage(ch)) { showSlate(ch); return; }
     const key = keyOf(ch, c);
     player.classList.remove('hide');
@@ -706,6 +742,7 @@ button{font-family:inherit}
     if (!APPS[name]) return;
     closeNav(); clearTimeout(pvT);
     stopPlayer();                                                 // the channel stops; Back to Ch … returns to it
+    if (name === 'wstar') stopRadioAudio();                        // WeatherStar has its own music
     $('chatf').src = 'about:blank';
     full = false; mode = 'app'; app = name;
     stage.classList.remove('guiding', 'watching', 'full'); stage.classList.add('apping');
@@ -787,9 +824,8 @@ button{font-family:inherit}
     if (mode !== 'watch') return;
     const cur = current();
     if (!cur) return;
-    let nxt = cur.ch.cells[sel.c + 1];
-    if (!nxt && cur.ch.kind === 'radio') { nxt = cur.ch.cells[0]; select(sel.r, 0); watched.c = 0; play(cur.ch, nxt, false); renderSide(false); renderBanner(); flashOsd(); return; }   // the radio never stops
-    if (!nxt || nxt.live) return;
+    const nxt = cur.ch.cells[sel.c + 1];
+    if (!nxt || nxt.live || cur.ch.kind === 'radio') return;
     select(sel.r, sel.c + 1);
     watched.c = sel.c;
     play(cur.ch, nxt, false);
