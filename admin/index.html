@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-11-22T22:40:08Z build.1795387208 -->
+<!-- WeatherTV Admin — updated 2026-11-23T00:48:38Z build.1795394918 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -665,9 +665,10 @@
   </div>
   <script>
   fetch('/api/admin/guide').then(r => r.json()).then(d => {
-    const fresh = d.channels.filter(c => !c.saved).length;
-    document.getElementById('guide-summary').innerHTML = d.channels.length + ' channels in ' + d.blocks.filter(b => b.count).length + ' blocks · '
-      + (fresh ? '<strong style="color:var(--gold)">' + fresh + '</strong> without a fixed number' : 'every channel has a fixed number')
+    const nocode = d.channels.filter(c => !c.area).length, clash = d.channels.filter(c => c.conflict).length;
+    document.getElementById('guide-summary').innerHTML = d.channels.length + ' channels in ' + d.blocks.filter(b => b.count).length + ' of ' + d.blocks.length + ' blocks · '
+      + (nocode ? '<strong style="color:var(--gold)">' + nocode + '</strong> without a country code' : 'every channel has a country code')
+      + (clash ? ' · <strong style="color:var(--red)">' + clash + ' number conflicts</strong>' : '')
       + ' · <a href="/guide" target="_blank" style="color:var(--accent)">open the guide ↗</a>';
   }).catch(() => { document.getElementById('guide-summary').textContent = 'Not available yet — deploy the new server.'; });
   </script>

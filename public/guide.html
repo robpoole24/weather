@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T00:45:00Z build.1795394700 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T02:30:00Z build.1795401000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -152,7 +152,7 @@ button{font-family:inherit}
 #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;color:var(--muted);z-index:30;background:var(--bg)}
 </style>
 </head>
-<body class="classic">
+<body class="wtv">
 <div id="stage" class="guiding">
   <div id="guide">
     <div id="top">
@@ -235,7 +235,7 @@ button{font-family:inherit}
   const stage = $('stage'), rowsEl = $('rows'), yt = $('yt'), player = $('player');
 
   let G = null, flat = [], sel = { r: -1, c: 0 }, off = 0, mode = 'guide', full = false;
-  let skin = LS.get('wtvGuideSkin', 'classic');
+  let skin = LS.get('wtvGuideSkin', 'wtv');                    // Weather TV colors by default; Classic is the option
   let hidden = new Set(LS.get('wtvGuideHidden', []));
   let panels = Object.assign({ side: true, info: true }, LS.get('wtvGuidePanels', {}));
   let loaded = { key: null, muted: true };
@@ -340,8 +340,9 @@ button{font-family:inherit}
   function cellSub(it, c, k) {
     const ch = it.ch;
     if (ch.kind === 'forecast') return 'Opens your forecast';
+    if (ch.kind === 'radar') return 'Opens Live Radar';
     if (ch.kind === 'wstar') return 'Opens the WeatherStar menu';
-    if (ch.kind === 'list') return (ch.n === 3 ? 'Clip ' + (k + 1) : (k + 1) + ' of ' + ch.cells.length);
+    if (ch.kind === 'list') return (ch.id === 'highlights' ? 'Clip ' + (k + 1) : (k + 1) + ' of ' + ch.cells.length);
     if (c.live) return 'Live now';
     return ago(c.at);
   }
@@ -361,7 +362,8 @@ button{font-family:inherit}
         + '<span class="l">' + (c.live ? '<i class="live">LIVE</i>' : '') + '<span class="t">' + esc(c.t) + '</span></span>'
         + '<span class="s">' + esc(cellSub(it, c, k) + more) + '</span></button>';
     }
-    return '<div class="row" id="r' + i + '"><div class="chan"><b>' + ch.n + '</b><span>' + esc(ch.call) + '</span></div>' + cells + '</div>';
+    const code = ch.area && ch.area !== 'US' ? ' · ' + ch.area : '';   // country / state (a plain US says nothing)
+    return '<div class="row" id="r' + i + '"><div class="chan"><b>' + ch.n + '</b><span>' + esc(ch.call + code) + '</span></div>' + cells + '</div>';
   }
   function renderGrid() {
     rowsEl.innerHTML = flat.map((it, i) => it.band
@@ -379,6 +381,7 @@ button{font-family:inherit}
     else if (top + el.offsetHeight > rowsEl.scrollTop + h - 40) rowsEl.scrollTop = top + el.offsetHeight - h + 40;
   }
 
+  function isPage(ch) { return ch && (ch.kind === 'forecast' || ch.kind === 'radar' || ch.kind === 'wstar'); }   // channels that open a page
   function current() { const it = flat[sel.r]; return it && it.ch ? { it, ch: it.ch, c: it.ch.cells[sel.c] } : null; }
 
   function select(r, c, force) {
@@ -419,6 +422,7 @@ button{font-family:inherit}
     const nxt = ch.cells[k + 1];
     let status = '', next = nxt ? 'Next on this channel: ' + nxt.t : '', action = 'WATCH', live = false;
     if (ch.kind === 'forecast') { status = 'Opens your full forecast'; next = 'Hourly · 7-day · alerts · records'; action = 'OPEN FORECAST'; }
+    else if (ch.kind === 'radar') { status = 'Opens Live Radar'; next = 'Radar · warnings · chasers on the map'; action = 'OPEN RADAR'; }
     else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
     else if (ch.kind === 'list') { status = 'Plays straight through · ' + cellSub(it, c, k); }
     else if (c && c.live) { status = 'LIVE now'; live = true; }
@@ -440,7 +444,7 @@ button{font-family:inherit}
     if (!cur) return;
     const { it, ch, c } = cur;
     const d = describe(it, c, sel.c);
-    $('i-block').textContent = blockLabel(it) + ' · Channel ' + ch.n;
+    $('i-block').textContent = blockLabel(it) + ' · Channel ' + ch.n + (ch.area && ch.area !== 'US' ? ' · ' + ch.area : '');
     $('i-title').textContent = c ? '“' + c.t + '”' : ch.name;
     $('i-creator').textContent = ch.name;
     $('i-status').textContent = d.status;
@@ -477,7 +481,7 @@ button{font-family:inherit}
                : 'https://www.youtube.com/embed/live_stream?channel=' + encodeURIComponent(c.ch || ch.id) + '&' + q;
   }
   function play(ch, c, muted) {
-    if (!c || ch.kind === 'forecast' || ch.kind === 'wstar') { showSlate(ch); return; }
+    if (!c || isPage(ch)) { showSlate(ch); return; }
     const key = keyOf(ch, c);
     player.classList.remove('hide');
     $('slate').style.display = 'none';
@@ -495,7 +499,7 @@ button{font-family:inherit}
     stopPlayer();
     $('slate').style.display = 'flex';
     $('sl-cap').innerHTML = ch ? '<b>' + esc(ch.n) + '</b><span>' + esc(ch.name) + '</span><small>'
-      + (ch.kind === 'forecast' || ch.kind === 'wstar' ? 'Press OK to open' : 'Nothing to preview yet') + '</small>' : '';
+      + (isPage(ch) ? 'Press OK to open' : 'Nothing to preview yet') + '</small>' : '';
     updateBar();
   }
   function schedulePreview() {
@@ -503,7 +507,7 @@ button{font-family:inherit}
     if (!engaged) { showSlate(null); return; }                    // first visit: logo until a channel is picked
     const cur = current();
     if (!cur) return;
-    if (!cur.c || cur.ch.kind === 'forecast' || cur.ch.kind === 'wstar') { showSlate(cur.ch); return; }
+    if (!cur.c || isPage(cur.ch)) { showSlate(cur.ch); return; }
     if (loaded.key === keyOf(cur.ch, cur.c)) return;   // keep what's playing (and its sound)
     pvT = setTimeout(() => { const now = current(); if (now && mode === 'guide') play(now.ch, now.c, true); }, 650);
   }
@@ -594,6 +598,7 @@ button{font-family:inherit}
     const cur = current();
     if (!cur) return;
     if (cur.ch.kind === 'forecast') { openApp('forecast'); return; }
+    if (cur.ch.kind === 'radar') { openApp('radar'); return; }
     if (cur.ch.kind === 'wstar') { openApp('wstar'); return; }
     if (!cur.c) return;
     clearTimeout(pvT);
@@ -622,7 +627,7 @@ button{font-family:inherit}
   }
   function surf(dir) {
     const rows = [];
-    flat.forEach((it, i) => { if (it.ch && it.b.id === watchBlock && it.ch.cells.length && it.ch.kind !== 'forecast' && it.ch.kind !== 'wstar') rows.push(i); });
+    flat.forEach((it, i) => { if (it.ch && it.b.id === watchBlock && it.ch.cells.length && !isPage(it.ch)) rows.push(i); });
     if (!rows.length) return;
     let p = rows.indexOf(sel.r);
     p = (p + dir + rows.length) % rows.length;
@@ -758,6 +763,11 @@ button{font-family:inherit}
   function goNumber() {
     $('numbox').style.display = 'none';
     const n = parseInt(numBuf, 10); numBuf = '';
+    if (n === 1) {                                                 // channel 1 is Live Now
+      const r1 = flat.findIndex((it) => it.ch && it.b.id === 'live');
+      if (r1 >= 0) { if (mode === 'watch') { select(r1, 0); activate(); flashOsd(); } else select(r1, 0); }
+      return;
+    }
     let r = flat.findIndex((it) => it.ch && it.b.id !== 'live' && it.ch.n === n);
     if (r < 0) r = flat.findIndex((it) => it.ch && it.ch.n === n);
     if (r < 0) return;

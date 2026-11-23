@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T01:00:00Z build.1795395600 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T02:30:00Z build.1795401000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -16,61 +16,76 @@
   .logo span { color:var(--gold); }
   header .links { margin-left:auto; display:flex; gap:1rem; align-items:center; }
   header a { font-family:'Barlow Condensed',sans-serif; font-weight:600; color:var(--accent); text-decoration:none; }
-  .wrap { max-width:1280px; margin:1.25rem auto 5rem; padding:0 1.25rem; display:flex; flex-direction:column; gap:1rem; }
+  .wrap { max-width:1360px; margin:1.25rem auto 5rem; padding:0 1.25rem; display:flex; flex-direction:column; gap:1rem; }
   .bar { display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; font-size:0.88rem; color:var(--muted); }
   .bar strong { color:var(--text); }
   .btn { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.8rem; letter-spacing:0.08em; text-transform:uppercase; padding:0.4rem 0.85rem;
          border-radius:4px; cursor:pointer; border:none; }
   .btn-primary { background:var(--accent); color:#000; } .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--text); }
   .btn:disabled { opacity:.45; cursor:default; }
-  .ib { background:transparent; border:1px solid var(--border); color:var(--text); border-radius:4px; width:1.9rem; height:1.9rem; cursor:pointer; font-size:.8rem; flex:none; }
+  .ib { background:transparent; border:1px solid var(--border); color:var(--text); border-radius:4px; width:1.8rem; height:1.8rem; cursor:pointer; font-size:.75rem; flex:none; }
   .ib:hover { border-color:var(--accent); color:var(--accent); }
   .ib:disabled { opacity:.3; cursor:default; }
-  select, input[type=text], input[type=number] { background:var(--surface2); border:1px solid var(--border); color:var(--text); font:inherit; font-size:0.85rem; padding:0.28rem 0.45rem; border-radius:4px; }
-  input[type=number] { width:5rem; } input.tag { width:5.8rem; text-transform:uppercase; font-family:'Barlow Condensed',sans-serif; font-weight:600; letter-spacing:.04em; }
+  select, input[type=text], input[type=number] { background:var(--surface2); border:1px solid var(--border); color:var(--text); font:inherit; font-size:0.85rem; padding:0.26rem 0.4rem; border-radius:4px; }
   input::placeholder { color:#4f6b82; }
   .panel { background:var(--surface); border:1px solid var(--border); border-radius:8px; }
-  .panel h2 { font-family:'Barlow Condensed',sans-serif; font-size:1.15rem; letter-spacing:.05em; padding:.7rem .9rem; border-bottom:1px solid var(--border); display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap; }
+  .panel h2 { font-family:'Barlow Condensed',sans-serif; font-size:1.15rem; letter-spacing:.05em; padding:.7rem .9rem; border-bottom:1px solid var(--border); display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
   .panel h2 small { font-family:'Barlow',sans-serif; font-weight:400; font-size:.8rem; color:var(--muted); letter-spacing:0; }
-  .help { font-size:.85rem; color:var(--muted); padding:.7rem .9rem; line-height:1.45; }
+  details.panel > summary { list-style:none; cursor:pointer; }
+  details.panel > summary::-webkit-details-marker { display:none; }
+  .help { font-size:.85rem; color:var(--muted); padding:.7rem .9rem; line-height:1.5; }
   .help strong { color:var(--text); }
-  .cols { display:grid; grid-template-columns:minmax(300px, 380px) minmax(0, 1fr); gap:1rem; align-items:start; }
-  @media (max-width:900px) { .cols { grid-template-columns:1fr; } }
+  .cols { display:grid; grid-template-columns:minmax(320px, 400px) minmax(0, 1fr); gap:1rem; align-items:start; }
+  @media (max-width:980px) { .cols { grid-template-columns:1fr; } }
   #blocks-panel { position:sticky; top:5rem; max-height:calc(100vh - 6rem); display:flex; flex-direction:column; }
-  @media (max-width:900px) { #blocks-panel { position:static; max-height:none; } }
+  @media (max-width:980px) { #blocks-panel { position:static; max-height:none; } }
   #blocks { overflow-y:auto; padding:.4rem; display:flex; flex-direction:column; gap:.3rem; }
-  .bk { display:flex; align-items:center; gap:.35rem; background:var(--surface2); border:1px solid transparent; border-radius:6px; padding:.35rem .4rem; }
-  .bk.fixed { opacity:.6; }
-  .bk input[type=text] { flex:1; min-width:0; }
-  .bk input[type=number] { width:4.4rem; }
-  .bk .cnt { font-size:.75rem; color:var(--muted); width:2.2rem; text-align:right; flex:none; cursor:pointer; }
-  .bk .warn { color:var(--gold); font-size:.85rem; cursor:help; }
-  .handle { cursor:grab; color:var(--muted); font-size:1.05rem; padding:0 .15rem; user-select:none; flex:none; }
+  .bk { display:flex; align-items:center; gap:.3rem; background:var(--surface2); border:1px solid transparent; border-radius:6px; padding:.3rem .35rem; }
+  .bk.fixed { opacity:.65; }
+  .bk.empty { opacity:.75; }
+  .bk input[type=text] { flex:1; min-width:0; font-size:.8rem; }
+  .bk input[type=number] { width:3.9rem; font-size:.8rem; padding:.24rem .3rem; }
+  .bk .dash { color:var(--muted); font-size:.8rem; }
+  .bk .cnt { font-size:.75rem; color:var(--muted); width:1.8rem; text-align:right; flex:none; cursor:pointer; }
+  .warn { color:var(--gold); font-size:.85rem; cursor:help; }
+  .handle { cursor:grab; color:var(--muted); font-size:1rem; padding:0 .1rem; user-select:none; flex:none; }
   .handle:active { cursor:grabbing; }
-  .addb { display:flex; gap:.35rem; padding:.5rem .4rem .6rem; border-top:1px solid var(--border); flex-wrap:wrap; }
+  .addb { display:flex; gap:.3rem; padding:.5rem .4rem .6rem; border-top:1px solid var(--border); flex-wrap:wrap; align-items:center; }
   .addb input[type=text] { flex:1; min-width:8rem; }
+  .addb input[type=number] { width:4.2rem; }
+  table.src { width:100%; border-collapse:collapse; font-size:.86rem; }
+  table.src td { padding:.32rem .8rem; border-bottom:1px solid rgba(0,180,216,.07); }
+  table.src td.k { color:var(--muted); font-size:.75rem; width:5.5rem; }
+  table.src td.c { color:var(--muted); font-size:.78rem; width:4rem; text-align:right; }
+  table.src select { min-width:14rem; }
   #list { padding:.3rem 0 .6rem; }
   .bh { display:flex; align-items:center; gap:.6rem; background:var(--surface2); padding:.5rem .8rem; margin-top:.5rem; font-family:'Barlow Condensed',sans-serif; font-weight:700; letter-spacing:.08em; color:var(--accent); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
   .bh small { color:var(--muted); font-weight:600; }
   .bh.none { color:var(--muted); }
-  .row { display:flex; align-items:center; gap:.5rem; padding:.3rem .8rem; border-bottom:1px solid rgba(0,180,216,.07); background:var(--surface); }
-  .row .num { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.05rem; color:var(--gold); width:3.2rem; text-align:right; flex:none; }
-  .row .nm { flex:1; min-width:0; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .row .grp { font-size:.75rem; color:var(--muted); width:7.5rem; flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .row select { max-width:11rem; }
+  .row { display:flex; align-items:center; gap:.4rem; padding:.28rem .8rem; border-bottom:1px solid rgba(0,180,216,.07); background:var(--surface); }
+  .row input.numin { width:4.6rem; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:1rem; color:var(--muted); text-align:right; }
+  .row input.numin.fixed { color:var(--gold); font-weight:700; border-color:rgba(244,162,97,.6); }
+  .row input.numin.clash { color:#ffb3b9; border-color:var(--red); }
+  .row input.tag { width:5.4rem; text-transform:uppercase; font-family:'Barlow Condensed',sans-serif; font-weight:600; letter-spacing:.04em; }
+  .row input.code { width:4.4rem; text-transform:uppercase; font-family:'Barlow Condensed',sans-serif; font-weight:600; }
+  .row .pin { width:1rem; flex:none; font-size:.8rem; }
+  .row .nm { flex:1; min-width:0; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .by { font-size:.7rem; color:var(--muted); width:5.8rem; flex:none; white-space:nowrap; }
+  .row .by.you { color:#7fdcf0; } .row .by.code { color:#8fe0b8; } .row .by.collection { color:var(--gold); }
+  .row select { max-width:10.5rem; }
   .dragging { opacity:.35; }
   .drop-before { box-shadow:inset 0 3px 0 var(--gold); }
   .drop-after { box-shadow:inset 0 -3px 0 var(--gold); }
   .drop-into { outline:2px dashed var(--gold); outline-offset:-2px; }
   .pill { display:inline-block; padding:.05rem .4rem; border-radius:3px; font-size:.68rem; font-weight:700; font-family:'Barlow Condensed',sans-serif; letter-spacing:.06em; text-transform:uppercase; margin-left:.35rem; vertical-align:1px; }
-  .p-new { background:rgba(244,162,97,.2); color:var(--gold); } .p-custom { background:rgba(0,180,216,.18); color:#7fdcf0; }
+  .p-custom { background:rgba(0,180,216,.18); color:#7fdcf0; }
   .live { color:var(--red); font-weight:700; font-size:.72rem; margin-left:.35rem; }
-  .empty { padding:.6rem .8rem; font-size:.82rem; color:var(--muted); font-style:italic; }
-  .msg { font-size:.88rem; } .msg.ok { color:var(--green); } .msg.err { color:var(--red); }
-  .savebar { position:fixed; left:0; right:0; bottom:0; background:var(--surface); border-top:1px solid var(--gold); padding:.65rem 2rem; display:none; gap:.75rem; align-items:center; z-index:6; }
+  .empty { padding:.5rem .8rem; font-size:.82rem; color:var(--muted); font-style:italic; }
+  .msg { font-size:.88rem; } .msg.ok { color:var(--green); } .msg.err { color:var(--red); } .msg.warn { color:var(--gold); }
+  .savebar { position:fixed; left:0; right:0; bottom:0; background:var(--surface); border-top:1px solid var(--gold); padding:.65rem 2rem; display:none; gap:.75rem; align-items:center; z-index:6; flex-wrap:wrap; }
   .savebar.on { display:flex; }
   .muted { color:var(--muted); }
-  @media (max-width:700px) { .row .grp { display:none; } .row select { max-width:7rem; } header { padding:.8rem 1rem; } }
+  @media (max-width:760px) { .row .by { display:none; } .row select { max-width:6.5rem; } header { padding:.8rem 1rem; } table.src select { min-width:9rem; } }
 </style>
 </head>
 <body>
@@ -81,28 +96,38 @@
 <div class="wrap">
   <div class="bar" id="stats">Loading…</div>
   <div class="panel"><div class="help">
-    <strong>Drag</strong> blocks to set the order they appear in the guide, and drag channels up and down or onto another block.
-    Numbers count up from each block's start on their own. On a touch screen or TV, use <strong>▲▼</strong> and <strong>Move to</strong>.
-    Channels you haven't arranged yet come in from your groups and collections automatically and are marked <span class="pill p-new">New</span>.
-    <strong>Save layout</strong> keeps all of it. Live Now and Weather TV (channels 1–9) always stay at the top of the guide.
+    <strong>Where a channel goes</strong> (first match wins): where <strong>you</strong> put it → its <strong>collection</strong>'s block → its <strong>country / state code</strong>
+    (IN, PK, BD → Asia · GB → Europe · AU → Australia · <em>US-WI</em> style state codes → Regional United States; a plain US stays put) → its <strong>group</strong>'s block.
+    Channels 1–10 are Weather TV's own (1 Live Now, 2 Forecast, 3 Live Radar, 4 WeatherStar, 5 Highlights, 6–10 playlists).<br>
+    <strong>Drag</strong> or use <strong>▲▼</strong> to order a block; numbers count up from its start. <strong>Type a number</strong> to fix one (📌) — it sorts into place;
+    two channels on one number show red until you change one. <strong>Move to</strong> puts a channel somewhere by hand; <em>↺ Automatic</em> undoes that.
   </div></div>
+
+  <details class="panel" id="src-panel">
+    <summary><h2>Groups &amp; collections → blocks <small>Send everyone in a group or collection to a block at once. This is also how the original layout's groups line up with the guide.</small></h2></summary>
+    <table class="src"><tbody id="sources"></tbody></table>
+  </details>
 
   <div class="cols">
     <div class="panel" id="blocks-panel">
-      <h2>Blocks <small>Drag to reorder · click the count to jump there</small></h2>
-      <div class="bk fixed" style="margin:.4rem .4rem 0"><span class="handle">🔒</span><span style="flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:700;letter-spacing:.06em">LIVE NOW · WEATHER TV (1–9)</span></div>
+      <h2>Blocks <small>Drag to reorder · click a count to jump</small></h2>
+      <div class="bk fixed" style="margin:.4rem .4rem 0"><span class="handle">🔒</span><span style="flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:700;letter-spacing:.06em;font-size:.85rem">1–10 · LIVE NOW &amp; WEATHER TV</span></div>
       <div id="blocks"></div>
       <div class="addb">
-        <input type="text" id="nb-label" placeholder="New block (e.g. LATIN AMERICA · ESPAÑOL)" maxlength="40">
-        <input type="number" id="nb-start" placeholder="Start #" min="10">
+        <input type="text" id="nb-label" placeholder="New block (e.g. REGIONAL CANADA)" maxlength="40">
+        <input type="number" id="nb-start" placeholder="From" min="11">
+        <input type="number" id="nb-end" placeholder="To" min="11">
         <button class="btn btn-ghost" id="nb-add">+ Add</button>
       </div>
     </div>
 
     <div class="panel">
       <h2>Channels
-        <input type="text" id="q" placeholder="Search name or tag…" style="margin-left:auto;font-family:'Barlow',sans-serif;font-weight:400;letter-spacing:0;font-size:.85rem">
-        <label class="muted" style="font-family:'Barlow',sans-serif;font-size:.82rem;font-weight:400;letter-spacing:0;display:flex;gap:.3rem;align-items:center"><input type="checkbox" id="onlynew"> New only</label>
+        <input type="text" id="q" placeholder="Search name, tag, code or #" style="margin-left:auto;font-family:'Barlow',sans-serif;font-weight:400;letter-spacing:0;font-size:.85rem">
+        <select id="f" style="font-family:'Barlow',sans-serif;font-weight:400;letter-spacing:0">
+          <option value="">All channels</option><option value="nocode">No country code</option><option value="group">Placed only by group</option><option value="clash">Number conflicts</option><option value="live">Live now</option>
+        </select>
+        <button class="btn btn-ghost" id="prefill" title="Looks up each channel's country on YouTube (about 5 quota units). Fills only empty codes; nothing is saved until you press Save.">🌐 Fill codes from YouTube</button>
       </h2>
       <div id="list"></div>
     </div>
@@ -119,97 +144,126 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const RESERVED = 9;
-  let D = null;                  // server view
-  let order = [];                // block ids, top to bottom
-  let B = {};                    // block id → { label, start, custom }
-  let M = {};                    // block id (and 'none') → [channel ids], top to bottom
-  let CH = {};                   // channel id → server row
-  let tags = {};                 // channel id → tag
-  let dirty = false;
+  const BY = { you: 'by you', collection: 'by collection', code: 'by code', group: 'by group' };
+  let V = null;          // the layout as the server works it out (saved or draft)
+  let draft = null;      // { blocks, map, channels } being edited
+  let dirty = false, seq = 0;
 
   async function load() {
     $('stats').textContent = 'Loading…';
     try {
       const r = await fetch('/api/admin/guide', { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      D = await r.json();
+      V = await r.json();
     } catch (e) { $('stats').textContent = 'Could not load the guide (' + e.message + ').'; return; }
-    order = D.blocks.map((b) => b.id);
-    B = {}; M = { none: [] }; CH = {}; tags = {};
-    D.blocks.forEach((b) => { B[b.id] = { label: b.label, start: b.start, custom: !b.auto }; M[b.id] = []; });
-    D.channels.forEach((c) => {                       // the server sends them in guide order
-      CH[c.id] = c; tags[c.id] = c.call;
-      (M[c.block] = M[c.block] || []).push(c.id);
-    });
+    draft = {
+      blocks: {}, map: {}, channels: JSON.parse(JSON.stringify((V.config && V.config.channels) || {})),
+    };
+    V.blocks.forEach((b, i) => { draft.blocks[b.id] = { label: b.label, start: b.start, end: b.end, order: i, custom: b.custom }; });
+    V.sources.forEach((s) => { draft.map[s.key] = s.block || ''; });
     setDirty(false);
     render();
   }
 
-  // Same numbering as the guide: each block counts up from its start, skipping numbers taken above it
-  function numbers() {
-    const used = new Set(), out = {}, warn = {};
-    order.forEach((bid) => {
-      let n = +B[bid].start || 10;
-      (M[bid] || []).forEach((id, i) => {
-        while (used.has(n) || n <= RESERVED) n++;
-        if (n !== (+B[bid].start || 10) + i) warn[bid] = true;
-        used.add(n); out[id] = n++;
-      });
-    });
-    return { out, warn };
+  // Every change goes to the server's own layout rules, so what you see is what the guide will do
+  let pvT = null;
+  function change() {
+    setDirty(true);
+    clearTimeout(pvT);
+    pvT = setTimeout(async () => {
+      const my = ++seq;
+      try {
+        const r = await fetch('/api/admin/guide/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+        if (my === seq) { V = j; render(); }
+      } catch (e) { $('msg').className = 'msg err'; $('msg').textContent = 'Preview failed: ' + e.message; }
+    }, 120);
   }
+  function payload() {
+    const blocks = {};
+    Object.entries(draft.blocks).forEach(([id, b]) => { blocks[id] = { label: b.label, start: b.start, end: b.end, order: b.order }; });
+    return { blocks, map: draft.map, channels: draft.channels };
+  }
+  function ch(id) { return (draft.channels[id] = draft.channels[id] || {}); }
+  function chansOf(bid) { return V.channels.filter((c) => c.block === bid); }
+  function blockIds() { return V.blocks.map((b) => b.id); }
 
   function render() {
-    const { out: num, warn } = numbers();
-    const total = Object.keys(CH).length;
-    const fresh = Object.values(CH).filter((c) => !c.saved).length;
-    $('stats').innerHTML = '<strong>' + total + '</strong> channels in <strong>' + order.filter((b) => (M[b] || []).length).length + '</strong> blocks · '
-      + (fresh ? '<strong style="color:var(--gold)">' + fresh + '</strong> new (not arranged yet)' : 'everything is arranged')
-      + ' · <strong>' + (M.none || []).length + '</strong> not in the guide';
+    const total = V.channels.length;
+    const clashes = V.channels.filter((c) => c.conflict).length;
+    const nocode = V.channels.filter((c) => !c.area).length;
+    $('stats').innerHTML = '<strong>' + total + '</strong> channels · <strong>' + V.blocks.filter((b) => b.count).length + '</strong> of ' + V.blocks.length + ' blocks in use · '
+      + '<strong>' + nocode + '</strong> without a country code · <strong>' + V.channels.filter((c) => c.block === 'none').length + '</strong> not in the guide'
+      + (clashes ? ' · <strong style="color:var(--red)">' + clashes + ' number conflict' + (clashes > 1 ? 's' : '') + '</strong>' : '');
+    if (dirty) {
+      if (clashes) { $('msg').className = 'msg warn'; $('msg').textContent = 'Number conflicts: the guide gives the duplicate the next free number until you change one.'; }
+      else if ($('msg').className === 'msg warn') { $('msg').textContent = ''; $('msg').className = 'msg'; }
+    }
 
-    // Blocks list
-    $('blocks').innerHTML = order.map((id, i) => {
-      const b = B[id], n = (M[id] || []).length;
-      return '<div class="bk" draggable="true" data-bk="' + esc(id) + '">'
+    // Sources
+    const opts = (sel, withNone, noneLabel) => (withNone ? '<option value=""' + (!sel ? ' selected' : '') + '>' + noneLabel + '</option>' : '')
+      + V.blocks.map((b) => '<option value="' + esc(b.id) + '"' + (b.id === sel ? ' selected' : '') + '>' + esc(b.label) + ' (' + b.start + '–' + b.end + ')</option>').join('');
+    $('sources').innerHTML = V.sources.map((s) => '<tr><td class="k">' + (s.kind === 'group' ? 'Group' : 'Collection') + '</td><td>' + esc(s.label) + '</td><td class="c">' + s.count + '</td>'
+      + '<td><select data-src="' + esc(s.key) + '">' + opts(draft.map[s.key] || (s.kind === 'group' ? s.block : ''), s.kind !== 'group', '— Stay with their group / code —') + '</select></td></tr>').join('');
+
+    // Blocks
+    const ids = blockIds();
+    $('blocks').innerHTML = ids.map((id, i) => {
+      const b = V.blocks[i], d = draft.blocks[id] || b;
+      return '<div class="bk' + (b.count ? '' : ' empty') + '" draggable="true" data-bk="' + esc(id) + '">'
         + '<span class="handle" title="Drag to reorder">⠿</span>'
-        + '<input type="text" data-bl="' + esc(id) + '" value="' + esc(b.label) + '" maxlength="40" aria-label="Block name">'
-        + '<input type="number" data-bs="' + esc(id) + '" value="' + esc(b.start) + '" min="10" aria-label="Starting channel number" title="Starting channel number">'
-        + (warn[id] ? '<span class="warn" title="Its numbers run into a block above it, so some channels get the next free number">⚠</span>' : '')
-        + '<span class="cnt" data-jump="' + esc(id) + '" title="Jump to this block">' + n + '</span>'
+        + '<input type="text" data-bl="' + esc(id) + '" value="' + esc(d.label) + '" maxlength="40" aria-label="Block name">'
+        + '<input type="number" data-bs="' + esc(id) + '" value="' + esc(d.start) + '" min="11" aria-label="First channel number">'
+        + '<span class="dash">–</span>'
+        + '<input type="number" data-be="' + esc(id) + '" value="' + esc(d.end) + '" min="11" aria-label="Last channel number">'
+        + (b.overflow ? '<span class="warn" title="Some of its channels are outside its range: more channels than room, or numbers taken by a block above">⚠</span>' : '')
+        + '<span class="cnt" data-jump="' + esc(id) + '" title="Jump to this block">' + b.count + '</span>'
         + '<button class="ib" data-bup="' + i + '" aria-label="Move block up"' + (i ? '' : ' disabled') + '>▲</button>'
-        + '<button class="ib" data-bdn="' + i + '" aria-label="Move block down"' + (i < order.length - 1 ? '' : ' disabled') + '>▼</button>'
-        + (b.custom && !n ? '<button class="ib" data-bdel="' + esc(id) + '" aria-label="Delete block" title="Delete this empty block">✕</button>' : '')
+        + '<button class="ib" data-bdn="' + i + '" aria-label="Move block down"' + (i < ids.length - 1 ? '' : ' disabled') + '>▼</button>'
+        + (b.custom && !b.count ? '<button class="ib" data-bdel="' + esc(id) + '" aria-label="Delete block" title="Delete this empty block">✕</button>' : '')
         + '</div>';
     }).join('');
 
-    // Channel list, grouped by block
-    const q = $('q').value.trim().toLowerCase(), onlyNew = $('onlynew').checked;
-    const match = (id) => { const c = CH[id]; if (onlyNew && c.saved) return false; return !q || c.name.toLowerCase().includes(q) || String(tags[id] || '').toLowerCase().includes(q) || String(num[id] || '') === q; };
-    const opts = (sel) => order.map((b) => '<option value="' + esc(b) + '"' + (b === sel ? ' selected' : '') + '>' + esc(B[b].label) + '</option>').join('')
-      + '<option value="none"' + (sel === 'none' ? ' selected' : '') + '>— Not in the guide —</option>';
-    const groupLabel = {}; (D.groups || []).forEach((g) => { groupLabel[g.id] = g.label; });
+    // Channels, grouped by block
+    const q = $('q').value.trim().toLowerCase(), f = $('f').value;
+    const groupLabel = {}; (V.groups || []).forEach((g) => { groupLabel[g.id] = g.label; });
+    const match = (c) => {
+      if (f === 'nocode' && c.area) return false;
+      if (f === 'group' && c.by !== 'group') return false;
+      if (f === 'clash' && !c.conflict) return false;
+      if (f === 'live' && !c.live) return false;
+      return !q || c.name.toLowerCase().includes(q) || String(c.call || '').toLowerCase().includes(q) || String(c.area || '').toLowerCase() === q || String(c.n || '') === q;
+    };
+    const mvOpts = (c) => '<option value="" disabled selected>Move to…</option>'
+      + (c.own ? '<option value="__auto">↺ Automatic</option>' : '')
+      + V.blocks.map((b) => '<option value="' + esc(b.id) + '">' + esc(b.label) + '</option>').join('')
+      + '<option value="none">— Not in the guide —</option>';
     let html = '';
-    order.concat(['none']).forEach((bid) => {
-      const ids = M[bid] || [];
-      const shown = ids.filter(match);
-      if ((q || onlyNew) && !shown.length) return;
-      const label = bid === 'none' ? 'NOT IN THE GUIDE' : B[bid].label;
-      const range = bid === 'none' || !ids.length ? '' : 'CH ' + num[ids[0]] + (ids.length > 1 ? '–' + num[ids[ids.length - 1]] : '') + ' · ';
-      html += '<div class="bh' + (bid === 'none' ? ' none' : '') + '" id="bh-' + esc(bid) + '" data-b="' + esc(bid) + '">' + esc(label) + ' <small>' + esc(range) + ids.length + '</small>'
-        + (bid !== 'none' && B[bid].custom ? '<span class="pill p-custom">Made here</span>' : '') + '</div>';
-      if (!ids.length) html += '<div class="empty" data-b="' + esc(bid) + '">Drag channels here</div>';
-      shown.forEach((id) => {
-        const c = CH[id], i = ids.indexOf(id);
-        html += '<div class="row" draggable="true" data-id="' + esc(id) + '">'
+    ids.concat(['none']).forEach((bid) => {
+      const list = chansOf(bid), shown = list.filter(match);
+      if ((q || f) && !shown.length) return;
+      const b = V.blocks.find((x) => x.id === bid);
+      const label = bid === 'none' ? 'NOT IN THE GUIDE' : b.label;
+      const range = bid === 'none' ? '' : b.start + '–' + b.end + (list.length ? ' · using ' + list[0].n + (list.length > 1 ? '–' + list[list.length - 1].n : '') : '') + ' · ';
+      html += '<div class="bh' + (bid === 'none' ? ' none' : '') + '" id="bh-' + esc(bid) + '" data-b="' + esc(bid) + '">' + esc(label) + ' <small>' + esc(range) + list.length + '</small>'
+        + (b && b.custom ? '<span class="pill p-custom">Made here</span>' : '') + (b && b.overflow ? '<span class="warn" title="Channels outside this block\'s range">⚠ over its range</span>' : '') + '</div>';
+      if (!list.length) html += '<div class="empty" data-b="' + esc(bid) + '">Empty · drag channels here</div>';
+      shown.forEach((c) => {
+        const i = list.indexOf(c);
+        html += '<div class="row" draggable="true" data-id="' + esc(c.id) + '">'
           + '<span class="handle" title="Drag to move">⠿</span>'
-          + '<span class="num">' + (bid === 'none' ? '—' : num[id]) + '</span>'
-          + '<input type="text" class="tag" maxlength="7" data-t="' + esc(id) + '" value="' + esc(tags[id] || '') + '" placeholder="' + esc(c.autoCall) + '" aria-label="Tag">'
-          + '<span class="nm">' + esc(c.name) + (c.live ? '<span class="live">● LIVE</span>' : '') + (c.saved ? '' : '<span class="pill p-new">New</span>') + '</span>'
-          + '<span class="grp">' + esc(groupLabel[c.group] || c.group || '') + '</span>'
-          + '<button class="ib" data-up="' + esc(id) + '" aria-label="Move up"' + (i ? '' : ' disabled') + '>▲</button>'
-          + '<button class="ib" data-dn="' + esc(id) + '" aria-label="Move down"' + (i < ids.length - 1 ? '' : ' disabled') + '>▼</button>'
-          + '<select data-mv="' + esc(id) + '" aria-label="Move to block">' + opts(bid) + '</select>'
+          + (bid === 'none' ? '<span style="width:4.6rem;text-align:right" class="muted">—</span>'
+            : '<input type="number" class="numin' + (c.fixed ? ' fixed' : '') + (c.conflict ? ' clash' : '') + '" data-n="' + esc(c.id) + '" value="' + esc(c.n) + '" min="11" aria-label="Channel number" title="'
+              + (c.conflict ? 'Another channel already has the number you set' : c.fixed ? 'Fixed number · clear it to go back to automatic' : 'Automatic · type a number to fix it') + '">')
+          + '<span class="pin">' + (c.fixed || c.conflict ? '📌' : '') + '</span>'
+          + '<input type="text" class="tag" maxlength="7" data-t="' + esc(c.id) + '" value="' + esc(c.call || '') + '" placeholder="' + esc(c.autoCall) + '" aria-label="Tag">'
+          + '<input type="text" class="code" maxlength="6" data-a="' + esc(c.id) + '" value="' + esc(c.area || '') + '" placeholder="Code" aria-label="Country or state code" title="Country (IN, GB, AU…) or US state (US-WI)">'
+          + '<span class="nm" title="' + esc(groupLabel[c.group] || '') + '">' + esc(c.name) + (c.live ? '<span class="live">● LIVE</span>' : '') + '</span>'
+          + '<span class="by ' + c.by + '">' + BY[c.by] + '</span>'
+          + '<button class="ib" data-up="' + esc(c.id) + '" aria-label="Move up"' + (i && bid !== 'none' ? '' : ' disabled') + '>▲</button>'
+          + '<button class="ib" data-dn="' + esc(c.id) + '" aria-label="Move down"' + (i < list.length - 1 && bid !== 'none' ? '' : ' disabled') + '>▼</button>'
+          + '<select data-mv="' + esc(c.id) + '" aria-label="Move to block">' + mvOpts(c) + '</select>'
           + '</div>';
       });
     });
@@ -220,77 +274,122 @@
     dirty = v;
     $('savebar').classList.toggle('on', v);
     $('dirtyc').textContent = v ? 'Unsaved changes' : '';
-    if (v) { $('msg').textContent = ''; $('msg').className = 'msg'; }
-  }
-  function blockOf(id) { return Object.keys(M).find((b) => M[b].includes(id)); }
-  function moveChannel(id, toBlock, index) {
-    const from = blockOf(id);
-    if (!from || !M[toBlock]) return;
-    const fromIdx = M[from].indexOf(id);
-    M[from].splice(fromIdx, 1);
-    if (from === toBlock && index != null && index > fromIdx) index--;
-    index = index == null ? M[toBlock].length : Math.max(0, Math.min(index, M[toBlock].length));
-    M[toBlock].splice(index, 0, id);
-    setDirty(true); render();
-  }
-  function moveBlock(i, j) {
-    if (j < 0 || j >= order.length) return;
-    const [b] = order.splice(i, 1); order.splice(j, 0, b);
-    setDirty(true); render();
+    if (!v) { $('msg').textContent = ''; $('msg').className = 'msg'; }
   }
 
-  // ── Buttons, inputs ──
+  // Put a channel at a position in a block (the order you see becomes the saved order)
+  function place(id, toBlock, index) {
+    const c = V.channels.find((x) => x.id === id); if (!c) return;
+    const list = chansOf(toBlock).map((x) => x.id).filter((x) => x !== id);
+    index = index == null ? list.length : Math.max(0, Math.min(index, list.length));
+    list.splice(index, 0, id);
+    if (toBlock !== c.block) ch(id).block = toBlock;               // moved to another block by hand
+    delete ch(id).n;                                              // moving means "put it here": it takes the number there
+    list.forEach((x, i) => { ch(x).pos = i; });
+    change();
+  }
+  function moveBlock(i, j) {
+    const ids = blockIds();
+    if (j < 0 || j >= ids.length) return;
+    const [b] = ids.splice(i, 1); ids.splice(j, 0, b);
+    ids.forEach((id, k) => { draft.blocks[id].order = k; });
+    change();
+  }
+
+  // ── Inputs ──
+  $('sources').addEventListener('change', (e) => { const k = e.target.dataset.src; if (k) { draft.map[k] = e.target.value; change(); } });
   $('list').addEventListener('click', (e) => {
     const t = e.target;
-    if (t.dataset.up) { const id = t.dataset.up, b = blockOf(id); moveChannel(id, b, M[b].indexOf(id) - 1); }
-    else if (t.dataset.dn) { const id = t.dataset.dn, b = blockOf(id); moveChannel(id, b, M[b].indexOf(id) + 2); }
+    const step = (id, d) => { const c = V.channels.find((x) => x.id === id), list = chansOf(c.block).map((x) => x.id); place(id, c.block, list.indexOf(id) + d); };
+    if (t.dataset.up) step(t.dataset.up, -1);
+    else if (t.dataset.dn) step(t.dataset.dn, 1);
   });
   $('list').addEventListener('change', (e) => {
     const t = e.target;
-    if (t.dataset.mv) moveChannel(t.dataset.mv, t.value, null);
-    else if (t.dataset.t) { tags[t.dataset.t] = t.value.toUpperCase().replace(/[^A-Z0-9+&'-]/g, '').slice(0, 7); setDirty(true); render(); }
+    if (t.dataset.mv) {
+      const id = t.dataset.mv, v = t.value;
+      if (v === '__auto') { delete ch(id).block; delete ch(id).pos; delete ch(id).n; change(); }
+      else place(id, v, null);
+    } else if (t.dataset.n) {
+      const v = parseInt(t.value, 10);
+      if (t.value.trim() === '' || !(v > 10)) delete ch(t.dataset.n).n; else ch(t.dataset.n).n = v;
+      change();
+    } else if (t.dataset.t) {
+      const v = t.value.toUpperCase().replace(/[^A-Z0-9+&'-]/g, '').slice(0, 7);
+      const c = V.channels.find((x) => x.id === t.dataset.t);
+      if (!v || v === c.autoCall) delete ch(t.dataset.t).call; else ch(t.dataset.t).call = v;
+      change();
+    } else if (t.dataset.a) {
+      const v = t.value.toUpperCase().trim();
+      if (v && !/^[A-Z]{2}(-[A-Z0-9]{1,3})?$/.test(v)) { t.style.borderColor = 'var(--red)'; t.title = 'Two letters (IN, GB, AU) or a US state like US-WI'; return; }
+      if (v) ch(t.dataset.a).area = v; else delete ch(t.dataset.a).area;
+      change();
+    }
   });
   $('blocks').addEventListener('click', (e) => {
     const t = e.target;
     if (t.dataset.bup) moveBlock(+t.dataset.bup, +t.dataset.bup - 1);
     else if (t.dataset.bdn) moveBlock(+t.dataset.bdn, +t.dataset.bdn + 1);
-    else if (t.dataset.bdel) { const id = t.dataset.bdel; order = order.filter((b) => b !== id); delete B[id]; delete M[id]; setDirty(true); render(); }
+    else if (t.dataset.bdel) { delete draft.blocks[t.dataset.bdel]; Object.keys(draft.map).forEach((k) => { if (draft.map[k] === t.dataset.bdel) draft.map[k] = ''; }); change(); }
     else if (t.dataset.jump) { const h = $('bh-' + t.dataset.jump); if (h) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
   $('blocks').addEventListener('change', (e) => {
-    const t = e.target, id = t.dataset.bl || t.dataset.bs;
+    const t = e.target, id = t.dataset.bl || t.dataset.bs || t.dataset.be;
     if (!id) return;
-    if (t.dataset.bl) B[id].label = t.value.trim().toUpperCase().slice(0, 40) || B[id].label;
-    else { const v = parseInt(t.value, 10); if (v > RESERVED) B[id].start = v; }
-    setDirty(true); render();
+    const b = draft.blocks[id];
+    if (t.dataset.bl) b.label = t.value.trim().toUpperCase().slice(0, 40) || b.label;
+    else if (t.dataset.bs) { const v = parseInt(t.value, 10); if (v > 10) b.start = v; }
+    else { const v = parseInt(t.value, 10); if (v > 10) b.end = v; }
+    change();
   });
   $('nb-add').onclick = () => {
     const label = $('nb-label').value.trim().toUpperCase().slice(0, 40), start = parseInt($('nb-start').value, 10);
+    let end = parseInt($('nb-end').value, 10);
     if (!label) { $('nb-label').focus(); return; }
-    if (!(start > RESERVED)) { $('nb-start').focus(); return; }
+    if (!(start > 10)) { $('nb-start').focus(); return; }
+    if (!(end >= start)) end = start + 99;
     let id = 'blk-' + label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-    while (B[id]) id += '-2';
-    B[id] = { label, start, custom: true }; M[id] = []; order.push(id);
-    $('nb-label').value = ''; $('nb-start').value = '';
-    setDirty(true); render();
-    const h = $('bh-' + id); if (h) h.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    while (draft.blocks[id]) id += '-2';
+    draft.blocks[id] = { label, start, end, custom: true };
+    $('nb-label').value = ''; $('nb-start').value = ''; $('nb-end').value = '';
+    change();
   };
-  $('q').oninput = render; $('onlynew').onchange = render;
+  $('q').oninput = render; $('f').onchange = render;
+
+  // Fill empty codes from each channel's YouTube country (nothing saved until Save)
+  $('prefill').onclick = async () => {
+    const btn = $('prefill'); btn.disabled = true; btn.textContent = 'Looking up…';
+    try {
+      const r = await fetch('/api/admin/guide/countries', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok && !j.countries) throw new Error(j.error || 'HTTP ' + r.status);
+      let n = 0;
+      Object.entries(j.countries || {}).forEach(([id, code]) => {
+        if (!V.channels.some((c) => c.id === id)) return;
+        if (ch(id).area) return;                                   // never overwrite a code you typed
+        ch(id).area = code; n++;
+      });
+      setDirty(true);
+      $('msg').className = 'msg ok';
+      $('msg').textContent = 'Filled ' + n + ' codes from YouTube' + (j.units ? ' (' + j.units + ' quota units)' : '') + '. US channels show as US: add a state (US-WI) to send one to Regional United States. Review, then Save.';
+      change();
+    } catch (e) { $('msg').className = 'msg err'; $('msg').textContent = 'Lookup failed: ' + e.message; setDirty(true); }
+    finally { btn.disabled = false; btn.textContent = '🌐 Fill codes from YouTube'; }
+  };
 
   // ── Drag and drop ──
   let drag = null;   // { kind: 'ch' | 'bk', id }
-  function clearMarks() { document.querySelectorAll('.drop-before,.drop-after,.drop-into').forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into')); }
-  function endDrag() { document.querySelectorAll('.dragging').forEach((r) => r.classList.remove('dragging')); clearMarks(); drag = null; }
-  // Channels: drag a row
+  const clearMarks = () => document.querySelectorAll('.drop-before,.drop-after,.drop-into').forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into'));
+  const endDrag = () => { document.querySelectorAll('.dragging').forEach((r) => r.classList.remove('dragging')); clearMarks(); drag = null; };
   $('list').addEventListener('dragstart', (e) => {
-    const row = e.target.closest && e.target.closest('.row[data-id]'); if (!row) return;
+    const row = e.target.closest && e.target.closest('.row[data-id]'); if (!row || /INPUT|SELECT/.test(e.target.tagName)) return;
     drag = { kind: 'ch', id: row.dataset.id }; row.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', row.dataset.id); } catch (_) {}
   });
   $('list').addEventListener('dragend', endDrag);
   function chTarget(e) {
     const row = e.target.closest('.row[data-id]');
-    if (row) { const r = row.getBoundingClientRect(); return { el: row, block: blockOf(row.dataset.id), before: e.clientY < r.top + r.height / 2, id: row.dataset.id }; }
+    if (row) { const r = row.getBoundingClientRect(), c = V.channels.find((x) => x.id === row.dataset.id); return { el: row, block: c.block, before: e.clientY < r.top + r.height / 2, id: row.dataset.id }; }
     const into = e.target.closest('.bh[data-b], .empty[data-b]');
     if (into) return { el: into, block: into.dataset.b, into: true };
     return null;
@@ -306,12 +405,13 @@
     const t = chTarget(e); clearMarks(); if (!t) return;
     e.preventDefault();
     const id = drag.id; drag = null;
-    if (t.into) moveChannel(id, t.block, 0);                              // onto a block's heading: top of that block
-    else if (t.id !== id) moveChannel(id, t.block, M[t.block].indexOf(t.id) + (t.before ? 0 : 1));
+    if (t.into) { place(id, t.block, 0); return; }
+    if (t.id === id) return;
+    const list = chansOf(t.block).map((x) => x.id).filter((x) => x !== id);
+    place(id, t.block, list.indexOf(t.id) + (t.before ? 0 : 1));
   });
-  // Blocks: drag a block to reorder; drop a channel on a block to move it there
   $('blocks').addEventListener('dragstart', (e) => {
-    const bk = e.target.closest && e.target.closest('[data-bk]'); if (!bk || e.target.tagName === 'INPUT') return;
+    const bk = e.target.closest && e.target.closest('[data-bk]'); if (!bk || /INPUT|SELECT/.test(e.target.tagName)) return;
     drag = { kind: 'bk', id: bk.dataset.bk }; bk.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', bk.dataset.bk); } catch (_) {}
   });
@@ -329,26 +429,21 @@
     const bk = e.target.closest('[data-bk]'); clearMarks(); if (!bk) return;
     e.preventDefault();
     const d = drag; drag = null;
-    if (d.kind === 'ch') { moveChannel(d.id, bk.dataset.bk, null); return; }  // end of that block
+    if (d.kind === 'ch') { place(d.id, bk.dataset.bk, null); return; }
     if (bk.dataset.bk === d.id) return;
-    const r = bk.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
-    order.splice(order.indexOf(d.id), 1);
-    order.splice(order.indexOf(bk.dataset.bk) + (before ? 0 : 1), 0, d.id);
-    setDirty(true); render();
+    const ids = blockIds(), r = bk.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+    ids.splice(ids.indexOf(d.id), 1);
+    ids.splice(ids.indexOf(bk.dataset.bk) + (before ? 0 : 1), 0, d.id);
+    ids.forEach((id, k) => { draft.blocks[id].order = k; });
+    change();
   });
 
   // ── Save ──
   $('discard').onclick = () => { if (!dirty || confirm('Throw away your changes?')) load(); };
   $('save').onclick = async () => {
-    const blocks = {}, channels = {};
-    order.forEach((id, i) => { blocks[id] = { label: B[id].label, start: B[id].start, order: i }; });
-    Object.keys(M).forEach((bid) => (M[bid] || []).forEach((id, pos) => {
-      const tag = tags[id] && tags[id] !== CH[id].autoCall ? tags[id] : undefined;
-      channels[id] = { block: bid, pos, call: tag };
-    }));
     $('save').disabled = true; $('msg').className = 'msg'; $('msg').textContent = 'Saving…';
     try {
-      const r = await fetch('/api/admin/guide', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks, channels }) });
+      const r = await fetch('/api/admin/guide', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()) });
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
       await load();
