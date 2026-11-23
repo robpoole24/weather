@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T15:00:00Z build.1795446000
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T15:30:00Z build.1795447800
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -51,12 +51,17 @@ const DEFAULT_BLOCKS = [
   ['reg-samerica', 'REGIONAL SOUTH AMERICA', 1200, 1299],
   ['reg-africa', 'REGIONAL AFRICA', 1300, 1399],
   ['radar', 'WEATHER RADAR CHANNELS', 1400, 1600],
+  ['nws', 'NATIONAL WEATHER SERVICE', 1700, 1899],
   ['audio', 'AUDIO CHANNELS', 9900, 9999],
 ];
 // YouTube channels that start in a particular block (until moved in admin)
 const DEFAULT_CHANNEL_BLOCK = { UCUEQ5cxsnSpYL1VoTqbhsDw: 'wtv' };   // Altruistic Apps → Weather TV
 const WTV_GROUP = { id: 'wtv', label: 'Weather TV (built in)' };
-const DEFAULT_GROUP_BLOCK = { forecasters: 'forecasters', chasers: 'chasers', creators: 'creators', react: 'react', reacts: 'react' };
+const DEFAULT_GROUP_BLOCK = { forecasters: 'forecasters', chasers: 'chasers', creators: 'creators', react: 'react', reacts: 'react', nws: 'nws' };
+// Blocks that keep their channels whatever their country / state code says (the code
+// still labels them and sorts them by state): the NWS offices stay together.
+const KEEPS_CHANNELS = new Set(['nws']);
+const groupBlockByLabel = (label) => (/national weather service|^nws\b/i.test(label || '') ? 'nws' : /react/i.test(label || '') ? 'react' : null);
 // Collections that go to a block unless changed in admin (matched by name)
 const DEFAULT_COLLECTION_BLOCK = [
   [/react/i, 'react'],
@@ -226,7 +231,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     const networks = {}, netsOf = {}, families = [];
     const target = (key, def) => (has(key) ? (map[key] && meta[map[key]] ? map[key] : null) : def);
     groups.forEach((g) => {
-      let def = DEFAULT_GROUP_BLOCK[g.id] || null;
+      let def = DEFAULT_GROUP_BLOCK[g.id] || groupBlockByLabel(g.label) || null;
       if (!def) {                                                // a group with no block yet gets its own
         const id = 'grp-' + g.id;
         if (!meta[id]) meta[id] = { id, label: String(g.label || g.id).toUpperCase(), start: bump(), custom: false, end: 0 };
@@ -277,7 +282,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         if (k) { block = srcBlock['c:' + k]; by = 'collection'; }
       }
       const reg = area ? regionOfCode(area) : null;
-      if (!block && reg && meta[reg]) { block = reg; by = 'code'; }
+      if (!block && reg && meta[reg] && !KEEPS_CHANNELS.has(srcBlock['g:' + groupOf[ch.id].id])) { block = reg; by = 'code'; }
       if (!block) { block = srcBlock['g:' + groupOf[ch.id].id] || 'creators'; by = 'group'; }
       info[ch.id] = { block, area, by, own: by === 'you', call: cleanTag(c.call) || ch.call || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) != null ? num(c.n) : (ch.builtin && ch.n && block === ch.block ? ch.n : null) };
     });
@@ -298,14 +303,15 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
 
     // Order inside each block
     Object.keys(lists).forEach((bid) => {
-      const regional = /^reg-/.test(bid);
+      const regional = /^reg-/.test(bid) || KEEPS_CHANNELS.has(bid);
+      const blank = KEEPS_CHANNELS.has(bid) ? '' : '~';             // NWS: national centers (no code) first, then offices by state
       lists[bid].sort((a, b) => {
         const A = info[a.id], Bb = info[b.id];
         if (A.pos != null && Bb.pos != null) return A.pos - Bb.pos || adminIdx[a.id] - adminIdx[b.id];
         if (A.pos != null) return -1;
         if (Bb.pos != null) return 1;
         if (!!a.builtin !== !!b.builtin) return a.builtin ? -1 : 1;   // Weather TV's own channels first, then channels added to the block
-        if (regional && A.area !== Bb.area) return (A.area || '~').localeCompare(Bb.area || '~');
+        if (regional && A.area !== Bb.area) return (A.area || blank).localeCompare(Bb.area || blank);
         return adminIdx[a.id] - adminIdx[b.id];
       });
       // …then each creator's other channels (not ordered by you) right after the lead

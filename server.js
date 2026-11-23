@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-23T14:30:00Z build.1795444200
+// WeatherTV Server — updated 2026-11-23T15:30:00Z build.1795447800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -658,6 +658,36 @@ app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
     rDel('wt:recent:' + req.params.channelId);
   }
   res.json({ ok: true });
+});
+
+// Add many channels to a group at once: [{ id, name, area?, hasLive? }]. Channels the site
+// already carries (in any group) are skipped. area = country / state code for the guide.
+app.post('/api/admin/groups/:groupId/channels/bulk', (req, res) => {
+  const data = loadData();
+  const group = data.groups.find(g => g.id === req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+  const list = Array.isArray(req.body && req.body.channels) ? req.body.channels.slice(0, 500) : [];
+  const have = new Set(data.groups.flatMap(g => (g.channels || []).map(c => c.id)));
+  const added = [], skipped = [];
+  for (const c of list) {
+    const id = String((c && c.id) || '').trim();
+    const name = String((c && c.name) || '').replace(/[<>]/g, '').trim().slice(0, 80);
+    if (!/^UC[\w-]{22}$/.test(id) || !name) { skipped.push({ id, name, why: 'not a channel ID' }); continue; }
+    if (have.has(id)) { skipped.push({ id, name, why: 'already on the site' }); continue; }
+    have.add(id);
+    (group.channels = group.channels || []).push({ id, name, enabled: true, hasLive: c.hasLive !== false });
+    const area = String(c.area || '').toUpperCase().trim();
+    if (/^[A-Z]{2}(-[A-Z0-9]{1,3})?$/.test(area)) {
+      data.guide = data.guide && data.guide.v === 2 ? data.guide : { v: 2, blocks: {}, map: {}, channels: {} };
+      data.guide.channels = data.guide.channels || {};
+      data.guide.channels[id] = { ...(data.guide.channels[id] || {}), area };
+    }
+    added.push({ id, name });
+  }
+  saveData(data);
+  // Live-stream notices for the new channels (the live verifier covers them either way)
+  added.forEach((c, i) => setTimeout(() => { try { if (process.env.APP_URL) websubSubscribe(c.id).catch(() => {}); } catch (e) {} }, i * 1500));
+  res.json({ ok: true, added, skipped });
 });
 
 // Move a channel to another group, keeping everything about it (collections, live, filters…)

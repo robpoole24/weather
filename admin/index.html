@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-11-23T14:30:00Z build.1795444200 -->
+<!-- WeatherTV Admin — updated 2026-11-23T15:30:00Z build.1795447800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1196,6 +1196,7 @@ function renderGroupCard(group, gi) {
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();sortGroupAlpha('${group.id}')" title="Sort channels A–Z">A-Z</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();setGroupLive('${group.id}')" title="Turn &quot;Has Live Stream&quot; on or off for every channel in this group (live checks cost no quota, but off means they're never checked or shown live)">🔴 Live ${group.channels.filter(c => c.hasLive).length}/${group.channels.length}</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleAddChannelForm('${group.id}')">+ Channel</button>
+      <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();bulkAddChannels('${group.id}')" title="Paste a list of channels to add them all at once">+ Many</button>
       <button class="btn btn-gold btn-sm" title="A standalone collection: its own card on the site, titled with its name, shown after the channels" onclick="event.stopPropagation();addGroupCollection('${group.id}')">+ 📁 Collection</button>
       <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGroup('${group.id}','${group.label}')">Delete</button>
     </div>
@@ -1612,6 +1613,47 @@ async function updateChannel(groupId, channelId, fields) {
     body: JSON.stringify(fields)
   });
   showToast('Saved');
+}
+
+// Add many channels at once. One per line: channel ID | name | code (code optional,
+// e.g. US-OK or GB — it places them in the Channel Guide). Tabs or commas work too.
+function bulkAddChannels(groupId) {
+  const group = (appData.groups || []).find(g => g.id === groupId);
+  if (!group) return;
+  let box = document.getElementById('bulk-add');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'bulk-add';
+    box.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
+    box.innerHTML = '<div style="background:var(--surface,#0d1b2a);border:1px solid var(--accent,#00b4d8);border-radius:10px;padding:1.2rem;width:min(760px,94vw);display:flex;flex-direction:column;gap:.6rem;">' +
+      '<strong id="bulk-title"></strong>' +
+      '<div style="font-size:.8rem;color:var(--muted)">One channel per line: <code>channel ID | name | code</code>. The code is optional (US-OK, GB, IN…) and places it in the Channel Guide. Channels already on the site are skipped. Live checks start on.</div>' +
+      '<textarea id="bulk-text" rows="14" style="width:100%;font-family:monospace;font-size:.78rem;background:#06111c;color:#e6f1ff;border:1px solid rgba(0,180,216,.3);border-radius:6px;padding:.5rem;" placeholder="UCxxxxxxxxxxxxxxxxxxxxxx | NWS Norman | US-OK"></textarea>' +
+      '<div id="bulk-msg" style="font-size:.8rem;color:var(--muted);max-height:8rem;overflow:auto"></div>' +
+      '<div style="display:flex;gap:.5rem;justify-content:flex-end"><button class="btn btn-ghost" id="bulk-cancel">Close</button><button class="btn btn-primary" id="bulk-go">Add channels</button></div></div>';
+    document.body.appendChild(box);
+    box.querySelector('#bulk-cancel').onclick = () => { box.style.display = 'none'; };
+  }
+  box.style.display = 'flex';
+  box.querySelector('#bulk-title').textContent = 'Add many channels to ' + group.label;
+  box.querySelector('#bulk-msg').textContent = '';
+  box.querySelector('#bulk-go').onclick = async () => {
+    const channels = box.querySelector('#bulk-text').value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
+      const [id, name, area] = l.split(/\s*[|\t,]\s*/);
+      return { id, name, area };
+    });
+    if (!channels.length) return;
+    const btn = box.querySelector('#bulk-go'); btn.disabled = true;
+    try {
+      const r = await fetch('/api/admin/groups/' + groupId + '/channels/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channels }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      box.querySelector('#bulk-msg').innerHTML = '<b style="color:var(--green,#4ade80)">Added ' + j.added.length + '</b>' +
+        (j.skipped.length ? ' · skipped ' + j.skipped.length + ':<br>' + j.skipped.map(x => (x.name || x.id) + ' — ' + x.why).join('<br>') : '');
+      if (j.added.length) { box.querySelector('#bulk-text').value = ''; await loadData(); }
+    } catch (e) { box.querySelector('#bulk-msg').textContent = 'Not added: ' + e.message; }
+    finally { btn.disabled = false; }
+  };
 }
 
 // Guide only: in the Channel Guide but not the original layout
