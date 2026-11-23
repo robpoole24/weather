@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-11-23T00:48:38Z build.1795394918 -->
+<!-- WeatherTV Admin — updated 2026-11-23T05:30:00Z build.1795411800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1193,6 +1193,7 @@ function renderGroupCard(group, gi) {
       <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','up')">▲</button>
       <button class="order-btn" onclick="event.stopPropagation();reorderGroup('${group.id}','down')">▼</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();sortGroupAlpha('${group.id}')" title="Sort channels A–Z">A-Z</button>
+      <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();setGroupLive('${group.id}')" title="Turn &quot;Has Live Stream&quot; on or off for every channel in this group (live checks cost no quota, but off means they're never checked or shown live)">🔴 Live ${group.channels.filter(c => c.hasLive).length}/${group.channels.length}</button>
       <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleAddChannelForm('${group.id}')">+ Channel</button>
       <button class="btn btn-gold btn-sm" title="A standalone collection: its own card on the site, titled with its name, shown after the channels" onclick="event.stopPropagation();addGroupCollection('${group.id}')">+ 📁 Collection</button>
       <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteGroup('${group.id}','${group.label}')">Delete</button>
@@ -1603,6 +1604,28 @@ async function updateChannel(groupId, channelId, fields) {
     body: JSON.stringify(fields)
   });
   showToast('Saved');
+}
+
+// Turn "Has Live Stream" on or off for a whole group at once
+async function setGroupLive(groupId) {
+  const group = appData.groups.find(g => g.id === groupId);
+  if (!group) return;
+  const on = group.channels.filter(c => c.hasLive).length;
+  const turnOn = on === 0;
+  const msg = turnOn
+    ? 'Turn live checks ON for all ' + group.channels.length + ' channels in ' + group.label + '?'
+    : 'Turn live checks OFF for all ' + group.channels.length + ' channels in ' + group.label + '?\n\nThey will never be checked or shown as live. New uploads still appear. You can turn single channels back on with their "Has Live Stream" switch.';
+  if (!confirm(msg)) return;
+  let done = 0;
+  for (const ch of group.channels) {
+    if (!!ch.hasLive === turnOn) continue;
+    await fetch('/api/admin/groups/' + groupId + '/channels/' + ch.id, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hasLive: turnOn })
+    });
+    ch.hasLive = turnOn; done++;
+  }
+  showToast('Live checks ' + (turnOn ? 'on' : 'off') + ' for ' + done + ' channels');
+  renderGroups();
 }
 
 async function updateChannelMembership(groupId, channelId, collectionIds, hiddenInGroup) {

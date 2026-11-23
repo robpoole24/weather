@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T04:00:00Z build.1795406400
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T06:00:00Z build.1795413600
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -11,7 +11,8 @@
 //   POST /api/admin/guide/countries       suggested country codes from YouTube (1 unit per 50 channels)
 //
 // Channels 1–10 are Weather TV's own: 1 Live Now, 2 Forecast, 3 Live Radar,
-// 4 WeatherStar, 5 Highlights, 6–10 playlists.
+// 4 WeatherStar, 5 Highlights, 6–10 playlists. Channel 9999 is WeatherStar Radio
+// (the music in public/weatherstar/music/default, nonstop) in the Audio Channels block.
 //
 // Which block a channel is in (first match wins):
 //   1. you placed it there in admin
@@ -104,6 +105,21 @@ function logoFor(name) {
     try { if (t && fs.existsSync(path.join(IMG_DIR, t + '.' + ext))) return '/images/' + t + '.' + ext; } catch (e) {}
   }
   return null;
+}
+// WeatherStar Radio: every track in the WeatherStar music folder
+const MUSIC_DIR = path.join(__dirname, 'public', 'weatherstar', 'music', 'default');
+function trackTitle(file) {
+  let t = file.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]\d{3,}$/, '');
+  if (/^[a-z0-9_]+(-[a-z0-9_]+)+$/.test(t)) {               // stock-music slugs: "artist-name-song-name" → Song words
+    t = t.split(/[-_]/).filter((w) => !/^(youtube|music|flow|amplify|djartmusic)$/.test(w)).join(' ');
+  }
+  return t.replace(/\s+/g, ' ').trim().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function radioTracks() {
+  try {
+    return fs.readdirSync(MUSIC_DIR).filter((f) => /\.(mp3|m4a|ogg)$/i.test(f)).sort()
+      .map((f) => ({ t: trackTitle(f), src: '/weatherstar/music/default/' + encodeURIComponent(f) }));
+  } catch (e) { return []; }
 }
 const netName = (label) => cleanLabel(String(label || '').replace(/\s*(chasers?|network)\s*$/i, '')) || cleanLabel(label);
 const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Math.round(+v); return Number.isFinite(n) ? n : null; };
@@ -338,6 +354,10 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       wtv.push({ n: 6 + i, id: 'pl-' + p.playlistId, name: p.title, call: callSign(p.title), kind: 'list', playlistId: p.playlistId, cells, needsFetch: !cells.length });
     });
 
+    const radio = radioTracks();
+    const audio = radio.length ? [{ id: 'audio', label: 'AUDIO CHANNELS', range: 'CH 9999', channels: [
+      { n: 9999, id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', cells: radio },
+    ] }] : [];
     const liveRows = [];
     out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }));
     return {
@@ -347,6 +367,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         { id: 'live', label: 'LIVE NOW · ' + liveRows.length + (liveRows.length === 1 ? ' CHANNEL' : ' CHANNELS'), range: 'CH 1 · UNDER THEIR HOME NUMBERS', n: 1, channels: liveRows },
         { id: 'wtv', label: 'WEATHER TV', range: 'CH 2–' + wtv[wtv.length - 1].n, channels: wtv },
         ...out,
+        ...audio,
       ],
     };
   }

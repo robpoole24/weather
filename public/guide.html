@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T04:30:00Z build.1795408200 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T06:00:00Z build.1795413600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -99,6 +99,24 @@ button{font-family:inherit}
 #player{position:absolute;z-index:6;left:12px;top:12px;width:533px;height:300px;box-sizing:border-box;border:3px solid var(--frame);border-radius:var(--r);background:#000;overflow:hidden;transition:left .35s ease,top .35s ease,width .35s ease,height .35s ease}
 #player.hide{visibility:hidden}
 #player iframe{width:100%;height:100%;border:0;display:block}
+/* WeatherStar Radio (channel 9999): a WeatherStar-style screen over the player while the music plays */
+#radio{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;background:linear-gradient(180deg,#1b2f8f 0%,#24379e 45%,#3a2a7a 100%);color:#fff;font-family:inherit;overflow:hidden}
+#radio[hidden]{display:none}
+#rd-top{display:flex;justify-content:space-between;align-items:center;padding:3.2% 4%;background:linear-gradient(180deg,#c8641e,#9c3f0c);border-bottom:3px solid #f0c040}
+#rd-top b{font-size:clamp(14px,4.2cqw,34px);letter-spacing:.08em;color:#fff;text-shadow:2px 2px 0 #000}
+#rd-top span{font-size:clamp(12px,3.4cqw,28px);color:#ffe9a0;text-shadow:2px 2px 0 #000;font-variant-numeric:tabular-nums}
+#rd-mid{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2.5%;text-align:center;padding:0 5%;container-type:inline-size}
+#rd-now{font-size:clamp(11px,3cqw,24px);color:#a8c4ff;letter-spacing:.18em}
+#rd-title{font-size:clamp(16px,5.4cqw,46px);font-weight:700;color:#ffef7a;text-shadow:3px 3px 0 #000;line-height:1.1}
+#rd-wx{font-size:clamp(13px,4cqw,34px);text-shadow:2px 2px 0 #000}
+#rd-wx b{color:#fff;margin-right:.4em}
+#rd-hint{font-size:clamp(11px,2.8cqw,22px);color:#cfd8ff}
+#rd-eq{display:flex;gap:6px;align-items:flex-end;height:14%;margin-top:2%}
+#rd-eq i{width:10px;background:#f0c040;border-radius:2px;height:20%;animation:rdq 1s ease-in-out infinite alternate}
+#rd-eq i:nth-child(2){animation-delay:-.3s}#rd-eq i:nth-child(3){animation-delay:-.6s}#rd-eq i:nth-child(4){animation-delay:-.15s}#rd-eq i:nth-child(5){animation-delay:-.45s}#rd-eq i:nth-child(6){animation-delay:-.75s}
+#radio.paused #rd-eq i{animation-play-state:paused}
+@keyframes rdq{from{height:15%}to{height:100%}}
+#player{container-type:size}
 #stage.full #player{border:0;border-radius:0}
 #side{position:absolute;left:900px;top:12px;width:368px;box-sizing:border-box;border:3px solid var(--frame);border-radius:var(--r);background:var(--panel);display:flex;flex-direction:column;overflow:hidden}
 #tabs{display:flex;gap:2px;background:var(--line);flex:none}
@@ -218,7 +236,10 @@ button{font-family:inherit}
     </div>
   </div>
 
-  <div id="player" class="hide"><iframe id="yt" title="Video player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>
+  <div id="player" class="hide"><iframe id="yt" title="Video player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+    <div id="radio" hidden aria-live="polite"><div id="rd-top"><b>WEATHERSTAR RADIO</b><span id="rd-clock"></span></div>
+      <div id="rd-mid"><div id="rd-now">NOW PLAYING</div><div id="rd-title"></div><div id="rd-wx"></div><div id="rd-eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><div id="rd-hint"></div></div></div>
+    <audio id="aud" preload="none"></audio></div>
   <div id="pvbug"><b id="pv-n"></b><span id="pv-call"></span></div>
   <div id="osd"><b id="o-n"></b><span id="o-name"></span><div id="o-title"></div></div>
 
@@ -271,7 +292,8 @@ button{font-family:inherit}
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
   };
   const NCOL = 4;
-  const stage = $('stage'), rowsEl = $('rows'), yt = $('yt'), player = $('player');
+  const stage = $('stage'), rowsEl = $('rows'), yt = $('yt'), player = $('player'), aud = $('aud');
+  let wxNow = null;                                               // your temperature + place, for WeatherStar Radio's screen
 
   let G = null, flat = [], sel = { r: -1, c: 0 }, off = 0, mode = 'guide', full = false;
   let skin = LS.get('wtvGuideSkin', 'wtv');                    // Weather TV colors by default; Classic is the option
@@ -326,7 +348,25 @@ button{font-family:inherit}
       const t = j && j.current && j.current.temperature_2m;
       const name = (p.label || (j.location && j.location.name) || '').split(',').slice(0, 2).join(',');
       $('wx').innerHTML = (isFinite(t) ? '<b>' + Math.round(t) + '°</b>' : '') + esc(name);
+      wxNow = { t: isFinite(t) ? Math.round(t) : null, name, sky: skyOf(j.current && (j.current.weather_code != null ? j.current.weather_code : j.current.weathercode)) };
+      if (!$('radio').hidden) radioScreen();
     } catch (e) { $('wx').textContent = (p.label || '').split(',')[0]; }
+  }
+
+  function skyOf(code) {
+    const c = +code; if (!isFinite(c)) return '';
+    if (c === 0) return 'Clear'; if (c <= 2) return 'Partly Cloudy'; if (c === 3) return 'Cloudy'; if (c <= 48) return 'Fog';
+    if (c <= 57) return 'Drizzle'; if (c <= 67) return 'Rain'; if (c <= 77) return 'Snow'; if (c <= 82) return 'Showers'; if (c <= 86) return 'Snow Showers';
+    return 'Thunderstorms';
+  }
+  // WeatherStar Radio plays in a shuffled order that stays the same for this visit
+  const radioRank = {};
+  function shuffleRadio() {
+    (G.blocks || []).forEach((b) => (b.channels || []).forEach((ch) => {
+      if (ch.kind !== 'radio') return;
+      ch.cells.forEach((c) => { if (radioRank[c.src] == null) radioRank[c.src] = Math.random(); });
+      ch.cells.sort((a, b) => radioRank[a.src] - radioRank[b.src]);
+    }));
   }
 
   // ── Data ──
@@ -335,6 +375,7 @@ button{font-family:inherit}
       const r = await fetch('/api/guide', { cache: 'no-cache' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       G = await r.json();
+      shuffleRadio();
       rebuild();
       $('loading').style.display = 'none';
     } catch (e) {
@@ -380,6 +421,7 @@ button{font-family:inherit}
     const ch = it.ch;
     if (ch.kind === 'forecast') return 'Opens your forecast';
     if (ch.kind === 'radar') return 'Opens Live Radar';
+    if (ch.kind === 'radio') return 'Song ' + (k + 1) + ' of ' + ch.cells.length;
     if (ch.kind === 'wstar') return 'Opens the WeatherStar menu';
     if (ch.kind === 'list') return (ch.id === 'highlights' ? 'Clip ' + (k + 1) : (k + 1) + ' of ' + ch.cells.length);
     if (c.live) return 'Live now';
@@ -475,6 +517,7 @@ button{font-family:inherit}
     else if (ch.kind === 'radar') { status = 'Opens Live Radar'; next = 'Radar · warnings · chasers on the map'; action = 'OPEN RADAR'; }
     else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
     else if (ch.kind === 'list') { status = 'Plays straight through · ' + cellSub(it, c, k); }
+    else if (ch.kind === 'radio') { status = 'Nonstop music from the WeatherStar · ' + cellSub(it, c, k); next = 'Next song: ' + (nxt || ch.cells[0] || {}).t; action = 'LISTEN'; }
     else if (c && c.live) { status = 'LIVE now'; live = true; }
     else if (c) { status = 'Uploaded ' + ago(c.at); }
     return { status, next, action, live };
@@ -525,13 +568,63 @@ button{font-family:inherit}
     if (ended && Date.now() - lastEnd > 3000) { lastEnd = Date.now(); onEnded(); }
   });
 
-  function keyOf(ch, c) { return c ? (c.v || ('live:' + (c.ch || ch.id))) : null; }
+  function keyOf(ch, c) { return c ? (c.src ? 'radio:' + c.src : c.v || ('live:' + (c.ch || ch.id))) : null; }
   function srcOf(ch, c, muted) {
     const q = 'autoplay=1&mute=' + (muted ? 1 : 0) + '&enablejsapi=1&playsinline=1&rel=0&origin=' + encodeURIComponent(location.origin);
     return c.v ? 'https://www.youtube.com/embed/' + encodeURIComponent(c.v) + '?' + q
                : 'https://www.youtube.com/embed/live_stream?channel=' + encodeURIComponent(c.ch || ch.id) + '&' + q;
   }
+  // ── WeatherStar Radio: an audio player behind a WeatherStar-style screen ──
+  function radioScreen() {
+    const cur = current(); const r = $('radio');
+    const c = cur && cur.ch.kind === 'radio' ? cur.c : null;
+    $('rd-title').textContent = c ? c.t : '';
+    $('rd-wx').innerHTML = wxNow ? (wxNow.t != null ? '<b>' + wxNow.t + '°</b>' : '') + esc([wxNow.sky, wxNow.name].filter(Boolean).join(' · ')) : 'Set your location for local conditions';
+    $('rd-hint').textContent = loaded.muted ? 'Press OK to listen' : '';
+    r.classList.toggle('paused', loaded.muted || aud.paused);
+    const d = new Date();
+    $('rd-clock').textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  }
+  setInterval(() => { if (!$('radio').hidden) radioScreen(); }, 1000);
+  function stopRadio() {
+    if ($('radio').hidden) return;
+    aud.pause(); aud.removeAttribute('src'); try { aud.load(); } catch (e) {}
+    $('radio').hidden = true; yt.style.display = '';
+  }
+  function playRadio(ch, c, muted) {
+    const key = 'radio:' + c.src;
+    player.classList.remove('hide');
+    $('slate').style.display = 'none';
+    if (!String(loaded.key || '').startsWith('radio:')) yt.src = 'about:blank';
+    yt.style.display = 'none';
+    $('radio').hidden = false;
+    if (loaded.key !== key) { aud.pause(); aud.removeAttribute('src'); }
+    loaded = { key, muted };
+    if (muted) { aud.pause(); }                                    // the guide's preview shows the screen; music starts on OK
+    else {
+      if (aud.getAttribute('src') !== c.src) aud.src = c.src;
+      aud.muted = false; aud.volume = 0.9;
+      const p = aud.play(); if (p && p.catch) p.catch(() => {});
+    }
+    radioScreen();
+  }
+  aud.addEventListener('ended', () => {
+    if (mode === 'watch') { onEnded(); return; }
+    // Browsing the guide (the radio playing in the preview box): keep the music going
+    let ch = null; (G.blocks || []).forEach((b) => (b.channels || []).forEach((x) => { if (x.kind === 'radio') ch = x; }));
+    if (!ch || !ch.cells.length) return;
+    const i = ch.cells.findIndex((c) => 'radio:' + c.src === loaded.key);
+    const k = (i + 1) % ch.cells.length;
+    if (watched && watched.id === ch.id) watched.c = k;
+    const cur = current();
+    if (cur && cur.ch.id === ch.id) select(sel.r, k);
+    playRadio(ch, ch.cells[k], false);
+  });
+  aud.addEventListener('play', radioScreen); aud.addEventListener('pause', radioScreen);
+
   function play(ch, c, muted) {
+    if (ch && ch.kind === 'radio' && c) { playRadio(ch, c, muted); return; }
+    stopRadio();
     if (!c || isPage(ch)) { showSlate(ch); return; }
     const key = keyOf(ch, c);
     player.classList.remove('hide');
@@ -543,7 +636,7 @@ button{font-family:inherit}
     loaded = { key, muted };
     yt.src = srcOf(ch, c, muted);
   }
-  function stopPlayer() { loaded = { key: null, muted: true }; yt.src = 'about:blank'; player.classList.add('hide'); }
+  function stopPlayer() { stopRadio(); loaded = { key: null, muted: true }; yt.src = 'about:blank'; player.classList.add('hide'); }
   // The Weather TV logo with radar pulses: before a channel is picked, and for
   // channels with nothing to preview (Forecast, WeatherStar, an empty channel)
   function showSlate(ch) {
@@ -694,7 +787,8 @@ button{font-family:inherit}
     if (mode !== 'watch') return;
     const cur = current();
     if (!cur) return;
-    const nxt = cur.ch.cells[sel.c + 1];
+    let nxt = cur.ch.cells[sel.c + 1];
+    if (!nxt && cur.ch.kind === 'radio') { nxt = cur.ch.cells[0]; select(sel.r, 0); watched.c = 0; play(cur.ch, nxt, false); renderSide(false); renderBanner(); flashOsd(); return; }   // the radio never stops
     if (!nxt || nxt.live) return;
     select(sel.r, sel.c + 1);
     watched.c = sel.c;

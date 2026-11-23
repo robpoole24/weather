@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-23T00:46:14Z build.1795394774
+// WeatherTV Server — updated 2026-11-23T05:30:00Z build.1795411800
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -633,6 +633,10 @@ app.put('/api/admin/groups/:groupId/channels/:channelId', (req, res) => {
   if (idx === -1) return res.status(404).json({ error: 'Channel not found' });
   group.channels[idx] = { ...group.channels[idx], ...req.body };
   saveData(data);
+  if (req.body && req.body.hasLive === false) {         // live checks off: drop any live status right away
+    delete cache.liveStatuses[req.params.channelId];
+    rDel('wt:live:' + req.params.channelId);
+  }
   if ('weatherOnly' in (req.body || {})) {            // refetch their recent videos with the new rule
     delete cache.recentVideos[req.params.channelId];
     rDel('wt:recent:' + req.params.channelId);
@@ -6188,13 +6192,20 @@ app.post('/websub/callback/:channelId', rawBodyParser, (req, res) => {
   const channelId = req.params.channelId;
   // Only channels WeatherTV actually carries — anything else is ignored, so a
   // forged request can't add junk entries or spend quota on random channels
-  if (!getAllChannels().some(ch => ch.id === channelId)) return;
+  const carried = getAllChannels().find(ch => ch.id === channelId);
+  if (!carried) return;
   const body = req.body ? req.body.toString() : '';
   // Unsigned/forged pushes are never trusted on their own: they skip the instant
   // "LIVE from the feed" path below and only trigger the normal rate-limited
   // YouTube check, so nobody can put an arbitrary video on WeatherTV.
   const signed = websubSignatureValid(req);
   if (!signed) console.warn('[WebSub] Unsigned or mis-signed push for ' + channelId + ' — verifying with YouTube instead of trusting it');
+  // Live checks turned off for this channel ("Has Live Stream" unticked): a signed
+  // push still means a new upload, so refresh its videos, but never mark it live
+  if (!carried.hasLive) {
+    if (signed) { delete cache.recentVideos[channelId]; rDel('wt:recent:' + channelId); }
+    return;
+  }
 
   // Track that YouTube pushed a notification to us (free, 0 units)
   cache.lastNotificationReceived = Date.now();
