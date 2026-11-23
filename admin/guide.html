@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T04:30:00Z build.1795408200 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-23T05:00:00Z build.1795410000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -80,6 +80,8 @@
   .row .nm { flex:1; min-width:0; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row .by { font-size:.7rem; color:var(--muted); width:5.8rem; flex:none; white-space:nowrap; }
   .row .by.you { color:#7fdcf0; } .row .by.code { color:#8fe0b8; } .row .by.collection { color:var(--gold); } .row .by.creator { color:#c9a6ff; }
+  .row a.yt { flex:none; font-size:.72rem; font-weight:700; color:#ff6b6b; text-decoration:none; border:1px solid rgba(255,107,107,.45); border-radius:4px; padding:.05rem .35rem; white-space:nowrap; }
+  .row a.yt:hover, .row a.yt:focus-visible { background:rgba(255,107,107,.15); outline:none; }
   .row .net { font-size:.68rem; color:var(--muted); margin-left:.45rem; white-space:nowrap; }
   table.src select.ty { min-width:9.5rem; }
   table.src .note { color:var(--muted); font-size:.78rem; }
@@ -282,6 +284,7 @@
           + '<input type="text" class="tag" maxlength="7" data-t="' + esc(c.id) + '" value="' + esc(c.call || '') + '" placeholder="' + esc(c.autoCall) + '" aria-label="Tag">'
           + '<input type="text" class="code" maxlength="40" autocomplete="off" spellcheck="false" data-a="' + esc(c.id) + '" value="' + esc(c.area || '') + '" placeholder="Code" aria-label="Country or state code" title="' + esc(c.area ? codeName(c.area) : 'Type a country or US state — a code (IN, US-WI) or a name (India, Wisconsin)') + '">'
           + '<span class="nm" title="' + esc(groupLabel[c.group] || '') + '">' + esc(c.name) + (c.live ? '<span class="live">● LIVE</span>' : '') + (c.nets && c.nets.length ? '<span class="net">' + esc(c.nets.join(' · ')) + '</span>' : '') + '</span>'
+          + (/^UC[\w-]{22}$/.test(c.id) ? '<a class="yt" draggable="false" href="https://www.youtube.com/channel/' + esc(c.id) + '/about" target="_blank" rel="noopener noreferrer" title="Open ' + esc(c.name) + ' on YouTube (About page: country, description, links)">YT ↗</a>' : '')
           + '<span class="by ' + c.by + '">' + BY[c.by] + '</span>'
           + '<button class="ib" data-up="' + esc(c.id) + '" aria-label="Move up"' + (i && bid !== 'none' ? '' : ' disabled') + '>▲</button>'
           + '<button class="ib" data-dn="' + esc(c.id) + '" aria-label="Move down"' + (i < list.length - 1 && bid !== 'none' ? '' : ' disabled') + '>▼</button>'
