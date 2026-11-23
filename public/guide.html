@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T00:00:00Z build.1795392000 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T00:45:00Z build.1795394700 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,6 +14,7 @@
 body.classic{--bg:#050a2e;--frame:#8fa6ff;--panel:#1a2fb0;--chan:#14228a;--cell:#1b2a9c;--sel:#3352f0;--selb:#ffe63b;--line:#8fa6ff;--head:#2a44d6;--headt:#ffe63b;--title:#ffe63b;--sub:#ffe63b;--num:#ffe63b;--band:#0b1460;--bandt:#ffffff;--text:#ffffff;--muted:#c9d4ff;--live:#e11d2e;--btn:#ffe63b;--btnt:#0b1460;--tab:#14228a;--bar:#0b1460;--r:0px}
 body.wtv{--bg:#03101b;--frame:#22d3ee;--panel:#0a2236;--chan:#061827;--cell:#0a1d2f;--sel:#173a55;--selb:#ff8a1f;--line:#1b6b80;--head:#0c2a40;--headt:#22d3ee;--title:#ffa24a;--sub:#7fe3f3;--num:#ffa24a;--band:#05253a;--bandt:#22d3ee;--text:#f1f8ff;--muted:#a9cadb;--live:#e11d2e;--btn:#ff8a1f;--btnt:#03101b;--tab:#061827;--bar:#061827;--r:6px}
 html,body{margin:0;height:100%;background:#000;overflow:hidden}
+[hidden]{display:none !important}
 body{font-family:'Barlow Condensed','Noto Sans Bengali',sans-serif}
 button{font-family:inherit}
 #stage{position:absolute;left:0;top:0;width:1280px;height:720px;transform-origin:0 0;background:var(--bg);color:var(--text);overflow:hidden}
@@ -23,10 +24,19 @@ button{font-family:inherit}
 #stage.guiding #guide{display:block}
 #top{position:absolute;left:12px;top:12px;width:1256px;height:300px;display:flex;gap:8px}
 #pv{width:533px;height:300px;flex:none;box-sizing:border-box;border:3px solid var(--frame);border-radius:var(--r);background:radial-gradient(120% 90% at 30% 35%,#2b3746 0%,#141b25 55%,#07090d 100%);position:relative;overflow:hidden}
-#slate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:4px;padding:20px;color:var(--muted)}
-#slate b{font-size:44px;color:var(--num);line-height:1}
-#slate span{font-size:22px;color:#fff;font-weight:600}
-#slate small{font-size:16px}
+#slate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px;padding:16px;color:var(--muted);background:#000;overflow:hidden}
+#slate .rings{position:absolute;top:50%;left:50%;width:0;height:0}
+.radar-ring{position:absolute;width:220px;height:220px;margin-left:-110px;margin-top:-110px;border-radius:50%;border:2px solid rgba(0,212,245,.45);animation:radarPulse 4.5s ease-out infinite}
+.radar-ring:nth-child(2){border-color:rgba(249,115,22,.45);animation-delay:1.5s}
+.radar-ring:nth-child(3){animation-delay:3s}
+@keyframes radarPulse{0%{transform:scale(.3);opacity:.8}100%{transform:scale(3);opacity:0}}
+@media (prefers-reduced-motion:reduce){.radar-ring{animation:none}}
+#slate img{width:270px;max-width:70%;position:relative;z-index:1}
+#sl-cap{position:relative;z-index:1;display:flex;gap:10px;align-items:baseline;justify-content:center}
+#sl-cap:empty{display:none}
+#sl-cap b{font-size:26px;color:var(--num);line-height:1}
+#sl-cap span{font-size:20px;color:#fff;font-weight:600}
+#sl-cap small{font-size:15px}
 #pvbug{position:absolute;left:24px;top:262px;z-index:7;display:flex;gap:8px;align-items:baseline;text-shadow:0 2px 4px #000;pointer-events:none}
 #pvbug b{font-size:30px;color:var(--num)}#pvbug span{font-size:18px;font-weight:600;color:#fff}
 #info{flex:1 1 0;min-width:0;box-sizing:border-box;background:var(--panel);border:3px solid var(--frame);border-radius:var(--r);padding:14px 26px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px}
@@ -147,7 +157,7 @@ button{font-family:inherit}
   <div id="guide">
     <div id="top">
       <div id="pv">
-        <div id="slate"><b id="sl-n"></b><span id="sl-name"></span><small id="sl-sub"></small></div>
+        <div id="slate"><div class="rings" aria-hidden="true"><div class="radar-ring"></div><div class="radar-ring"></div><div class="radar-ring"></div></div><img src="/images/weathertv-logo-stacked.png" alt="Weather TV"><div id="sl-cap"></div></div>
       </div>
       <div id="info" aria-live="polite">
         <div id="i-block"></div>
@@ -159,6 +169,7 @@ button{font-family:inherit}
           <button type="button" class="btn" id="i-go">OK · WATCH</button>
           <button type="button" class="btn ghost" id="i-cust">☰ BLOCKS</button>
           <button type="button" class="btn ghost" id="skinbtn">LOOK: CLASSIC</button>
+          <button type="button" class="btn ghost" id="scrollbtn">AUTO-SCROLL: ON</button>
         </div>
       </div>
     </div>
@@ -229,6 +240,8 @@ button{font-family:inherit}
   let panels = Object.assign({ side: true, info: true }, LS.get('wtvGuidePanels', {}));
   let loaded = { key: null, muted: true };
   let watched = null;            // { b, id, c } — the channel the player is on
+  let engaged = false;           // false until the viewer picks or browses a channel (logo shows until then)
+  function engage() { if (engaged) return; engaged = true; updateInfo(); schedulePreview(); }
   let watchBlock = null, tab = null, chasers = {}, map = null, marker = null, osdT = null, pvT = null;
 
   // ── Stage: a 1280×720 TV screen scaled to the window ──
@@ -299,15 +312,22 @@ button{font-family:inherit}
     } catch (e) {}
   }
 
+  // A hidden block's channels leave Live Now too (a channel only ever lives in one block)
+  function visibleChannels(b) {
+    const list = b.channels || [];
+    return b.id === 'live' ? list.filter((ch) => !hidden.has(ch.home)) : list;
+  }
   function rebuild() {
     const prev = flat[sel.r];
     const keep = prev && prev.ch ? { b: prev.b.id, id: prev.ch.id } : null;
     flat = [];
     G.blocks.forEach((b) => {
-      if (!b.channels || !b.channels.length) return;
+      const chans = visibleChannels(b);
+      if (!chans.length) return;
       if (hidden.has(b.id) && b.id !== 'wtv') return;
-      flat.push({ band: true, b });
-      b.channels.forEach((ch) => flat.push({ b, ch }));
+      const bb = b.id === 'live' ? Object.assign({}, b, { label: 'LIVE NOW · ' + chans.length + (chans.length === 1 ? ' CHANNEL' : ' CHANNELS') }) : b;
+      flat.push({ band: true, b: bb });
+      chans.forEach((ch) => flat.push({ b: bb, ch }));
     });
     let r = keep ? flat.findIndex((it) => it.ch && it.b.id === keep.b && it.ch.id === keep.id) : -1;
     if (r < 0) r = flat.findIndex((it) => it.ch);
@@ -352,7 +372,7 @@ button{font-family:inherit}
   }
   function keepVisible() {
     const el = $('r' + sel.r);
-    if (!el || mode !== 'guide') return;
+    if (!el || mode !== 'guide' || scrolling) return;              // don't yank the view while it's rolling
     const top = el.offsetTop - rowsEl.offsetTop, h = rowsEl.clientHeight;
     const want = flat[sel.r - 1] && flat[sel.r - 1].band ? top - 24 : top;
     if (want < rowsEl.scrollTop + 40) rowsEl.scrollTop = Math.max(0, want - 40);
@@ -406,6 +426,16 @@ button{font-family:inherit}
     return { status, next, action, live };
   }
   function updateInfo() {
+    if (!engaged) {
+      $('i-block').textContent = 'Welcome to Weather TV';
+      $('i-title').textContent = 'Live storm chasers, forecasters and radar';
+      $('i-creator').textContent = 'Pick a channel to start watching';
+      $('i-status').textContent = '▲▼ to browse · OK to watch · ☰ BLOCKS to jump';
+      $('i-status').className = '';
+      $('i-next').textContent = 'Or click any show in the guide below';
+      $('i-go').textContent = 'OK · START';
+      return;
+    }
     const cur = current();
     if (!cur) return;
     const { it, ch, c } = cur;
@@ -459,16 +489,18 @@ button{font-family:inherit}
     yt.src = srcOf(ch, c, muted);
   }
   function stopPlayer() { loaded = { key: null, muted: true }; yt.src = 'about:blank'; player.classList.add('hide'); }
+  // The Weather TV logo with radar pulses: before a channel is picked, and for
+  // channels with nothing to preview (Forecast, WeatherStar, an empty channel)
   function showSlate(ch) {
     stopPlayer();
     $('slate').style.display = 'flex';
-    $('sl-n').textContent = ch ? ch.n : '';
-    $('sl-name').textContent = ch ? ch.name : '';
-    $('sl-sub').textContent = ch && (ch.kind === 'forecast' || ch.kind === 'wstar') ? 'Press OK to open' : 'Nothing to preview yet';
+    $('sl-cap').innerHTML = ch ? '<b>' + esc(ch.n) + '</b><span>' + esc(ch.name) + '</span><small>'
+      + (ch.kind === 'forecast' || ch.kind === 'wstar' ? 'Press OK to open' : 'Nothing to preview yet') + '</small>' : '';
     updateBar();
   }
   function schedulePreview() {
     clearTimeout(pvT);
+    if (!engaged) { showSlate(null); return; }                    // first visit: logo until a channel is picked
     const cur = current();
     if (!cur) return;
     if (!cur.c || cur.ch.kind === 'forecast' || cur.ch.kind === 'wstar') { showSlate(cur.ch); return; }
@@ -558,6 +590,7 @@ button{font-family:inherit}
   // ── Guide ⇄ watching ──
   function activate() {
     closeNav();
+    if (!engaged) { engage(); return; }                            // OK · START: begin previewing the highlighted channel
     const cur = current();
     if (!cur) return;
     if (cur.ch.kind === 'forecast') { openApp('forecast'); return; }
@@ -674,7 +707,7 @@ button{font-family:inherit}
 
   // ── Blocks menu: jump to a block; tick / untick to show or hide it (saved on this device) ──
   let navOpen = false, navIdx = 0;
-  function navBlocks() { return G ? G.blocks.filter((b) => b.channels && b.channels.length) : []; }
+  function navBlocks() { return G ? G.blocks.filter((b) => visibleChannels(b).length || (b.id !== 'live' && b.channels && b.channels.length)) : []; }
   function currentBlockId() { const it = flat[sel.r]; return it ? it.b.id : null; }
   function openNav() {
     if (mode !== 'guide' || !G) return;
@@ -690,7 +723,7 @@ button{font-family:inherit}
       return '<div class="nv' + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
         + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(b.label) + '">' + (on ? '✓' : '') + '</button>')
         + '<span class="nl">' + esc(b.label.replace(/ · \d+ CHANNELS?$/, '')) + '</span>'
-        + '<small>' + esc(b.id === 'live' ? b.channels.length + ' live' : b.range.replace(/^CH /, '')) + '</small></div>';
+        + '<small>' + esc(b.id === 'live' ? visibleChannels(b).length + ' live' : b.range.replace(/^CH /, '')) + '</small></div>';
     }).join('');
     const foc = $('navlist').querySelector('.foc'); if (foc) foc.scrollIntoView({ block: 'nearest' });
   }
@@ -761,6 +794,8 @@ button{font-family:inherit}
       e.preventDefault(); return;
     }
     if (mode === 'app') { if (k === 'Escape' || k === 'GoBack' || k === 'g' || k === 'G') { e.preventDefault(); closeApp(); } return; }
+    noteInput();
+    if (mode === 'guide' && !engaged && /^(Arrow(Up|Down|Left|Right)|Page(Up|Down)|Channel(Up|Down)|[0-9])$/.test(k)) engage();
     if (/^[0-9]$/.test(k)) { digit(k); e.preventDefault(); return; }
     if (mode === 'guide') {
       if (k === 'ArrowUp') moveRow(-1);
@@ -790,9 +825,43 @@ button{font-family:inherit}
   rowsEl.addEventListener('click', (e) => {
     const b = e.target.closest('.cell[data-r]'); if (!b) return;
     const r = +b.dataset.r, c = +b.dataset.c;
-    if (r === sel.r && c === sel.c) activate(); else select(r, c);
+    const wasScrolling = scrolling;
+    noteInput(true);
+    if (!engaged) engaged = true;
+    if (wasScrolling || (r === sel.r && c === sel.c)) { select(r, c, false, true); activate(); }   // mid-scroll: one click opens it
+    else select(r, c);
   });
-  rowsEl.addEventListener('wheel', (e) => { e.preventDefault(); moveRow(e.deltaY > 0 ? 1 : -1); }, { passive: false });
+  rowsEl.addEventListener('wheel', (e) => { e.preventDefault(); noteInput(); if (!engaged) engage(); moveRow(e.deltaY > 0 ? 1 : -1); }, { passive: false });
+
+  // ── Auto-scroll (like the cable guide channel): after a few idle seconds the grid rolls
+  //    slowly through every channel and loops. Any key stops it and jumps back to your
+  //    place; clicking a channel while it rolls opens it. Saved on this device. ──
+  let autoScroll = LS.get('wtvGuideAutoScroll', true), scrolling = false, lastInput = Date.now(), scrollPos = 0, holdUntil = 0;
+  const IDLE_MS = 8000, SPEED = 18;                               // px per second, about a row every 2 seconds
+  function noteInput(keepView) {
+    lastInput = Date.now();
+    if (scrolling) { scrolling = false; if (!keepView) keepVisible(); }
+  }
+  function setScrollBtn() { $('scrollbtn').textContent = 'AUTO-SCROLL: ' + (autoScroll ? 'ON' : 'OFF'); }
+  $('scrollbtn').onclick = () => { autoScroll = !autoScroll; LS.set('wtvGuideAutoScroll', autoScroll); setScrollBtn(); noteInput(); };
+  setScrollBtn();
+  let lastFrame = 0;
+  function rollFrame(t) {
+    const dt = lastFrame ? Math.min(100, t - lastFrame) : 16; lastFrame = t;
+    const idle = Date.now() - lastInput > IDLE_MS;
+    if (autoScroll && idle && mode === 'guide' && !navOpen && !document.hidden && rowsEl.scrollHeight > rowsEl.clientHeight) {
+      if (!scrolling) { scrolling = true; scrollPos = rowsEl.scrollTop; }
+      const max = rowsEl.scrollHeight - rowsEl.clientHeight;
+      const now = Date.now();
+      if (now >= holdUntil) {
+        if (scrollPos >= max) { holdUntil = now + 3000; scrollPos = -1; }               // pause at the bottom…
+        else if (scrollPos < 0) { scrollPos = 0; rowsEl.scrollTop = 0; holdUntil = now + 2000; }   // …then back to the top
+        else { scrollPos = Math.min(max, scrollPos + SPEED * dt / 1000); rowsEl.scrollTop = Math.round(scrollPos); }
+      }
+    }
+    requestAnimationFrame(rollFrame);
+  }
+  requestAnimationFrame(rollFrame);
   $('tabs').addEventListener('click', (e) => {
     if (e.target.closest('button[data-min]')) { setPanel('side', false); return; }
     const b = e.target.closest('button[data-tab]'); if (b) { tab = b.dataset.tab; renderSide(false); }
@@ -864,9 +933,10 @@ button{font-family:inherit}
     return on.has(ev) || BANNER_ALWAYS.has(ev);
   }
   function tkLocation() {
+    // Your place (typed in the radar's top bar, the forecast or WeatherStar), else the alerts' location
     let p = null;
-    try { p = JSON.parse(localStorage.getItem('wtv-alert-location') || 'null'); } catch (e) {}
-    if (!p || !isFinite(p.lat)) { try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {} }
+    try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
+    if (!p || !isFinite(p.lat)) { try { p = JSON.parse(localStorage.getItem('wtv-alert-location') || 'null'); } catch (e) {} }
     return p && isFinite(p.lat) && isFinite(p.lon) ? p : null;
   }
   async function loadTicker() {
@@ -908,7 +978,10 @@ button{font-family:inherit}
   loadTicker();
   setInterval(loadTicker, 2 * 60 * 1000);
   // Changed the Warning Banner or Alert Types on the radar in another tab? Follow it right away.
-  addEventListener('storage', (e) => { if (/^wtv-(warning-banner|alert-types|alert-location|radar-place)/.test(e.key || '')) loadTicker(); });
+  addEventListener('storage', (e) => {
+    if (/^wtv-(warning-banner|alert-types|alert-location|radar-place)/.test(e.key || '')) loadTicker();
+    if (e.key === 'wtv-radar-place') loadWx();                    // a new ZIP in Radar, Forecast or WeatherStar: new temp + place
+  });
   load(true);
   loadChasers();
   loadWx();

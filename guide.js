@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-22T23:45:00Z build.1795391100
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T00:30:00Z build.1795393800
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -242,7 +242,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent }
 
     // Live Now (top): every live channel, under its home number
     const liveRows = [];
-    out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label }); }));
+    out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }));   // home: hiding that block hides it here too
 
     return {
       generatedAt: new Date().toISOString(),

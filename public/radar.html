@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- WeatherTV Radar — updated 2026-11-22T23:19:53Z build.1795389593 -->
+<!-- WeatherTV Radar — updated 2026-11-22T23:37:31Z build.1795390651 -->
 <html lang="en">
 <head>
 <!-- Analytics: Cloudflare Web Analytics (cookieless). Cloudflare injects its beacon automatically; no code needed here. -->
@@ -7712,6 +7712,12 @@ function setPlace(p, opts = {}) {
   userLat = p.lat; userLng = p.lon;
   _savePlace();
   _showPlace();
+  // A ZIP or city typed in the top bar or the forecast is now YOUR location, everywhere:
+  // the warning banner's zones, storm-alert notifications, WeatherStar and the guide
+  if (_place.source === 'search') {
+    if (typeof fetchUserZone === 'function') fetchUserZone(p.lat, p.lon);
+    if (window.WTVAlerts) WTVAlerts.setLocation(p.lat, p.lon).catch(() => {});
+  }
   if (opts.reloadForecast !== false) {
     _forecastData = null;
     if (_forecastPanelOpen) loadForecast({ lat: p.lat, lon: p.lon, name: _place.label });
@@ -10692,6 +10698,7 @@ try {
     _place = saved; userLat = saved.lat; userLng = saved.lon;
     _showPlace();
     _placePin(saved.lat, saved.lon, saved.label);
+    fetchUserZone(saved.lat, saved.lon);   // the banner's zone check, even when location access is blocked
     if (!_sharedView) { map.setView([saved.lat, saved.lon], 10); updateViewButtons('local'); }
   }
 } catch (_) {}

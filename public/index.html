@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-22T23:20:01Z build.1795389601 -->
+<!-- WeatherTV App — updated 2026-11-22T23:37:31Z build.1795390651 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3350,6 +3350,32 @@ function wsResetSettings() {
   buildWSPanel();
 }
 
+// ── One location for everything ───────────────────────────────────────────────
+// The place typed in the radar's top bar or forecast (saved on this device as
+// wtv-radar-place) is the viewer's location for WeatherStar, alerts and the guide
+// until they change it. A ZIP set here in WeatherStar becomes that place too.
+const WTV_PLACE_KEY = 'wtv-radar-place';
+function wtvSharedPlace() {
+  try {
+    const p = JSON.parse(localStorage.getItem(WTV_PLACE_KEY) || 'null');
+    return p && p.source === 'search' && isFinite(p.lat) && isFinite(p.lon) ? p : null;
+  } catch (_) { return null; }
+}
+function wtvSetSharedPlace(lat, lon, label, query) {
+  try { localStorage.setItem(WTV_PLACE_KEY, JSON.stringify({ lat: +lat, lon: +lon, label: label || '', query: query || '', source: 'search' })); } catch (_) {}
+  if (window.WTVAlerts) WTVAlerts.setLocation(+lat, +lon).catch(() => {});
+}
+// WeatherStar follows the shared place (Haddonfield, the Halloween town, is left alone)
+function wsAdoptSharedPlace() {
+  const p = wtvSharedPlace(), s = wsAllSettings['4000'];
+  if (!p || s.town === 'haddonfield') return false;
+  if (s.lat && Math.abs(s.lat - p.lat) < 0.01 && Math.abs(s.lon - p.lon) < 0.01) return false;
+  ['4000', '3000'].forEach(v => { wsAllSettings[v].lat = +p.lat; wsAllSettings[v].lon = +p.lon; wsAllSettings[v].location = p.label || p.query || ''; });
+  saveWSSettings();
+  wsClearZipPrompt();
+  return true;
+}
+
 async function ws4kpGeocode() {
   const input = document.getElementById('ws-location');
   const query = (input ? input.value : '').trim();
@@ -3442,6 +3468,14 @@ async function ws4kpGeocode() {
   } catch {}
   return false;
 }
+// A location set in WeatherStar (ZIP or 📍 Locate) becomes the shared place too
+const _wsGeocodeOwn = ws4kpGeocode;
+ws4kpGeocode = async function () {
+  const ok = await _wsGeocodeOwn.apply(this, arguments);
+  const s = wsAllSettings['4000'];
+  if (ok && s.lat && s.town !== 'haddonfield') wtvSetSharedPlace(s.lat, s.lon, s.location, (document.getElementById('ws-location') || {}).value || '');
+  return ok;
+};
 
 // Enter / 📍 Locate: find the place AND load it — no Restart needed.
 // Empty box → your current location. Unknown place → say so, keep the old one.
@@ -3511,6 +3545,7 @@ function ws4kpLaunch() {
 }
 
 async function launchWeatherStar() {
+  wsAdoptSharedPlace();
   buildWSPanel();
   if (!wsAllSettings[wsActiveVersion].lat) {
     await ws4kpGeocode();
@@ -4911,8 +4946,9 @@ window.onFcmToken = function (token) {
 async function _syncNativePush(lat, lng) {
   const token = window._nativeFcmToken;
   if (!token || !window.WTVAlerts) return;
-  lat = lat ?? wsAllSettings?.['4000']?.lat ?? wsAllSettings?.['3000']?.lat;
-  lng = lng ?? wsAllSettings?.['4000']?.lon ?? wsAllSettings?.['3000']?.lon;
+  const _sp = wtvSharedPlace();   // the viewer's chosen place first, then WeatherStar's
+  lat = lat ?? _sp?.lat ?? wsAllSettings?.['4000']?.lat ?? wsAllSettings?.['3000']?.lat;
+  lng = lng ?? _sp?.lon ?? wsAllSettings?.['4000']?.lon ?? wsAllSettings?.['3000']?.lon;
   if (lat && lng) await WTVAlerts.setLocation(Number(lat), Number(lng));
   const r = await WTVAlerts.sync(token);       // saves the token; later location changes re-sync on their own
   const loc = WTVAlerts.getLocation();
