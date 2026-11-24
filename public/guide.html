@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T01:00:00Z build.1795482000 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T01:15:00Z build.1795482900 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -992,14 +992,23 @@ button{font-family:inherit}
     const n = parseInt(numBuf, 10); numBuf = '';
     if (n === 1) {                                                 // channel 1 is Live Now
       const r1 = flat.findIndex((it) => it.ch && it.b.id === 'live');
-      if (r1 >= 0) { if (mode === 'watch') { select(r1, 0); activate(); flashOsd(); } else select(r1, 0); }
+      if (r1 >= 0) { if (mode === 'watch') { select(r1, 0); activate(); flashOsd(); } else tuneIn(r1); }
       return;
     }
     let r = flat.findIndex((it) => it.ch && it.b.id !== 'live' && it.ch.n === n);
     if (r < 0) r = flat.findIndex((it) => it.ch && it.ch.n === n);
     if (r < 0) return;
     if (mode === 'watch') { select(r, 0); activate(); flashOsd(); }
-    else select(r, 0);
+    else tuneIn(r);
+  }
+  // Typing a number in the guide tunes the preview box to that channel WITH its sound,
+  // like changing the channel on a TV: the music (WeatherStar Radio) gives way to it.
+  // Browsing on with the arrows goes back to silent previews.
+  function tuneIn(r) {
+    select(r, 0);
+    const cur = current(); if (!cur || !cur.c || isPage(cur.ch)) return;
+    clearTimeout(pvT);
+    play(cur.ch, cur.c, false);
   }
 
   // ── Input ──
