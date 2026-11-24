@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T02:00:00Z build.1795485600 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T02:30:00Z build.1795487400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -188,6 +188,8 @@ button{font-family:inherit}
 #kp-g button.ok{background:var(--btn);color:var(--btnt);font-size:24px}
 #kp small{font-size:14px;color:var(--muted)}
 .nv.kpr .nl{color:var(--title);font-weight:700}
+.nv .go{flex:none;font:inherit;font-size:12px;font-weight:700;letter-spacing:.06em;background:transparent;color:var(--muted);border:2px solid var(--line);border-radius:var(--r);padding:1px 6px;cursor:pointer}
+.nv.foc .go,.nv .go:hover{background:var(--btn);color:var(--btnt);border-color:var(--btn)}
 #nav h3{margin:0;padding:8px 14px 4px;font-size:22px;letter-spacing:.1em;color:var(--title)}
 #nav p{margin:0;padding:0 14px 6px;font-size:14px;color:var(--muted)}
 #navlist{flex:1 1 0;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;background:var(--line);border-top:2px solid var(--line)}
@@ -301,7 +303,7 @@ button{font-family:inherit}
     <div id="kp-g"></div>
     <small>▲▼◀▶ MOVE · OK PRESS · BACK CLOSE</small>
   </div></div>
-  <div id="nav" role="dialog" aria-label="Blocks"><h3>BLOCKS</h3><p>Jump to a block, or untick the ones you don’t want in the guide. Saved on this device only.</p><div id="navlist"></div><div id="navkeys"><b>▲▼</b> MOVE · <b>OK / ▶</b> JUMP · <b>SPACE</b> SHOW / HIDE · <b>◀</b> CLOSE</div></div>
+  <div id="nav" role="dialog" aria-label="Blocks"><h3>BLOCKS</h3><p>Untick blocks you don’t want in the guide (saved on this device). ▶ GO takes the guide straight to a block and the scroll carries on from there.</p><div id="navlist"></div><div id="navkeys"><b>▲▼</b> MOVE · <b>OK</b> SHOW / HIDE · <b>▶</b> GO THERE · <b>◀</b> CLOSE</div></div>
   <div id="ticker" role="status" aria-live="polite"><span id="tk-label"></span><div id="tk-wrap"><span id="tk-text"></span></div></div>
   <div id="loading">Loading the guide…</div>
 </div>
@@ -957,7 +959,7 @@ button{font-family:inherit}
 
   // ── Blocks menu: jump to a block; tick / untick to show or hide it (saved on this device) ──
   let navOpen = false, navIdx = 0;
-  function navBlocks() { return G ? allBlocks().filter((b) => visibleChannels(b).length || (b.id !== 'live' && b.channels && b.channels.length)) : []; }
+  function navBlocks() { return G ? allBlocks().filter((b) => b.channels && b.channels.length) : []; }
   function currentBlockId() { const it = flat[sel.r]; return it ? it.b.id : null; }
   function openNav() {
     if (mode !== 'guide' || !G) return;
@@ -973,7 +975,8 @@ button{font-family:inherit}
       return '<div class="nv' + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
         + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(b.label) + '">' + (on ? '✓' : '') + '</button>')
         + '<span class="nl">' + esc(b.label.replace(/ · \d+ CHANNELS?$/, '')) + '</span>'
-        + '<small>' + esc(b.id === 'live' ? visibleChannels(b).length + ' live' : b.range.replace(/^CH /, '')) + '</small></div>';
+        + '<small>' + esc(b.id === 'live' ? visibleChannels(b).length + ' live' : b.range.replace(/^CH /, '')) + '</small>'
+        + '<button type="button" class="go" data-go="' + i + '" aria-label="Go to ' + esc(b.label) + '">GO ▶</button></div>';
     }).join('');
     const foc = $('navlist').querySelector('.foc'); if (foc) foc.scrollIntoView({ block: 'nearest' });
   }
@@ -981,7 +984,9 @@ button{font-family:inherit}
     const b = navBlocks()[i]; if (!b || b.id === 'wtv') return;
     if (hidden.has(b.id)) hidden.delete(b.id); else hidden.add(b.id);
     LS.set('wtvGuideHidden', [...hidden]);
-    rebuild(); renderNav();
+    rebuild();
+    const j = navBlocks().findIndex((x) => x.id === b.id); if (j >= 0) navIdx = j;   // stay on the same block
+    renderNav();
   }
   function jumpTo(i) {
     const b = navBlocks()[i]; if (!b) return;
@@ -990,9 +995,15 @@ button{font-family:inherit}
     closeNav();
     if (r >= 0) { select(r, 0); const band = $('r' + (r - 1)); if (band) rowsEl.scrollTop = Math.max(0, band.offsetTop - rowsEl.offsetTop); }
   }
+  // ▶ GO: jump to a block, and if auto-scroll is on, roll on from there in a moment
+  function goBlock(i) {
+    jumpTo(i);
+    if (autoScroll) { scrolling = false; lastInput = Date.now() - IDLE_MS + 1500; }
+  }
   $('navlist').addEventListener('click', (e) => {
+    const go = e.target.closest('[data-go]'); if (go) { goBlock(+go.dataset.go); return; }
     const ck = e.target.closest('[data-ck]'); if (ck) { navIdx = +ck.dataset.ck; toggleBlock(navIdx); return; }
-    const row = e.target.closest('.nv[data-i]'); if (row) { if (row.dataset.i === '-1') { closeNav(); openKp(); } else jumpTo(+row.dataset.i); }
+    const row = e.target.closest('.nv[data-i]'); if (row) { if (row.dataset.i === '-1') { closeNav(); openKp(); } else goBlock(+row.dataset.i); }
   });
   $('i-cust').onclick = openNav;
   rowsEl.addEventListener('click', (e) => { if (e.target.closest('.band')) openNav(); });
@@ -1108,8 +1119,9 @@ button{font-family:inherit}
       const n = navBlocks().length;                                // row -1 is "Enter a channel number"
       if (k === 'ArrowUp') { navIdx = navIdx <= -1 ? n - 1 : navIdx - 1; renderNav(); }
       else if (k === 'ArrowDown') { navIdx = navIdx >= n - 1 ? -1 : navIdx + 1; renderNav(); }
-      else if (k === 'Enter' || k === 'ArrowRight') { if (navIdx === -1) { closeNav(); openKp(); } else jumpTo(navIdx); }
-      else if (k === ' ') { if (navIdx >= 0) toggleBlock(navIdx); }
+      else if (navIdx === -1 && (k === 'Enter' || k === 'ArrowRight' || k === ' ')) { closeNav(); openKp(); }
+      else if (k === 'ArrowRight') goBlock(navIdx);                  // ▶ GO: the guide goes there and keeps scrolling from there
+      else if (k === 'Enter' || k === ' ') toggleBlock(navIdx);      // OK: show / hide
       else if (k === 'ArrowLeft' || k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'b' || k === 'B') closeNav();
       else return;
       e.preventDefault(); return;
