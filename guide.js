@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T15:30:00Z build.1795447800
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T01:00:00Z build.1795482000
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -17,6 +17,8 @@
 // blocks that work like the rest (move, renumber, add YouTube channels to them):
 //   WEATHER TV (2–10): 2 Forecast, 3 Live Radar, 4 WeatherStar, 5 Highlights, then playlists
 //   AUDIO CHANNELS (9900–9999): 9999 WeatherStar Radio (public/weatherstar/music/default, nonstop)
+//   Playlist channels added in admin (data.guide.extras), e.g. the holiday Yule logs in
+//   SEASONAL CHANNELS (9000–9099): a YouTube playlist on repeat, shown only between its dates
 //
 // Which block a channel is in (first match wins):
 //   1. you placed it there in admin
@@ -46,12 +48,13 @@ const DEFAULT_BLOCKS = [
   ['react', 'WEATHER REACT CHANNELS', 700, 799],
   ['reg-us', 'REGIONAL UNITED STATES', 800, 899],
   ['reg-europe', 'REGIONAL EUROPE', 900, 999],
-  ['reg-oceania', 'REGIONAL AUSTRALIA', 1000, 1099],
+  ['reg-oceania', 'REGIONAL OCEANIA', 1000, 1099],
   ['reg-asia', 'REGIONAL ASIA', 1100, 1199],
   ['reg-samerica', 'REGIONAL SOUTH AMERICA', 1200, 1299],
   ['reg-africa', 'REGIONAL AFRICA', 1300, 1399],
   ['radar', 'WEATHER RADAR CHANNELS', 1400, 1600],
   ['nws', 'NATIONAL WEATHER SERVICE', 1700, 1899],
+  ['seasonal', 'SEASONAL CHANNELS', 9000, 9099],
   ['audio', 'AUDIO CHANNELS', 9900, 9999],
 ];
 // YouTube channels that start in a particular block (until moved in admin)
@@ -137,8 +140,33 @@ function radioTracks() {
       .map((f) => ({ t: trackTitle(f), src: '/weatherstar/music/default/' + encodeURIComponent(f) }));
   } catch (e) { return []; }
 }
+// Playlist channels (a YouTube playlist that plays on repeat), set in admin. Until you
+// save your own list, these holiday Yule logs are used, Nov 1 – Dec 31. Each one can also
+// be switched off (hidden) and back on in admin without losing it.
+const DEFAULT_EXTRAS = [
+  { playlistId: 'PLNJHctTJPWVI', title: 'WPIX Yule Log', block: 'seasonal', from: '11-01', to: '12-31' },
+  { playlistId: 'PLOD1fWE3_FPI', title: 'Townsends Log Cabin Fire', block: 'seasonal', from: '11-01', to: '12-31' },
+  { playlistId: 'PL9pARcP4EoEj3ALLqT3H9wYbri2HKZqEY', title: 'Bing at Christmas Yule Log', block: 'seasonal', from: '11-01', to: '12-31' },
+  { playlistId: 'PLV3-REjEjIi4', title: 'Classic Christmas Songs', block: 'seasonal', from: '11-01', to: '12-31' },
+  { playlistId: 'PLcsYfW8jCWiA', title: 'Yule Logs (Natural Sounds)', block: 'seasonal', from: '11-01', to: '12-31' },
+];
+const PLAYLIST_RE = /^[A-Za-z0-9_-]{10,64}$/;
+const MMDD_RE = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+function todayMMDD() {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+// from–to can wrap the new year (11-20 → 01-06)
+function inSeason(e) {
+  if (e.on === false) return false;                                     // switched off in admin
+  if (!e.from || !e.to) return true;
+  const t = todayMMDD();
+  return e.from <= e.to ? t >= e.from && t <= e.to : t >= e.from || t <= e.to;
+}
+const extrasOf = (cfg) => (cfg && Array.isArray(cfg.extras) ? cfg.extras : DEFAULT_EXTRAS);
+
 // Weather TV's own channels, laid out like any other channel
-function builtins(data) {
+function builtins(data, cfg, all) {
   const out = [
     { id: 'forecast', name: 'Your Forecast', call: 'FCST', kind: 'forecast', block: 'wtv', n: 2 },
     { id: 'radar', name: 'Live Radar', call: 'RADAR', kind: 'radar', block: 'wtv', n: 3 },
@@ -147,6 +175,10 @@ function builtins(data) {
   ];
   ((data && data.playlists) || []).forEach((p) => { if (p && p.playlistId) out.push({ id: 'pl-' + p.playlistId, name: p.title || 'Playlist', call: callSign(p.title), kind: 'list', block: 'wtv', playlistId: p.playlistId }); });
   out.push({ id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', block: 'audio', n: 9999 });
+  extrasOf(cfg).forEach((e) => {
+    if (!all && !inSeason(e)) return;                                   // out of season: not in the guide
+    out.push({ id: 'x-' + e.playlistId, name: e.title, call: callSign(e.title), kind: 'list', block: e.block || 'seasonal', playlistId: e.playlistId, repeat: true });
+  });
   return out.map((b) => ({ ...b, builtin: true }));
 }
 const netName = (label) => cleanLabel(String(label || '').replace(/\s*(chasers?|network)\s*$/i, '')) || cleanLabel(label);
@@ -206,7 +238,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       if (!b || !ID_RE.test(id)) return;
       if (!meta[id]) meta[id] = { id, label: cleanLabel(b.label) || id.toUpperCase(), start: 0, end: 0, custom: true };
       const m = meta[id];
-      if (b.label) m.label = cleanLabel(b.label) || m.label;
+      if (b.label && !(id === 'reg-oceania' && /^REGIONAL AUSTRALIA$/i.test(b.label))) m.label = cleanLabel(b.label) || m.label;   // the old default name
       if (num(b.start) > RESERVED_MAX) m.start = num(b.start);
       if (num(b.end) != null && num(b.end) >= m.start) m.end = num(b.end);
       if (num(b.order) != null) m.order = num(b.order);
@@ -225,7 +257,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       if (!groupOf[ch.id]) { groupOf[ch.id] = g; adminIdx[ch.id] = channels.length; channels.push(ch); }
       new Set([...(ch.collectionIds || []), ...(ch.collectionId ? [ch.collectionId] : [])]).forEach((k) => { (members[k] = members[k] || []).push(ch.id); });
     }));
-    builtins(data).forEach((b) => { if (!groupOf[b.id]) { groupOf[b.id] = WTV_GROUP; adminIdx[b.id] = channels.length; channels.push(b); } });
+    builtins(data, cfg).forEach((b) => { if (!groupOf[b.id]) { groupOf[b.id] = WTV_GROUP; adminIdx[b.id] = channels.length; channels.push(b); } });
     const has = (k) => Object.prototype.hasOwnProperty.call(map, k);
     const typeOf = (key, label, lead) => (TYPES.includes(tcfg[key]) && (lead || tcfg[key] === 'block') ? tcfg[key] : defaultType(label, lead));
     const networks = {}, netsOf = {}, families = [];
@@ -370,7 +402,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
 
   // A built-in channel's row: what it opens or plays
   function builtinRow(c, data) {
-    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind };
+    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind, repeat: ch.repeat || undefined };
     if (ch.kind === 'forecast') return { ...base, cells: ['Current Conditions', 'Hourly', '7-Day Forecast', 'Records & Normals'].map((t) => ({ t })) };
     if (ch.kind === 'radar') return { ...base, cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) };
     if (ch.kind === 'wstar') return { ...base, cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) };
@@ -415,7 +447,15 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   function sanitize(body, data) {
     const known = new Set();
     (data.groups || []).forEach((g) => (g.channels || []).forEach((ch) => known.add(ch.id)));
-    builtins(data).forEach((b) => known.add(b.id));
+    const extras = [];
+    if (body && Array.isArray(body.extras)) body.extras.slice(0, 50).forEach((e) => {
+      if (!e || !PLAYLIST_RE.test(e.playlistId || '') || extras.some((x) => x.playlistId === e.playlistId)) return;
+      const x = { playlistId: e.playlistId, title: cleanLabel(e.title) || 'Playlist', block: ID_RE.test(e.block || '') ? e.block : 'seasonal' };
+      if (MMDD_RE.test(e.from || '') && MMDD_RE.test(e.to || '')) { x.from = e.from; x.to = e.to; }
+      if (e.on === false) x.on = false;
+      extras.push(x);
+    });
+    builtins(data, body && Array.isArray(body.extras) ? { extras } : configOf(data), true).forEach((b) => known.add(b.id));
     const blocks = {}, map = {}, channels = {}, types = {};
     Object.entries((body && body.blocks) || {}).forEach(([id, b]) => {
       if (!ID_RE.test(id) || !b) return;
@@ -440,7 +480,10 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const area = cleanCode(c.area); if (area) e.area = area;
       if (Object.keys(e).length) channels[id] = e;
     });
-    return { v: 2, blocks, map, channels, types };
+    const out = { v: 2, blocks, map, channels, types };
+    if (body && Array.isArray(body.extras)) out.extras = extras;
+    else if (Array.isArray(configOf(data).extras)) out.extras = configOf(data).extras;
+    return out;
   }
   function adminView(data, cfg) {
     const { blocks, sources, hidden, networks } = layout(data, cfg);
@@ -452,6 +495,8 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, type: s.type, defType: s.defType, lead: s.lead || null, count: s.count, block: s.block || '', def: s.def || '' })),
       channels: [...blocks.flatMap((b) => b.chans.map((c) => row(c, b.id))), ...hidden.map((c) => row(c, 'none'))],
       config: cfg || configOf(data),
+      extras: extrasOf(cfg || configOf(data)).map((e) => ({ ...e, inSeason: inSeason(e) })),
+      today: todayMMDD(),
     };
   }
   app.get('/api/admin/guide', (req, res) => {
@@ -511,6 +556,13 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         await new Promise((r) => setTimeout(r, 1500));
       }
       if (missing.length) { memo = { at: 0, body: null }; console.log('[Guide] Filled in video lists for ' + missing.length + ' channels'); }
+      // Playlist channels in season: have their videos ready before anyone tunes in
+      for (const e of extrasOf(configOf(data)).filter(inSeason)) {
+        if (cache.playlist[e.playlistId] || Date.now() - (tried.get('pl:' + e.playlistId) || 0) < 6 * 3600 * 1000) continue;
+        tried.set('pl:' + e.playlistId, Date.now());
+        try { await fetch('http://127.0.0.1:' + PORT + '/api/yt/playlist/' + encodeURIComponent(e.playlistId)); memo = { at: 0, body: null }; } catch (err) {}
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     } catch (e) { console.warn('[Guide] Backfill failed:', e.message); }
   }
   const t1 = setTimeout(backfill, 3 * 60 * 1000); if (t1.unref) t1.unref();

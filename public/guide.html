@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-23T15:00:00Z build.1795446000 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T01:00:00Z build.1795482000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -561,7 +561,7 @@ button{font-family:inherit}
     if (ch.kind === 'forecast') { status = 'Opens your full forecast'; next = 'Hourly · 7-day · alerts · records'; action = 'OPEN FORECAST'; }
     else if (ch.kind === 'radar') { status = 'Opens Live Radar'; next = 'Radar · warnings · chasers on the map'; action = 'OPEN RADAR'; }
     else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
-    else if (ch.kind === 'list') { status = 'Plays straight through · ' + cellSub(it, c, k); }
+    else if (ch.kind === 'list') { status = (ch.repeat ? 'Plays on repeat · ' : 'Plays straight through · ') + cellSub(it, c, k); if (ch.repeat && !nxt && ch.cells.length) next = 'Then back to: ' + ch.cells[0].t; }
     else if (ch.kind === 'radio') { status = 'Nonstop music from the WeatherStar · plays while you browse the guide'; next = 'Next song: ' + (nxt || ch.cells[0] || {}).t; action = 'LISTEN'; }
     else if (c && c.live) { status = 'LIVE now'; live = true; }
     else if (c) { status = 'Uploaded ' + ago(c.at); }
@@ -866,9 +866,13 @@ button{font-family:inherit}
     if (mode !== 'watch') return;
     const cur = current();
     if (!cur) return;
-    const nxt = cur.ch.cells[sel.c + 1];
-    if (!nxt || nxt.live || cur.ch.kind === 'radio') return;
-    select(sel.r, sel.c + 1);
+    if (cur.ch.kind === 'radio') return;
+    let k = sel.c + 1;
+    if (!cur.ch.cells[k] && cur.ch.repeat && cur.ch.cells.length) k = 0;   // playlist channels (Yule logs) play on repeat
+    const nxt = cur.ch.cells[k];
+    if (!nxt || nxt.live) return;
+    if (keyOf(cur.ch, nxt) === loaded.key) { ytCmd('seekTo', [0, true]); ytCmd('playVideo'); return; }   // a one-video playlist: start it again
+    select(sel.r, k);
     watched.c = sel.c;
     play(cur.ch, nxt, false);
     renderSide(false); renderBanner(); flashOsd();
