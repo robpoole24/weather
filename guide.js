@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T01:00:00Z build.1795482000
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T03:30:00Z build.1795491000
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -57,6 +57,9 @@ const DEFAULT_BLOCKS = [
   ['seasonal', 'SEASONAL CHANNELS', 9000, 9099],
   ['audio', 'AUDIO CHANNELS', 9900, 9999],
 ];
+// Block colors, like the old PPV and premium-channel bands (set per block in admin)
+const THEMES = ['holiday', 'halloween', 'ppv', 'shamrock', 'frost', 'patriot', 'gold'];
+const DEFAULT_THEME = { seasonal: 'holiday' };
 // YouTube channels that start in a particular block (until moved in admin)
 const DEFAULT_CHANNEL_BLOCK = { UCUEQ5cxsnSpYL1VoTqbhsDw: 'wtv' };   // Altruistic Apps → Weather TV
 const WTV_GROUP = { id: 'wtv', label: 'Weather TV (built in)' };
@@ -149,6 +152,7 @@ const DEFAULT_EXTRAS = [
   { playlistId: 'PL9pARcP4EoEj3ALLqT3H9wYbri2HKZqEY', title: 'Bing at Christmas Yule Log', block: 'seasonal', from: '11-01', to: '12-31' },
   { playlistId: 'PLV3-REjEjIi4', title: 'Classic Christmas Songs', block: 'seasonal', from: '11-01', to: '12-31' },
   { playlistId: 'PLcsYfW8jCWiA', title: 'Yule Logs (Natural Sounds)', block: 'seasonal', from: '11-01', to: '12-31' },
+  { playlistId: 'PLSODG9J4zv6Y', title: 'Christmas Around The World', block: 'seasonal', from: '11-01', to: '12-31' },
 ];
 const PLAYLIST_RE = /^[A-Za-z0-9_-]{10,64}$/;
 const MMDD_RE = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
@@ -242,10 +246,11 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       if (num(b.start) > RESERVED_MAX) m.start = num(b.start);
       if (num(b.end) != null && num(b.end) >= m.start) m.end = num(b.end);
       if (num(b.order) != null) m.order = num(b.order);
+      if (b.theme === 'none' || THEMES.includes(b.theme)) m.theme = b.theme;
     });
     let extra = 1700;
     const bump = () => { const s = extra; extra += 100; return s; };
-    Object.values(meta).forEach((m) => { if (!(m.start > RESERVED_MAX)) m.start = bump(); if (!(m.end >= m.start)) m.end = m.start + 99; });
+    Object.values(meta).forEach((m) => { if (!m.theme) m.theme = DEFAULT_THEME[m.id] || 'none'; if (!(m.start > RESERVED_MAX)) m.start = bump(); if (!(m.end >= m.start)) m.end = m.start + 99; });
 
     // Sources: groups and collections, each sending its channels to a block
     const sources = [];
@@ -417,7 +422,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     const data = loadData() || {};
     const { blocks, networks } = layout(data);
     const out = blocks.filter((b) => b.chans.length).map((b) => ({
-      id: b.id, label: b.label, range: rangeOf(b.chans), regional: /^reg-/.test(b.id),
+      id: b.id, label: b.label, range: rangeOf(b.chans), regional: /^reg-/.test(b.id), theme: b.theme !== 'none' ? b.theme : undefined,
       channels: b.chans.map((c) => (c.ch.builtin ? builtinRow(c, data) : channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam))),
     }));
     const liveRows = [];
@@ -461,7 +466,8 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       if (!ID_RE.test(id) || !b) return;
       const start = num(b.start), end = num(b.end), order = num(b.order);
       blocks[id] = { label: cleanLabel(b.label) || undefined, start: start > RESERVED_MAX && start < 100000 ? start : undefined,
-        end: end > RESERVED_MAX && end < 100000 ? end : undefined, order: order != null && order >= 0 && order < 10000 ? order : undefined };
+        end: end > RESERVED_MAX && end < 100000 ? end : undefined, order: order != null && order >= 0 && order < 10000 ? order : undefined,
+        theme: b.theme === 'none' || THEMES.includes(b.theme) ? b.theme : undefined };
     });
     Object.entries((body && body.map) || {}).forEach(([key, b]) => {
       if (!/^[gc]:[A-Za-z0-9:_-]{1,120}$/.test(key)) return;
@@ -491,7 +497,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     return {
       reserved: RESERVED_MAX,
       groups: [WTV_GROUP, ...(data.groups || []).map((g) => ({ id: g.id, label: g.label }))],
-      blocks: blocks.map((b, i) => ({ id: b.id, label: b.label, start: b.start, end: b.end, order: i, custom: b.custom, count: b.chans.length, overflow: b.overflow })),
+      blocks: blocks.map((b, i) => ({ id: b.id, label: b.label, start: b.start, end: b.end, order: i, custom: b.custom, count: b.chans.length, overflow: b.overflow, theme: b.theme })),
       sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, type: s.type, defType: s.defType, lead: s.lead || null, count: s.count, block: s.block || '', def: s.def || '' })),
       channels: [...blocks.flatMap((b) => b.chans.map((c) => row(c, b.id))), ...hidden.map((c) => row(c, 'none'))],
       config: cfg || configOf(data),

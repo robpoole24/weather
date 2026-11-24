@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T02:30:00Z build.1795487400 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T03:00:00Z build.1795489200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -95,6 +95,21 @@ button{font-family:inherit}
 .live{font-style:normal;background:var(--live);color:#fff;font-weight:700;font-size:11px;padding:0 4px;margin-right:6px;letter-spacing:.08em;flex:none}
 .band{height:22px;flex:none;background:var(--band);color:var(--bandt);display:flex;justify-content:space-between;align-items:center;padding:0 12px;font-size:15px;font-weight:700;letter-spacing:.12em}
 .band span:last-child{color:var(--muted);font-weight:600}
+/* Block colors (set in admin), like the old PPV / premium bands: cells, channel tag and the block's band */
+.th-holiday{--tc:#b3121f;--tt:#fff;--tb:#fff;--ts:#ffd5d9;--chc:#7a0a13;--cht:#fff;--bb:#fff;--bt:#b3121f}
+.th-halloween{--tc:#ec7a12;--tt:#111;--tb:#111;--ts:#3d1d00;--chc:#111;--cht:#ff8c1a;--bb:#111;--bt:#ff8c1a}
+.th-ppv{--tc:#4b1f73;--tt:#f5c542;--tb:#f5c542;--ts:#e6d4ff;--chc:#2d0f47;--cht:#f5c542;--bb:#f5c542;--bt:#2d0f47}
+.th-shamrock{--tc:#1f7a3a;--tt:#fff;--tb:#fff;--ts:#d6f5df;--chc:#0f4d22;--cht:#fff;--bb:#fff;--bt:#1f7a3a}
+.th-frost{--tc:#d4ebff;--tt:#0b2a4a;--tb:#fff;--ts:#2d5c86;--chc:#2d6fb5;--cht:#fff;--bb:#e8f4ff;--bt:#2d6fb5}
+.th-patriot{--tc:#1c3f94;--tt:#fff;--tb:#c8102e;--ts:#dbe4ff;--chc:#c8102e;--cht:#fff;--bb:#fff;--bt:#1c3f94}
+.th-gold{--tc:#2a2208;--tt:#f5c542;--tb:#f5c542;--ts:#e8d9a8;--chc:#f5c542;--cht:#2a2208;--bb:#f5c542;--bt:#2a2208}
+.row[class*=" th-"] .cell:not(.sel){background:var(--tc);color:var(--tt);border-color:var(--tb)}
+.row[class*=" th-"] .cell:not(.sel) .s{color:var(--ts)}
+.row[class*=" th-"] .cell.empty{opacity:.75}
+.row[class*=" th-"] .chan{background:var(--chc);color:var(--cht);box-shadow:inset 0 0 0 2px var(--tb)}
+.row[class*=" th-"] .chan b{color:var(--cht)}
+.band[class*=" th-"]{background:var(--bb);color:var(--bt)}
+.band[class*=" th-"] span:last-child{color:var(--bt);opacity:.8}
 
 /* ── Watching (the main player screen) ── */
 #watch{display:none}
@@ -512,11 +527,11 @@ button{font-family:inherit}
     const nets = netsOf(ch);
     const badges = nets.slice(0, 2).map((n, j) => '<span class="nb n' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(n.name.slice(0, 4).toUpperCase()) + '</i>') + '</span>').join('');
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
-    return '<div class="row" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + badges + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span></button>' + cells + '</div>';
+    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + badges + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span></button>' + cells + '</div>';
   }
   function renderGrid() {
     rowsEl.innerHTML = flat.map((it, i) => it.band
-      ? '<div class="band" id="r' + i + '"><span>' + esc(it.b.label) + '</span><span>' + esc(it.b.range) + '</span></div>'
+      ? '<div class="band' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><span>' + esc(it.b.label) + '</span><span>' + esc(it.b.range) + '</span></div>'
       : rowHTML(it, i)).join('');
     $('h1').textContent = off === 0 ? 'ON NOW · NEWEST' : '‹‹‹ NEWER';
     keepVisible();

@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-24T01:00:00Z build.1795482000 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-24T03:00:00Z build.1795489200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -45,6 +45,7 @@
   .bk.empty { opacity:.75; }
   .bk input[type=text] { flex:1; min-width:0; font-size:.8rem; }
   .bk input[type=number] { width:3.9rem; font-size:.8rem; padding:.24rem .3rem; }
+  .bk select.theme { width:2.6rem; flex:none; font-size:.85rem; padding:.15rem .1rem; text-overflow:clip; cursor:pointer; }
   .bk .dash { color:var(--muted); font-size:.8rem; }
   .bk .cnt { font-size:.75rem; color:var(--muted); width:1.8rem; text-align:right; flex:none; cursor:pointer; }
   .warn { color:var(--gold); font-size:.85rem; cursor:help; }
@@ -181,6 +182,8 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const BY = { you: 'by you', collection: 'by collection', code: 'by code', group: 'by group', creator: 'with creator', builtin: 'by default' };
+  const THEME_OPTS = [['none', '🎨 Standard'], ['holiday', '🎅 Holiday (red & white)'], ['halloween', '🎃 Halloween (orange & black)'], ['ppv', '💜 PPV (purple & gold)'],
+    ['shamrock', '☘ Shamrock (green & white)'], ['frost', '❄ Frost (icy blue)'], ['patriot', '🎆 Patriot (red, white & blue)'], ['gold', '⭐ Gold']];
   const TYPE_LABEL = { block: 'Send to block', network: 'Network (badge)', creator: 'Same creator' };
   let V = null;          // the layout as the server works it out (saved or draft)
   let draft = null;      // { blocks, map, channels } being edited
@@ -198,7 +201,7 @@
       types: Object.assign({}, (V.config && V.config.types) || {}),
       extras: (V.extras || []).map((e) => { const x = { ...e }; delete x.inSeason; return x; }),
     };
-    V.blocks.forEach((b, i) => { draft.blocks[b.id] = { label: b.label, start: b.start, end: b.end, order: i, custom: b.custom }; });
+    V.blocks.forEach((b, i) => { draft.blocks[b.id] = { label: b.label, start: b.start, end: b.end, order: i, custom: b.custom, theme: b.theme || 'none' }; });
     V.sources.forEach((s) => { draft.map[s.key] = s.block || ''; });
     setDirty(false);
     render();
@@ -221,7 +224,7 @@
   }
   function payload() {
     const blocks = {};
-    Object.entries(draft.blocks).forEach(([id, b]) => { blocks[id] = { label: b.label, start: b.start, end: b.end, order: b.order }; });
+    Object.entries(draft.blocks).forEach(([id, b]) => { blocks[id] = { label: b.label, start: b.start, end: b.end, order: b.order, theme: b.theme || 'none' }; });
     return { blocks, map: draft.map, channels: draft.channels, types: draft.types, extras: draft.extras, syncGroups: !!($('syncg') && $('syncg').checked) };
   }
   function ch(id) { return (draft.channels[id] = draft.channels[id] || {}); }
@@ -277,6 +280,7 @@
         + '<input type="number" data-bs="' + esc(id) + '" value="' + esc(d.start) + '" min="2" aria-label="First channel number">'
         + '<span class="dash">–</span>'
         + '<input type="number" data-be="' + esc(id) + '" value="' + esc(d.end) + '" min="2" aria-label="Last channel number">'
+        + '<select class="theme" data-bt="' + esc(id) + '" aria-label="Block colors" title="Colors for this block in the guide">' + THEME_OPTS.map(([v, t]) => '<option value="' + v + '"' + (v === (d.theme || 'none') ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>'
         + (b.overflow ? '<span class="warn" title="Some of its channels are outside its range: more channels than room, or numbers taken by a block above">⚠</span>' : '')
         + '<span class="cnt" data-jump="' + esc(id) + '" title="Jump to this block">' + b.count + '</span>'
         + '<button class="ib" data-bup="' + i + '" aria-label="Move block up"' + (i ? '' : ' disabled') + '>▲</button>'
@@ -471,10 +475,11 @@
     else if (t.dataset.jump) { const h = $('bh-' + t.dataset.jump); if (h) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
   $('blocks').addEventListener('change', (e) => {
-    const t = e.target, id = t.dataset.bl || t.dataset.bs || t.dataset.be;
+    const t = e.target, id = t.dataset.bl || t.dataset.bs || t.dataset.be || t.dataset.bt;
     if (!id) return;
     const b = draft.blocks[id];
-    if (t.dataset.bl) b.label = t.value.trim().toUpperCase().slice(0, 40) || b.label;
+    if (t.dataset.bt) b.theme = t.value;
+    else if (t.dataset.bl) b.label = t.value.trim().toUpperCase().slice(0, 40) || b.label;
     else if (t.dataset.bs) { const v = parseInt(t.value, 10); if (v > 1) b.start = v; }
     else { const v = parseInt(t.value, 10); if (v > 1) b.end = v; }
     change();
