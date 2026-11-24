@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T04:00:00Z build.1795492800 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T04:30:00Z build.1795494600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -998,7 +998,8 @@ button{font-family:inherit}
   function closeNav() { navOpen = false; $('nav').classList.remove('on'); }
   function renderNav() {
     const list = navBlocks();
-    $('navlist').innerHTML = '<div class="nv kpr' + (navIdx === -1 ? ' foc' : '') + '" data-i="-1"><span class="ck" style="border-color:transparent;text-align:center">#</span><span class="nl">ENTER A CHANNEL NUMBER</span><small>CH #</small></div>' + list.map((b, i) => {
+    $('navlist').innerHTML = '<div class="nv kpr' + (navIdx === -1 ? ' foc' : '') + '" data-i="-1"><span class="ck" style="border-color:transparent;text-align:center">#</span><span class="nl">ENTER A CHANNEL NUMBER</span><small>CH #</small></div>'
+      + '<div class="nv kpr' + (navIdx === -2 ? ' foc' : '') + '" data-i="-2"><span class="ck" style="border-color:transparent;text-align:center">' + (autoScroll ? '⏸' : '▶') + '</span><span class="nl">' + (autoScroll ? 'PAUSE THE SCROLL' : 'START THE SCROLL') + '</span><small>AUTO</small></div>' + list.map((b, i) => {
       const on = !hidden.has(b.id), locked = b.id === 'wtv';
       return '<div class="nv' + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
         + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(b.label) + '">' + (on ? '✓' : '') + '</button>')
@@ -1031,7 +1032,7 @@ button{font-family:inherit}
   $('navlist').addEventListener('click', (e) => {
     const go = e.target.closest('[data-go]'); if (go) { goBlock(+go.dataset.go); return; }
     const ck = e.target.closest('[data-ck]'); if (ck) { navIdx = +ck.dataset.ck; toggleBlock(navIdx); return; }
-    const row = e.target.closest('.nv[data-i]'); if (row) { if (row.dataset.i === '-1') { closeNav(); openKp(); } else goBlock(+row.dataset.i); }
+    const row = e.target.closest('.nv[data-i]'); if (row) { if (row.dataset.i === '-1') { closeNav(); openKp(); } else if (row.dataset.i === '-2') { toggleScroll(); renderNav(); } else goBlock(+row.dataset.i); }
   });
   $('i-cust').onclick = openNav;
   rowsEl.addEventListener('click', (e) => { if (e.target.closest('.band')) openNav(); });
@@ -1062,6 +1063,7 @@ button{font-family:inherit}
   // like changing the channel on a TV: the music (WeatherStar Radio) gives way to it.
   // Browsing on with the arrows goes back to silent previews.
   function tuneIn(r) {
+    lastInput = Date.now() + 22000;                                // the scroll waits ~30 s before rolling on
     select(r, 0);
     const cur = current(); if (!cur || !cur.c || isPage(cur.ch)) return;
     clearTimeout(pvT);
@@ -1123,7 +1125,7 @@ button{font-family:inherit}
   // TV browsers and remotes don't always fill in e.key: fall back to the key codes
   // (digits 48–57, keypad 96–105, the TV's own 0–9 / channel / back codes)
   const TV_KEYS = { 13: 'Enter', 33: 'PageUp', 34: 'PageDown', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown',
-    427: 'ChannelUp', 428: 'ChannelDown', 10009: 'GoBack', 461: 'GoBack', 166: 'GoBack' };
+    427: 'ChannelUp', 428: 'ChannelDown', 10009: 'GoBack', 461: 'GoBack', 166: 'GoBack', 10252: 'MediaPlayPause', 415: 'MediaPlay', 19: 'MediaPause', 179: 'MediaPlayPause' };
   function keyName(e) {
     const k = e.key;
     if (k && k !== 'Unidentified' && k !== 'Process') return k;
@@ -1145,9 +1147,12 @@ button{font-family:inherit}
     if (mode === 'guide' && (k === 'i' || k === 'I') && !navOpen) { e.preventDefault(); openChm(sel.r); return; }
     if (navOpen) {
       const n = navBlocks().length;                                // row -1 is "Enter a channel number"
-      if (k === 'ArrowUp') { navIdx = navIdx <= -1 ? n - 1 : navIdx - 1; renderNav(); }
-      else if (k === 'ArrowDown') { navIdx = navIdx >= n - 1 ? -1 : navIdx + 1; renderNav(); }
+      const order = [-1, -2, ...Array.from({ length: n }, (_, i) => i)];   // number pad, scroll on/off, then the blocks
+      const at = Math.max(0, order.indexOf(navIdx));
+      if (k === 'ArrowUp') { navIdx = order[(at - 1 + order.length) % order.length]; renderNav(); }
+      else if (k === 'ArrowDown') { navIdx = order[(at + 1) % order.length]; renderNav(); }
       else if (navIdx === -1 && (k === 'Enter' || k === 'ArrowRight' || k === ' ')) { closeNav(); openKp(); }
+      else if (navIdx === -2 && (k === 'Enter' || k === 'ArrowRight' || k === ' ')) { toggleScroll(); renderNav(); }
       else if (k === 'ArrowRight') goBlock(navIdx);                  // ▶ GO: the guide goes there and keeps scrolling from there
       else if (k === 'Enter' || k === ' ') toggleBlock(navIdx);      // OK: show / hide
       else if (k === 'ArrowLeft' || k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'b' || k === 'B') closeNav();
@@ -1168,6 +1173,7 @@ button{font-family:inherit}
       else if (k === 'Enter' || k === ' ') activate();
       else if ((k === 'Escape' || k === 'Backspace' || k === 'GoBack') && watched) backToWatched();
       else if (k === 's' || k === 'S') toggleSkin();
+      else if (k === 'p' || k === 'P' || k === 'MediaPlayPause' || k === 'MediaPause' || k === 'MediaPlay') toggleScroll();
       else if (k === 'f' || k === 'F' || k === 'h' || k === 'H') { const cur = current(); if (cur) toggleFav(cur.ch); }
       else if (k === 'b' || k === 'B' || k === 'c' || k === 'C') openNav();
       else return;
@@ -1255,12 +1261,30 @@ button{font-family:inherit}
   //    place; clicking a channel while it rolls opens it. Saved on this device. ──
   let autoScroll = LS.get('wtvGuideAutoScroll', true), scrolling = false, lastInput = Date.now(), scrollPos = 0, holdUntil = 0;
   const IDLE_MS = 8000, SPEED = 18;                               // px per second, about a row every 2 seconds
-  function noteInput(keepView) {
-    lastInput = Date.now();
-    if (scrolling) { scrolling = false; if (!keepView) keepVisible(); }
+  // Stopping the roll keeps what's on screen: the highlight moves to the first channel in view,
+  // so ▲ goes back to the one that just rolled past instead of jumping to where you were before.
+  function noteInput(keepView, holdMs) {
+    lastInput = Date.now() + (holdMs || 0);
+    if (scrolling) {
+      scrolling = false;
+      if (!keepView) {
+        const top = rowsEl.scrollTop + rowsEl.offsetTop;
+        const first = [...rowsEl.querySelectorAll('.row')].find((el) => el.offsetTop >= top - 2);
+        const r = first ? +first.id.slice(1) : -1;
+        if (r >= 0 && flat[r] && flat[r].ch) { sel = { r, c: Math.min(sel.c, Math.max(0, flat[r].ch.cells.length - 1)) }; renderGrid(); updateInfo(); if (mode === 'guide' && engaged) schedulePreview(); }
+      }
+    }
   }
-  function setScrollBtn() { $('scrollbtn').textContent = 'AUTO-SCROLL: ' + (autoScroll ? 'ON' : 'OFF'); }
-  $('scrollbtn').onclick = () => { autoScroll = !autoScroll; LS.set('wtvGuideAutoScroll', autoScroll); setScrollBtn(); noteInput(); };
+  // Reading with the mouse: moving it over the listings holds the roll (it picks up again after 8 idle seconds)
+  rowsEl.addEventListener('mousemove', () => { if (autoScroll) noteInput(true); });
+  // The button shows what pressing it will do: ⏸ PAUSE SCROLL while it's on, ▶ START SCROLL while it's off
+  function setScrollBtn() { $('scrollbtn').textContent = autoScroll ? '⏸ PAUSE SCROLL' : '▶ START SCROLL'; }
+  function toggleScroll() {
+    autoScroll = !autoScroll; LS.set('wtvGuideAutoScroll', autoScroll); setScrollBtn();
+    if (autoScroll) { scrolling = false; lastInput = Date.now() - IDLE_MS + 1200; }          // starting: roll again in a moment
+    else noteInput(true);
+  }
+  $('scrollbtn').onclick = toggleScroll;
   setScrollBtn();
   let lastFrame = 0;
   function rollFrame(t) {
