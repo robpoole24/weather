@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T01:15:00Z build.1795482900 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T02:00:00Z build.1795485600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -176,6 +176,18 @@ button{font-family:inherit}
 /* Blocks menu: opens over the left of the grid */
 #nav{position:absolute;left:12px;top:320px;width:330px;height:348px;z-index:9;box-sizing:border-box;background:var(--panel);border:3px solid var(--selb);border-radius:var(--r);display:none;flex-direction:column;box-shadow:12px 0 30px rgba(0,0,0,.55)}
 #nav.on{display:flex}
+/* On-screen channel number pad (for remotes and controllers without number buttons) */
+#kp{position:absolute;inset:0;z-index:23;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+#kp.on{display:flex}
+#kp .box{background:var(--panel);border:3px solid var(--selb);border-radius:var(--r);padding:16px 20px;display:flex;flex-direction:column;gap:12px;align-items:center}
+#kp-d{font-size:40px;font-weight:700;color:var(--num);letter-spacing:.08em;min-width:260px;text-align:center;background:var(--cell);border-radius:var(--r);padding:4px 12px}
+#kp-d span{color:var(--muted);font-size:26px;margin-right:10px}
+#kp-g{display:grid;grid-template-columns:repeat(3,84px);gap:8px}
+#kp-g button{height:62px;font:inherit;font-size:30px;font-weight:700;background:var(--cell);color:var(--text);border:3px solid transparent;border-radius:var(--r);cursor:pointer}
+#kp-g button.on{border-color:var(--selb);background:var(--sel)}
+#kp-g button.ok{background:var(--btn);color:var(--btnt);font-size:24px}
+#kp small{font-size:14px;color:var(--muted)}
+.nv.kpr .nl{color:var(--title);font-weight:700}
 #nav h3{margin:0;padding:8px 14px 4px;font-size:22px;letter-spacing:.1em;color:var(--title)}
 #nav p{margin:0;padding:0 14px 6px;font-size:14px;color:var(--muted)}
 #navlist{flex:1 1 0;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;background:var(--line);border-top:2px solid var(--line)}
@@ -250,6 +262,7 @@ button{font-family:inherit}
   <div id="bar">
     <div class="k">
       <button type="button" class="btn" id="guidebtn">GUIDE</button>
+      <button type="button" class="btn ghost" id="kpbtn" title="Enter a channel number">CH #</button>
       <button type="button" class="btn green" data-app="radar">LIVE RADAR</button>
       <button type="button" class="btn ghost" data-app="forecast">FORECAST</button>
       <button type="button" class="btn ghost" data-app="wstar">WEATHERSTAR</button>
@@ -282,6 +295,11 @@ button{font-family:inherit}
       <button type="button" class="btn ghost" id="chm-fav">♡ FAVORITE</button>
       <button type="button" class="btn ghost" id="chm-close">CLOSE</button>
     </div>
+  </div></div>
+  <div id="kp" role="dialog" aria-modal="true" aria-label="Enter a channel number"><div class="box">
+    <div id="kp-d"><span>CH</span><b id="kp-n"></b></div>
+    <div id="kp-g"></div>
+    <small>▲▼◀▶ MOVE · OK PRESS · BACK CLOSE</small>
   </div></div>
   <div id="nav" role="dialog" aria-label="Blocks"><h3>BLOCKS</h3><p>Jump to a block, or untick the ones you don’t want in the guide. Saved on this device only.</p><div id="navlist"></div><div id="navkeys"><b>▲▼</b> MOVE · <b>OK / ▶</b> JUMP · <b>SPACE</b> SHOW / HIDE · <b>◀</b> CLOSE</div></div>
   <div id="ticker" role="status" aria-live="polite"><span id="tk-label"></span><div id="tk-wrap"><span id="tk-text"></span></div></div>
@@ -950,7 +968,7 @@ button{font-family:inherit}
   function closeNav() { navOpen = false; $('nav').classList.remove('on'); }
   function renderNav() {
     const list = navBlocks();
-    $('navlist').innerHTML = list.map((b, i) => {
+    $('navlist').innerHTML = '<div class="nv kpr' + (navIdx === -1 ? ' foc' : '') + '" data-i="-1"><span class="ck" style="border-color:transparent;text-align:center">#</span><span class="nl">ENTER A CHANNEL NUMBER</span><small>CH #</small></div>' + list.map((b, i) => {
       const on = !hidden.has(b.id), locked = b.id === 'wtv';
       return '<div class="nv' + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
         + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(b.label) + '">' + (on ? '✓' : '') + '</button>')
@@ -974,7 +992,7 @@ button{font-family:inherit}
   }
   $('navlist').addEventListener('click', (e) => {
     const ck = e.target.closest('[data-ck]'); if (ck) { navIdx = +ck.dataset.ck; toggleBlock(navIdx); return; }
-    const row = e.target.closest('.nv[data-i]'); if (row) jumpTo(+row.dataset.i);
+    const row = e.target.closest('.nv[data-i]'); if (row) { if (row.dataset.i === '-1') { closeNav(); openKp(); } else jumpTo(+row.dataset.i); }
   });
   $('i-cust').onclick = openNav;
   rowsEl.addEventListener('click', (e) => { if (e.target.closest('.band')) openNav(); });
@@ -1027,8 +1045,57 @@ button{font-family:inherit}
     }
     if (flat[r] && flat[r].ch) select(r, 0);
   }
-  addEventListener('keydown', (e) => {
+  // ── On-screen number pad: CH # in the bar, or the top row of ☰ BLOCKS ──
+  const KP = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', 'OK'];
+  let kpOpen = false, kpIdx = 0, kpBuf = '';
+  function kpRender() {
+    $('kp-n').textContent = kpBuf || '_ _ _';
+    $('kp-g').innerHTML = KP.map((x, i) => '<button type="button" data-kp="' + i + '" class="' + (i === kpIdx ? 'on ' : '') + (x === 'OK' ? 'ok' : '') + '">' + x + '</button>').join('');
+  }
+  function openKp() {
+    if (!G) return;
+    closeNav(); if (chmOpen) closeChm();
+    kpOpen = true; kpIdx = 0; kpBuf = '';
+    $('kp').classList.add('on'); kpRender();
+  }
+  function closeKp() { kpOpen = false; $('kp').classList.remove('on'); }
+  function kpPress(x) {
+    if (x === '⌫') kpBuf = kpBuf.slice(0, -1);
+    else if (x === 'OK') { if (kpBuf) { const n = kpBuf; closeKp(); if (mode === 'app') closeApp(); if (!engaged) engage(); numBuf = n; goNumber(); } else closeKp(); return; }
+    else if (kpBuf.length < 4) kpBuf += x;
+    kpRender();
+  }
+  function kpKey(k) {
+    if (/^[0-9]$/.test(k)) { kpPress(k); return true; }
+    if (k === 'ArrowRight') kpIdx = kpIdx % 3 === 2 ? kpIdx - 2 : kpIdx + 1;
+    else if (k === 'ArrowLeft') kpIdx = kpIdx % 3 === 0 ? kpIdx + 2 : kpIdx - 1;
+    else if (k === 'ArrowDown') kpIdx = (kpIdx + 3) % 12;
+    else if (k === 'ArrowUp') kpIdx = (kpIdx + 9) % 12;
+    else if (k === 'Enter' || k === ' ') { kpPress(KP[kpIdx]); return true; }
+    else if (k === 'Backspace') { if (kpBuf) kpPress('⌫'); else closeKp(); return true; }
+    else if (k === 'Escape' || k === 'GoBack') { closeKp(); return true; }
+    else return false;
+    kpRender(); return true;
+  }
+  $('kp-g').addEventListener('click', (e) => { const b = e.target.closest('[data-kp]'); if (b) { kpIdx = +b.dataset.kp; kpPress(KP[kpIdx]); } });
+  $('kp').addEventListener('click', (e) => { if (e.target.id === 'kp') closeKp(); });
+  $('kpbtn').onclick = openKp;
+
+  // TV browsers and remotes don't always fill in e.key: fall back to the key codes
+  // (digits 48–57, keypad 96–105, the TV's own 0–9 / channel / back codes)
+  const TV_KEYS = { 13: 'Enter', 33: 'PageUp', 34: 'PageDown', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown',
+    427: 'ChannelUp', 428: 'ChannelDown', 10009: 'GoBack', 461: 'GoBack', 166: 'GoBack' };
+  function keyName(e) {
     const k = e.key;
+    if (k && k !== 'Unidentified' && k !== 'Process') return k;
+    const c = e.keyCode || e.which || 0;
+    if (c >= 48 && c <= 57) return String(c - 48);
+    if (c >= 96 && c <= 105) return String(c - 96);
+    return TV_KEYS[c] || k || '';
+  }
+  addEventListener('keydown', (e) => {
+    const k = keyName(e);
+    if (kpOpen) { if (kpKey(k)) e.preventDefault(); return; }
     if (chmOpen) {
       if (k === 'f' || k === 'F' || k === 'h' || k === 'H') { e.preventDefault(); const it = flat[chmRow]; if (it && it.ch) toggleFav(it.ch); return; }
       if (k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'i' || k === 'I') closeChm();
@@ -1038,11 +1105,11 @@ button{font-family:inherit}
     }
     if (mode === 'guide' && (k === 'i' || k === 'I') && !navOpen) { e.preventDefault(); openChm(sel.r); return; }
     if (navOpen) {
-      const n = navBlocks().length;
-      if (k === 'ArrowUp') { navIdx = (navIdx - 1 + n) % n; renderNav(); }
-      else if (k === 'ArrowDown') { navIdx = (navIdx + 1) % n; renderNav(); }
-      else if (k === 'Enter' || k === 'ArrowRight') jumpTo(navIdx);
-      else if (k === ' ') toggleBlock(navIdx);
+      const n = navBlocks().length;                                // row -1 is "Enter a channel number"
+      if (k === 'ArrowUp') { navIdx = navIdx <= -1 ? n - 1 : navIdx - 1; renderNav(); }
+      else if (k === 'ArrowDown') { navIdx = navIdx >= n - 1 ? -1 : navIdx + 1; renderNav(); }
+      else if (k === 'Enter' || k === 'ArrowRight') { if (navIdx === -1) { closeNav(); openKp(); } else jumpTo(navIdx); }
+      else if (k === ' ') { if (navIdx >= 0) toggleBlock(navIdx); }
       else if (k === 'ArrowLeft' || k === 'Escape' || k === 'Backspace' || k === 'GoBack' || k === 'b' || k === 'B') closeNav();
       else return;
       e.preventDefault(); return;
