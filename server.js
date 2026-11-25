@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-23T15:30:00Z build.1795447800
+// WeatherTV Server — updated 2026-11-25T00:45:00Z build.1795567500
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -6939,13 +6939,18 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
   }
 });
 
-// Playlist items — cached for 6 hours
+// Playlist items — cached (CACHE_TTL.playlist). Up to 200 videos (4 pages of 50, 1 unit each).
+// ?fresh=1 from the server itself (the Channel Guide's refresh) skips the cache, so videos
+// added to a playlist show up within a few hours instead of two days.
 app.get('/api/yt/playlist/:playlistId', async (req, res) => {
   const playlistId = req.params.playlistId;
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(playlistId)) return res.status(400).json({ error: 'Bad playlist ID' });
+  const local = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test((req.socket && req.socket.remoteAddress) || '');
+  const fresh = local && req.query.fresh === '1';
 
   // Serve from cache if fresh
   const cached = cache.playlist[playlistId];
-  if (cached && (Date.now() - cached.cachedAt) < CACHE_TTL.playlist) {
+  if (!fresh && cached && (Date.now() - cached.cachedAt) < CACHE_TTL.playlist) {
     return res.json({ items: cached.items, _cached: true });
   }
 
@@ -6957,14 +6962,25 @@ app.get('/api/yt/playlist/:playlistId', async (req, res) => {
   if (!key) return res.status(500).json({ error: 'No API key configured' });
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=50`;
-    const data = await ytFetch(url);
-    if (checkQuotaError(data)) {
-      markQuotaExceeded();
-      return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
+    let data = null, allItems = [], pageToken = '';
+    for (let page = 0; page < 4; page++) {
+      const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=50` + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+      const d = await ytFetch(url);
+      if (checkQuotaError(d)) {
+        markQuotaExceeded();
+        if (cached) return res.json({ items: cached.items, _cached: true, _stale: true });
+        return res.status(429).json({ error: 'quota_exceeded', message: 'Daily YouTube quota reached — resets at midnight Pacific' });
+      }
+      if (!data) data = d;
+      allItems = allItems.concat(d.items || []);
+      pageToken = d.nextPageToken;
+      if (!pageToken || d.error) break;
+    }
+    if (!allItems.length && data && data.error) {              // YouTube said no: keep what we had
+      if (cached) return res.json({ items: cached.items, _cached: true, _stale: true });
+      return res.status(502).json({ error: (data.error && data.error.message) || 'YouTube error' });
     }
     // Filter out deleted and private videos — they return with generic titles
-    const allItems = data.items || [];
     const validItems = allItems.filter(item => {
       const title = item.snippet && item.snippet.title;
       if (!title) return false;

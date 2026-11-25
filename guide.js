@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-24T03:30:00Z build.1795491000
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T00:45:00Z build.1795567500
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -414,7 +414,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     if (ch.kind === 'radio') return { ...base, cells: radioTracks() };
     if (ch.id === 'highlights') return { ...base, cells: (data.highlights || []).slice(0, 30).map((h) => ({ v: h.videoId, t: h.title || '' })) };
     const pl = cache.playlist[ch.playlistId];
-    const cells = ((pl && pl.items) || []).slice(0, 50).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
+    const cells = ((pl && pl.items) || []).slice(0, 200).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
     return { ...base, playlistId: ch.playlistId, cells, needsFetch: !cells.length };
   }
 
@@ -547,6 +547,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   // the list the same way as everywhere else. A channel that comes back empty is
   // not tried again for a day.
   const PORT = process.env.PORT || 3000;
+  const PL_REFRESH = 3 * 3600 * 1000;
   const tried = new Map();
   async function backfill() {
     try {
@@ -562,11 +563,15 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         await new Promise((r) => setTimeout(r, 1500));
       }
       if (missing.length) { memo = { at: 0, body: null }; console.log('[Guide] Filled in video lists for ' + missing.length + ' channels'); }
-      // Playlist channels in season: have their videos ready before anyone tunes in
-      for (const e of extrasOf(configOf(data)).filter(inSeason)) {
-        if (cache.playlist[e.playlistId] || Date.now() - (tried.get('pl:' + e.playlistId) || 0) < 6 * 3600 * 1000) continue;
-        tried.set('pl:' + e.playlistId, Date.now());
-        try { await fetch('http://127.0.0.1:' + PORT + '/api/yt/playlist/' + encodeURIComponent(e.playlistId)); memo = { at: 0, body: null }; } catch (err) {}
+      // The guide's playlists (6–10 and the playlist channels in season): refreshed every
+      // 3 hours, so videos you add to a playlist show up the same day (1 unit per 50 videos)
+      const pls = [...(data.playlists || []).slice(0, 5).map((p) => p.playlistId), ...extrasOf(configOf(data)).filter(inSeason).map((e) => e.playlistId)].filter(Boolean);
+      for (const pid of [...new Set(pls)]) {
+        const c = cache.playlist[pid];
+        if (c && Date.now() - (c.cachedAt || 0) < PL_REFRESH) continue;
+        if (Date.now() - (tried.get('pl:' + pid) || 0) < PL_REFRESH) continue;
+        tried.set('pl:' + pid, Date.now());
+        try { await fetch('http://127.0.0.1:' + PORT + '/api/yt/playlist/' + encodeURIComponent(pid) + '?fresh=1'); memo = { at: 0, body: null }; } catch (err) {}
         await new Promise((r) => setTimeout(r, 1500));
       }
     } catch (e) { console.warn('[Guide] Backfill failed:', e.message); }
