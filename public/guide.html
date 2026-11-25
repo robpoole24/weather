@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T19:00:00Z build.1795633200 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T19:20:00Z build.1795634400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -60,13 +60,14 @@ button{font-family:inherit}
 .chan:hover b{text-decoration:underline}
 /* Channel cell: role icon on the left (forecaster, chaser, hurricane, radar, Weather TV…),
    number and call in the middle, network logos (WeatherFront, WeatherWise…) in a strip underneath */
-.chan{position:relative;padding-left:30px;box-sizing:border-box}
+.chan{position:relative;padding:0 30px;box-sizing:border-box}
 .chan .ri{position:absolute;left:6px;top:50%;transform:translateY(-50%);width:30px;height:30px;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .chan .ri img{width:30px;height:30px;object-fit:contain;border-radius:6px;display:block}
 .chan .ri.em{font-size:24px;line-height:1}
-.chan .ns{display:flex;gap:4px;margin-top:3px;height:14px;align-items:center;pointer-events:none}
-.chan .ns img{height:14px;width:auto;max-width:36px;border-radius:2px;object-fit:contain;display:block}
-.chan .ns i{font-style:normal;font-size:9px;font-weight:700;background:var(--band);color:var(--bandt);border-radius:2px;padding:1px 3px;letter-spacing:.02em;line-height:1.2}
+.chan .ns{position:absolute;right:5px;width:23px;height:23px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.chan .ns.s0{bottom:2px}.chan .ns.s1{top:2px}
+.chan .ns img{width:23px;height:23px;border-radius:4px;object-fit:contain;display:block}
+.chan .ns i{font-style:normal;font-size:10px;font-weight:700;background:var(--band);color:var(--bandt);border-radius:3px;padding:2px 2px;letter-spacing:0;line-height:1.1}
 #chm-net{font-size:18px;color:var(--text);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 #chm-net img{height:26px;width:auto;border-radius:4px;vertical-align:middle}
 #chm-net span{display:inline-flex;align-items:center;gap:6px}
@@ -603,7 +604,8 @@ button{font-family:inherit}
     const role = icons ? '<span class="ri em" aria-hidden="true">' + icons[(ch.n || 0) % icons.length] + '</span>'
       : ico ? '<span class="ri" aria-hidden="true"><img src="' + esc(ico) + '" alt=""></span>' : '';
     // Under the number: the networks it's in
-    const strip = nets.length ? '<span class="ns" aria-hidden="true">' + nets.slice(0, 3).map((n) => n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(((n.name.match(/[A-Z0-9]/g) || []).join('') || n.name).slice(0, 3).toUpperCase()) + '</i>').join('') + '</span>' : '';   // no logo yet: WF, WW, AW…
+    // Right: up to two network logos stacked — one sits in the bottom box, a second fills the top
+    const strip = nets.slice(0, 2).map((n, j) => '<span class="ns s' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(((n.name.match(/[A-Z0-9]/g) || []).join('') || n.name).slice(0, 2).toUpperCase()) + '</i>') + '</span>').join('');   // no logo yet: WF, WW, AW…
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
     return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + role + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span>' + strip + '</button>' + cells + '</div>';
   }
