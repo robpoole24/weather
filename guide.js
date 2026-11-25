@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T01:00:00Z build.1795568400
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T07:30:00Z build.1795591800
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -63,6 +63,9 @@ const DEFAULT_THEME = { seasonal: 'holiday' };
 // YouTube channels that start in a particular block (until moved in admin)
 const DEFAULT_CHANNEL_BLOCK = { UCUEQ5cxsnSpYL1VoTqbhsDw: 'wtv' };   // Altruistic Apps → Weather TV
 const WTV_GROUP = { id: 'wtv', label: 'Weather TV (built in)' };
+// Our own channels get our logo next to their number in the guide (like the network badges)
+const WTV_ICON = '/images/icon-192.png';
+const OWN_ICON = { UCUEQ5cxsnSpYL1VoTqbhsDw: WTV_ICON };   // Altruistic Apps (it has videos about Weather TV)
 const DEFAULT_GROUP_BLOCK = { forecasters: 'forecasters', chasers: 'chasers', creators: 'creators', react: 'react', reacts: 'react', nws: 'nws' };
 // Blocks that keep their channels whatever their country / state code says (the code
 // still labels them and sorts them by state): the NWS offices stay together.
@@ -407,7 +410,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
 
   // A built-in channel's row: what it opens or plays
   function builtinRow(c, data) {
-    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind, repeat: ch.repeat || undefined };
+    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind, repeat: ch.repeat || undefined, own: WTV_ICON };
     if (ch.kind === 'forecast') return { ...base, cells: ['Current Conditions', 'Hourly', '7-Day Forecast', 'Records & Normals'].map((t) => ({ t })) };
     if (ch.kind === 'radar') return { ...base, cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) };
     if (ch.kind === 'wstar') return { ...base, cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) };
@@ -423,7 +426,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     const { blocks, networks } = layout(data);
     const out = blocks.filter((b) => b.chans.length).map((b) => ({
       id: b.id, label: b.label, range: rangeOf(b.chans), regional: /^reg-/.test(b.id), theme: b.theme !== 'none' ? b.theme : undefined,
-      channels: b.chans.map((c) => (c.ch.builtin ? builtinRow(c, data) : channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam))),
+      channels: b.chans.map((c) => (c.ch.builtin ? builtinRow(c, data) : Object.assign(channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam), OWN_ICON[c.ch.id] ? { own: OWN_ICON[c.ch.id] } : {}))),
     }));
     const liveRows = [];
     out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }));

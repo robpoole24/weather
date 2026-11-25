@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T01:15:00Z build.1795569300 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T07:30:00Z build.1795591800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -62,6 +62,7 @@ button{font-family:inherit}
 .chan{position:relative}
 .chan .nb{position:absolute;top:50%;transform:translateY(-50%);height:24px;max-width:30px;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .chan .nb.n0{left:5px}.chan .nb.n1{right:5px}
+.chan .nb.em{font-size:20px;line-height:1}
 .chan .nb img{height:24px;width:auto;max-width:30px;border-radius:4px;object-fit:contain;display:block}
 .chan .nb i{font-style:normal;font-size:10px;font-weight:700;background:var(--band);color:var(--bandt);border-radius:3px;padding:2px 3px;letter-spacing:.02em}
 #chm-net{font-size:18px;color:var(--text);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -478,7 +479,8 @@ button{font-family:inherit}
   const FAV_KEY = 'wtv-favorites', FAV_MAX = 100, FAV_START = 2000;
   function favList() { try { const a = JSON.parse(localStorage.getItem(FAV_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
   function isFav(id) { return favList().includes(id); }
-  function toast(t) { const nb = $('numbox'); nb.textContent = t; nb.style.display = 'block'; clearTimeout(numT); numT = setTimeout(() => { nb.style.display = 'none'; }, 2200); }
+  let toastT = null;
+  function toast(t) { const nb = $('numbox'); nb.textContent = t; nb.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { if (!numBuf) nb.style.display = 'none'; }, 2200); }
   function toggleFav(ch) {
     if (!ch || !ch.id) return;
     const id = ch.homeId || ch.id;
@@ -564,7 +566,10 @@ button{font-family:inherit}
     }
     const code = ch.area && ch.area !== 'US' ? ' · ' + ch.area : '';   // country / state (a plain US says nothing)
     const nets = netsOf(ch);
-    const badges = nets.slice(0, 2).map((n, j) => '<span class="nb n' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(n.name.slice(0, 4).toUpperCase()) + '</i>') + '</span>').join('');
+    const icons = THEME_ICONS[it.b.theme];
+    let badges = nets.slice(0, 2).map((n, j) => '<span class="nb n' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(n.name.slice(0, 4).toUpperCase()) + '</i>') + '</span>').join('');
+    if (!nets.length && icons) badges = '<span class="nb n0 em" aria-hidden="true">' + icons[(ch.n || 0) % icons.length] + '</span>';   // seasonal: 🎄 🎅 ⛄ …
+    else if (!nets.length && ch.own) badges = '<span class="nb n0" aria-hidden="true"><img src="' + esc(ch.own) + '" alt=""></span>';    // Weather TV's own channels
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
     return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + badges + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span></button>' + cells + '</div>';
   }
@@ -619,6 +624,16 @@ button{font-family:inherit}
     } catch (e) { ch._fetching = false; }
   }
 
+  // Icons on the channel numbers of themed (seasonal) blocks, one per channel
+  const THEME_ICONS = {
+    holiday: ['🎄', '🎅', '⛄', '🎁', '🔔', '🦌', '🕯️', '❄️'],
+    halloween: ['🎃', '👻', '🦇', '🕸️', '💀', '🧙'],
+    patriot: ['🎆', '🇺🇸', '🎇', '⭐'],
+    shamrock: ['☘️', '🍀', '🌈'],
+    frost: ['❄️', '⛄', '🧊'],
+    ppv: ['🎟️', '⭐'],
+    gold: ['⭐', '🏆'],
+  };
   // Networks a channel is in (badge, popup, info panel) and a creator's other channels
   function netsOf(ch) { const N = (G && G.networks) || {}; return (ch.nets || []).map((k) => N[k]).filter(Boolean); }
   function familyOf(it) {
@@ -675,16 +690,26 @@ button{font-family:inherit}
     try {
       yt.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 'wtvguide', channel: 'widget' }), '*');
       ytCmd('addEventListener', ['onStateChange']);
+      ytCmd('addEventListener', ['onError']);
     } catch (e) {}
     if (!loaded.muted) setTimeout(() => { ytCmd('unMute'); ytCmd('setVolume', [90]); }, 400);
   });
-  let lastEnd = 0;
+  let lastEnd = 0, errRun = 0;
   addEventListener('message', (e) => {
     if (!/^https:\/\/www\.youtube(-nocookie)?\.com$/.test(e.origin)) return;
     let d; try { d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data; } catch (x) { return; }
     if (!d) return;
     const ended = (d.event === 'onStateChange' && d.info === 0) || (d.event === 'infoDelivery' && d.info && d.info.playerState === 0);
-    if (ended && Date.now() - lastEnd > 3000) { lastEnd = Date.now(); onEnded(); }
+    if (ended && Date.now() - lastEnd > 3000) { lastEnd = Date.now(); errRun = 0; onEnded(); }
+    // A video YouTube won't play (removed, private, blocked here, not allowed off YouTube):
+    // say so and move on to the next one, the same as when a video ends
+    if (d.event === 'onError' && mode === 'watch' && Date.now() - lastEnd > 1500) {
+      lastEnd = Date.now();
+      const cur = current();
+      if (!cur || ++errRun > Math.max(3, (cur.ch.cells || []).length)) return;   // a whole row that won't play: stop trying
+      toast('Video unavailable · skipping');
+      setTimeout(() => onEnded(true), 1200);
+    }
   });
 
   function keyOf(ch, c) { return c ? (c.src ? 'radio:' + c.src : c.v || ('live:' + (c.ch || ch.id))) : null; }
@@ -839,7 +864,7 @@ button{font-family:inherit}
     document.querySelectorAll('#bar [data-app]').forEach((b) => b.classList.toggle('on', mode === 'app' && b.dataset.app === app));
     $('r-info').hidden = !(mode === 'watch' && !full && !panels.info);
     $('r-side').hidden = !(mode === 'watch' && !full && !panels.side);
-    $('fullbtn').hidden = mode !== 'watch';
+    $('fullbtn').hidden = !(document.fullscreenEnabled || document.webkitFullscreenEnabled);   // TV / console browsers without it: no button
   }
 
   // ── Pages that open above the bottom bar: Forecast, Live Radar, WeatherStar, About… ──
@@ -941,7 +966,7 @@ button{font-family:inherit}
     tab = null;
     renderSide(true); renderBanner(); flashOsd(); layout();
   }
-  function onEnded() {
+  function onEnded(skipping) {
     if (mode !== 'watch') return;
     const cur = current();
     if (!cur) return;
@@ -950,7 +975,7 @@ button{font-family:inherit}
     if (!cur.ch.cells[k] && cur.ch.repeat && cur.ch.cells.length) k = 0;   // playlist channels (Yule logs) play on repeat
     const nxt = cur.ch.cells[k];
     if (!nxt || nxt.live) return;
-    if (keyOf(cur.ch, nxt) === loaded.key) { ytCmd('seekTo', [0, true]); ytCmd('playVideo'); return; }   // a one-video playlist: start it again
+    if (keyOf(cur.ch, nxt) === loaded.key) { if (!skipping) { ytCmd('seekTo', [0, true]); ytCmd('playVideo'); } return; }   // a one-video playlist: start it again
     select(sel.r, k);
     watched.c = sel.c;
     play(cur.ch, nxt, false);
@@ -1075,7 +1100,9 @@ button{font-family:inherit}
     numBuf = (numBuf + d).slice(-4);
     $('numbox').textContent = 'CH ' + numBuf; $('numbox').style.display = 'block';
     clearTimeout(numT);
-    numT = setTimeout(goNumber, numBuf.length >= 3 ? 500 : 1300);
+    // Channels go up to 4 digits: the 4th tunes at once, otherwise wait 1.6 s for the next digit
+    // (it used to go after 0.5 s at 3 digits, so a slow "9000" landed on 900 and nowhere)
+    numT = setTimeout(goNumber, numBuf.length >= 4 ? 150 : 1600);
   }
   function goNumber() {
     $('numbox').style.display = 'none';
@@ -1087,7 +1114,12 @@ button{font-family:inherit}
     }
     let r = flat.findIndex((it) => it.ch && it.b.id !== 'live' && it.ch.n === n);
     if (r < 0) r = flat.findIndex((it) => it.ch && it.ch.n === n);
-    if (r < 0) return;
+    if (r < 0) {
+      // Not in view: it may be in a block you've hidden — show it again and go there
+      const b = allBlocks().find((x) => (x.channels || []).some((c) => c.n === n));
+      if (b && hidden.has(b.id)) { hidden.delete(b.id); LS.set('wtvGuideHidden', [...hidden]); rebuild(); r = flat.findIndex((it) => it.ch && it.b.id === b.id && it.ch.n === n); }
+    }
+    if (r < 0) { toast('CH ' + n + ' · NO CHANNEL'); return; }
     if (mode === 'watch') { select(r, 0); activate(); flashOsd(); }
     else tuneIn(r);
   }
@@ -1452,9 +1484,24 @@ button{font-family:inherit}
   $('r-side').onclick = () => { setPanel('side', true); renderSide(false); };
   $('i-go').onclick = activate;
   $('guidebtn').onclick = () => { if (mode === 'watch' || mode === 'app') openGuide(); else backToWatched(); };
-  function toggleFull() { full = !full; stage.classList.toggle('full', full); if (!full) $('osd').classList.remove('on'); else flashOsd(); layout(); }
+  // FULL pops the whole guide out of the browser (the browser's full screen), like the original
+  // site. The video has its own full-screen button for just the picture. Esc or the button again comes back.
+  function toggleFull() {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      else { const el = document.documentElement; const p = (el.requestFullscreen || el.webkitRequestFullscreen).call(el); if (p && p.catch) p.catch(() => {}); }
+    } catch (e) {}
+  }
+  function fullLabel() {
+    const on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    $('fullbtn').textContent = on ? '✕ EXIT FULL' : '⛶ FULL';
+    $('fullbtn').title = on ? 'Back to the browser window (Esc)' : 'Fill the whole screen';
+  }
+  document.addEventListener('fullscreenchange', () => { fullLabel(); setTimeout(fit, 60); });
+  document.addEventListener('webkitfullscreenchange', () => { fullLabel(); setTimeout(fit, 60); });
+  fullLabel();
   $('fullbtn').onclick = toggleFull;
-  stage.addEventListener('dblclick', (e) => { if (mode === 'watch' && full) toggleFull(); });
+
   function toggleSkin() { skin = skin === 'classic' ? 'wtv' : 'classic'; LS.set('wtvGuideSkin', skin); applySkin(); }
   $('skinbtn').onclick = toggleSkin;
 
