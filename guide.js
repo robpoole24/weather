@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T07:30:00Z build.1795591800
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T19:00:00Z build.1795633200
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -40,47 +40,80 @@ const RESERVED_MAX = 1;    // channel 1 is Live Now; every other number is a nor
 // 2000–2099: each viewer's own favorites (YOUR FAVORITES, kept in their browser). No channel is ever numbered there.
 const FAV_RANGE = [2000, 2099];
 
-const DEFAULT_BLOCKS = [
+// Layout v3 (agreed 2026-11-25): blocks by region, then section. Parents (US NATIONAL,
+// EUROPE…) exist only in the guide's ☰ BLOCKS menu; each child is one band in the guide
+// ("US NATIONAL · FORECASTERS"). Ids of the old blocks are kept where the meaning carried over.
+const LAYOUT_V = 3;
+const REGIONS = [
+  ['us-nat', 'US NATIONAL'], ['us-reg', 'US REGIONAL'], ['na', 'NORTH AMERICA'], ['europe', 'EUROPE'],
+  ['oceania', 'OCEANIA'], ['asia', 'ASIA'], ['samerica', 'SOUTH AMERICA'], ['africa', 'AFRICA'],
+];
+const REGION_LABEL = Object.fromEntries(REGIONS);
+const DEFAULT_BLOCKS = [            // [id, label, start, end, parent region]
   ['wtv', 'WEATHER TV', 2, 10],
-  ['forecasters', 'FORECASTERS', 11, 199],
-  ['chasers', 'STORM CHASERS', 200, 499],
-  ['creators', 'OTHER WEATHER CREATORS', 500, 699],
-  ['react', 'WEATHER REACT CHANNELS', 700, 799],
-  ['reg-us', 'REGIONAL UNITED STATES', 800, 899],
-  ['reg-europe', 'REGIONAL EUROPE', 900, 999],
-  ['reg-oceania', 'REGIONAL OCEANIA', 1000, 1099],
-  ['reg-asia', 'REGIONAL ASIA', 1100, 1199],
-  ['reg-samerica', 'REGIONAL SOUTH AMERICA', 1200, 1299],
-  ['reg-africa', 'REGIONAL AFRICA', 1300, 1399],
-  ['radar', 'WEATHER RADAR CHANNELS', 1400, 1600],
-  ['nws', 'NATIONAL WEATHER SERVICE', 1700, 1899],
+  ['forecasters', 'FORECASTERS', 11, 199, 'us-nat'],
+  ['chasers', 'STORM CHASERS', 200, 499, 'us-nat'],
+  ['nws', 'NWS', 500, 549, 'us-nat'],
+  ['reg-us', 'FORECASTERS', 550, 699, 'us-reg'],
+  ['nws-off', 'NWS OFFICES', 700, 899, 'us-reg'],
+  ['reg-na', 'FORECASTERS', 900, 949, 'na'], ['reg-na-ch', 'STORM CHASERS', 950, 999, 'na'],
+  ['reg-europe', 'FORECASTERS', 1000, 1049, 'europe'], ['reg-europe-ch', 'STORM CHASERS', 1050, 1099, 'europe'],
+  ['reg-oceania', 'FORECASTERS', 1100, 1149, 'oceania'], ['reg-oceania-ch', 'STORM CHASERS', 1150, 1199, 'oceania'],
+  ['reg-asia', 'FORECASTERS', 1200, 1249, 'asia'], ['reg-asia-ch', 'STORM CHASERS', 1250, 1299, 'asia'],
+  ['reg-samerica', 'FORECASTERS', 1300, 1349, 'samerica'], ['reg-samerica-ch', 'STORM CHASERS', 1350, 1399, 'samerica'],
+  ['reg-africa', 'FORECASTERS', 1400, 1449, 'africa'], ['reg-africa-ch', 'STORM CHASERS', 1450, 1499, 'africa'],
+  ['creators', 'OTHER WEATHER CREATORS', 1500, 1699],
+  ['react', 'WEATHER REACT CHANNELS', 1700, 1799],
+  ['radar', 'WEATHER RADAR CHANNELS', 1800, 1899],
   ['seasonal', 'SEASONAL CHANNELS', 9000, 9099],
   ['audio', 'AUDIO CHANNELS', 9900, 9999],
 ];
+// Region + section → block. A US chaser marked US Regional still chases nationally.
+const SECTION_BLOCK = {
+  'us-nat': { fc: 'forecasters', ch: 'chasers', nws: 'nws' },
+  'us-reg': { fc: 'reg-us', ch: 'chasers', nws: 'nws-off' },
+  na: { fc: 'reg-na', ch: 'reg-na-ch' }, europe: { fc: 'reg-europe', ch: 'reg-europe-ch' },
+  oceania: { fc: 'reg-oceania', ch: 'reg-oceania-ch' }, asia: { fc: 'reg-asia', ch: 'reg-asia-ch' },
+  samerica: { fc: 'reg-samerica', ch: 'reg-samerica-ch' }, africa: { fc: 'reg-africa', ch: 'reg-africa-ch' },
+};
+// Which section a group's channels are (by the original site's groups)
+function sectionOfGroup(g) {
+  const id = String((g && g.id) || ''), label = String((g && g.label) || '');
+  if (id === 'forecasters' || /forecast/i.test(label)) return 'fc';
+  if (id === 'chasers' || /chaser/i.test(label)) return 'ch';
+  if (id === 'nws' || /national weather service|^nws\b/i.test(label)) return 'nws';
+  return null;
+}
+// The forecasters always at the top of US National · Forecasters (unless you number them yourself)
+const DEFAULT_PINS = { UCvBVK2ymNzPLRJrgip2GeQQ: 11, 'UCJHAT3Uvv-g3I8H3GhHWV7w': 12, 'UCuYqi3hOfz6-3Hdp6tEJjAg': 13, UCpYQmszu4IP37xyt3RQb2gw: 14 };   // Max Velocity, Ryan Hall Y'all, AccuWeather, More Max Velocity
+// Role icons next to the channel number (default from the section; per channel in admin)
+const ROLE_ICON = {
+  forecaster: '/images/role-forecaster.png', chaser: '/images/role-chaser.png', hurricane: '/images/role-hurricane.png',
+  radar: '/images/role-radar.png', nws: '/images/role-forecaster.png', wtv: '/images/icon-192.png', aa: '/images/role-altruistic-apps.png',
+};
+const ROLE_CHOICES = ['forecaster', 'chaser', 'hurricane', 'radar', 'nws', 'none'];
 // Block colors, like the old PPV and premium-channel bands (set per block in admin)
 const THEMES = ['holiday', 'halloween', 'ppv', 'shamrock', 'frost', 'patriot', 'gold'];
 const DEFAULT_THEME = { seasonal: 'holiday' };
 // YouTube channels that start in a particular block (until moved in admin)
 const DEFAULT_CHANNEL_BLOCK = { UCUEQ5cxsnSpYL1VoTqbhsDw: 'wtv' };   // Altruistic Apps → Weather TV
 const WTV_GROUP = { id: 'wtv', label: 'Weather TV (built in)' };
-// Our own channels get our logo next to their number in the guide (like the network badges)
-const WTV_ICON = '/images/icon-192.png';
-const OWN_ICON = { UCUEQ5cxsnSpYL1VoTqbhsDw: WTV_ICON };   // Altruistic Apps (it has videos about Weather TV)
-const DEFAULT_GROUP_BLOCK = { forecasters: 'forecasters', chasers: 'chasers', creators: 'creators', react: 'react', reacts: 'react', nws: 'nws' };
-// Blocks that keep their channels whatever their country / state code says (the code
-// still labels them and sorts them by state): the NWS offices stay together.
-const KEEPS_CHANNELS = new Set(['nws']);
-const groupBlockByLabel = (label) => (/national weather service|^nws\b/i.test(label || '') ? 'nws' : /react/i.test(label || '') ? 'react' : null);
+const OWN_ROLE = { UCUEQ5cxsnSpYL1VoTqbhsDw: 'aa' };   // Altruistic Apps: its own "A"
+// Groups that keep their own block (no region): Other Weather Creators, Weather React
+const DEFAULT_GROUP_BLOCK = { creators: 'creators', react: 'react', reacts: 'react' };
+const groupBlockByLabel = (label) => (/react/i.test(label || '') ? 'react' : /creator/i.test(label || '') ? 'creators' : null);
 // Collections that go to a block unless changed in admin (matched by name)
+// Group collections: a block (react, radar) or a region ("r:…") for their members
 const DEFAULT_COLLECTION_BLOCK = [
   [/react/i, 'react'],
   [/radar/i, 'radar'],
-  [/US States|United States|US Regional/i, 'reg-us'],
-  [/Europe|\bUK\b|United Kingdom|Britain/i, 'reg-europe'],
-  [/Oceania|Australia|New Zealand/i, 'reg-oceania'],
-  [/Asia|India|Pakistan|Bangladesh|Philippines|Japan/i, 'reg-asia'],
-  [/South America|Latin|Brazil|Argentina/i, 'reg-samerica'],
-  [/Africa/i, 'reg-africa'],
+  [/US States|United States|US Regional/i, 'r:us-reg'],
+  [/Canada|Mexico|North America/i, 'r:na'],
+  [/Europe|\bUK\b|United Kingdom|Britain/i, 'r:europe'],
+  [/Oceania|Australia|New Zealand/i, 'r:oceania'],
+  [/Asia|India|Pakistan|Bangladesh|Philippines|Japan/i, 'r:asia'],
+  [/South America|Latin|Brazil|Argentina/i, 'r:samerica'],
+  [/Africa/i, 'r:africa'],
 ];
 
 // Country / state codes → regional block. A plain "US" places nothing (most US
@@ -90,15 +123,18 @@ const ASIA = 'IN PK BD LK NP BT MV AF CN JP KR KP TW HK MO MN PH VN TH MY SG ID 
 const OCEANIA = 'AU NZ PG FJ SB VU NC PF WS TO KI FM MH PW NR TV CK NU'.split(' ');
 const SAMERICA = 'BR AR CL CO PE VE EC BO PY UY GY SR GF FK'.split(' ');
 const AFRICA = 'ZA NG KE EG MA DZ TN LY ET GH TZ UG RW SN CI CM AO MZ ZW ZM BW NA MG MU SD SS SO DJ ER ML NE TD BF BJ TG LR SL GN GW GM MR CV CF CG CD GA GQ ST BI MW LS SZ KM SC RE YT SH'.split(' ');
+// A country code → its region. US codes (plain or state) give no region: national vs regional is your call.
+const NAMERICA = 'CA MX GL PM BM'.split(' ');
 function regionOfCode(code) {
   const c = String(code || '').toUpperCase();
-  if (/^US-[A-Z]{2}$/.test(c)) return 'reg-us';
+  if (!c || /^US/.test(c) || c === 'PR' || c === 'GU' || c === 'VI') return null;
   const cc = c.slice(0, 2);
-  if (EUROPE.includes(cc)) return 'reg-europe';
-  if (ASIA.includes(cc)) return 'reg-asia';
-  if (OCEANIA.includes(cc)) return 'reg-oceania';
-  if (SAMERICA.includes(cc)) return 'reg-samerica';
-  if (AFRICA.includes(cc)) return 'reg-africa';
+  if (NAMERICA.includes(cc)) return 'na';
+  if (EUROPE.includes(cc)) return 'europe';
+  if (ASIA.includes(cc)) return 'asia';
+  if (OCEANIA.includes(cc)) return 'oceania';
+  if (SAMERICA.includes(cc)) return 'samerica';
+  if (AFRICA.includes(cc)) return 'africa';
   return null;
 }
 
@@ -235,27 +271,35 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   // ── Lay out every block and channel (no videos). Shared by the guide and admin. ──
   function layout(data, cfgIn) {
     const cfg = cfgIn || configOf(data);
-    const bcfg = cfg.blocks || {}, map = cfg.map || {}, ccfg = cfg.channels || {}, tcfg = cfg.types || {};
+    const bcfg = cfg.blocks || {}, map = Object.assign({}, cfg.map || {}), ccfg = cfg.channels || {}, tcfg = cfg.types || {};
     const groups = data.groups || [];
+
+    // Saved before layout v3: the old blocks' names, ranges and order (and the "nothing chosen"
+    // entries the old admin saved for every collection) don't apply to the new layout
+    const v3 = cfg.layoutV === LAYOUT_V;
+    const defIds = new Set(DEFAULT_BLOCKS.map((d) => d[0]));
 
     // Blocks: defaults (renamable / resizable) + blocks made in admin
     const meta = {};
-    DEFAULT_BLOCKS.forEach(([id, label, start, end]) => { meta[id] = { id, label, start, end, custom: false }; });
+    DEFAULT_BLOCKS.forEach(([id, label, start, end, parent]) => { meta[id] = { id, label, start, end, parent: parent || null, custom: false }; });
     Object.entries(bcfg).forEach(([id, b]) => {
       if (!b || !ID_RE.test(id)) return;
-      if (!meta[id]) meta[id] = { id, label: cleanLabel(b.label) || id.toUpperCase(), start: 0, end: 0, custom: true };
+      const isDef = defIds.has(id);
+      if (!meta[id]) meta[id] = { id, label: cleanLabel(b.label) || id.toUpperCase(), start: 0, end: 0, parent: null, custom: true };
       const m = meta[id];
-      if (b.label && !(id === 'reg-oceania' && /^REGIONAL AUSTRALIA$/i.test(b.label))) m.label = cleanLabel(b.label) || m.label;   // the old default name
+      if (b.theme === 'none' || THEMES.includes(b.theme)) m.theme = b.theme;
+      if (isDef && !v3) return;                                   // old layout's name / range / order: ignored
+      if (b.label) m.label = cleanLabel(b.label) || m.label;
       if (num(b.start) > RESERVED_MAX) m.start = num(b.start);
       if (num(b.end) != null && num(b.end) >= m.start) m.end = num(b.end);
       if (num(b.order) != null) m.order = num(b.order);
-      if (b.theme === 'none' || THEMES.includes(b.theme)) m.theme = b.theme;
+      if (m.custom && REGION_LABEL[b.parent]) m.parent = b.parent;
     });
-    let extra = 1700;
+    let extra = 1900;
     const bump = () => { const s = extra; extra += 100; return s; };
     Object.values(meta).forEach((m) => { if (!m.theme) m.theme = DEFAULT_THEME[m.id] || 'none'; if (!(m.start > RESERVED_MAX)) m.start = bump(); if (!(m.end >= m.start)) m.end = m.start + 99; });
 
-    // Sources: groups and collections, each sending its channels to a block
+    // Sources: groups and collections
     const sources = [];
     const members = {};
     const groupOf = {}, adminIdx = {};
@@ -266,24 +310,29 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       new Set([...(ch.collectionIds || []), ...(ch.collectionId ? [ch.collectionId] : [])]).forEach((k) => { (members[k] = members[k] || []).push(ch.id); });
     }));
     builtins(data, cfg).forEach((b) => { if (!groupOf[b.id]) { groupOf[b.id] = WTV_GROUP; adminIdx[b.id] = channels.length; channels.push(b); } });
-    const has = (k) => Object.prototype.hasOwnProperty.call(map, k);
+    const has = (k) => Object.prototype.hasOwnProperty.call(map, k) && (v3 || map[k] !== '');
     const typeOf = (key, label, lead) => (TYPES.includes(tcfg[key]) && (lead || tcfg[key] === 'block') ? tcfg[key] : defaultType(label, lead));
     const networks = {}, netsOf = {}, families = [];
-    const target = (key, def) => (has(key) ? (map[key] && meta[map[key]] ? map[key] : null) : def);
+    // Before regions (layout v3), "send to Regional Europe" meant the whole region: show and keep it as one
+    if (!v3) Object.keys(map).forEach((k) => { const g = /^reg-(us|na|europe|oceania|asia|samerica|africa)$/.exec(map[k] || ''); if (g) map[k] = 'r:' + (g[1] === 'us' ? 'us-reg' : g[1]); });
+    const okTarget = (v) => !!v && (meta[v] || (v.startsWith('r:') && REGION_LABEL[v.slice(2)]));
+    const target = (key, def) => (has(key) ? (okTarget(map[key]) ? map[key] : null) : def);
     groups.forEach((g) => {
-      let def = DEFAULT_GROUP_BLOCK[g.id] || groupBlockByLabel(g.label) || null;
-      if (!def) {                                                // a group with no block yet gets its own
+      const sec = sectionOfGroup(g);
+      let def = sec ? null : (DEFAULT_GROUP_BLOCK[g.id] || groupBlockByLabel(g.label) || null);
+      if (!sec && !def) {                                         // a group with no block yet gets its own
         const id = 'grp-' + g.id;
-        if (!meta[id]) meta[id] = { id, label: String(g.label || g.id).toUpperCase(), start: bump(), custom: false, end: 0 };
+        if (!meta[id]) meta[id] = { id, label: String(g.label || g.id).toUpperCase(), start: bump(), custom: false, end: 0, parent: null, theme: 'none' };
         if (!(meta[id].end >= meta[id].start)) meta[id].end = meta[id].start + 99;
         def = id;
       }
-      sources.push({ key: 'g:' + g.id, label: g.label || g.id, kind: 'group', type: 'block', defType: 'block', count: (g.channels || []).filter((c) => c.enabled !== false).length, def, block: target('g:' + g.id, def) || def });
+      // Forecasters, Storm Chasers and NWS are placed by region; other groups go to one block
+      sources.push({ key: 'g:' + g.id, label: g.label || g.id, kind: 'group', type: 'block', defType: 'block', byRegion: !!sec, count: (g.channels || []).filter((c) => c.enabled !== false).length, def: def || '', block: sec ? '' : (target('g:' + g.id, def) || def) });
       (g.collections || []).forEach((col) => {
         if (col.enabled === false) return;
         const k = 'group:' + g.id + '::' + col.id;
         const hit = DEFAULT_COLLECTION_BLOCK.find(([re]) => re.test(col.label || ''));
-        const d = hit ? hit[1] : null;
+        let d = hit ? hit[1] : null;
         sources.push({ key: 'c:' + k, label: (g.label || g.id) + ' › ' + (col.label || col.id), kind: 'collection', type: typeOf('c:' + k, col.label, null), defType: 'block', count: (members[k] || []).length, def: d, block: target('c:' + k, d) });
       });
       (g.channels || []).forEach((lead) => (lead.collections || []).forEach((col) => {
@@ -302,29 +351,50 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       }));
     });
     // Only "block" collections place channels; networks and creator collections don't
-    const srcBlock = {}; sources.forEach((s) => { if (s.type === 'block' || s.kind === 'group') srcBlock[s.key] = s.block; });
+    const srcBlock = {}; sources.forEach((s) => { if (s.block && (s.type === 'block' || s.kind === 'group')) srcBlock[s.key] = s.block; });
 
-    // Place every channel
+    // Place every channel: you → built-in → collection block → region + section → group
     const lists = {}; Object.keys(meta).forEach((id) => { lists[id] = []; });
     const hidden = [];
     const info = {};
     channels.forEach((ch) => {
       const c = ccfg[ch.id] || {};
       const area = cleanCode(c.area);
-      let block = null, by = null;
+      const g = groupOf[ch.id];
+      const sec = ch.builtin ? null : sectionOfGroup(g);
+      let block = null, by = null, region = null, regionBy = null;
       if (c.block === 'none') { block = 'none'; by = 'you'; }
       else if (c.block && meta[c.block]) { block = c.block; by = 'you'; }
       else if (ch.builtin) { block = meta[ch.block] ? ch.block : 'wtv'; by = 'builtin'; }
       else if (DEFAULT_CHANNEL_BLOCK[ch.id] && meta[DEFAULT_CHANNEL_BLOCK[ch.id]]) { block = DEFAULT_CHANNEL_BLOCK[ch.id]; by = 'builtin'; }
-      if (!block) {
+      // Its region: the Region picker → a collection → its country code (NWS: a state code = an office) → US National
+      if (!ch.builtin) {
         const keys = [...new Set([...(ch.collectionIds || []), ...(ch.collectionId ? [ch.collectionId] : [])])];
-        const k = keys.find((key) => srcBlock['c:' + key]);
-        if (k) { block = srcBlock['c:' + k]; by = 'collection'; }
+        let colBlock = null;
+        for (const key of keys) {
+          const t = srcBlock['c:' + key]; if (!t) continue;
+          if (t.startsWith('r:')) { if (!region) { region = t.slice(2); regionBy = 'collection'; } }
+          else if (meta[t] && meta[t].parent) { if (!region) { region = meta[t].parent; regionBy = 'collection'; } }   // an old "send to Regional Asia": its region
+          else if (!colBlock) colBlock = t;
+        }
+        if (REGION_LABEL[c.region]) { region = c.region; regionBy = 'you'; }
+        if (!region) { const r = regionOfCode(area); if (r) { region = r; regionBy = 'code'; } }
+        if (!region && sec === 'nws' && (/^US-[A-Z]{2}$/.test(area) || /^(PR|GU|VI|AS|MP)$/.test(area))) { region = 'us-reg'; regionBy = 'code'; }   // an NWS office (states and territories)
+        if (!block && colBlock) { block = colBlock; by = 'collection'; }
+        const explicit = regionBy === 'you' || regionBy === 'collection';
+        const s2 = sec || (explicit ? 'fc' : null);                // a creator you put in a region counts as one of its forecasters
+        if (!block && s2) {
+          const rr = region || 'us-nat';
+          const tbl = SECTION_BLOCK[rr] || SECTION_BLOCK['us-nat'];
+          block = tbl[s2] || tbl.fc; by = regionBy || 'region';
+          if (!region) { region = 'us-nat'; regionBy = 'default'; }
+        }
       }
-      const reg = area ? regionOfCode(area) : null;
-      if (!block && reg && meta[reg] && !KEEPS_CHANNELS.has(srcBlock['g:' + groupOf[ch.id].id])) { block = reg; by = 'code'; }
-      if (!block) { block = srcBlock['g:' + groupOf[ch.id].id] || 'creators'; by = 'group'; }
-      info[ch.id] = { block, area, by, own: by === 'you', call: cleanTag(c.call) || ch.call || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) != null ? num(c.n) : (ch.builtin && ch.n && block === ch.block ? ch.n : null) };
+      if (!block) { block = srcBlock['g:' + g.id] || 'creators'; by = 'group'; }
+      // Its role icon: yours → our own channels → radar → by section
+      const roleSet = ROLE_CHOICES.includes(c.icon) ? c.icon : null;
+      const role = roleSet || (ch.builtin ? 'wtv' : OWN_ROLE[ch.id] || (block === 'radar' ? 'radar' : /hurricane|cyclone|tropical/i.test(ch.name || '') ? 'hurricane' : sec === 'fc' ? 'forecaster' : sec === 'ch' ? 'chaser' : sec === 'nws' ? 'nws' : (block !== 'creators' && block !== 'react' && meta[block] && meta[block].parent ? 'forecaster' : 'none')));
+      info[ch.id] = { block, area, by, own: by === 'you', region, regionBy, role, roleSet, call: cleanTag(c.call) || ch.call || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) != null ? num(c.n) : (ch.builtin && ch.n && block === ch.block ? ch.n : null), nSet: num(c.n) != null };
     });
     // A creator's other channels go where the lead is (unless you placed them yourself)
     const leadOf = {};
@@ -335,16 +405,18 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         const I = info[id];
         if (!I || leadOf[id]) return;
         leadOf[id] = f.lead;
-        if (I.by !== 'you' && L.block !== 'none') { I.block = L.block; I.by = 'creator'; }
+        if (I.by !== 'you' && L.block !== 'none') { I.block = L.block; I.by = 'creator'; if (!I.roleSet && I.role === 'none') I.role = L.role; }   // and the lead's icon
       });
     });
+    // The four national forecasters at the top (11–14), unless you numbered them yourself
+    Object.entries(DEFAULT_PINS).forEach(([id, n]) => { const I = info[id]; if (I && !I.nSet && I.block === 'forecasters') I.fixed = n; });
     const famOf = (id) => (leadOf[id] && info[leadOf[id]] ? leadOf[id] : families.some((f) => f.lead === id && f.ids.some((x) => info[x])) ? id : null);
     channels.forEach((ch) => { if (info[ch.id].block === 'none') hidden.push(ch); else lists[info[ch.id].block].push(ch); });
 
     // Order inside each block
     Object.keys(lists).forEach((bid) => {
-      const regional = /^reg-/.test(bid) || KEEPS_CHANNELS.has(bid);
-      const blank = KEEPS_CHANNELS.has(bid) ? '' : '~';             // NWS: national centers (no code) first, then offices by state
+      const regional = !!(meta[bid] && meta[bid].parent && meta[bid].parent !== 'us-nat');   // regional blocks and NWS offices: by country / state code
+      const blank = '~';
       lists[bid].sort((a, b) => {
         const A = info[a.id], Bb = info[b.id];
         if (A.pos != null && Bb.pos != null) return A.pos - Bb.pos || adminIdx[a.id] - adminIdx[b.id];
@@ -394,12 +466,12 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         if (v == null) { while (used.has(n) || n <= RESERVED_MAX) n++; used.add(n); v = n++; }
         numOf[ch.id] = v;
         const i = info[ch.id];
-        return { ch, n: v, fixed: fixedOf[ch.id] != null && num((ccfg[ch.id] || {}).n) != null, conflict: conflict.has(ch.id), call: i.call, area: i.area, by: i.by, own: i.own, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id) };
+        return { ch, n: v, fixed: fixedOf[ch.id] != null && i.nSet, conflict: conflict.has(ch.id), call: i.call, area: i.area, by: i.by, own: i.own, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id), role: i.role, roleSet: i.roleSet, region: i.region, regionBy: i.regionBy };
       }).sort((a, b) => a.n - b.n);
       const overflow = chans.some((c) => c.n > m.end || c.n < m.start);
       return { ...m, chans, overflow };
     });
-    return { blocks, sources, networks, hidden: hidden.map((ch) => ({ ch, n: null, fixed: false, conflict: false, call: info[ch.id].call, area: info[ch.id].area, by: 'you', own: true, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id) })) };
+    return { blocks, sources, networks, hidden: hidden.map((ch) => { const i = info[ch.id]; return { ch, n: null, fixed: false, conflict: false, call: i.call, area: i.area, by: 'you', own: true, group: groupOf[ch.id].id, nets: netsOf[ch.id] || [], fam: famOf(ch.id), role: i.role, roleSet: i.roleSet, region: i.region, regionBy: i.regionBy }; }) };
   }
 
   function rangeOf(chans) {
@@ -410,7 +482,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
 
   // A built-in channel's row: what it opens or plays
   function builtinRow(c, data) {
-    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind, repeat: ch.repeat || undefined, own: WTV_ICON };
+    const ch = c.ch, base = { n: c.n, id: ch.id, name: ch.name, call: c.call, kind: ch.kind, repeat: ch.repeat || undefined, icon: ROLE_ICON[c.role] || undefined };
     if (ch.kind === 'forecast') return { ...base, cells: ['Current Conditions', 'Hourly', '7-Day Forecast', 'Records & Normals'].map((t) => ({ t })) };
     if (ch.kind === 'radar') return { ...base, cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) };
     if (ch.kind === 'wstar') return { ...base, cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) };
@@ -424,12 +496,16 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   function build() {
     const data = loadData() || {};
     const { blocks, networks } = layout(data);
+    // A child block's band reads "US NATIONAL · FORECASTERS"; its parent is only used by ☰ BLOCKS
     const out = blocks.filter((b) => b.chans.length).map((b) => ({
-      id: b.id, label: b.label, range: rangeOf(b.chans), regional: /^reg-/.test(b.id), theme: b.theme !== 'none' ? b.theme : undefined,
-      channels: b.chans.map((c) => (c.ch.builtin ? builtinRow(c, data) : Object.assign(channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam), OWN_ICON[c.ch.id] ? { own: OWN_ICON[c.ch.id] } : {}))),
+      id: b.id, label: b.parent ? REGION_LABEL[b.parent] + ' · ' + b.label : b.label, range: rangeOf(b.chans),
+      parent: b.parent || undefined, parentLabel: b.parent ? REGION_LABEL[b.parent] : undefined,
+      regional: !!(b.parent && b.parent !== 'us-nat'), theme: b.theme !== 'none' ? b.theme : undefined,
+      channels: b.chans.map((c) => (c.ch.builtin ? builtinRow(c, data) : Object.assign(channelRow(c.ch, c.n, c.call, c.area, c.nets, c.fam), ROLE_ICON[c.role] ? { icon: ROLE_ICON[c.role] } : {}))),
     }));
+    // Live Now: everyone live, except the 24/7 radar channels
     const liveRows = [];
-    out.forEach((b) => b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }));
+    out.forEach((b) => { if (b.id === 'radar') return; b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }); });
     return {
       generatedAt: new Date().toISOString(),
       networks,
@@ -470,11 +546,12 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const start = num(b.start), end = num(b.end), order = num(b.order);
       blocks[id] = { label: cleanLabel(b.label) || undefined, start: start > RESERVED_MAX && start < 100000 ? start : undefined,
         end: end > RESERVED_MAX && end < 100000 ? end : undefined, order: order != null && order >= 0 && order < 10000 ? order : undefined,
-        theme: b.theme === 'none' || THEMES.includes(b.theme) ? b.theme : undefined };
+        theme: b.theme === 'none' || THEMES.includes(b.theme) ? b.theme : undefined,
+        parent: REGION_LABEL[b.parent] ? b.parent : undefined };
     });
     Object.entries((body && body.map) || {}).forEach(([key, b]) => {
       if (!/^[gc]:[A-Za-z0-9:_-]{1,120}$/.test(key)) return;
-      map[key] = b && ID_RE.test(b) ? b : '';                      // '' = this collection doesn't send its channels anywhere
+      map[key] = b && ID_RE.test(b) ? b : '';                      // a block, "r:<region>", or '' = this collection doesn't send its channels anywhere
     });
     Object.entries((body && body.types) || {}).forEach(([key, t]) => {
       if (/^c:[A-Za-z0-9:_-]{1,120}$/.test(key) && TYPES.includes(t)) types[key] = t;
@@ -487,21 +564,25 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const n = num(c.n); if (n > RESERVED_MAX && n < 100000) e.n = n;
       const call = cleanTag(c.call); if (call) e.call = call;
       const area = cleanCode(c.area); if (area) e.area = area;
+      if (REGION_LABEL[c.region]) e.region = c.region;
+      if (ROLE_CHOICES.includes(c.icon)) e.icon = c.icon;
       if (Object.keys(e).length) channels[id] = e;
     });
-    const out = { v: 2, blocks, map, channels, types };
+    const out = { v: 2, layoutV: LAYOUT_V, blocks, map, channels, types };
     if (body && Array.isArray(body.extras)) out.extras = extras;
     else if (Array.isArray(configOf(data).extras)) out.extras = configOf(data).extras;
     return out;
   }
   function adminView(data, cfg) {
     const { blocks, sources, hidden, networks } = layout(data, cfg);
-    const row = (c, block) => ({ id: c.ch.id, builtin: !!c.ch.builtin, guideOnly: !!c.ch.guideOnly, name: c.ch.name, group: c.group, block, n: c.n, fixed: c.fixed, conflict: c.conflict, call: c.call, autoCall: c.ch.call || callSign(c.ch.name), area: c.area, by: c.by, own: c.own, live: !!liveOf(c.ch.id), nets: (c.nets || []).map((k) => networks[k] && networks[k].name).filter(Boolean), fam: c.fam || null });
+    const row = (c, block) => ({ id: c.ch.id, builtin: !!c.ch.builtin, guideOnly: !!c.ch.guideOnly, name: c.ch.name, group: c.group, block, n: c.n, fixed: c.fixed, conflict: c.conflict, call: c.call, autoCall: c.ch.call || callSign(c.ch.name), area: c.area, by: c.by, own: c.own, region: c.region || null, regionBy: c.regionBy || null, role: c.role || 'none', roleSet: c.roleSet || null, live: !!liveOf(c.ch.id), nets: (c.nets || []).map((k) => networks[k] && networks[k].name).filter(Boolean), fam: c.fam || null });
     return {
       reserved: RESERVED_MAX,
       groups: [WTV_GROUP, ...(data.groups || []).map((g) => ({ id: g.id, label: g.label }))],
-      blocks: blocks.map((b, i) => ({ id: b.id, label: b.label, start: b.start, end: b.end, order: i, custom: b.custom, count: b.chans.length, overflow: b.overflow, theme: b.theme })),
-      sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, type: s.type, defType: s.defType, lead: s.lead || null, count: s.count, block: s.block || '', def: s.def || '' })),
+      regions: REGIONS.map(([id, label]) => ({ id, label })),
+      roles: ROLE_CHOICES,
+      blocks: blocks.map((b, i) => ({ id: b.id, label: b.label, parent: b.parent || null, fullLabel: b.parent ? REGION_LABEL[b.parent] + ' · ' + b.label : b.label, start: b.start, end: b.end, order: i, custom: b.custom, count: b.chans.length, overflow: b.overflow, theme: b.theme })),
+      sources: sources.map((s) => ({ key: s.key, label: s.label, kind: s.kind, type: s.type, defType: s.defType, byRegion: !!s.byRegion, lead: s.lead || null, count: s.count, block: s.block || '', def: s.def || '' })),
       channels: [...blocks.flatMap((b) => b.chans.map((c) => row(c, b.id))), ...hidden.map((c) => row(c, 'none'))],
       config: cfg || configOf(data),
       extras: extrasOf(cfg || configOf(data)).map((e) => ({ ...e, inSeason: inSeason(e) })),

@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T07:30:00Z build.1795591800 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T19:00:00Z build.1795633200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -55,16 +55,18 @@ button{font-family:inherit}
 #ghead div{background:var(--head);color:var(--headt);font-size:18px;font-weight:700;letter-spacing:.08em;display:flex;align-items:center;justify-content:center}
 #clock{width:150px;flex:none;color:#fff !important}
 #rows{flex:1 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:2px}
-.row{display:flex;gap:2px;height:38px;flex:none}
+.row{display:flex;gap:2px;height:52px;flex:none}
 .chan{width:150px;flex:none;background:var(--chan);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;border:0;margin:0;padding:0;color:inherit;font:inherit;cursor:pointer}
 .chan:hover b{text-decoration:underline}
-/* Network badges (WeatherFront, WeatherWise…): first on the left, a second on the right */
-.chan{position:relative}
-.chan .nb{position:absolute;top:50%;transform:translateY(-50%);height:24px;max-width:30px;display:flex;align-items:center;justify-content:center;pointer-events:none}
-.chan .nb.n0{left:5px}.chan .nb.n1{right:5px}
-.chan .nb.em{font-size:20px;line-height:1}
-.chan .nb img{height:24px;width:auto;max-width:30px;border-radius:4px;object-fit:contain;display:block}
-.chan .nb i{font-style:normal;font-size:10px;font-weight:700;background:var(--band);color:var(--bandt);border-radius:3px;padding:2px 3px;letter-spacing:.02em}
+/* Channel cell: role icon on the left (forecaster, chaser, hurricane, radar, Weather TV…),
+   number and call in the middle, network logos (WeatherFront, WeatherWise…) in a strip underneath */
+.chan{position:relative;padding-left:30px;box-sizing:border-box}
+.chan .ri{position:absolute;left:6px;top:50%;transform:translateY(-50%);width:30px;height:30px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.chan .ri img{width:30px;height:30px;object-fit:contain;border-radius:6px;display:block}
+.chan .ri.em{font-size:24px;line-height:1}
+.chan .ns{display:flex;gap:4px;margin-top:3px;height:14px;align-items:center;pointer-events:none}
+.chan .ns img{height:14px;width:auto;max-width:36px;border-radius:2px;object-fit:contain;display:block}
+.chan .ns i{font-style:normal;font-size:9px;font-weight:700;background:var(--band);color:var(--bandt);border-radius:2px;padding:1px 3px;letter-spacing:.02em;line-height:1.2}
 #chm-net{font-size:18px;color:var(--text);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 #chm-net img{height:26px;width:auto;border-radius:4px;vertical-align:middle}
 #chm-net span{display:inline-flex;align-items:center;gap:6px}
@@ -244,6 +246,10 @@ button{font-family:inherit}
 .nv{display:flex;align-items:center;gap:10px;background:var(--cell);padding:0 10px 0 6px;height:34px;flex:none;cursor:pointer;border:2px solid transparent}
 .nv.foc{border-color:var(--selb);background:var(--sel)}
 .nv.off .nl{opacity:.45;text-decoration:line-through}
+.nv.par .nl{color:var(--title);font-weight:700}
+.nv.kid{padding-left:30px}
+.nv.kid .nl{font-size:16px}
+.nv.dim .nl,.nv.dim .ck{opacity:.45}
 .nv .ck{width:26px;height:26px;flex:none;border:2px solid var(--line);background:transparent;color:var(--btn);font-size:18px;font-weight:700;line-height:20px;padding:0;cursor:pointer;border-radius:var(--r)}
 .nl{flex:1 1 0;min-width:0;font-size:17px;font-weight:600;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nv small{font-size:14px;color:var(--muted);flex:none}
@@ -379,6 +385,32 @@ button{font-family:inherit}
   let G = null, flat = [], sel = { r: -1, c: 0 }, off = 0, mode = 'guide', full = false;
   let skin = LS.get('wtvGuideSkin', 'wtv');                    // Weather TV colors by default; Classic is the option
   let hidden = new Set(LS.get('wtvGuideHidden', []));
+  // Nov 2026: blocks became regions with child blocks. A hidden old regional block ("reg-europe")
+  // now hides the whole region ('p:europe'); a hidden NWS block hides the NWS offices too.
+  if (LS.get('wtvGuideHiddenV', 0) < 3) {
+    const m = new Set();
+    hidden.forEach((id) => {
+      const g = /^reg-([a-z]+)$/.exec(id);
+      if (g) m.add('p:' + (g[1] === 'us' ? 'us-reg' : g[1]));
+      else { m.add(id); if (id === 'nws') m.add('nws-off'); }
+    });
+    hidden = m; LS.set('wtvGuideHidden', [...hidden]); LS.set('wtvGuideHiddenV', 3);
+  }
+  // A block is hidden on its own or with its whole region (Weather TV can't be hidden)
+  function blockHidden(b) { return !!b && b.id !== 'wtv' && (hidden.has(b.id) || !!(b.parent && hidden.has('p:' + b.parent))); }
+  function blockById(id) { return G ? G.blocks.find((b) => b.id === id) : null; }
+  // Show a block you asked for (by number, search or GO). If its whole region was off, the region
+  // comes back on with just this block showing.
+  function showBlock(b) {
+    if (!b) return false;
+    let ch = hidden.delete(b.id);
+    if (b.parent && hidden.has('p:' + b.parent)) {
+      hidden.delete('p:' + b.parent); ch = true;
+      G.blocks.forEach((x) => { if (x.parent === b.parent && x.id !== b.id) hidden.add(x.id); });
+    }
+    if (ch) { LS.set('wtvGuideHidden', [...hidden]); rebuild(); }
+    return ch;
+  }
   let panels = Object.assign({ side: true, info: true }, LS.get('wtvGuidePanels', {}));
   let loaded = { key: null, muted: true };
   let watched = null;            // { b, id, c } — the channel the player is on
@@ -515,7 +547,7 @@ button{font-family:inherit}
   // A hidden block's channels leave Live Now too (a channel only ever lives in one block)
   function visibleChannels(b) {
     const list = b.channels || [];
-    return b.id === 'live' ? list.filter((ch) => !hidden.has(ch.home)) : list;
+    return b.id === 'live' ? list.filter((ch) => !blockHidden(blockById(ch.home))) : list;
   }
   function rebuild() {
     const prev = flat[sel.r];
@@ -524,7 +556,7 @@ button{font-family:inherit}
     allBlocks().forEach((b) => {
       const chans = visibleChannels(b);
       if (!chans.length) return;
-      if (hidden.has(b.id) && b.id !== 'wtv') return;
+      if (blockHidden(b)) return;
       const bb = b.id === 'live' ? Object.assign({}, b, { label: 'LIVE NOW · ' + chans.length + (chans.length === 1 ? ' CHANNEL' : ' CHANNELS') }) : b;
       flat.push({ band: true, b: bb });
       chans.forEach((ch) => flat.push({ b: bb, ch }));
@@ -566,12 +598,14 @@ button{font-family:inherit}
     }
     const code = ch.area && ch.area !== 'US' ? ' · ' + ch.area : '';   // country / state (a plain US says nothing)
     const nets = netsOf(ch);
-    const icons = THEME_ICONS[it.b.theme];
-    let badges = nets.slice(0, 2).map((n, j) => '<span class="nb n' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(n.name.slice(0, 4).toUpperCase()) + '</i>') + '</span>').join('');
-    if (!nets.length && icons) badges = '<span class="nb n0 em" aria-hidden="true">' + icons[(ch.n || 0) % icons.length] + '</span>';   // seasonal: 🎄 🎅 ⛄ …
-    else if (!nets.length && ch.own) badges = '<span class="nb n0" aria-hidden="true"><img src="' + esc(ch.own) + '" alt=""></span>';    // Weather TV's own channels
+    const icons = THEME_ICONS[it.b.theme], ico = ch.icon || ch.own;
+    // Left: the role icon (seasonal blocks get 🎄 🎅 ⛄ … instead)
+    const role = icons ? '<span class="ri em" aria-hidden="true">' + icons[(ch.n || 0) % icons.length] + '</span>'
+      : ico ? '<span class="ri" aria-hidden="true"><img src="' + esc(ico) + '" alt=""></span>' : '';
+    // Under the number: the networks it's in
+    const strip = nets.length ? '<span class="ns" aria-hidden="true">' + nets.slice(0, 3).map((n) => n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(((n.name.match(/[A-Z0-9]/g) || []).join('') || n.name).slice(0, 3).toUpperCase()) + '</i>').join('') + '</span>' : '';   // no logo yet: WF, WW, AW…
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
-    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + badges + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span></button>' + cells + '</div>';
+    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + role + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span>' + strip + '</button>' + cells + '</div>';
   }
   function renderGrid() {
     rowsEl.innerHTML = flat.map((it, i) => it.band
@@ -1043,12 +1077,28 @@ button{font-family:inherit}
 
   // ── Blocks menu: jump to a block; tick / untick to show or hide it (saved on this device) ──
   let navOpen = false, navIdx = 0;
-  function navBlocks() { return G ? allBlocks().filter((b) => b.channels && b.channels.length) : []; }
+  // Menu rows: a block → { b }; a region → { p, id: 'p:<region>', label, kids }, its blocks right under it ({ b, kid })
+  function navBlocks() {
+    if (!G) return [];
+    const out = [], par = {};
+    allBlocks().forEach((b) => {
+      if (!(b.channels && b.channels.length)) return;
+      if (b.parent) {
+        if (!par[b.parent]) { par[b.parent] = { p: b.parent, id: 'p:' + b.parent, label: b.parentLabel || b.parent.toUpperCase(), kids: [] }; out.push(par[b.parent]); }
+        par[b.parent].kids.push(b); out.push({ b, kid: true });
+      } else out.push({ b });
+    });
+    return out;
+  }
+  function navRange(kids) {
+    const a = kids[0].range.replace(/^CH /, '').split('–')[0], z = kids[kids.length - 1].range.replace(/^CH /, '').split('–');
+    return a === z[z.length - 1] ? a : a + '–' + z[z.length - 1];
+  }
   function currentBlockId() { const it = flat[sel.r]; return it ? it.b.id : null; }
   function openNav() {
     if (mode !== 'guide' || !G) return;
     const list = navBlocks();
-    navIdx = Math.max(0, list.findIndex((b) => b.id === currentBlockId()));
+    navIdx = Math.max(0, list.findIndex((x) => x.b && x.b.id === currentBlockId()));
     navOpen = true; $('nav').classList.add('on'); renderNav();
   }
   function closeNav() { navOpen = false; $('nav').classList.remove('on'); }
@@ -1056,27 +1106,33 @@ button{font-family:inherit}
     const list = navBlocks();
     $('navlist').innerHTML = '<div class="nv kpr' + (navIdx === -1 ? ' foc' : '') + '" data-i="-1"><span class="ck" style="border-color:transparent;text-align:center">#</span><span class="nl">ENTER A CHANNEL NUMBER</span><small>CH #</small></div>'
       + '<div class="nv kpr' + (navIdx === -3 ? ' foc' : '') + '" data-i="-3"><span class="ck" style="border-color:transparent;text-align:center">🔍</span><span class="nl">SEARCH CHANNELS AND VIDEOS</span><small>/</small></div>'
-      + '<div class="nv kpr' + (navIdx === -2 ? ' foc' : '') + '" data-i="-2"><span class="ck" style="border-color:transparent;text-align:center">' + (autoScroll ? '⏸' : '▶') + '</span><span class="nl">' + (autoScroll ? 'PAUSE THE SCROLL' : 'START THE SCROLL') + '</span><small>AUTO</small></div>' + list.map((b, i) => {
-      const on = !hidden.has(b.id), locked = b.id === 'wtv';
-      return '<div class="nv' + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
-        + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(b.label) + '">' + (on ? '✓' : '') + '</button>')
-        + '<span class="nl">' + esc(b.label.replace(/ · \d+ CHANNELS?$/, '')) + '</span>'
-        + '<small>' + esc(b.id === 'live' ? visibleChannels(b).length + ' live' : b.range.replace(/^CH /, '')) + '</small>'
-        + '<button type="button" class="go" data-go="' + i + '" aria-label="Go to ' + esc(b.label) + '">GO ▶</button></div>';
+      + '<div class="nv kpr' + (navIdx === -2 ? ' foc' : '') + '" data-i="-2"><span class="ck" style="border-color:transparent;text-align:center">' + (autoScroll ? '⏸' : '▶') + '</span><span class="nl">' + (autoScroll ? 'PAUSE THE SCROLL' : 'START THE SCROLL') + '</span><small>AUTO</small></div>' + list.map((x, i) => {
+      const b = x.b, locked = b && b.id === 'wtv';
+      const on = !hidden.has(x.p ? x.id : b.id);
+      const label = x.p ? x.label : x.kid ? b.label.slice((b.parentLabel || '').length).replace(/^ · /, '') : b.label.replace(/ · \d+ CHANNELS?$/, '');
+      const dim = x.kid && hidden.has('p:' + b.parent);           // its whole region is off
+      return '<div class="nv' + (x.p ? ' par' : '') + (x.kid ? ' kid' : '') + (dim ? ' dim' : '') + (i === navIdx ? ' foc' : '') + (on ? '' : ' off') + '" data-i="' + i + '">'
+        + (locked ? '<span class="ck" style="border-color:transparent"></span>' : '<button type="button" class="ck" data-ck="' + i + '" aria-label="' + (on ? 'Hide ' : 'Show ') + esc(x.p ? x.label : b.label) + '">' + (on ? '✓' : '') + '</button>')
+        + '<span class="nl">' + esc(label) + '</span>'
+        + '<small>' + esc(x.p ? navRange(x.kids) : b.id === 'live' ? visibleChannels(b).length + ' live' : b.range.replace(/^CH /, '')) + '</small>'
+        + '<button type="button" class="go" data-go="' + i + '" aria-label="Go to ' + esc(x.p ? x.label : b.label) + '">GO ▶</button></div>';
     }).join('');
     const foc = $('navlist').querySelector('.foc'); if (foc) foc.scrollIntoView({ block: 'nearest' });
   }
   function toggleBlock(i) {
-    const b = navBlocks()[i]; if (!b || b.id === 'wtv') return;
-    if (hidden.has(b.id)) hidden.delete(b.id); else hidden.add(b.id);
+    const x = navBlocks()[i]; if (!x || (x.b && x.b.id === 'wtv')) return;
+    const key = x.p ? x.id : x.b.id;                                // a region switches all its blocks
+    if (hidden.has(key)) hidden.delete(key); else hidden.add(key);
     LS.set('wtvGuideHidden', [...hidden]);
     rebuild();
-    const j = navBlocks().findIndex((x) => x.id === b.id); if (j >= 0) navIdx = j;   // stay on the same block
+    const j = navBlocks().findIndex((y) => (y.p ? y.id : y.b.id) === key); if (j >= 0) navIdx = j;   // stay on the same row
     renderNav();
   }
   function jumpTo(i) {
-    const b = navBlocks()[i]; if (!b) return;
-    if (hidden.has(b.id)) { hidden.delete(b.id); LS.set('wtvGuideHidden', [...hidden]); rebuild(); }
+    const x = navBlocks()[i]; if (!x) return;
+    // A region: its first block you haven't switched off
+    const b = x.p ? (x.kids.find((k) => !hidden.has(k.id)) || x.kids[0]) : x.b;
+    showBlock(b);
     const r = flat.findIndex((it) => it.ch && it.b.id === b.id);
     closeNav();
     if (r >= 0) { select(r, 0); const band = $('r' + (r - 1)); if (band) rowsEl.scrollTop = Math.max(0, band.offsetTop - rowsEl.offsetTop); }
@@ -1117,7 +1173,7 @@ button{font-family:inherit}
     if (r < 0) {
       // Not in view: it may be in a block you've hidden — show it again and go there
       const b = allBlocks().find((x) => (x.channels || []).some((c) => c.n === n));
-      if (b && hidden.has(b.id)) { hidden.delete(b.id); LS.set('wtvGuideHidden', [...hidden]); rebuild(); r = flat.findIndex((it) => it.ch && it.b.id === b.id && it.ch.n === n); }
+      if (b && showBlock(b)) r = flat.findIndex((it) => it.ch && it.b.id === b.id && it.ch.n === n);
     }
     if (r < 0) { toast('CH ' + n + ' · NO CHANNEL'); return; }
     if (mode === 'watch') { select(r, 0); activate(); flashOsd(); }
@@ -1128,7 +1184,15 @@ button{font-family:inherit}
   // Browsing on with the arrows goes back to silent previews.
   function tuneIn(r, c) {
     lastInput = Date.now() + 22000;                                // the scroll waits ~30 s before rolling on
+    scrolling = false;                                             // stop the roll here (it may have been rolling under the number pad)
     select(r, c || 0);
+    // Bring the guide to that channel: its block's band at the top, or the channel near the top of a long block
+    const row = $('r' + r);
+    if (row) {
+      const band = flat[r - 1] && flat[r - 1].band ? $('r' + (r - 1)) : null;
+      const target = (band || row).offsetTop - rowsEl.offsetTop - (band ? 0 : 30);
+      rowsEl.scrollTop = Math.max(0, target);
+    }
     const cur = current(); if (!cur || !cur.c || isPage(cur.ch)) return;
     clearTimeout(pvT);
     play(cur.ch, cur.c, false);
@@ -1224,7 +1288,7 @@ button{font-family:inherit}
     const h = srHits[i]; if (!h) return;
     closeSearch();
     if (mode === 'app') closeApp();
-    if (hidden.has(h.b.id)) { hidden.delete(h.b.id); LS.set('wtvGuideHidden', [...hidden]); rebuild(); }   // asked for it: show its block
+    showBlock(blockById(h.b.id) || h.b);   // asked for it: show its block
     const r = flat.findIndex((it) => it.ch && it.b.id === h.b.id && it.ch.id === h.ch.id);
     if (r < 0) return;
     if (!engaged) engage();
@@ -1457,7 +1521,7 @@ button{font-family:inherit}
   function rollFrame(t) {
     const dt = lastFrame ? Math.min(100, t - lastFrame) : 16; lastFrame = t;
     const idle = Date.now() - lastInput > IDLE_MS;
-    if (autoScroll && idle && mode === 'guide' && !navOpen && !document.hidden && rowsEl.scrollHeight > rowsEl.clientHeight) {
+    if (autoScroll && idle && mode === 'guide' && !navOpen && !kpOpen && !srOpen && !chmOpen && !document.hidden && rowsEl.scrollHeight > rowsEl.clientHeight) {
       if (!scrolling) { scrolling = true; scrollPos = rowsEl.scrollTop; }
       const max = rowsEl.scrollHeight - rowsEl.clientHeight;
       const now = Date.now();
