@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-24T03:00:00Z build.1795489200 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-25T01:00:00Z build.1795568400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -141,6 +141,8 @@
       <select id="x-block"></select>
       <input id="x-from" class="mmdd" placeholder="From MM-DD" style="width:6.5rem"><input id="x-to" class="mmdd" placeholder="To MM-DD" style="width:6.5rem">
       <button class="btn btn-ghost" id="x-add">+ Add playlist channel</button>
+      <button class="btn btn-ghost" id="x-refresh" style="margin-left:auto" title="Re-read every guide playlist (channels 6–10 and these) from YouTube now. They also refresh by themselves every hour. 1 quota unit per 50 videos.">↻ Refresh playlists now</button>
+      <span id="x-msg" class="muted" style="font-size:.8rem"></span>
     </div>
   </details>
 
@@ -600,6 +602,17 @@
     const x = draft.extras[+b.dataset.xdel];
     if (x && confirm('Remove the ' + x.title + ' channel? (To just hide it until next year, untick it instead.)')) { draft.extras.splice(+b.dataset.xdel, 1); change(); }
   });
+  $('x-refresh').onclick = async () => {
+    const b = $('x-refresh'); b.disabled = true; $('x-msg').textContent = 'Reading the playlists from YouTube…';
+    try {
+      const r = await fetch('/api/admin/guide/refresh-playlists', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+      const name = {}; (draft.extras || []).forEach((x) => { name[x.playlistId] = x.title; });
+      $('x-msg').textContent = 'Updated: ' + Object.entries(j.counts).map(([pid, n]) => (name[pid] || pid) + ' ' + n).join(' · ') + ' videos. The guide shows them within 30 seconds.';
+    } catch (e) { $('x-msg').textContent = 'Could not refresh: ' + e.message; }
+    finally { b.disabled = false; }
+  };
   $('x-add').onclick = () => {
     const raw = $('x-url').value.trim();
     const m = raw.match(/[?&]list=([A-Za-z0-9_-]+)/) || raw.match(/^([A-Za-z0-9_-]{10,64})$/);

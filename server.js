@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-25T00:45:00Z build.1795567500
+// WeatherTV Server — updated 2026-11-25T01:00:00Z build.1795568400
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -6939,7 +6939,8 @@ app.get('/api/yt/recent/:channelId', async (req, res) => {
   }
 });
 
-// Playlist items — cached (CACHE_TTL.playlist). Up to 200 videos (4 pages of 50, 1 unit each).
+// Playlist items — cached (CACHE_TTL.playlist). The whole playlist: every page of 50 is 1 unit
+// (YouTube caps a playlist at 5,000 videos, so at most 100 pages).
 // ?fresh=1 from the server itself (the Channel Guide's refresh) skips the cache, so videos
 // added to a playlist show up within a few hours instead of two days.
 app.get('/api/yt/playlist/:playlistId', async (req, res) => {
@@ -6963,7 +6964,7 @@ app.get('/api/yt/playlist/:playlistId', async (req, res) => {
 
   try {
     let data = null, allItems = [], pageToken = '';
-    for (let page = 0; page < 4; page++) {
+    for (let page = 0; page < 100; page++) {
       const url = `https://www.googleapis.com/youtube/v3/playlistItems?key=${key}&playlistId=${playlistId}&part=snippet&maxResults=50` + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
       const d = await ytFetch(url);
       if (checkQuotaError(d)) {

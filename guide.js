@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T00:45:00Z build.1795567500
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T01:00:00Z build.1795568400
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -414,7 +414,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     if (ch.kind === 'radio') return { ...base, cells: radioTracks() };
     if (ch.id === 'highlights') return { ...base, cells: (data.highlights || []).slice(0, 30).map((h) => ({ v: h.videoId, t: h.title || '' })) };
     const pl = cache.playlist[ch.playlistId];
-    const cells = ((pl && pl.items) || []).slice(0, 200).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
+    const cells = ((pl && pl.items) || []).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
     return { ...base, playlistId: ch.playlistId, cells, needsFetch: !cells.length };
   }
 
@@ -547,8 +547,36 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
   // the list the same way as everywhere else. A channel that comes back empty is
   // not tried again for a day.
   const PORT = process.env.PORT || 3000;
-  const PL_REFRESH = 3 * 3600 * 1000;
+  const PL_REFRESH = 60 * 60 * 1000;                                // guide playlists: re-read every hour
   const tried = new Map();
+  // The guide's playlists (6–10 and the playlist channels in season) are re-read every hour,
+  // so videos you add to a playlist show up within the hour (1 unit per 50 videos). Admin's
+  // "Refresh playlists now" does it straight away.
+  function guidePlaylists(data) {
+    return [...new Set([...(data.playlists || []).map((p) => p.playlistId), ...extrasOf(configOf(data)).filter(inSeason).map((e) => e.playlistId)].filter(Boolean))];
+  }
+  async function refreshPlaylists(data, now) {
+    let n = 0;
+    for (const pid of guidePlaylists(data)) {
+      const c = cache.playlist[pid];
+      if (!now && c && Date.now() - (c.cachedAt || 0) < PL_REFRESH) continue;
+      if (!now && Date.now() - (tried.get('pl:' + pid) || 0) < PL_REFRESH) continue;
+      tried.set('pl:' + pid, Date.now());
+      try { await fetch('http://127.0.0.1:' + PORT + '/api/yt/playlist/' + encodeURIComponent(pid) + '?fresh=1'); n++; } catch (err) {}
+      await new Promise((r) => setTimeout(r, now ? 300 : 1500));
+    }
+    if (n) memo = { at: 0, body: null };
+    return n;
+  }
+  app.post('/api/admin/guide/refresh-playlists', async (req, res) => {
+    try {
+      const data = loadData() || {};
+      const n = await refreshPlaylists(data, true);
+      const counts = {};
+      guidePlaylists(data).forEach((pid) => { counts[pid] = ((cache.playlist[pid] || {}).items || []).length; });
+      res.json({ ok: true, refreshed: n, counts });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
   async function backfill() {
     try {
       const data = loadData() || {};
@@ -563,21 +591,11 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
         await new Promise((r) => setTimeout(r, 1500));
       }
       if (missing.length) { memo = { at: 0, body: null }; console.log('[Guide] Filled in video lists for ' + missing.length + ' channels'); }
-      // The guide's playlists (6–10 and the playlist channels in season): refreshed every
-      // 3 hours, so videos you add to a playlist show up the same day (1 unit per 50 videos)
-      const pls = [...(data.playlists || []).slice(0, 5).map((p) => p.playlistId), ...extrasOf(configOf(data)).filter(inSeason).map((e) => e.playlistId)].filter(Boolean);
-      for (const pid of [...new Set(pls)]) {
-        const c = cache.playlist[pid];
-        if (c && Date.now() - (c.cachedAt || 0) < PL_REFRESH) continue;
-        if (Date.now() - (tried.get('pl:' + pid) || 0) < PL_REFRESH) continue;
-        tried.set('pl:' + pid, Date.now());
-        try { await fetch('http://127.0.0.1:' + PORT + '/api/yt/playlist/' + encodeURIComponent(pid) + '?fresh=1'); memo = { at: 0, body: null }; } catch (err) {}
-        await new Promise((r) => setTimeout(r, 1500));
-      }
+      await refreshPlaylists(data, false);
     } catch (e) { console.warn('[Guide] Backfill failed:', e.message); }
   }
-  const t1 = setTimeout(backfill, 3 * 60 * 1000); if (t1.unref) t1.unref();
-  const t2 = setInterval(backfill, 30 * 60 * 1000); if (t2.unref) t2.unref();
+  const t1 = setTimeout(backfill, 60 * 1000); if (t1.unref) t1.unref();
+  const t2 = setInterval(backfill, 15 * 60 * 1000); if (t2.unref) t2.unref();
 
   // Suggested country codes from each channel's YouTube "country" (channels.list, 50 per call = 1 unit)
   app.post('/api/admin/guide/countries', async (req, res) => {
