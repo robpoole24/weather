@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — updated 2026-11-23T16:00:00Z build.1795449600 -->
+<!-- WeatherTV Admin — updated 2026-11-25T18:10:00Z build.1795633800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -329,6 +329,26 @@
     </div>
   </div>
 
+  <!-- Channel Guide 2.0 — its own page: /admin/guide.html -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">📺 Channel Guide</div>
+      <a class="btn btn-primary btn-sm" href="/admin/guide.html" style="text-decoration:none">Blocks &amp; numbers →</a>
+    </div>
+    <div class="section-body">
+      <div id="guide-summary" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
+    </div>
+  </div>
+  <script>
+  fetch('/api/admin/guide').then(r => r.json()).then(d => {
+    const nocode = d.channels.filter(c => !c.area).length, clash = d.channels.filter(c => c.conflict).length;
+    document.getElementById('guide-summary').innerHTML = d.channels.length + ' channels in ' + d.blocks.filter(b => b.count).length + ' of ' + d.blocks.length + ' blocks · '
+      + (nocode ? '<strong style="color:var(--gold)">' + nocode + '</strong> without a country code' : 'every channel has a country code')
+      + (clash ? ' · <strong style="color:var(--red)">' + clash + ' number conflicts</strong>' : '')
+      + ' · <a href="/guide" target="_blank" style="color:var(--accent)">open the guide ↗</a>';
+  }).catch(() => { document.getElementById('guide-summary').textContent = 'Not available yet — deploy the new server.'; });
+  </script>
+
   <!-- Highlights -->
   <div class="section">
     <div class="section-header">
@@ -654,26 +674,6 @@
       ? `<strong style="color:var(--gold)">${n}</strong> weather channels waiting for review (${live} stream live) · ${d.today.searches}/${d.today.of} searches today`
       : `Nothing waiting · ${d.today.searches}/${d.today.of} searches today`;
   }).catch(() => { document.getElementById('disc-summary').textContent = 'Not available yet — deploy the new server.'; });
-  </script>
-
-  <!-- Channel Guide 2.0 — its own page: /admin/guide.html -->
-  <div class="section">
-    <div class="section-header">
-      <div class="section-title">📺 Channel Guide</div>
-      <a class="btn btn-primary btn-sm" href="/admin/guide.html" style="text-decoration:none">Blocks &amp; numbers →</a>
-    </div>
-    <div class="section-body">
-      <div id="guide-summary" style="font-size:0.8rem;color:var(--muted)">Loading…</div>
-    </div>
-  </div>
-  <script>
-  fetch('/api/admin/guide').then(r => r.json()).then(d => {
-    const nocode = d.channels.filter(c => !c.area).length, clash = d.channels.filter(c => c.conflict).length;
-    document.getElementById('guide-summary').innerHTML = d.channels.length + ' channels in ' + d.blocks.filter(b => b.count).length + ' of ' + d.blocks.length + ' blocks · '
-      + (nocode ? '<strong style="color:var(--gold)">' + nocode + '</strong> without a country code' : 'every channel has a country code')
-      + (clash ? ' · <strong style="color:var(--red)">' + clash + ' number conflicts</strong>' : '')
-      + ' · <a href="/guide" target="_blank" style="color:var(--accent)">open the guide ↗</a>';
-  }).catch(() => { document.getElementById('guide-summary').textContent = 'Not available yet — deploy the new server.'; });
   </script>
 
   <!-- Community Cams — managed on its own page: /admin/cams.html -->
