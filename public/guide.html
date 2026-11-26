@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T17:00:00Z build.1795712400 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T17:20:00Z build.1795713600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1149,11 +1149,20 @@ button{font-family:inherit}
     const { it, ch, c } = cur, d = describe(it, c, sel.c);
     $('b-n').textContent = ch.n; $('b-call').textContent = ch.call;
     $('b-block').textContent = blockLabel(it) + ' · ' + ch.name;
-    $('b-title').textContent = c ? '“' + c.t + '”' : '';
+    $('b-title').textContent = ch.kind === 'wxr' ? ch.name : c ? '“' + c.t + '”' : '';
     $('b-status').innerHTML = d.live ? '<b style="color:#ff6b6b">LIVE now</b>' : esc(d.status);
     const nxt = ch.cells[sel.c + 1];
+    if (ch.kind === 'wxr') {                                       // a live station has no "next"
+      const st = ch.station || {};
+      $('b-nexth').textContent = 'ON THE AIR 24/7 ›';
+      $('b-nextt').textContent = 'Forecasts, conditions and warnings' + (st.wfo ? ' from NWS ' + st.wfo : '');
+      $('b-nexts').textContent = 'Warnings break in as they’re issued';
+      return;
+    }
     $('b-nexth').textContent = 'NEXT ON CH ' + ch.n + ' ›';
-    $('b-nextt').textContent = nxt ? nxt.t : 'That’s the oldest one we have';
+    const wrap = !nxt && (ch.repeat || ch.kind === 'radio') && ch.cells.length > 1 ? ch.cells[0] : null;   // playlists and the radio start over
+    if (wrap) { $('b-nextt').textContent = wrap.t; $('b-nexts').textContent = 'back to the start of the list'; return; }
+    $('b-nextt').textContent = nxt ? nxt.t : 'End of List';
     $('b-nexts').textContent = nxt ? (nxt.at ? ago(nxt.at) + ' · ' : '') + (c && c.live ? 'in RECENT any time' : 'plays when this one ends') : '';
   }
 
@@ -1180,7 +1189,7 @@ button{font-family:inherit}
       if ($('chatf').src !== want) $('chatf').src = want;
     } else if ($('chatf').src && $('chatf').src !== 'about:blank') $('chatf').src = 'about:blank';
     if (tab === 'RECENT') {
-      $('recent').innerHTML = ch.cells.map((x, k) => '<button type="button" data-k="' + k + '" class="' + (k === sel.c ? 'cur' : '') + '"><span class="t">' + (x.live ? '<i class="live">LIVE</i>' : '') + esc(x.t) + '</span><span class="s">' + esc(x.live ? 'Live now' : (x.at ? ago(x.at) : (k + 1) + ' of ' + ch.cells.length)) + '</span></button>').join('');
+      $('recent').innerHTML = ch.cells.map((x, k) => '<button type="button" data-k="' + k + '" class="' + (k === sel.c ? 'cur' : '') + '"><span class="t">' + (x.live ? '<i class="live">LIVE</i>' : '') + esc(x.t) + '</span><span class="s">' + esc(x.live ? 'Live now' : x.wxr ? 'Live 24/7' : (x.at ? ago(x.at) : (k + 1) + ' of ' + ch.cells.length)) + '</span></button>').join('');
     }
   }
   function showMap(ch) {

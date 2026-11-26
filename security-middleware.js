@@ -1,5 +1,5 @@
 // src/security-middleware.js — Altruistic Apps unified security layer
-// Updated: 2026-09-28T20:00:00Z build.1790654400
+// Updated: 2026-11-26T17:20:00Z build.1795713600
 // Patched 2026-10-12T22:30:00Z — rate limit counts API calls only (not page files); admin limit 120/min; PUT allowed in CORS
 // Patched 2026-10-12T09:50:00Z — same-origin always allowed (fixes 403 on admin POSTs),
 //   Altruistic Apps subdomains allowed, separate counter per rate limiter, trust proxy for real client IPs
@@ -112,7 +112,8 @@ function securityHeaders(req, res, next) {
   // Content Security Policy — allows our own assets + Railway CDN + Google Fonts
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    "media-src 'self' blob:;",
+    // wxr.gwes-cdn.net — NOAA Weather Radio live streams (GWES · weatherradio.org), guide channels 9900+
+    "media-src 'self' blob: https://wxr.gwes-cdn.net;",
     "worker-src 'self' blob:;",
     // static.cloudflareinsights.com — Cloudflare Web Analytics beacon (cookieless)
     "script-src 'self' 'unsafe-inline' https://unpkg.com https://cdnjs.cloudflare.com https://www.gstatic.com https://static.cloudflareinsights.com",
