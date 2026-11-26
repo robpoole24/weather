@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T22:30:00Z build.1795735800
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T22:55:00Z build.1795737300
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -58,7 +58,8 @@
     var Base = maplibregl.Map;
     var Tracked = function (opts) {
       var m = new Base(opts);
-      m._wtvReady = new Promise(function (ok) { m.once('load', ok); setTimeout(ok, 20000); });
+      // Wait for the map style itself; a slow device (Xbox) can take well over 20 seconds on the first visit
+      m._wtvReady = new Promise(function (ok) { m.once('load', ok); setTimeout(ok, 120000); });
       window.WTV_MAPS.push(m);
       return m;
     };
@@ -217,9 +218,16 @@
     LocalAirportConditions: "Here's a look at conditions at area airports.",
     TrafficOverview: "Here's your local traffic.", TrafficFlow: "Here's your local traffic flow.", AllergyReport: "Here's your allergy report.",
   };
-  var voice = null;
+  // One voice for every screen: chosen once, then kept (and remembered on this device). Before,
+  // screens spoken before the browser had listed its voices used its default voice instead.
+  var voice = null, VKEY = 'wtvScanVoiceName';
   function pickVoice() {
     try {
+      if (voice) return;                                         // already chosen: never switch mid-show
+      var all = speechSynthesis.getVoices(), kept = null;
+      try { kept = localStorage.getItem(VKEY); } catch (e) {}
+      if (kept) voice = all.find(function (v) { return v.name === kept; }) || null;
+      if (voice) return;
       var vs = speechSynthesis.getVoices().filter(function (v) { return /^en(-|_)US/i.test(v.lang); });
       // Best first: the neural "Natural"/"Online" voices (Edge, Windows 11), then Google's own
       // voice in Chrome, then the better Mac voices. The old Windows voices (David, Zira, Mark)
@@ -229,6 +237,7 @@
       voice = null;
       for (var r = 0; r < rank.length && !voice; r++) voice = vs.find(function (v) { return rank[r].test(v.name); }) || null;
       if (!voice) voice = vs.find(function (v) { return !/David|Zira|Mark/i.test(v.name); }) || vs[0] || null;
+      if (voice) try { localStorage.setItem(VKEY, voice.name); } catch (e) {}
     } catch (e) {}
   }
   if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
@@ -271,8 +280,10 @@
     if (!line || !window.speechSynthesis) return true;
     try {
       speechSynthesis.cancel();
+      pickVoice();
+      if (!voice && speechSynthesis.getVoices().length === 0) return true;   // voices not listed yet: skip this one line rather than use a different voice
       var u = new SpeechSynthesisUtterance(line);
-      if (voice) u.voice = voice;
+      if (voice) { u.voice = voice; u.lang = voice.lang; }
       u.rate = 0.98; u.pitch = 1; u.volume = 1;
       u.onstart = function () { duck(mgr, true); };
       u.onend = u.onerror = function () { setTimeout(function () { duck(mgr, false); }, 300); };
@@ -294,9 +305,16 @@
       hits = pane.querySelector('.hits'), msg = pane.querySelector('.msg');
     function open(on) {
       pane.classList.toggle('open', on); keepShown();
-      if (on) { hits.innerHTML = ''; msg.textContent = ''; setTimeout(function () { input.focus(); input.select(); }, 30); } else btn.focus();
+      var tv = window.WTV_TV && WTV_TV.active;                    // TV / Xbox: move the remote's highlight instead
+      if (on) { hits.innerHTML = ''; msg.textContent = ''; setTimeout(function () { if (tv) WTV_TV.focusEl(input); else { input.focus(); input.select(); } }, 30); }
+      else if (tv) WTV_TV.focusEl(btn); else btn.focus();
     }
     btn.onclick = function () { open(!pane.classList.contains('open')); };
+    // No place known yet (opened without one and nothing saved): ask, instead of showing the middle of the US
+    var saved = null; try { saved = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
+    if (!location.search.slice(1) && !(saved && isFinite(saved.lat))) setTimeout(function () {
+      open(true); msg.textContent = "Where are you? Until you pick a place, Weatherscan shows the middle of the U.S.";
+    }, 2500);
     pane.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); open(false); } });
     function go(lat, lon, name, label) {
       // Weather TV's one shared location (radar, forecast, WeatherStar, alerts, the guide's bottom bar).
@@ -332,7 +350,7 @@
   function controls() {
     var css = document.createElement('style');
     css.textContent = '#wtv-ctl{position:fixed;right:14px;bottom:14px;z-index:99999;display:flex;gap:8px;opacity:0;transition:opacity .4s;font:700 15px/1 Barlow,system-ui,sans-serif}'
-      + '#wtv-ctl.on{opacity:1}#wtv-ctl button{font:inherit;letter-spacing:.04em;padding:8px 12px;border-radius:8px;border:2px solid #9fc4ff;background:rgba(10,25,60,.85);color:#fff;cursor:pointer}'
+      + '#wtv-ctl.on,html.tv-mode #wtv-ctl{opacity:1}#wtv-ctl button{font:inherit;letter-spacing:.04em;padding:8px 12px;border-radius:8px;border:2px solid #9fc4ff;background:rgba(10,25,60,.85);color:#fff;cursor:pointer}'
       + '#wtv-ctl button.off{opacity:.55;text-decoration:line-through}'
       + '#wtv-note{position:fixed;left:50%;bottom:7%;transform:translateX(-50%);z-index:99998;max-width:80%;padding:10px 18px;border-radius:10px;background:rgba(10,25,60,.9);color:#fff;'
       + 'font:600 18px/1.3 Barlow,system-ui,sans-serif;text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.4);transition:opacity .8s}#wtv-note.gone{opacity:0}'

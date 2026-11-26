@@ -3748,7 +3748,7 @@ function loadIframe(src, label, isLive) {
   newFrame.style.display = 'block';
   // TV remote: the embedded radar (same site, same remote script) can take the
   // highlight; YouTube/Twitch/WeatherStar players can't (they'd trap the remote)
-  if (/^\/radar\.html/.test(src)) newFrame.setAttribute('data-tv-frame', ''); else newFrame.removeAttribute('data-tv-frame');
+  if (/^\/(radar\.html|weatherscan\/)/.test(src)) newFrame.setAttribute('data-tv-frame', ''); else newFrame.removeAttribute('data-tv-frame');   // Weatherscan: its Location/Music/Voice buttons
   if (isWeatherStar && /[?&]wtvTown=haddonfield/.test(src)) newFrame.addEventListener('load', () => haddonfieldTakeover(newFrame));
   // WeatherStar 4000 keeps its own remembered scan-line setting; make it match WeatherTV's once it has started
   if (isWeatherStar && !isWS3000) newFrame.addEventListener('load', () => { setTimeout(() => wsSync4000ScanLines(newFrame), 1500); setTimeout(() => wsSync4000ScanLines(newFrame), 4000); });

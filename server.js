@@ -152,7 +152,9 @@ app.get('/api/admin/cameras/dot-status', (req, res) => res.json({ note: 'Each st
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res, file) {
     const url = res.req && res.req.originalUrl || '';
-    if (/\.html?$/i.test(file) || /sw\.js$|manifest|camera-count|\.json$/i.test(file)) res.setHeader('Cache-Control', 'no-cache');
+    // Weatherscan's map outlines (coasts, states, counties) never change: keep them a week
+    if (/[\\/]weatherscan[\\/]geo[\\/][^\\/]+\.json$/i.test(file)) res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    else if (/\.html?$/i.test(file) || /sw\.js$|manifest|camera-count|\.json$/i.test(file)) res.setHeader('Cache-Control', 'no-cache');
     else if (/[?&]v=/.test(url)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     else if (/\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf|mp3|mp4)$/i.test(file)) res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
     else res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
