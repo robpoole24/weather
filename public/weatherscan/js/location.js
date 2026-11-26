@@ -197,6 +197,12 @@ async function getMainCity() {
     ccTunnel = systemSettings.mainCity.icaoCode;
 }
 
+// WTV: one lookup per station, shared (the nearby list asks for the same stations more than once)
+const wtvPointMemo = {};
+function wtvPoint(icao) {
+    return wtvPointMemo[icao] || (wtvPointMemo[icao] = Promise.resolve($.getJSON(`/wxapi/v3/location/point?icaoCode=${icao}&language=en-US&format=json&apiKey=${systemSettings.apiKeys.api_key}`)));
+}
+
 async function getNearbyCities() {
     systemSettings.nearbyCities.cities = []
     let locationQueue = [], nearbyRound = 0, newCities = [];
@@ -220,6 +226,7 @@ async function getNearbyCities() {
 
         const data = await $.getJSON(`/wxapi/v3/location/near?geocode=${locpull}&product=observation&format=json&apiKey=${systemSettings.apiKeys.api_key}`)
 
+        data.location.stationId.forEach((id) => wtvPoint(id).catch(() => {}));   // WTV: ask for all of them at once; they're used in order below
         for (let i = 0; i < data.location.stationId.length; i++) {
             await createNewNearbyCity(data.location.stationId[i]);
         }
@@ -234,7 +241,7 @@ async function getNearbyCities() {
     async function createNewNearbyCity(icao) {
         var locName, dontPush;
         try {
-            const data = await $.getJSON(`/wxapi/v3/location/point?icaoCode=${icao}&language=en-US&format=json&apiKey=${systemSettings.apiKeys.api_key}`)
+            const data = await wtvPoint(icao)
             locName = data.location.displayName.replace(" Charter Township", "").replace(" Township", "");
             /*if(data.location.locale["locale4"] != null){
                 if(!data.location.locale["locale4"].endsWith("Naval Air Station")){locName = data.location.locale["locale4"]}
@@ -273,7 +280,7 @@ async function getExtraCities() {
     async function createNewExtraCity(icao, dist) {
         var extraCityObj, dontPush = false;
         try {
-        const data = await $.getJSON(`/wxapi/v3/location/point?icaoCode=${icao}&language=en-US&format=json&apiKey=${systemSettings.apiKeys.api_key}`)
+        const data = await wtvPoint(icao)
 
         extraCityObj = {
             packageName: "locname",
@@ -578,87 +585,8 @@ async function locationJS() {
         ]
     }
 
-    //nearby 8
-    if (systemSettings.nearbyCities.autoFind == true) {
-        await getNearbyCities()
-    } else {
-        for(let i = 0; i < systemSettings.nearbyCities.cities.length; i++){
-            if(systemSettings.nearbyCities.cities[i].locationID != undefined){
-                systemSettings.nearbyCities.cities[i].header = "geocode=" + await getCoordsLocID(systemSettings.nearbyCities.cities[i].locationID);
-            }else{
-                systemSettings.nearbyCities.cities[i].header = "icaoCode=" + systemSettings.nearbyCities.cities[i].icaoCode;
-            }
-        }
-    }
-
-    //extra
-    if (systemSettings.extraCity.autoFind == true) {
-        await getExtraCities()
-    } else {
-        for(let i = 0; i < systemSettings.extraCity.cities.length; i++){
-            if(systemSettings.extraCity.cities[i].locationID != undefined){
-                systemSettings.extraCity.cities[i].header = "geocode=" + await getCoordsLocID(systemSettings.extraCity.cities[i].locationID);
-            }else{
-                systemSettings.extraCity.cities[i].header = "icaoCode=" + systemSettings.extraCity.cities[i].icaoCode;
-            }
-        }
-    }
-
-    //extra radar
-    await getExtraRadar()
-
-    //lbar
-    if (systemSettings.LBar.locations.autoFind == true) {
-        systemSettings.LBar.locations.cities[0] = {
-            locationName: systemSettings.mainCity.locationName,
-            lat: systemSettings.mainCity.lat,
-            lon: systemSettings.mainCity.lon,
-            obsName: systemSettings.mainCity.obsName,
-            icaoCode: systemSettings.mainCity.icaoCode
-        }
-        systemSettings.LBar.locations.cities[0].header = "icaoCode=" + systemSettings.LBar.locations.cities[0].icaoCode;
-    } else {
-        for(let i = 0; i < systemSettings.LBar.locations.cities.length; i++){
-            if(systemSettings.LBar.locations.cities[i].locationID != undefined){
-                systemSettings.LBar.locations.cities[i].header = "geocode=" + await getCoordsLocID(systemSettings.LBar.locations.cities[i].locationID);
-            }else{
-                systemSettings.LBar.locations.cities[i].header = "icaoCode=" + systemSettings.LBar.locations.cities[i].icaoCode;
-            }
-        }
-    }
-    
-    //lbar radar
-    if (systemSettings.LBar.radar.auto == true) {
-        systemSettings.LBar.radar.lat = systemSettings.LBar.locations.cities[0].lat
-        systemSettings.LBar.radar.lon = systemSettings.LBar.locations.cities[0].lon
-        systemSettings.LBar.radar.radarCities = [{ locationName: systemSettings.LBar.locations.cities[0].locationName, dotTopPos: "97", dotLeftPos: "235", nameTopMargin: "-32", nameLeftMargin: "-34" }]
-    }
-    //lbar ccticker
-    if (systemSettings.LBar.ccTicker.autoFind == true) {
-        await getLBarCC()
-    }
-
-    //datamaps
-    if (systemSettings.dataMaps.auto == true) {
-        await centerDataMaps(systemSettings.mainCity.lat, systemSettings.mainCity.lon);
-    }
-    //travel map
-    if (systemSettings.travel.regionalMap.autoFind == true) {
-        await getTravelCities()
-        for (var i = 0; i < systemSettings.travel.regionalMap.cities.length; i++) {
-            systemSettings.travel.regionalMap.cities[i].header = systemSettings.travel.regionalMap.cities[i].lat + "," + systemSettings.travel.regionalMap.cities[i].lon
-        }
-    } else {
-        for (var i = 0; i < systemSettings.travel.regionalMap.cities.length; i++) {
-            systemSettings.travel.regionalMap.cities[i].header = await getCoordsLocID(systemSettings.travel.regionalMap.cities[i].locationID)
-        }
-    }
-    
-    for (var i = 0; i < systemSettings.travel.destinationForecast.length; i++) {
-        systemSettings.travel.destinationForecast[i].header = await getCoordsLocID(systemSettings.travel.destinationForecast[i].locationID)
-        
-    }
-
+    // WTV: the lookups below don't depend on each other, so they run side by side instead of one
+    // after another (this used to be most of the 10–20 second wait before the first screen)
     //health
     if (systemSettings.health.autoFind == true) {
         systemSettings.health.lat = systemSettings.mainCity.lat
@@ -667,81 +595,141 @@ async function locationJS() {
         systemSettings.health.obsName = systemSettings.mainCity.obsName
         systemSettings.health.icaoCode = systemSettings.mainCity.icaoCode
     }
-    //airport
-    if (systemSettings.airport.autoFind == true) {
-        await getAirports(systemSettings.mainCity.lat, systemSettings.mainCity.lon)
-    }
-    //intl
-    for (var i = 0; i < systemSettings.international.map.canada.length; i++) {
-        systemSettings.international.map.canada[i].header = await getCoordsLocID(systemSettings.international.map.canada[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.mexico.length; i++) {
-        systemSettings.international.map.mexico[i].header = await getCoordsLocID(systemSettings.international.map.mexico[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.caribbean.length; i++) {
-        systemSettings.international.map.caribbean[i].header = await getCoordsLocID(systemSettings.international.map.caribbean[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.southamerica.length; i++) {
-        systemSettings.international.map.southamerica[i].header = await getCoordsLocID(systemSettings.international.map.southamerica[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.britain.length; i++) {
-        systemSettings.international.map.britain[i].header = await getCoordsLocID(systemSettings.international.map.britain[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.europe.length; i++) {
-        systemSettings.international.map.europe[i].header = await getCoordsLocID(systemSettings.international.map.europe[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.africa.length; i++) {
-        systemSettings.international.map.africa[i].header = await getCoordsLocID(systemSettings.international.map.africa[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.india.length; i++) {
-        systemSettings.international.map.india[i].header = await getCoordsLocID(systemSettings.international.map.india[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.eastasia.length; i++) {
-        systemSettings.international.map.eastasia[i].header = await getCoordsLocID(systemSettings.international.map.eastasia[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.oceania.length; i++) {
-        systemSettings.international.map.oceania[i].header = await getCoordsLocID(systemSettings.international.map.oceania[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.map.australia.length; i++) {
-        systemSettings.international.map.australia[i].header = await getCoordsLocID(systemSettings.international.map.australia[i].locationID)
-    }
-    
-    for (var i = 0; i < systemSettings.international.forecast.length; i++) {
-        systemSettings.international.forecast[i].header = await getCoordsLocID(systemSettings.international.forecast[i].locationID)
-    }
-    
-    //golf
-    if (systemSettings.golf.autoFind == true) {
-        await getGolfCourses()
-    }
-    systemSettings.golf.teeTime.header = await getCoordsLocID(systemSettings.golf.teeTime.locationID)
+    (await Promise.allSettled([
+        (async () => {
+        //nearby 8
+        if (systemSettings.nearbyCities.autoFind == true) {
+            await getNearbyCities()
+        } else {
+            for(let i = 0; i < systemSettings.nearbyCities.cities.length; i++){
+                if(systemSettings.nearbyCities.cities[i].locationID != undefined){
+                    systemSettings.nearbyCities.cities[i].header = "geocode=" + await getCoordsLocID(systemSettings.nearbyCities.cities[i].locationID);
+                }else{
+                    systemSettings.nearbyCities.cities[i].header = "icaoCode=" + systemSettings.nearbyCities.cities[i].icaoCode;
+                }
+            }
+        }
+        })(),
+        (async () => {
+        //extra
+        if (systemSettings.extraCity.autoFind == true) {
+            await getExtraCities()
+        } else {
+            for(let i = 0; i < systemSettings.extraCity.cities.length; i++){
+                if(systemSettings.extraCity.cities[i].locationID != undefined){
+                    systemSettings.extraCity.cities[i].header = "geocode=" + await getCoordsLocID(systemSettings.extraCity.cities[i].locationID);
+                }else{
+                    systemSettings.extraCity.cities[i].header = "icaoCode=" + systemSettings.extraCity.cities[i].icaoCode;
+                }
+            }
+        }
 
-    for (var i = 0; i < systemSettings.golf.courses.length; i++) {
-        systemSettings.golf.courses[i].header = await getCoordsLocID(systemSettings.golf.courses[i].locationID)
-    }
+        //extra radar
+        await getExtraRadar()
+        })(),
+        (async () => {
+        //lbar
+        if (systemSettings.LBar.locations.autoFind == true) {
+            systemSettings.LBar.locations.cities[0] = {
+                locationName: systemSettings.mainCity.locationName,
+                lat: systemSettings.mainCity.lat,
+                lon: systemSettings.mainCity.lon,
+                obsName: systemSettings.mainCity.obsName,
+                icaoCode: systemSettings.mainCity.icaoCode
+            }
+            systemSettings.LBar.locations.cities[0].header = "icaoCode=" + systemSettings.LBar.locations.cities[0].icaoCode;
+        } else {
+            for(let i = 0; i < systemSettings.LBar.locations.cities.length; i++){
+                if(systemSettings.LBar.locations.cities[i].locationID != undefined){
+                    systemSettings.LBar.locations.cities[i].header = "geocode=" + await getCoordsLocID(systemSettings.LBar.locations.cities[i].locationID);
+                }else{
+                    systemSettings.LBar.locations.cities[i].header = "icaoCode=" + systemSettings.LBar.locations.cities[i].icaoCode;
+                }
+            }
+        }
+    
+        //lbar radar
+        if (systemSettings.LBar.radar.auto == true) {
+            systemSettings.LBar.radar.lat = systemSettings.LBar.locations.cities[0].lat
+            systemSettings.LBar.radar.lon = systemSettings.LBar.locations.cities[0].lon
+            systemSettings.LBar.radar.radarCities = [{ locationName: systemSettings.LBar.locations.cities[0].locationName, dotTopPos: "97", dotLeftPos: "235", nameTopMargin: "-32", nameLeftMargin: "-34" }]
+        }
+        //lbar ccticker
+        if (systemSettings.LBar.ccTicker.autoFind == true) {
+            await getLBarCC()
+        }
+        })(),
+        (async () => {
+        //datamaps
+        if (systemSettings.dataMaps.auto == true) {
+            await centerDataMaps(systemSettings.mainCity.lat, systemSettings.mainCity.lon);
+        }
+        })(),
+        (async () => {
+        //travel map
+        if (systemSettings.travel.regionalMap.autoFind == true) {
+            await getTravelCities()
+            for (var i = 0; i < systemSettings.travel.regionalMap.cities.length; i++) {
+                systemSettings.travel.regionalMap.cities[i].header = systemSettings.travel.regionalMap.cities[i].lat + "," + systemSettings.travel.regionalMap.cities[i].lon
+            }
+        } else {
+            await Promise.all(systemSettings.travel.regionalMap.cities.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+        }
+    
+        await Promise.all(systemSettings.travel.destinationForecast.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+        })(),
+        (async () => {
+        //airport
+        if (systemSettings.airport.autoFind == true) {
+            await getAirports(systemSettings.mainCity.lat, systemSettings.mainCity.lon)
+        }
+        })(),
+        (async () => {
+        //intl
+        await Promise.all(systemSettings.international.map.canada.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.mexico.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.caribbean.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.southamerica.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.britain.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.europe.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.africa.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.india.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.eastasia.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.oceania.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.map.australia.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+    
+        await Promise.all(systemSettings.international.forecast.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+        })(),
+        (async () => {
+        //golf
+        if (systemSettings.golf.autoFind == true) {
+            await getGolfCourses()
+        }
+        systemSettings.golf.teeTime.header = await getCoordsLocID(systemSettings.golf.teeTime.locationID)
 
-    //garden
-    if (systemSettings.garden.autoFind == true) {
-        await getGardenLoc(systemSettings.mainCity.lat, systemSettings.mainCity.lon, systemSettings.mainCity.locationName)
-    }
+        await Promise.all(systemSettings.golf.courses.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+        })(),
+        (async () => {
+        //garden
+        if (systemSettings.garden.autoFind == true) {
+            await getGardenLoc(systemSettings.mainCity.lat, systemSettings.mainCity.lon, systemSettings.mainCity.locationName)
+        }
 
-    systemSettings.garden.header = await getCoordsLocID(systemSettings.garden.locationID)
+        systemSettings.garden.header = await getCoordsLocID(systemSettings.garden.locationID)
 
-    for (var i = 0; i < systemSettings.LBar.ccTicker.cities.length; i++) {
-        systemSettings.LBar.ccTicker.cities[i].header = await getCoordsLocID(systemSettings.LBar.ccTicker.cities[i].locationID)
-    }
+        await Promise.all(systemSettings.LBar.ccTicker.cities.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
 
-    for (var i = 0; i < systemSettings.LBar.ccTicker.travelCities.length; i++) {
-        systemSettings.LBar.ccTicker.travelCities[i].header = await getCoordsLocID(systemSettings.LBar.ccTicker.travelCities[i].locationID)
-    }
+        await Promise.all(systemSettings.LBar.ccTicker.travelCities.map(async (c) => { c.header = await getCoordsLocID(c.locationID) }))
+        })(),
+    ])).forEach((r) => { if (r.status === 'rejected') console.error(r.reason) });
 }

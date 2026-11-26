@@ -3756,10 +3756,15 @@ async function getCoordsLocID(locID) {
 		return ""
 	}
 	var url = "/wxapi/v3/location/point?locid=" + locID + "&language=en-US&format=json&apiKey=" + api_key
+	// WTV: a place ID always means the same spot, so remember the answer on this device (30 days)
+	var memo = {}; try { memo = JSON.parse(localStorage.getItem("wtvLocIds") || "{}"); } catch (e) {}
+	if (memo[locID] && Date.now() - memo[locID][1] < 30 * 864e5) return memo[locID][0];
 
 	try {
 		const data = await $.getJSON(url)
-		return String(data.location.latitude) + "," + String(data.location.longitude)
+		var ll = String(data.location.latitude) + "," + String(data.location.longitude)
+		try { memo = JSON.parse(localStorage.getItem("wtvLocIds") || "{}"); memo[locID] = [ll, Date.now()]; localStorage.setItem("wtvLocIds", JSON.stringify(memo)); } catch (e) {}
+		return ll
 	} catch (error) {
 		console.error(error)
 		return ""

@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T22:55:00Z build.1795737300
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T23:05:00Z build.1795737900
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -60,18 +60,64 @@
       var m = new Base(opts);
       // Wait for the map style itself; a slow device (Xbox) can take well over 20 seconds on the first visit
       m._wtvReady = new Promise(function (ok) { m.once('load', ok); setTimeout(ok, 120000); });
+      // Health notes for the map check below
+      m._wtv = { loaded: false, lost: false, err: '' };
+      m.once('load', function () { m._wtv.loaded = true; });
+      m.on('error', function (e) { var t = String((e && e.error && e.error.message) || 'error'); if (!m._wtv.err && !/non-existing layer|Failed to fetch|404/i.test(t)) m._wtv.err = t.slice(0, 80); });   // skip Weatherscan's own harmless slips and missing tiles
+      try {
+        var cv = m.getCanvas();
+        cv.addEventListener('webglcontextlost', function () { m._wtv.lost = true; });
+        cv.addEventListener('webglcontextrestored', function () { m._wtv.lost = false; });
+      } catch (e) {}
       window.WTV_MAPS.push(m);
       return m;
     };
     Tracked.prototype = Base.prototype;
     maplibregl.Map = Tracked;
   }
+  // Map check: if any map hasn't drawn 45 seconds in (or the device's graphics dropped one),
+  // show one small line at the top left saying what's wrong, so a photo of the screen tells us.
+  // Add #diag to the address to always show it.
+  function mapCheck(force) {
+    var M = window.WTV_MAPS || [], loaded = 0, lost = 0, errs = [];
+    M.forEach(function (m) { if (m._wtv) { if (m._wtv.loaded) loaded++; if (m._wtv.lost) lost++; if (m._wtv.err && errs.indexOf(m._wtv.err) < 0) errs.push(m._wtv.err); } });
+    if (!force && loaded === M.length && !lost && !errs.length) return;
+    var gpu = '';
+    try { var c = document.createElement('canvas').getContext('webgl'); var d = c && c.getExtension('WEBGL_debug_renderer_info'); gpu = c ? (d ? c.getParameter(d.UNMASKED_RENDERER_WEBGL) : 'webgl ok') : 'NO WEBGL'; } catch (e) { gpu = 'webgl error'; }
+    var el = document.getElementById('wtv-diag') || document.body.appendChild(Object.assign(document.createElement('div'), { id: 'wtv-diag' }));
+    el.style.cssText = 'position:fixed;left:8px;top:8px;z-index:100001;max-width:70%;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,.8);color:#ffd000;font:600 14px/1.3 Barlow,system-ui,sans-serif';
+    el.textContent = 'Map check: ' + loaded + '/' + M.length + ' drawn' + (lost ? ', ' + lost + ' dropped by graphics' : '') + (errs.length ? ' · ' + errs.join(' | ') : '') + ' · ' + gpu;
+  }
+  setTimeout(function () { mapCheck(/diag/.test(location.hash)); setInterval(function () { mapCheck(/diag/.test(location.hash)); }, 15000); }, 45000);
+
   // Our extra layers follow Weatherscan's own switches: lakes show when any land layer shows;
   // lake shores show with the coastlines.
   var LAND = ['conus merc', 'conus sat', 'alaska', 'hawaii local', 'hawaii regional'];
   if (window.maplibregl) {
     var setLP = maplibregl.Map.prototype.setLayoutProperty;
+    // Radar loops: a hidden map layer never loads its pictures, so every frame used to start
+    // loading only when its turn came and flashed blank. Frames now stay "on" at zero opacity
+    // (loaded and ready) and showing/hiding one just changes its opacity.
+    var RADAR = /^radarlayer_/, addL = maplibregl.Map.prototype.addLayer, getLP = maplibregl.Map.prototype.getLayoutProperty;
+    maplibregl.Map.prototype.addLayer = function (layer) {
+      if (layer && RADAR.test(layer.id) && layer.type === 'raster') {
+        var hidden = layer.layout && layer.layout.visibility === 'none';
+        layer.layout = Object.assign({}, layer.layout, { visibility: 'visible' });
+        layer.paint = Object.assign({}, layer.paint, { 'raster-opacity': hidden ? 0 : 1, 'raster-opacity-transition': { duration: 0 } });
+        (this._wtvVis = this._wtvVis || {})[layer.id] = hidden ? 'none' : 'visible';
+      }
+      return addL.apply(this, arguments);
+    };
+    maplibregl.Map.prototype.getLayoutProperty = function (id, name) {
+      if (name === 'visibility' && this._wtvVis && this._wtvVis[id]) return this._wtvVis[id];
+      return getLP.apply(this, arguments);
+    };
     maplibregl.Map.prototype.setLayoutProperty = function (id, name, value) {
+      if (name === 'visibility' && this._wtvVis && this._wtvVis[id]) {
+        this._wtvVis[id] = value;
+        this.setPaintProperty(id, 'raster-opacity', value === 'none' ? 0 : 1);
+        return this;
+      }
       var r = setLP.apply(this, arguments);
       try {
         if (name === 'visibility' && LAND.indexOf(id) >= 0) {

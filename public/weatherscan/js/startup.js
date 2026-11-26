@@ -142,6 +142,8 @@ requestAnimationFrame(animate);
     audioPlayer.startPlaying(audioPlayer.playlist, true);
 
     await locationJS()
+    // WTV: build the radar maps now, so they load while the weather data comes in
+    try { initializeRadars(); window.wtvRadarsMade = true; } catch (e) { console.error(e) }
 
     setBackground()
     setWInterLegend()
@@ -194,25 +196,24 @@ requestAnimationFrame(animate);
     //all starting data calls
     console.log("systemSettings", systemSettings)
 
-    try {
-      await allData();
-    } catch (error) {
-      console.error(error)
-    }
+    // WTV: the packages' data, the L-bar, the ticker and the warning crawl all load at the same
+    // time (they used to wait for each other, one after another)
+    const wtvAllData = (async () => { try { await allData(); } catch (error) { console.error(error) } })();
 
     console.log("weatherData", weatherData)
 
-    for (let i = 0; i < systemSettings.LBar.locations.cities.length; i++){
+    // WTV: the L-bar cities load side by side
+    await Promise.all(systemSettings.LBar.locations.cities.map(async (c, i) => {
       try {
         await getlBarData(i);
       } catch (error) {
         console.error(error)
         lBarData.cities[i].currentConditions.noReport = true
       }
-    }
+    }))
     console.log("Lbar data", lBarData)
 
-    try {
+    const wtvTicker = (async () => { try {
       await getTickerData()
     } catch (error) {
       console.error(error)
@@ -224,9 +225,9 @@ requestAnimationFrame(animate);
       localTickerData.travelCities.current.cities = []
       localTickerData.travelCities.forecast.cities = []
     }
-    console.log("ticker data", localTickerData)
+    console.log("ticker data", localTickerData) })();
 
-    try {
+    const wtvCrawl = (async () => { try {
       await checkWarningCrawl()
     } catch (error) {
       console.error(error)
@@ -234,8 +235,10 @@ requestAnimationFrame(animate);
       weatherData.severemode = false;
     }
 
-    console.log("warning crawl data", weatherData.crawlAlerts)
+    console.log("warning crawl data", weatherData.crawlAlerts) })();
 
+    await Promise.all([wtvAllData, wtvTicker, wtvCrawl]);
+    console.log("weatherData", weatherData)
     await startPrograms()
 }
 

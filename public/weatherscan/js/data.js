@@ -496,9 +496,7 @@ async function getCoreData() {
     weatherData.nearbyCities.cities[num] = obj
   }
 
-  for (var i = 0; i < systemSettings.nearbyCities.cities.length; i++) {
-    await getNearby(i)
-  }
+  await Promise.all(systemSettings.nearbyCities.cities.map((_, i) => getNearby(i)))   // WTV: side by side
 
   async function getLF() {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.mainCity.lat + "," + systemSettings.mainCity.lon + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1207,9 +1205,7 @@ async function getTrafficData() {
   }
 
   weatherData.trafficFlow.routes = []
-  for (var i = 0; i < systemSettings.traffic.routes.length; i++) {
-    await getTrafficFlow(i)
-  }
+  await Promise.all(systemSettings.traffic.routes.map((_, i) => getTrafficFlow(i)))   // WTV: side by side
 }
 async function getTravelData() {
   async function getTravelMapData(citynum) {
@@ -1247,9 +1243,7 @@ async function getTravelData() {
     weatherData.travelForecast.cities[citynum] = tfObj
   }
   weatherData.travelForecast.cities = []
-  for (var i = 0; i < systemSettings.travel.regionalMap.cities.length; i++) {
-    await getTravelMapData(i)
-  }
+  await Promise.all(systemSettings.travel.regionalMap.cities.map((_, i) => getTravelMapData(i)))   // WTV: side by side
   async function getDestinationData(){
     var url = "/wxapi/v3/aggcommon/v3-wx-forecast-daily-5day?geocodes="
     for (let i = 0; i < systemSettings.travel.destinationForecast.length; i++) {
@@ -1628,9 +1622,7 @@ async function getAirporData() {
   weatherData.localAirportConditions = []
 
   if (systemSettings.airport.mainEnabled) {
-    for (let i = 0; i < systemSettings.airport.main.length; i++) {
-      await getLocalAirports(i)
-    }
+    await Promise.all(systemSettings.airport.main.map((_, i) => getLocalAirports(i)))   // WTV: side by side
   }
   
   async function getNatAirports(num) {
@@ -1666,9 +1658,7 @@ async function getAirporData() {
   }
 
   weatherData.nationalAirportConditions = []
-  for (let i = 0; i < systemSettings.airport.national.length; i++) {
-    await getNatAirports(i)
-  }
+  await Promise.all(systemSettings.airport.national.map((_, i) => getNatAirports(i)))   // WTV: side by side
 }
 async function getIntlData() {
   async function getIntlMapDataCA(citynum) {
@@ -1703,9 +1693,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.canada = []
-  for (var i = 0; i < systemSettings.international.map.canada.length; i++) {
-    await getIntlMapDataCA(i)
-  }
+  await Promise.all(systemSettings.international.map.canada.map((_, i) => getIntlMapDataCA(i)))   // WTV: side by side
 
   async function getIntlMapDataMX(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.mexico[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1739,9 +1727,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.mexico = []
-  for (var i = 0; i < systemSettings.international.map.mexico.length; i++) {
-    await getIntlMapDataMX(i)
-  }
+  await Promise.all(systemSettings.international.map.mexico.map((_, i) => getIntlMapDataMX(i)))   // WTV: side by side
 
   async function getIntlMapDataCB(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.caribbean[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1775,9 +1761,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.caribbean = []
-  for (var i = 0; i < systemSettings.international.map.caribbean.length; i++) {
-    await getIntlMapDataCB(i)
-  }
+  await Promise.all(systemSettings.international.map.caribbean.map((_, i) => getIntlMapDataCB(i)))   // WTV: side by side
 
   async function getIntlMapDataSA(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.southamerica[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1811,9 +1795,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.southamerica = []
-  for (var i = 0; i < systemSettings.international.map.southamerica.length; i++) {
-    await getIntlMapDataSA(i)
-  }
+  await Promise.all(systemSettings.international.map.southamerica.map((_, i) => getIntlMapDataSA(i)))   // WTV: side by side
 
   async function getIntlMapDataGB(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.britain[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1847,9 +1829,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.britain = []
-  for (var i = 0; i < systemSettings.international.map.britain.length; i++) {
-    await getIntlMapDataGB(i)
-  }
+  await Promise.all(systemSettings.international.map.britain.map((_, i) => getIntlMapDataGB(i)))   // WTV: side by side
 
   async function getIntlMapDataEU(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.europe[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1882,9 +1862,7 @@ async function getIntlData() {
   }
   
   weatherData.internationalMap.europe = []
-  for (var i = 0; i < systemSettings.international.map.europe.length; i++) {
-    await getIntlMapDataEU(i)
-  }
+  await Promise.all(systemSettings.international.map.europe.map((_, i) => getIntlMapDataEU(i)))   // WTV: side by side
 
   async function getIntlMapDataAF(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.africa[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1918,9 +1896,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.africa = []
-  for (var i = 0; i < systemSettings.international.map.africa.length; i++) {
-    await getIntlMapDataAF(i)
-  }
+  await Promise.all(systemSettings.international.map.africa.map((_, i) => getIntlMapDataAF(i)))   // WTV: side by side
 
   async function getIntlMapDataIN(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.india[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1954,9 +1930,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.india = []
-  for (var i = 0; i < systemSettings.international.map.india.length; i++) {
-    await getIntlMapDataIN(i)
-  }
+  await Promise.all(systemSettings.international.map.india.map((_, i) => getIntlMapDataIN(i)))   // WTV: side by side
 
   async function getIntlMapDataEA(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.eastasia[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -1990,9 +1964,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.eastasia = []
-  for (var i = 0; i < systemSettings.international.map.eastasia.length; i++) {
-    await getIntlMapDataEA(i)
-  }
+  await Promise.all(systemSettings.international.map.eastasia.map((_, i) => getIntlMapDataEA(i)))   // WTV: side by side
 
   async function getIntlMapDataOC(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.oceania[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -2026,9 +1998,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.oceania = []
-  for (var i = 0; i < systemSettings.international.map.oceania.length; i++) {
-    await getIntlMapDataOC(i)
-  }
+  await Promise.all(systemSettings.international.map.oceania.map((_, i) => getIntlMapDataOC(i)))   // WTV: side by side
 
   async function getIntlMapDataAU(citynum) {
     var url = "/wxapi/v3/wx/forecast/daily/5day?geocode=" + systemSettings.international.map.australia[citynum].header + "&format=json&units=e&language=en-US&apiKey=" + api_key
@@ -2062,9 +2032,7 @@ async function getIntlData() {
   }
 
   weatherData.internationalMap.australia = []
-  for (var i = 0; i < systemSettings.international.map.australia.length; i++) {
-    await getIntlMapDataAU(i)
-  }
+  await Promise.all(systemSettings.international.map.australia.map((_, i) => getIntlMapDataAU(i)))   // WTV: side by side
 
   async function getIntlForecastData(){
     var url = "/wxapi/v3/aggcommon/v3-wx-forecast-daily-7day?geocodes="
@@ -2247,9 +2215,7 @@ async function getGolfData() {
   }
 
   weatherData.courseForecast = []
-  for (var i = 0; i < systemSettings.golf.courses.length; i++) {
-    await getCourseData(i)
-  }
+  await Promise.all(systemSettings.golf.courses.map((_, i) => getCourseData(i)))   // WTV: side by side
 }
 function getGardenData() {
   async function getGardeningInfo() {
@@ -2329,9 +2295,7 @@ async function getSkiData() {
   }
 
   weatherData.skiReport.resorts = []
-  for (var i = 0; i < systemSettings.ski.resorts.length; i++) {
-    await getSkiReport(i)
-  }
+  await Promise.all(systemSettings.ski.resorts.map((_, i) => getSkiReport(i)))   // WTV: side by side
   
   weatherData.skiReport.resorts.sort((a, b) => a.timeReported-b.timeReported)
 }
@@ -2566,48 +2530,27 @@ function getBeachData() {
   getSunInfo();
 }
 async function allData() {
-  if (systemSettings.packageSettings.includes("forecast") || systemSettings.packageSettings.includes("minicoreone") || systemSettings.packageSettings.includes("minicoretwo")) {
-    await getCoreData()
-  }
-  if (systemSettings.packageSettings.includes("extralocal")) {
-    for (var i = 0; i < systemSettings.extraCity.cities.length; i++) {
-      await getExtraCore(i)
-    }
-  }
-  if (systemSettings.packageSettings.includes("traffic")) {
-    await getTrafficData()
-  }
-  if (systemSettings.packageSettings.includes("travel")) {
-    await getTravelData()
-  }
-  if (systemSettings.packageSettings.includes("health")) {
-    await getHealthData()
-  }
-  if (systemSettings.packageSettings.includes("airport")) {
-    await getAirporData()
-  }
-  if (systemSettings.packageSettings.includes("international")) {
-    await getIntlData()
-  }
-  if (systemSettings.packageSettings.includes("golf")) {
-    await getGolfData()
-  }
-  if (systemSettings.packageSettings.includes("garden")) {
-    await getGardenData()
-  }
-  if (systemSettings.packageSettings.includes("ski")) {
-    await getSkiData()
-  }
-  if (systemSettings.packageSettings.includes("beach")) {
-    await getBeachData()
-  }
-  if (systemSettings.packageSettings.includes("spanish")) {
-    await getSpanishData()
-  }
+  // WTV: every package's data loads at the same time (it used to be one package after another).
+  // A package that fails still gets its "no report" state from its own function; the rest carry on.
+  const has = (p) => systemSettings.packageSettings.includes(p);
+  const jobs = [];
+  if (has("forecast") || has("minicoreone") || has("minicoretwo")) jobs.push(getCoreData());
+  if (has("extralocal")) for (var i = 0; i < systemSettings.extraCity.cities.length; i++) jobs.push(getExtraCore(i));
+  if (has("traffic")) jobs.push(getTrafficData());
+  if (has("travel")) jobs.push(getTravelData());
+  if (has("health")) jobs.push(getHealthData());
+  if (has("airport")) jobs.push(getAirporData());
+  if (has("international")) jobs.push(getIntlData());
+  if (has("golf")) jobs.push(getGolfData());
+  if (has("garden")) jobs.push(getGardenData());
+  if (has("ski")) jobs.push(getSkiData());
+  if (has("beach")) jobs.push(getBeachData());
+  if (has("spanish")) jobs.push(getSpanishData());
+  (await Promise.allSettled(jobs)).forEach((r) => { if (r.status === "rejected") console.error(r.reason) });
 }
 async function startPrograms() {
   try {
-    await initializeRadars()//creates radar maps
+    if (!window.wtvRadarsMade) await initializeRadars()//creates radar maps (WTV: usually already made in startSystem)
 
     $(".radar-lbar .miniradar-shrink").css({"transform":"none"})
     $(".radar-lbar").fadeIn(0)
