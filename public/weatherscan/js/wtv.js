@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T18:30:00Z build.1795732200
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T22:30:00Z build.1795735800
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -281,6 +281,53 @@
     return true;
   };
 
+  // 📍 Location: look up a city, ZIP code or "City, ST" and restart Weatherscan there. The choice
+  // is saved as Weather TV's own location on this device, so the radar, forecast and next visit
+  // all use it too (the start place otherwise comes from Weather TV or a guess from the network).
+  function placePicker(keepShown) {
+    var pane = document.createElement('div'); pane.id = 'wtv-loc'; pane.setAttribute('role', 'dialog'); pane.setAttribute('aria-label', 'Change location');
+    pane.innerHTML = '<div style="margin-bottom:8px">Show the weather for…</div>'
+      + '<form class="row"><input type="search" placeholder="City, ZIP code or City, ST" aria-label="City or ZIP code" autocomplete="off"><button type="submit">Search</button></form>'
+      + '<div class="hits"></div><div class="msg"></div>';
+    document.body.appendChild(pane);
+    var btn = document.getElementById('wtv-place'), form = pane.querySelector('form'), input = pane.querySelector('input'),
+      hits = pane.querySelector('.hits'), msg = pane.querySelector('.msg');
+    function open(on) {
+      pane.classList.toggle('open', on); keepShown();
+      if (on) { hits.innerHTML = ''; msg.textContent = ''; setTimeout(function () { input.focus(); input.select(); }, 30); } else btn.focus();
+    }
+    btn.onclick = function () { open(!pane.classList.contains('open')); };
+    pane.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); open(false); } });
+    function go(lat, lon, name, label) {
+      // Weather TV's one shared location (radar, forecast, WeatherStar, alerts, the guide's bottom bar).
+      // Inside Weather TV, let the page set it so alerts and WeatherStar follow right away.
+      var done = false;
+      try { if (window.parent !== window && parent.wtvSetSharedPlace) { parent.wtvSetSharedPlace(+lat, +lon, label || name, input.value.trim()); done = true; } } catch (e) {}
+      if (!done) try { localStorage.setItem('wtv-radar-place', JSON.stringify({ lat: +lat, lon: +lon, label: label || name, query: input.value.trim(), source: 'search' })); } catch (e) {}
+      location.replace(location.pathname + '?' + (+lat).toFixed(3) + ',' + (+lon).toFixed(3) + ';' + encodeURIComponent(name));
+    }
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      var q = input.value.trim(); if (!q) return;
+      hits.innerHTML = ''; msg.textContent = 'Looking up ' + q + '…';
+      fetch('/wxapi/v3/location/search?query=' + encodeURIComponent(q) + '&language=en-US&format=json')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          var L = j && j.location, n = L && L.latitude ? L.latitude.length : 0;
+          if (!n) { msg.textContent = 'No place found for "' + q + '". Try a ZIP code or "City, ST".'; return; }
+          msg.textContent = n > 1 ? 'Pick one:' : '';
+          for (var i = 0; i < n; i++) (function (i) {
+            var name = L.city[i] || L.displayName[i] || q, where = L.address[i] || [name, L.adminDistrictCode[i] || L.country[i]].filter(Boolean).join(', ');
+            var b = document.createElement('button'); b.type = 'button'; b.textContent = where;
+            b.onclick = function () { msg.textContent = 'Switching to ' + where + '…'; go(L.latitude[i], L.longitude[i], name, where); };
+            hits.appendChild(b);
+          })(i);
+          if (n === 1) hits.firstChild.focus();
+        })
+        .catch(function () { msg.textContent = "Couldn't look that up just now. Try again in a moment."; });
+    };
+  }
+
   // The small control (bottom right; shows when you move the mouse, tap or press a key)
   function controls() {
     var css = document.createElement('style');
@@ -288,11 +335,18 @@
       + '#wtv-ctl.on{opacity:1}#wtv-ctl button{font:inherit;letter-spacing:.04em;padding:8px 12px;border-radius:8px;border:2px solid #9fc4ff;background:rgba(10,25,60,.85);color:#fff;cursor:pointer}'
       + '#wtv-ctl button.off{opacity:.55;text-decoration:line-through}'
       + '#wtv-note{position:fixed;left:50%;bottom:7%;transform:translateX(-50%);z-index:99998;max-width:80%;padding:10px 18px;border-radius:10px;background:rgba(10,25,60,.9);color:#fff;'
-      + 'font:600 18px/1.3 Barlow,system-ui,sans-serif;text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.4);transition:opacity .8s}#wtv-note.gone{opacity:0}';
+      + 'font:600 18px/1.3 Barlow,system-ui,sans-serif;text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.4);transition:opacity .8s}#wtv-note.gone{opacity:0}'
+      + '#wtv-loc{position:fixed;right:14px;bottom:64px;z-index:100000;width:min(420px,92vw);padding:14px;border-radius:12px;border:2px solid #9fc4ff;background:rgba(10,25,60,.96);color:#fff;'
+      + 'font:600 16px/1.3 Barlow,system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5);display:none}#wtv-loc.open{display:block}'
+      + '#wtv-loc .row{display:flex;gap:8px}#wtv-loc input{flex:1;min-width:0;font:inherit;padding:8px 10px;border-radius:8px;border:2px solid #9fc4ff;background:#fff;color:#0a193c}'
+      + '#wtv-loc button{font:inherit;padding:8px 12px;border-radius:8px;border:2px solid #9fc4ff;background:#16335f;color:#fff;cursor:pointer}'
+      + '#wtv-loc .hits{margin-top:10px;display:flex;flex-direction:column;gap:6px}#wtv-loc .hits button{text-align:left;width:100%}'
+      + '#wtv-loc .msg{margin-top:8px;opacity:.85;font-weight:500}#wtv-loc button:focus,#wtv-loc input:focus,#wtv-ctl button:focus{outline:3px solid #ffd000;outline-offset:2px}';
     document.head.appendChild(css);
     var box = document.createElement('div'); box.id = 'wtv-ctl';
-    box.innerHTML = '<button type="button" id="wtv-mus" aria-pressed="true">♪ Music</button><button type="button" id="wtv-voi" aria-pressed="true">🗣 Voice</button>';
+    box.innerHTML = '<button type="button" id="wtv-place" aria-haspopup="dialog">📍 Location</button><button type="button" id="wtv-mus" aria-pressed="true">♪ Music</button><button type="button" id="wtv-voi" aria-pressed="true">🗣 Voice</button>';
     document.body.appendChild(box);
+    placePicker(show);
     var mus = document.getElementById('wtv-mus'), voi = document.getElementById('wtv-voi');
     function paint() {
       mus.classList.toggle('off', !musicOn); mus.setAttribute('aria-pressed', musicOn);
@@ -302,14 +356,17 @@
     mus.onclick = function () { musicOn = !musicOn; LSset('wtvScanMusic', musicOn); paint(); show(); };
     voi.onclick = function () { voiceOn = !voiceOn; LSset('wtvScanVoice', voiceOn); if (!voiceOn) try { speechSynthesis.cancel(); } catch (e) {} paint(); show(); };
     var hideT = null;
-    function show() { box.classList.add('on'); clearTimeout(hideT); hideT = setTimeout(function () { box.classList.remove('on'); }, 3500); }
+    function show() {
+      box.classList.add('on'); clearTimeout(hideT);
+      hideT = setTimeout(function () { if (!document.getElementById('wtv-loc').classList.contains('open')) box.classList.remove('on'); }, 3500);
+    }
     ['mousemove', 'touchstart', 'keydown', 'click'].forEach(function (ev) { addEventListener(ev, show, { passive: true }); });
     paint();
 
     // While local data loads (10–20 seconds), say so; the note fades once the first screen is up
     var note = document.createElement('div'); note.id = 'wtv-note';
     var q = decodeURIComponent(location.search.slice(1)).split(';')[1];
-    note.textContent = 'Loading local weather' + (q ? ' for ' + q : '') + '… this takes about 10–20 seconds.';
+    note.textContent = 'Loading local weather' + (q ? ' for ' + q : '') + '… this takes about 10–20 seconds. Wrong place? Use 📍 Location at the bottom right.';
     document.body.appendChild(note);
     var t0 = Date.now(), seen = false, poll = setInterval(function () {
       var st = document.getElementById('startup'), up = st && getComputedStyle(st).display !== 'none';
