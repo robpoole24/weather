@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T20:15:00Z build.1795724100
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T22:10:00Z build.1795731000
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -115,6 +115,105 @@
   fetch('/weatherstar/playlist.json').then(function (r) { return r.json(); }).then(function (j) {
     window.WTV_MUSIC = (j.availableFiles || []).map(function (f) { return '/weatherstar/music/' + f.split('/').map(encodeURIComponent).join('/'); });
   }).catch(function () {});
+
+  // ── Sound: our own announcer and switches ──
+  // Weatherscan's narration clips and music are recordings from The Weather Channel, so we don't
+  // host them. Instead the browser's own speech voice announces each screen, and the music dips
+  // while it talks (Weatherscan's own playVoice() calls this). Music and voice can each be
+  // switched off with the small control that appears when you move the mouse or tap; the choice
+  // is remembered on this device.
+  var LSget = function (k, d) { try { var v = localStorage.getItem(k); return v == null ? d : v === '1'; } catch (e) { return d; } };
+  var LSset = function (k, v) { try { localStorage.setItem(k, v ? '1' : '0'); } catch (e) {} };
+  var musicOn = LSget('wtvScanMusic', true), voiceOn = LSget('wtvScanVoice', true), talking = false;
+  window.wtvMusicVol = function () { return musicOn ? (talking ? 0.18 : 0.8) : 0; };
+  var LINES = {
+    CurrentConditions: 'Here are your current conditions.',
+    TextForecast: "Here's your local forecast.",
+    DaypartForecast: "Here's your forecast for the next few hours.",
+    LocalDoppler: "Here's your local Doppler radar.",
+    RegionalForecastConditions: "Here's a look at the regional forecast.",
+    LocalAirportConditions: "Here's a look at conditions at area airports.",
+    TrafficOverview: "Here's your local traffic.", TrafficFlow: "Here's your local traffic flow.", AllergyReport: "Here's your allergy report.",
+  };
+  var voice = null;
+  function pickVoice() {
+    try {
+      var vs = speechSynthesis.getVoices().filter(function (v) { return /^en(-|_)US/i.test(v.lang); });
+      voice = vs.find(function (v) { return /Google US English|Microsoft (Guy|Aria|Jenny|Mark|David)|Samantha|Alex/i.test(v.name); }) || vs[0] || null;
+    } catch (e) {}
+  }
+  if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+  function duck(mgr, on) { talking = on; try { mgr.musicPlayer.jPlayer('volume', wtvMusicVol()); } catch (e) {} }
+  function beeps(mgr) {                                           // the warning tone, made here (no audio file)
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)(), t = ctx.currentTime + 0.05;
+      duck(mgr, true);
+      for (var i = 0; i < 4; i++) {
+        var o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = 960; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.38);
+        o.start(t); o.stop(t + 0.4); t += 0.55;
+      }
+      setTimeout(function () { duck(mgr, false); ctx.close(); }, 2400);
+    } catch (e) {}
+  }
+  // Weatherscan's playVoice(files) → speak it instead. Returns true when handled.
+  window.wtvSpeak = function (files, mgr) {
+    var names = (files || []).map(function (f) { return String(f).replace(/^.*\//, '').replace(/\.\w+$/, ''); });
+    if (names.length && names.every(function (n) { return n === 'beep'; })) { beeps(mgr); return true; }
+    var key = (names[0] || '').replace(/^Local[-_]/, '').replace(/_Default\d*$/, '');
+    var line = LINES[key];
+    if (!line || !voiceOn || !window.speechSynthesis) return true;
+    try {
+      speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(line);
+      if (voice) u.voice = voice;
+      u.rate = 0.98; u.pitch = 1; u.volume = 1;
+      u.onstart = function () { duck(mgr, true); };
+      u.onend = u.onerror = function () { setTimeout(function () { duck(mgr, false); }, 300); };
+      speechSynthesis.speak(u);
+    } catch (e) {}
+    return true;
+  };
+
+  // The small control (bottom right; shows when you move the mouse, tap or press a key)
+  function controls() {
+    var css = document.createElement('style');
+    css.textContent = '#wtv-ctl{position:fixed;right:14px;bottom:14px;z-index:99999;display:flex;gap:8px;opacity:0;transition:opacity .4s;font:700 15px/1 Barlow,system-ui,sans-serif}'
+      + '#wtv-ctl.on{opacity:1}#wtv-ctl button{font:inherit;letter-spacing:.04em;padding:8px 12px;border-radius:8px;border:2px solid #9fc4ff;background:rgba(10,25,60,.85);color:#fff;cursor:pointer}'
+      + '#wtv-ctl button.off{opacity:.55;text-decoration:line-through}'
+      + '#wtv-note{position:fixed;left:50%;bottom:7%;transform:translateX(-50%);z-index:99998;max-width:80%;padding:10px 18px;border-radius:10px;background:rgba(10,25,60,.9);color:#fff;'
+      + 'font:600 18px/1.3 Barlow,system-ui,sans-serif;text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.4);transition:opacity .8s}#wtv-note.gone{opacity:0}';
+    document.head.appendChild(css);
+    var box = document.createElement('div'); box.id = 'wtv-ctl';
+    box.innerHTML = '<button type="button" id="wtv-mus" aria-pressed="true">♪ Music</button><button type="button" id="wtv-voi" aria-pressed="true">🗣 Voice</button>';
+    document.body.appendChild(box);
+    var mus = document.getElementById('wtv-mus'), voi = document.getElementById('wtv-voi');
+    function paint() {
+      mus.classList.toggle('off', !musicOn); mus.setAttribute('aria-pressed', musicOn);
+      voi.classList.toggle('off', !voiceOn); voi.setAttribute('aria-pressed', voiceOn);
+      try { if (window.audioPlayer) audioPlayer.musicPlayer.jPlayer('volume', wtvMusicVol()); } catch (e) {}
+    }
+    mus.onclick = function () { musicOn = !musicOn; LSset('wtvScanMusic', musicOn); paint(); show(); };
+    voi.onclick = function () { voiceOn = !voiceOn; LSset('wtvScanVoice', voiceOn); if (!voiceOn) try { speechSynthesis.cancel(); } catch (e) {} paint(); show(); };
+    var hideT = null;
+    function show() { box.classList.add('on'); clearTimeout(hideT); hideT = setTimeout(function () { box.classList.remove('on'); }, 3500); }
+    ['mousemove', 'touchstart', 'keydown', 'click'].forEach(function (ev) { addEventListener(ev, show, { passive: true }); });
+    paint();
+
+    // While local data loads (10–20 seconds), say so; the note fades once the first screen is up
+    var note = document.createElement('div'); note.id = 'wtv-note';
+    var q = decodeURIComponent(location.search.slice(1)).split(';')[1];
+    note.textContent = 'Loading local weather' + (q ? ' for ' + q : '') + '… this takes about 10–20 seconds.';
+    document.body.appendChild(note);
+    var t0 = Date.now(), seen = false, poll = setInterval(function () {
+      var st = document.getElementById('startup'), up = st && getComputedStyle(st).display !== 'none';
+      if (up) seen = true;                                         // the startup screen appears a moment after load…
+      var done = seen && !up;                                       // …and the note goes when it does
+      if (done || Date.now() - t0 > 40000) { clearInterval(poll); note.classList.add('gone'); setTimeout(function () { note.remove(); }, 900); }
+    }, 500);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', controls); else controls();
 
   // Where to start: Weather TV passes "?lat,lon;Name". Opened on its own, use the place saved
   // on this device by Weather TV, else the middle of the US.

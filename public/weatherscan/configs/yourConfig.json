@@ -18,7 +18,7 @@
     "Weatherscan recreation by Mist Weather Media \u00b7 adapted for Weather TV"
    ],
    "providerType": "provider",
-   "providerImage": "weathertv",
+   "providerImage": "weathertv-2026",
    "adImages": [],
    "backgroundImage": "wxscan_default_bg_new",
    "condensedCrawlFont": {
@@ -31,7 +31,7 @@
    "enableMusic": true,
    "shuffle": true,
    "randomStart": true,
-   "narrations": false,
+   "narrations": true,
    "order": [
     1,
     2,

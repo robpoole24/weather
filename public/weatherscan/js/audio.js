@@ -30,7 +30,7 @@ class AudioManager {
             supplied: 'mp3',
             preload: 'auto',
             solution: 'html',
-            volume: audioType === 'music' ? 0.8 : 1.0,
+            volume: audioType === 'music' ? (window.wtvMusicVol ? wtvMusicVol() : 0.8) : 1.0,   // WTV: honours the Music switch
             errorAlerts: false,
             warningAlerts: false
         });
@@ -117,6 +117,7 @@ class AudioManager {
     }
 
     playVoice(files) {
+        if (window.wtvSpeak && window.wtvSpeak(files, this)) return;   // WTV: our announcer instead of TWC's recordings
         if (!files || !files.length) return;
 
         let current = 0;
