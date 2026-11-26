@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T23:05:00Z build.1795737900
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T23:30:00Z build.1795739400
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -54,10 +54,23 @@
   // Weatherscan starts drawing radar on its maps right away. Mapbox's hosted style was usually
   // ready by then; ours loads its outlines first, so radar waits until every map is ready.
   window.WTV_MAPS = [];
+  // Which drawer: MapLibre (WebGL) normally; our light 2D drawer (wtv-lite.js) on Xbox and TVs,
+  // where the graphics can't hold Weatherscan's 11+ maps, on any device without WebGL, and on a
+  // device whose graphics dropped the maps before (remembered). #gl / #lite in the address force one.
+  window.WTV_LITE = (function () {
+    if (!window.WTVLiteMap) return false;
+    if (/#gl\b/.test(location.hash)) return false;
+    if (/#lite\b/.test(location.hash)) return true;
+    var ua = navigator.userAgent || '';
+    if (/Xbox|WeatherTVXbox|Tizen|SMART-TV|SmartTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey/i.test(ua)) return true;
+    try { if (localStorage.getItem('wtvLiteMaps') === '1') return true; } catch (e) {}
+    try { var c = document.createElement('canvas'); if (!(c.getContext('webgl') || c.getContext('experimental-webgl'))) return true; } catch (e) { return true; }
+    return false;
+  })();
   if (window.maplibregl) {
     var Base = maplibregl.Map;
     var Tracked = function (opts) {
-      var m = new Base(opts);
+      var m = window.WTV_LITE ? new WTVLiteMap(opts) : new Base(opts);
       // Wait for the map style itself; a slow device (Xbox) can take well over 20 seconds on the first visit
       m._wtvReady = new Promise(function (ok) { m.once('load', ok); setTimeout(ok, 120000); });
       // Health notes for the map check below
@@ -66,7 +79,7 @@
       m.on('error', function (e) { var t = String((e && e.error && e.error.message) || 'error'); if (!m._wtv.err && !/non-existing layer|Failed to fetch|404/i.test(t)) m._wtv.err = t.slice(0, 80); });   // skip Weatherscan's own harmless slips and missing tiles
       try {
         var cv = m.getCanvas();
-        cv.addEventListener('webglcontextlost', function () { m._wtv.lost = true; });
+        cv.addEventListener('webglcontextlost', function () { m._wtv.lost = true; try { localStorage.setItem('wtvLiteMaps', '1'); } catch (e) {} });   // next visit uses the light drawer
         cv.addEventListener('webglcontextrestored', function () { m._wtv.lost = false; });
       } catch (e) {}
       window.WTV_MAPS.push(m);
@@ -86,20 +99,20 @@
     try { var c = document.createElement('canvas').getContext('webgl'); var d = c && c.getExtension('WEBGL_debug_renderer_info'); gpu = c ? (d ? c.getParameter(d.UNMASKED_RENDERER_WEBGL) : 'webgl ok') : 'NO WEBGL'; } catch (e) { gpu = 'webgl error'; }
     var el = document.getElementById('wtv-diag') || document.body.appendChild(Object.assign(document.createElement('div'), { id: 'wtv-diag' }));
     el.style.cssText = 'position:fixed;left:8px;top:8px;z-index:100001;max-width:70%;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,.8);color:#ffd000;font:600 14px/1.3 Barlow,system-ui,sans-serif';
-    el.textContent = 'Map check: ' + loaded + '/' + M.length + ' drawn' + (lost ? ', ' + lost + ' dropped by graphics' : '') + (errs.length ? ' · ' + errs.join(' | ') : '') + ' · ' + gpu;
+    el.textContent = 'Map check' + (window.WTV_LITE ? ' (light maps)' : '') + ': ' + loaded + '/' + M.length + ' drawn' + (lost ? ', ' + lost + ' dropped by graphics' : '') + (errs.length ? ' · ' + errs.join(' | ') : '') + ' · ' + gpu;
   }
   setTimeout(function () { mapCheck(/diag/.test(location.hash)); setInterval(function () { mapCheck(/diag/.test(location.hash)); }, 15000); }, 45000);
 
   // Our extra layers follow Weatherscan's own switches: lakes show when any land layer shows;
   // lake shores show with the coastlines.
   var LAND = ['conus merc', 'conus sat', 'alaska', 'hawaii local', 'hawaii regional'];
-  if (window.maplibregl) {
-    var setLP = maplibregl.Map.prototype.setLayoutProperty;
+  function patchMaps(Proto) {
+    var setLP = Proto.setLayoutProperty;
     // Radar loops: a hidden map layer never loads its pictures, so every frame used to start
     // loading only when its turn came and flashed blank. Frames now stay "on" at zero opacity
     // (loaded and ready) and showing/hiding one just changes its opacity.
-    var RADAR = /^radarlayer_/, addL = maplibregl.Map.prototype.addLayer, getLP = maplibregl.Map.prototype.getLayoutProperty;
-    maplibregl.Map.prototype.addLayer = function (layer) {
+    var RADAR = /^radarlayer_/, addL = Proto.addLayer, getLP = Proto.getLayoutProperty;
+    Proto.addLayer = function (layer) {
       if (layer && RADAR.test(layer.id) && layer.type === 'raster') {
         var hidden = layer.layout && layer.layout.visibility === 'none';
         layer.layout = Object.assign({}, layer.layout, { visibility: 'visible' });
@@ -108,11 +121,11 @@
       }
       return addL.apply(this, arguments);
     };
-    maplibregl.Map.prototype.getLayoutProperty = function (id, name) {
+    Proto.getLayoutProperty = function (id, name) {
       if (name === 'visibility' && this._wtvVis && this._wtvVis[id]) return this._wtvVis[id];
       return getLP.apply(this, arguments);
     };
-    maplibregl.Map.prototype.setLayoutProperty = function (id, name, value) {
+    Proto.setLayoutProperty = function (id, name, value) {
       if (name === 'visibility' && this._wtvVis && this._wtvVis[id]) {
         this._wtvVis[id] = value;
         this.setPaintProperty(id, 'raster-opacity', value === 'none' ? 0 : 1);
@@ -130,6 +143,9 @@
       return r;
     };
   }
+  if (window.maplibregl) patchMaps(Base.prototype);
+  if (window.WTVLiteMap) patchMaps(WTVLiteMap.prototype);
+
   // Mapbox-only: Weatherscan switches maps between Mercator and Lambert/globe. MapLibre 2 only
   // draws Mercator, so this is a no-op (without it the radar map never centred on you).
   if (window.maplibregl && !maplibregl.Map.prototype.setProjection) maplibregl.Map.prototype.setProjection = function () { return this; };
