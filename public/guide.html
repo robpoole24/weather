@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T03:40:00Z build.1795664400 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T17:00:00Z build.1795712400 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -126,6 +126,9 @@ button{font-family:inherit}
 #radio[hidden]{display:none}
 #rd-by{font-size:clamp(11px,3.2cqw,26px);color:#fff;text-shadow:2px 2px 0 #000;margin-top:2px}
 #rd-by:empty{display:none}
+/* NOAA Weather Radio: your local station */
+.row.mine .chan{box-shadow:inset 0 0 0 3px #ffd34d}
+.row.mine .cell .s{color:#ffd34d;font-weight:700}
 /* Now playing (a channel's own soundtrack over its muted videos) */
 #np{position:absolute;left:10px;bottom:10px;z-index:3;max-width:80%;background:rgba(0,0,0,.75);color:#fff;border-left:4px solid #ffef7a;padding:6px 12px;border-radius:4px;pointer-events:none;opacity:0;transition:opacity .6s}
 #np.on{opacity:1}
@@ -317,7 +320,7 @@ button{font-family:inherit}
   </div>
 
   <div id="player" class="hide"><iframe id="yt" title="Video player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe><div id="np" aria-live="polite"></div>
-    <div id="radio" hidden aria-live="polite"><div id="rd-top"><b>WEATHERSTAR RADIO</b><span id="rd-clock"></span></div>
+    <div id="radio" hidden aria-live="polite"><div id="rd-top"><b id="rd-head">WEATHERSTAR RADIO</b><span id="rd-clock"></span></div>
       <div id="rd-mid"><div id="rd-now">NOW PLAYING</div><div id="rd-title"></div><div id="rd-by"></div><div id="rd-wx"></div><div id="rd-eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div><div id="rd-hint"></div></div></div>
     <audio id="aud" preload="none"></audio></div>
   <div id="pvbug"><b id="pv-n"></b><span id="pv-call"></span></div>
@@ -460,10 +463,21 @@ button{font-family:inherit}
   setInterval(tick, 1000); tick();
 
   // ── Your temperature + place (from the place saved on Live Radar's forecast; this device only) ──
+  // Your NOAA Weather Radio station: the stream covering your county (or one close by)
+  let myWxr = null;
+  function isMyWxr(ch) { return !!(myWxr && ch && ch.kind === 'wxr' && ch.id === 'wr-' + myWxr); }
+  async function findMyWxr(p) {
+    try {
+      const j = await (await fetch('/api/wxradio/local?lat=' + (+p.lat).toFixed(2) + '&lon=' + (+p.lon).toFixed(2))).json();
+      const call = (j && j.call) || null;
+      if (call !== myWxr) { myWxr = call; if (G) { renderGrid(); updateInfo(); } }
+    } catch (e) {}
+  }
   async function loadWx() {
     let p = null;
     try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
     if (!p || !isFinite(p.lat) || !isFinite(p.lon)) { $('wx').innerHTML = 'SET YOUR LOCATION ›'; return; }
+    findMyWxr(p);
     try {
       const j = await (await fetch('/api/forecast?lat=' + (+p.lat).toFixed(4) + '&lon=' + (+p.lon).toFixed(4) + (p.label ? '&name=' + encodeURIComponent(p.label) : ''), { cache: 'no-cache' })).json();
       const t = j && j.current && j.current.temperature_2m;
@@ -583,6 +597,7 @@ button{font-family:inherit}
     if (ch.kind === 'forecast') return 'Opens your forecast';
     if (ch.kind === 'radar') return 'Opens Live Radar';
     if (ch.kind === 'radio') return c.a || ('Song ' + (k + 1) + ' of ' + ch.cells.length);   // its artist (from the song's tags)
+    if (ch.kind === 'wxr') { const st = ch.station || {}; return (isMyWxr(ch) ? '📍 YOUR LOCAL STATION · ' : '') + 'Live NOAA Weather Radio' + (st.freq ? ' · ' + st.freq + ' MHz' : ''); }
     if (ch.kind === 'wstar') return 'Opens the WeatherStar menu';
     if (ch.kind === 'list') return (ch.id === 'highlights' ? 'Clip ' + (k + 1) : (k + 1) + ' of ' + ch.cells.length);
     if (c.live) return 'Live now';
@@ -608,13 +623,14 @@ button{font-family:inherit}
     const nets = netsOf(ch);
     const icons = THEME_ICONS[it.b.theme], ico = ch.icon || ch.own;
     // Left: the role icon (seasonal blocks get 🎄 🎅 ⛄ … instead)
-    const role = icons ? '<span class="ri em" aria-hidden="true">' + icons[(ch.n || 0) % icons.length] + '</span>'
+    const role = ch.kind === 'wxr' ? '<span class="ri em" aria-hidden="true">📻</span>'
+      : icons ? '<span class="ri em" aria-hidden="true">' + icons[(ch.n || 0) % icons.length] + '</span>'
       : ico ? '<span class="ri" aria-hidden="true"><img src="' + esc(ico) + '" alt=""></span>' : '';
     // Under the number: the networks it's in
     // Right: up to two network logos stacked — one sits in the bottom box, a second fills the top
     const strip = nets.slice(0, 2).map((n, j) => '<span class="ns s' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(((n.name.match(/[A-Z0-9]/g) || []).join('') || n.name).slice(0, 2).toUpperCase()) + '</i>') + '</span>').join('');   // no logo yet: WF, WW, AW…
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
-    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + role + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span>' + strip + '</button>' + cells + '</div>';
+    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + (isMyWxr(ch) ? ' mine' : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + role + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span>' + strip + '</button>' + cells + '</div>';
   }
   function renderGrid() {
     rowsEl.innerHTML = flat.map((it, i) => it.band
@@ -694,6 +710,11 @@ button{font-family:inherit}
     else if (ch.kind === 'radar') { status = 'Opens Live Radar'; next = 'Radar · warnings · chasers on the map'; action = 'OPEN RADAR'; }
     else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
     else if (ch.kind === 'list') { status = (ch.repeat ? 'Plays on repeat · ' : 'Plays straight through · ') + (ch.soundtrack ? '♪ with our own music · ' : '') + cellSub(it, c, k); if (ch.repeat && !nxt && ch.cells.length) next = 'Then back to: ' + ch.cells[0].t; }
+    else if (ch.kind === 'wxr') {
+      const st = ch.station || {};
+      status = (isMyWxr(ch) ? '📍 Your local station · ' : '') + 'Live NOAA Weather Radio · ' + [st.site, st.freq ? st.freq + ' MHz' : ''].filter(Boolean).join(' · ');
+      next = (st.wfo ? 'From the National Weather Service in ' + st.wfo + ' · ' : '') + 'Streamed by GWES (weatherradio.org)'; action = 'LISTEN';
+    }
     else if (ch.kind === 'radio') { status = 'Nonstop music from the WeatherStar · plays while you browse the guide'; const ns = nxt || ch.cells[0] || {}; next = 'Next song: ' + ns.t + (ns.a ? ' · ' + ns.a : ''); action = 'LISTEN'; }
     else if (c && c.live) { status = 'LIVE now'; live = true; }
     else if (c) { status = 'Uploaded ' + ago(c.at); }
@@ -715,9 +736,10 @@ button{font-family:inherit}
     const { it, ch, c } = cur;
     const d = describe(it, c, sel.c);
     $('i-block').textContent = (isFav(ch.homeId || ch.id) ? '♥ ' : '') + blockLabel(it) + ' · Channel ' + ch.n + (ch.homeN ? ' (' + ch.homeN + ')' : '') + (ch.area && ch.area !== 'US' ? ' · ' + ch.area : '');
-    $('i-title').textContent = c ? '“' + c.t + '”' : ch.name;
+    $('i-title').textContent = ch.kind === 'wxr' ? ch.name : c ? '“' + c.t + '”' : ch.name;   // a station: just its name
     const nets = netsOf(ch);
-    $('i-creator').textContent = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
+    $('i-creator').textContent = ch.kind === 'wxr' ? [ch.station && ch.station.call, ch.station && ch.station.st, ch.station && ch.station.wfo ? 'NWS ' + ch.station.wfo : ''].filter(Boolean).join(' · ')
+      : ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
     $('i-status').textContent = d.status;
     $('i-status').className = d.live ? 'live' : '';
     $('i-next').textContent = d.next;
@@ -792,6 +814,25 @@ button{font-family:inherit}
   // ── A channel's own soundtrack: a music folder (e.g. music/yule) that plays over its muted
   // videos, song after song, while you watch it. Leaving the channel stops it; ♪ turns it off/on.
   let stKey = null, stIdx = 0, loadedSt = null, stUserOff = null, npT = null;
+  // A live NOAA Weather Radio stream (channels 9900+) plays on the same audio player
+  let wxrCall = null, wxrRetry = 0;
+  function startWxr(ch) {
+    const c = ch && ch.cells && ch.cells[0]; if (!c || !c.src) return;
+    stKey = null; nowPlaying(null);
+    wxrCall = ch.id; wxrRetry = 0;
+    aud.src = c.src; aud.muted = false; aud.volume = 0.9;
+    const p = aud.play(); if (p && p.catch) p.catch(() => {});
+    radioOn = true; musicUi();
+  }
+  // A live stream that drops: reconnect a few times (3 s, 6 s, 9 s…)
+  function wxrReconnect() {
+    if (!wxrCall || !radioOn || wxrRetry >= 5) return;
+    const id = wxrCall, ch = flat.map((it) => it.ch).find((x) => x && x.id === id);
+    const src = ch && ch.cells[0] && ch.cells[0].src; if (!src) return;
+    setTimeout(() => { if (wxrCall === id && radioOn) { aud.src = src + (src.includes('?') ? '&' : '?') + 'r=' + Date.now(); const p = aud.play(); if (p && p.catch) p.catch(() => {}); } }, 3000 * (++wxrRetry));
+  }
+  aud.addEventListener('error', wxrReconnect);
+  aud.addEventListener('playing', () => { wxrRetry = 0; if (!$('radio').hidden) radioScreen(); });
   function stList(k) {
     const L = (G && G.music && G.music[k]) || [];
     L.forEach((c) => { if (radioRank[c.src] == null) radioRank[c.src] = Math.random(); });
@@ -799,7 +840,7 @@ button{font-family:inherit}
   }
   function startSt(k, i) {
     const L = stList(k); if (!L.length) return false;
-    stKey = k; stIdx = ((i % L.length) + L.length) % L.length;
+    stKey = k; wxrCall = null; stIdx = ((i % L.length) + L.length) % L.length;
     const src = L[stIdx].src;
     if (aud.getAttribute('src') !== src) aud.src = src;
     aud.muted = false; aud.volume = 0.9;
@@ -815,7 +856,7 @@ button{font-family:inherit}
   }
   function startRadio(k) {
     const ch = radioCh(); if (!ch) return;
-    stKey = null; nowPlaying(null);
+    stKey = null; wxrCall = null; nowPlaying(null);
     radioIdx = ((k % ch.cells.length) + ch.cells.length) % ch.cells.length;
     const src = ch.cells[radioIdx].src;
     if (aud.getAttribute('src') !== src) aud.src = src;
@@ -825,7 +866,7 @@ button{font-family:inherit}
   }
   function stopRadioAudio() {
     if (!radioOn) return;
-    radioOn = false; aud.pause(); stKey = null; nowPlaying(null); musicUi();
+    radioOn = false; aud.pause(); stKey = null; wxrCall = null; nowPlaying(null); musicUi();
   }
   function musicUi() {
     const b = $('musicbtn'); if (!b) return;
@@ -837,6 +878,20 @@ button{font-family:inherit}
     if (!$('radio').hidden) radioScreen();
   }
   function radioScreen() {
+    const cu = current(), wx = cu && cu.ch.kind === 'wxr' ? cu.ch : null;
+    if (wx) {                                                      // a NOAA Weather Radio station's screen
+      const st = wx.station || {}, on = radioOn && wxrCall === wx.id;
+      $('rd-head').textContent = 'NOAA WEATHER RADIO';
+      $('rd-now').textContent = on ? (aud.paused ? 'CONNECTING…' : 'ON THE AIR') : 'LIVE';
+      $('rd-title').textContent = wx.name;
+      $('rd-by').textContent = [st.call, st.freq ? st.freq + ' MHz' : '', isMyWxr(wx) ? '📍 Your local station' : ''].filter(Boolean).join(' · ');
+      $('rd-wx').innerHTML = wxNow ? (wxNow.t != null ? '<b>' + wxNow.t + '°</b>' : '') + esc([wxNow.sky, wxNow.name].filter(Boolean).join(' · ')) : '';
+      $('rd-hint').textContent = on ? '' : 'Press OK to listen';
+      $('radio').classList.toggle('paused', !on || aud.paused);
+      $('rd-clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+      return;
+    }
+    $('rd-head').textContent = 'WEATHERSTAR RADIO';
     const ch = radioCh(); const r = $('radio');
     const c = ch ? (radioOn ? ch.cells[radioIdx] : (current() && current().ch.kind === 'radio' ? current().c : ch.cells[0])) : null;
     $('rd-now').textContent = radioOn ? 'NOW PLAYING' : 'UP NEXT';
@@ -860,14 +915,16 @@ button{font-family:inherit}
     yt.style.display = 'none';
     $('radio').hidden = false;
     loaded = { key: 'radio:' + c.src, muted };
-    if (!muted) {                                                  // OK on a song: play that one (or keep the one playing)
+    if (!muted && ch.kind === 'wxr') { if (!radioOn || wxrCall !== ch.id) startWxr(ch); }   // OK on a station: listen live
+    else if (!muted) {                                             // OK on a song: play that one (or keep the one playing)
       const k = ch.cells.indexOf(c);
-      if (!radioOn || k !== radioIdx) startRadio(k);
+      if (!radioOn || k !== radioIdx || stKey || wxrCall) startRadio(k);
     }
     radioScreen();
   }
   aud.addEventListener('ended', () => {
     if (stKey && radioOn) { startSt(stKey, stIdx + 1); return; }   // a channel's soundtrack: next song
+    if (wxrCall) { wxrReconnect(); return; }                        // a live station stopped: reconnect
     const ch = radioCh(); if (!ch || !radioOn) return;
     startRadio(radioIdx + 1);                                      // the radio never stops
     const cur = current();
@@ -883,6 +940,7 @@ button{font-family:inherit}
   $('musicbtn').onclick = () => {
     if (radioOn) { if (stKey) stUserOff = stKey; stopRadioAudio(); }
     else if (loadedSt) { stUserOff = null; startSt(loadedSt, stIdx); }
+    else if (current() && current().ch.kind === 'wxr' && !$('radio').hidden) startWxr(current().ch);   // on a station: listen to it
     else {
       if (!loaded.muted && !String(loaded.key || '').startsWith('radio:')) { ytCmd('mute'); loaded.muted = true; }   // a video with sound: the music takes over
       startRadio(radioIdx);
@@ -891,7 +949,7 @@ button{font-family:inherit}
   };
 
   function play(ch, c, muted) {
-    if (ch && ch.kind === 'radio' && c) { loadedSt = null; playRadio(ch, c, muted); return; }
+    if (ch && (ch.kind === 'radio' || ch.kind === 'wxr') && c) { loadedSt = null; playRadio(ch, c, muted); return; }
     stopRadio();
     // Watching a channel with its own soundtrack: its videos play silent under the music
     const st = !muted && c && !isPage(ch) && ch.soundtrack && stList(ch.soundtrack).length ? ch.soundtrack : null;

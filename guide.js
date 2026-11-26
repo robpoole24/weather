@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T03:30:00Z build.1795663800
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T17:00:00Z build.1795712400
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -157,6 +157,7 @@ const TYPES = ['block', 'network', 'creator'];
 const defaultType = (label, lead) => (!lead ? 'block' : /chasers?\b/i.test(label || '') ? 'network' : /channels\b/i.test(label || '') ? 'creator' : 'block');
 const fs = require('fs');
 const path = require('path');
+const WXR = require('./weatherradio');     // NOAA Weather Radio streams (channels 9900+)
 const IMG_DIR = path.join(__dirname, 'public', 'images');
 // Badge logo: public/images/<name>.webp (WeatherWise → weatherwise or weather-wise)
 function logoFor(name) {
@@ -280,6 +281,8 @@ function builtins(data, cfg, all) {
   ];
   ((data && data.playlists) || []).forEach((p) => { if (p && p.playlistId) out.push({ id: 'pl-' + p.playlistId, name: p.title || 'Playlist', call: callSign(p.title), kind: 'list', block: 'wtv', playlistId: p.playlistId }); });
   out.push({ id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', block: 'audio', n: 9999 });
+  // NOAA Weather Radio, live (GWES): 9900, 9901, … by state and city
+  WXR.stations().slice(0, 99).forEach((s, i) => out.push({ id: 'wr-' + s.call, name: s.city + ' Weather Radio' + (s.note ? ' (' + s.note + ')' : ''), call: s.call, kind: 'wxr', block: 'audio', n: 9900 + i, wxr: s }));
   extrasOf(cfg).forEach((e) => {
     if (!all && !inSeason(e)) return;                                   // out of season: not in the guide
     out.push({ id: 'x-' + e.playlistId, name: e.title, call: callSign(e.title), kind: 'list', block: e.block || 'seasonal', playlistId: e.playlistId, repeat: true, music: e.music || undefined });
@@ -291,6 +294,7 @@ const num = (v) => { if (v === null || v === undefined || v === '') return null;
 
 module.exports = function guide(app, { loadData, saveData, cache, filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError }) {
   let memo = { at: 0, body: null };
+  WXR.mount(app);
 
   function videoCells(channelId) {
     const entry = cache.recentVideos[channelId];
@@ -549,6 +553,11 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     if (ch.kind === 'radar') return { ...base, cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) };
     if (ch.kind === 'wstar') return { ...base, cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) };
     if (ch.kind === 'radio') return { ...base, cells: radioTracks() };
+    if (ch.kind === 'wxr') {                                       // a live NOAA Weather Radio stream
+      const s = ch.wxr || {};
+      return { ...base, icon: undefined, area: s.st, cells: [{ t: ch.name, src: s.url, wxr: true }],
+        station: { call: s.call, city: s.city, st: s.st, freq: s.freq, site: s.site, wfo: s.wfo, status: s.status, listeners: s.listeners } };
+    }
     if (ch.id === 'highlights') return { ...base, cells: (data.highlights || []).slice(0, 30).map((h) => ({ v: h.videoId, t: h.title || '' })) };
     const pl = cache.playlist[ch.playlistId];
     const cells = ((pl && pl.items) || []).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
