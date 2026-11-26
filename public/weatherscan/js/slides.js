@@ -1387,6 +1387,7 @@ var slidePrograms = {
       //     $("#slides").css("scale","0.72")
       //   }
       // }, 50);
+      if (window.wtvDataMap) wtvDataMap('travel')   // WTV: draw this data map
       if (weatherData.travelMapUnavailable) {
         $(".tempunavailable").fadeIn(500)
         setTimeout(() => {
@@ -2089,7 +2090,7 @@ var slidePrograms = {
       }
     },
     airQuality() {
-      var qualities = ["Good", "Moderate", "Unhealthy for sensitive groups", "Hazardous", "Extreme"]
+      var qualities = ["Good", "Moderate", "Unhealthy for sensitive groups", "Unhealthy", "Hazardous"]   // WTV: EPA wording
       var margins = [0, 104, 190, 312, 416]
       $('.titletext').text("Air Quality Forecast")
       $('.headertext').text(weatherData.airQuality.locationName)
@@ -2341,6 +2342,7 @@ var slidePrograms = {
       //     $("#slides").css("scale","0.72")
       //   }
       // }, 50);
+      if (window.wtvDataMap) wtvDataMap('precip')   // WTV: draw this data map
       if (weatherData.estimatedPrecipMapUnavailable) {
         $(".tempunavailable").fadeIn(500)
         setTimeout(() => {
@@ -2363,6 +2365,7 @@ var slidePrograms = {
       $('.headertext').text("")
       fadeSlideIn($(".precip-forecast"), 0)
       $("#slides-background").fadeOut(0)
+      if (window.wtvDataMap) wtvDataMap('qpf')   // WTV: draw this data map
       if (weatherData.precipForecastMapUnavailable) {
         //set data map bg to blank basemap
         $(".tempunavailable").fadeIn(500)
@@ -2386,6 +2389,7 @@ var slidePrograms = {
       $('.headertext').text("")
       fadeSlideIn($(".drought-monitor"), 0)
       $("#slides-background").fadeOut(0)
+      if (window.wtvDataMap) wtvDataMap('drought')   // WTV: draw this data map
       if (weatherData.droughtMonitorMapUnavailable) {
         //set data map bg to blank basemap
         $(".tempunavailable").fadeIn(500)
@@ -3068,6 +3072,8 @@ function manageDurations() {
           )
         }
       }
+      // WTV: no aches/breathing forecast source, so that screen becomes another health tip
+      slideSettings.order[orderidx].slideLineup[gidx].slides.forEach(function (sl) { if (sl.function == "healthForecast") sl.function = "healthTip" })
       break;
     case "airport":
       //read national airports for more info

@@ -1,4 +1,4 @@
-// WeatherTV — Weatherscan data translator — updated 2026-11-26T19:00:00Z build.1795719600
+// WeatherTV — Weatherscan data translator — updated 2026-11-26T22:30:00Z build.1795732200
 //
 // Weatherscan v2 (Mist Weather Media, GPL-3.0; self-hosted at /weatherscan/) was written for The
 // Weather Company's paid API (api.weather.com/v3/...). Our copy asks THIS server instead
@@ -6,6 +6,7 @@
 //   • NWS (api.weather.gov)            — forecast wording (US), alerts, observing stations, airport codes
 //   • Open-Meteo (api.open-meteo.com)  — current conditions, hourly and daily numbers (worldwide)
 //   • Open-Meteo archive               — normal and record highs/lows (almanac)
+//   • Open-Meteo air quality           — US AQI and the main pollutant; UV and watering needs from the forecast
 //   • Open-Meteo / Nominatim geocoding — finding a place by name or ZIP
 // No weather.com keys, nothing from viewers' browsers goes anywhere but here. Everything is
 // cached in memory by rounded location, so a room full of Weatherscans costs a few calls.
@@ -170,7 +171,7 @@ function openMeteo(lat, lon) {
   return cached('om:' + r2(lat) + ',' + r2(lon), 10 * MIN, () => getJson('https://api.open-meteo.com/v1/forecast?latitude=' + r2(lat) + '&longitude=' + r2(lon)
     + '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,dew_point_2m,uv_index'
     + '&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,precipitation_probability,weather_code,pressure_msl,cloud_cover,visibility,wind_speed_10m,wind_direction_10m,wind_gusts_10m,uv_index,is_day'
-    + '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_direction_10m_dominant'
+    + '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_direction_10m_dominant,et0_fao_evapotranspiration'
     + '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=9&past_days=1'));
 }
 const CARD = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
@@ -381,6 +382,54 @@ async function hourly(q, hours) {
   return out;
 }
 
+// ── health and garden ───────────────────────────────────────────────────────
+// Air quality (US AQI) from Open-Meteo's air-quality service
+function airQuality(lat, lon) {
+  return cached('aq:' + r2(lat) + ',' + r2(lon), 30 * MIN, () => getJson('https://air-quality-api.open-meteo.com/v1/air-quality?latitude=' + r2(lat) + '&longitude=' + r2(lon)
+    + '&current=us_aqi,us_aqi_pm2_5,us_aqi_pm10,us_aqi_nitrogen_dioxide,us_aqi_ozone,us_aqi_sulphur_dioxide,us_aqi_carbon_monoxide&timezone=auto'));
+}
+async function globalAirQuality(q) {
+  const w = await whereFrom(q), j = await airQuality(w.lat, w.lon), c = j.current || {};
+  if (c.us_aqi == null) throw Object.assign(new Error('no air quality here'), { status: 404 });
+  const parts = { 'PM2.5': c.us_aqi_pm2_5, PM10: c.us_aqi_pm10, NO2: c.us_aqi_nitrogen_dioxide, O3: c.us_aqi_ozone, SO2: c.us_aqi_sulphur_dioxide, CO: c.us_aqi_carbon_monoxide };
+  const main = Object.keys(parts).filter((k) => parts[k] != null).sort((a, b) => parts[b] - parts[a])[0] || 'O3';
+  const aqi = Math.round(c.us_aqi), cat = aqi <= 50 ? 1 : aqi <= 100 ? 2 : aqi <= 150 ? 3 : aqi <= 200 ? 4 : aqi <= 300 ? 5 : 6;
+  return { metadata: { latitude: r2(w.lat), longitude: r2(w.lon) }, globalairquality: {
+    airQualityIndex: aqi, airQualityCategoryIndex: [0, 0, 2, 4, 6, 6, 8][cat], /* Weatherscan halves this onto its 5-step scale */ airQualityCategory: ['', 'Good', 'Moderate', 'Unhealthy for Sensitive Groups', 'Unhealthy', 'Very Unhealthy', 'Hazardous'][cat],
+    airQualityCategoryIndexColor: ['', '00E400', 'FFFF00', 'FF7E00', 'FF0000', '8F3F97', '7E0023'][cat], primaryPollutant: main, source: 'Open-Meteo (CAMS)', disclaimer: null,
+    expireTimeGmt: Math.round(Date.now() / 1000) + 3600, messages: {} } };
+}
+// UV index for the next 48 hours, hour by hour
+async function uvHourly(q) {
+  const w = await whereFrom(q), om = await openMeteo(w.lat, w.lon), H = om.hourly, k = nowIndex(om) + 1;
+  const out = { fcstValidLocal: [], fcstValid: [], uvIndex: [], uvDesc: [], dow: [], uvWarning: [] };
+  for (let i = k; i < k + 48 && i < H.time.length; i++) {
+    const u = Math.round(H.uv_index[i] || 0);
+    out.fcstValidLocal.push(localIso(H.time[i], om)); out.fcstValid.push(gmt(H.time[i], om)); out.uvIndex.push(u); out.uvDesc.push(uvDesc(u)); out.dow.push(dowOf(H.time[i])); out.uvWarning.push(0);
+  }
+  return { uvIndex1hour: out };
+}
+// Watering needs, 0–10, for each half-day: how much water plants lose to the air
+// (FAO-56 reference evapotranspiration) minus the rain that falls, over that day and the next.
+// It's 0 when nothing is growing (highs under 40°F). Low ≤3, Moderate 4–7, High 8–10.
+async function wateringNeeds(q, days) {
+  const w = await whereFrom(q), om = await openMeteo(w.lat, w.lon), d = om.daily;
+  const i0 = Math.max(0, d.time.indexOf(om.current.time.slice(0, 10)));
+  const out = { fcstValidLocal: [], dayInd: [], num: [], daypartName: [], wateringNeedsIndex: [], wateringNeedsCategory: [] };
+  const night = +om.current.time.slice(11, 13) >= 18;
+  for (let j = 0; j < days; j++) for (let h = 0; h < 2; h++) {
+    if (j === 0 && h === 0 && night) continue;                      // like weather.com: tonight first after 6 pm
+    const i = i0 + j; if (!d.time[i]) break;
+    const et = (d.et0_fao_evapotranspiration[i] || 0) + (d.et0_fao_evapotranspiration[i + 1] || 0);   // mm, two days
+    const rain = ((d.precipitation_sum[i] || 0) + (d.precipitation_sum[i + 1] || 0)) * 25.4;          // inches → mm
+    let idx = Math.max(0, Math.min(10, Math.round((et - rain) / 1.2)));
+    if ((d.temperature_2m_max[i] || 0) < 40) idx = 0;
+    out.fcstValidLocal.push(localIso(d.time[i] + (h ? 'T19:00' : 'T07:00'), om)); out.dayInd.push(h ? 'N' : 'D'); out.num.push(out.num.length + 1);
+    out.daypartName.push(h ? 'Tonight' : 'Today'); out.wateringNeedsIndex.push(idx); out.wateringNeedsCategory.push(idx <= 3 ? 'Low' : idx <= 7 ? 'Moderate' : 'High');
+  }
+  return { wateringNeedsIndex12hour: out };
+}
+
 // ── almanac: normals (1991–2020) and records, from the Open-Meteo archive ──
 function climate(lat, lon) {
   const la = Math.round(lat * 4) / 4, lo = Math.round(lon * 4) / 4;
@@ -543,6 +592,9 @@ function mount(app) {
     a.texts = [{ languageCode: 'en-US', description: p.description || '', instruction: p.instruction || '', overview: p.headline || '' }];
     return { alertDetail: a };
   }));
+  app.get(base + '/v3/wx/globalAirQuality', send(globalAirQuality));
+  app.get(base + '/v2/indices/uv/hourly/48hour', send(uvHourly));
+  app.get(/^\/wxapi\/v2\/indices\/wateringNeeds\/daypart\/(\d+)day$/, send((q, req) => wateringNeeds(q, Math.min(7, +req.params[0]))));
   // Moon phases for a month, in the shape Weatherscan's almanac expects (it used icalendar37.net):
   // { monthName, phase: { "1": { phaseName, isPhaseLimit }, … } } — the four main phases marked.
   app.get(base + '/lunar', send((q) => lunar(+q.year || new Date().getUTCFullYear(), +q.month || new Date().getUTCMonth() + 1)));

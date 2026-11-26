@@ -73,8 +73,11 @@
    "forecast",
    "extralocal",
    "travel",
+   "airport",
    "minicoreone",
-   "international"
+   "health",
+   "international",
+   "garden"
   ],
   "severePackageSettings": [
    "severeA",

@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T22:10:00Z build.1795731000
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T18:30:00Z build.1795732200
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -107,6 +107,88 @@
     var now = Math.floor(Date.now() / 1000 / STEP) * STEP, m = Math.max(0, Math.min(55, Math.round((now - ts) / 60 / 5) * 5));
     return 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913' + (m ? '-m' + String(m).padStart(2, '0') + 'm' : '') + '/{z}/{x}/{y}.png';
   };
+  // ── Data maps ──
+  // Weatherscan v2 never finished its four data maps (they always said "Temporarily
+  // Unavailable"), so we draw them here, each on our own base map:
+  //   travel   Travel Weather — Weather TV's precipitation-type map (rain, snow, mix, ice) from
+  //            tiles.watchweathertv.com when a scan is ready; otherwise live NEXRAD radar (IEM)
+  //   precip   Estimated Precip — MRMS rain and melted snow over the past 24 hours (IEM)
+  //   qpf      Precip Forecast — NWS Weather Prediction Center rain/snow-water for the next 3 days
+  //   drought  Drought Monitor — this week's U.S. Drought Monitor (via IEM)
+  // Each slide calls wtvDataMap(kind) as it opens.
+  var WXTILES = 'https://tiles.watchweathertv.com', IEM = 'https://mesonet.agron.iastate.edu';
+  var DM = {
+    travel: { el: 'travel-weather-map', flag: 'travelMapUnavailable', center: [-97.5, 39.4], zoom: 3.55, national: true },
+    precip: { el: 'estimated-precip-map', flag: 'estimatedPrecipMapUnavailable', zoom: 4.7 },
+    qpf: { el: 'precip-forecast-map', flag: 'precipForecastMapUnavailable', zoom: 4.7 },
+    drought: { el: 'drought-monitor-map', flag: 'droughtMonitorMapUnavailable', zoom: 4.7 },
+  };
+  var USDM = ['#FFFF00', '#FCD37F', '#FFAA00', '#E60000', '#730000'];   // D0 abnormally dry … D4 exceptional
+  function legendStyle() {
+    if (document.getElementById('wtv-dm-css')) return;
+    var c = document.createElement('style'); c.id = 'wtv-dm-css';
+    // The precip legends were drawn for weather.com's colors, so only their time labels stay
+    c.textContent = '.estimated-precip .legend .box,.estimated-precip .legend .number,.estimated-precip .legend .label,'
+      + '.precip-forecast .legend .box,.precip-forecast .legend .number,.precip-forecast .legend .label{visibility:hidden}'
+      + '.drought-monitor .box.six{visibility:hidden}'
+      + USDM.slice().reverse().map(function (col, k) { return '.drought-monitor .box.' + ['one', 'two', 'three', 'four', 'five'][k] + '{background-color:' + col + ' !important}'; }).join('');
+    document.head.appendChild(c);
+  }
+  function rasterTiles(kind) {
+    if (kind === 'precip') return Promise.resolve(IEM + '/cache/tile.py/1.0.0/q2-p24h-900913/{z}/{x}/{y}.png');
+    if (kind === 'qpf') return Promise.resolve('https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&dpi=96&format=png32&transparent=true&layers=show:9&f=image');
+    return fetch(WXTILES + '/meta/ptype', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : {}; }).catch(function () { return {}; })
+      .then(function (m) {
+        var ok = m && m.available && m.scan;
+        var lg = document.querySelector('.travel-weather .legend'); if (lg) lg.style.visibility = ok ? '' : 'hidden';   // rain/snow/mix legend fits only the ptype map
+        return ok ? WXTILES + '/tiles/ptype/' + encodeURIComponent(m.scan) + '/{z}/{x}/{y}.png' : window.wtvTile(Math.floor(Date.now() / 1000));
+      });
+  }
+  function setData(map, kind) {
+    var before = 'i2-county-lines-conus-ak-hi-81h5x4';
+    if (kind === 'drought') {
+      if (map.getSource('wtv-data')) return;
+      fetch(IEM + '/geojson/usdm.py').then(function (r) { return r.json(); }).then(function (g) {
+        map.addSource('wtv-data', { type: 'geojson', data: g });
+        map.addLayer({ id: 'wtv-data', type: 'fill', source: 'wtv-data', paint: { 'fill-color': ['match', ['get', 'dm'], 0, USDM[0], 1, USDM[1], 2, USDM[2], 3, USDM[3], 4, USDM[4], 'rgba(0,0,0,0)'], 'fill-opacity': 0.8 } }, before);
+        var d = g.features && g.features[0] && g.features[0].properties.date;
+        if (d) $('.drought-monitor .legend .timestamp').text('Valid ' + dateFns.format(new Date(d + 'T12:00:00'), 'MMM d'));
+      }).catch(function (e) { console.warn('drought map', e); });
+      $('.drought-monitor .legend .exceptional').html('Exceptional<br>Drought'); $('.drought-monitor .legend .dry').html('Abnormally<br>Dry');
+      return;
+    }
+    if (kind === 'qpf') $('.precip-forecast .legend .timestamp').text('Next 3 Days');
+    rasterTiles(kind).then(function (url) {
+      if (map._wtvUrl === url) return;
+      map._wtvUrl = url;
+      if (map.getLayer('wtv-data')) map.removeLayer('wtv-data');
+      if (map.getSource('wtv-data')) map.removeSource('wtv-data');
+      map.addSource('wtv-data', { type: 'raster', tiles: [url], tileSize: 256 });
+      map.addLayer({ id: 'wtv-data', type: 'raster', source: 'wtv-data', paint: { 'raster-opacity': kind === 'travel' ? 0.9 : 0.85, 'raster-fade-duration': 0 } }, before);
+    });
+  }
+  window.wtvDataMap = function (kind) {
+    var d = DM[kind]; if (!d || !window.maplibregl) return;
+    try { weatherData[d.flag] = false; } catch (e) {}
+    legendStyle();
+    setTimeout(function () {                      // after the slide is showing, so the map can measure itself
+      try {
+        var el = document.getElementById(d.el); if (!el) return;
+        el.style.backgroundImage = 'none';
+        if (!d.map) {
+          var c = systemSettings.mainCity || {};
+          d.map = new maplibregl.Map({ container: d.el, style: window.WTV_MAP_STYLE, trackResize: false, interactive: false, attributionControl: false,
+            center: d.center || [+c.lon || -96, +c.lat || 39], zoom: d.zoom });
+          d.map.on('load', function () {
+            d.map.setLayoutProperty('i2-county-lines-conus-ak-hi-81h5x4', 'visibility', 'none');
+            d.map.setPaintProperty('cb-2019-us-state-20m-nocoast-7m1rrd', 'line-width', d.national ? 2 : 1.8);
+            setData(d.map, kind);
+          });
+        } else { d.map.resize(); if (d.map.loaded()) setData(d.map, kind); }
+      } catch (e) { console.warn('data map', kind, e); }
+    }, 80);
+  };
+
   // Show the satellite picture whenever a map turns on its satellite land layer
   window.wtvSatOn = function (map) { try { map.setLayoutProperty('wtv-goes', 'visibility', 'visible'); } catch (e) {} };
 
@@ -139,7 +221,14 @@
   function pickVoice() {
     try {
       var vs = speechSynthesis.getVoices().filter(function (v) { return /^en(-|_)US/i.test(v.lang); });
-      voice = vs.find(function (v) { return /Google US English|Microsoft (Guy|Aria|Jenny|Mark|David)|Samantha|Alex/i.test(v.name); }) || vs[0] || null;
+      // Best first: the neural "Natural"/"Online" voices (Edge, Windows 11), then Google's own
+      // voice in Chrome, then the better Mac voices. The old Windows voices (David, Zira, Mark)
+      // sound robotic, so they're only used if nothing else is installed.
+      var rank = [/(Andrew|Brian|Guy|Christopher|Eric|Roger|Steffan).*(Natural|Online)/i, /(Natural|Online)/i, /^Google US English/i,
+        /(Evan|Nathan|Tom|Aaron).*(Enhanced|Premium)|(Enhanced|Premium)/i, /Samantha|Alex/i];
+      voice = null;
+      for (var r = 0; r < rank.length && !voice; r++) voice = vs.find(function (v) { return rank[r].test(v.name); }) || null;
+      if (!voice) voice = vs.find(function (v) { return !/David|Zira|Mark/i.test(v.name); }) || vs[0] || null;
     } catch (e) {}
   }
   if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
@@ -157,13 +246,29 @@
       setTimeout(function () { duck(mgr, false); ctx.close(); }, 2400);
     } catch (e) {}
   }
+  // Recorded announcer clips: put an MP3 named after a line (CurrentConditions.mp3, …) in
+  // weatherscan/voice/ and list its name in voice/clips.json; it plays instead of the browser voice.
+  var CLIPS = {};
+  fetch('voice/clips.json', { cache: 'no-cache' }).then(function (r) { return r.ok ? r.json() : []; })
+    .then(function (a) { (a || []).forEach(function (k) { CLIPS[k] = 1; }); }).catch(function () {});
+  function playClip(key, mgr) {
+    try {
+      var a = new Audio('voice/' + key + '.mp3'); a.volume = 1;
+      a.onplay = function () { duck(mgr, true); };
+      a.onended = a.onerror = function () { setTimeout(function () { duck(mgr, false); }, 300); };
+      a.play().catch(function () { duck(mgr, false); });
+      return true;
+    } catch (e) { return false; }
+  }
   // Weatherscan's playVoice(files) → speak it instead. Returns true when handled.
   window.wtvSpeak = function (files, mgr) {
     var names = (files || []).map(function (f) { return String(f).replace(/^.*\//, '').replace(/\.\w+$/, ''); });
     if (names.length && names.every(function (n) { return n === 'beep'; })) { beeps(mgr); return true; }
     var key = (names[0] || '').replace(/^Local[-_]/, '').replace(/_Default\d*$/, '');
     var line = LINES[key];
-    if (!line || !voiceOn || !window.speechSynthesis) return true;
+    if (!voiceOn) return true;
+    if (CLIPS[key] && playClip(key, mgr)) return true;
+    if (!line || !window.speechSynthesis) return true;
     try {
       speechSynthesis.cancel();
       var u = new SpeechSynthesisUtterance(line);

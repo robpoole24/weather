@@ -1421,7 +1421,7 @@ function getHealthData() {
     try {
       weatherData.airQuality.noReport = false
       weatherData.airQuality.locationName = systemSettings.health.locationName
-      weatherData.airQuality.dayName = dateFns.format(new Date(data.globalairquality.expireTimeGmt * 1000), "dddd")
+      weatherData.airQuality.dayName = dateFns.format(new Date(data.globalairquality.expireTimeGmt * 1000), "EEEE")   // WTV: date-fns 4 spells weekday EEEE
       weatherData.airQuality.index = Math.round(data.globalairquality.airQualityCategoryIndex/2)
       weatherData.airQuality.primaryPollutant = data.globalairquality.primaryPollutant.replace("CO","Ozone").replace("NO2","Ozone").replace("O3","Ozone").replace("PM10","Fine\nParticulates").replace("PM2.5","Fine\nParticulates").replace("SO2","Ozone")
     } catch (error) {
