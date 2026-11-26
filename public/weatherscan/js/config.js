@@ -11,8 +11,8 @@ var traf_key = "";
 /*
 var systemSettings = {
   apiKeys: {
-    api_key: ""   /* WTV: weather.com key removed — Weather TV uses its own /wxapi */,
-    map_key: ""   /* WTV: Mapbox token removed — Weather TV uses MapLibre */,
+    api_key: "",   // WTV: weather.com key removed (Weather TV uses its own /wxapi),
+    map_key: "",   // WTV: Mapbox token removed (Weather TV uses MapLibre),
     traf_key: ""
   },
   systemLocation: "",
