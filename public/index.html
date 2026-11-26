@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-23T04:30:00Z build.1795408200 -->
+<!-- WeatherTV App — updated 2026-11-26T18:00:00Z build.1795716000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1279,6 +1279,26 @@
     word-break: break-word;
   }
 
+  /* ── CHANNELS: the group picker row, and "‹ Channels" at the start of a group's row ── */
+  #channels-groups { display:flex; gap:0.6rem; align-items:center; padding:0.4rem 0.75rem; overflow-x:auto; scrollbar-width:none; width:100%; box-sizing:border-box; height:100%; }
+  .ch-group-pill { flex-shrink:0; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:0.15rem; min-width:10rem; padding:0.55rem 1rem; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; font-family:'Barlow Condensed',sans-serif; text-align:left; }
+  .ch-group-pill b { font-size:1rem; letter-spacing:0.08em; text-transform:uppercase; }
+  .ch-group-pill small { font-size:0.72rem; color:var(--muted); letter-spacing:0.04em; }
+  .ch-group-pill:hover, .ch-group-pill:focus-visible { border-color:var(--accent); outline:none; }
+  .ch-group-pill:hover b, .ch-group-pill:focus-visible b { color:var(--accent); }
+  .ch-back { flex-shrink:0; align-self:center; margin-left:0.4rem; font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:0.75rem; letter-spacing:0.08em; text-transform:uppercase; background:transparent; color:var(--muted); border:1px solid var(--border); border-radius:4px; padding:0.35rem 0.6rem; cursor:pointer; white-space:nowrap; }
+  .ch-back:hover, .ch-back:focus-visible { color:var(--accent); border-color:var(--accent); outline:none; }
+  /* ── RADIO: NOAA Weather Radio station cards ── */
+  #radio-list { display:flex; gap:0.5rem; flex:1; overflow-x:auto; align-items:center; scrollbar-width:none; min-width:0; padding:0.4rem 0.5rem; box-sizing:border-box; height:100%; }
+  .wxr-card { flex-shrink:0; display:flex; flex-direction:column; gap:0.15rem; min-width:11.5rem; padding:0.5rem 0.8rem; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); cursor:pointer; font-family:'Barlow Condensed',sans-serif; text-align:left; }
+  .wxr-card b { font-size:0.95rem; letter-spacing:0.03em; }
+  .wxr-card small { font-size:0.72rem; color:var(--muted); letter-spacing:0.04em; }
+  .wxr-card.mine { border-color:#ffd34d; box-shadow:inset 0 0 0 1px #ffd34d; }
+  .wxr-card.mine small.tag { color:#ffd34d; font-weight:700; }
+  .wxr-card:hover, .wxr-card:focus-visible { border-color:var(--accent); outline:none; }
+  .wxr-card.on { background:var(--accent); color:#000; }
+  .wxr-card.on small { color:#000; }
+
   /* nav-right-btns — the group of right-side utility nav buttons */
   #nav-right-btns {
     display: contents; /* transparent wrapper, children lay out as normal flex items */
@@ -1359,6 +1379,9 @@
   html.embed-guide .skip-link, html.embed-guide #channel-hint { display:none !important; }
   /* The Channel Guide is web-only for now: no Guide button inside the Android / Xbox / Windows / TV apps */
   html.native-app .guide-btn, html.in-app .guide-btn { display:none !important; }
+  /* Weather Apps: on the website and in the Google Play app (native-app), not in the Xbox / Windows apps */
+  html.in-app:not(.native-app) .apps-btn { display:none !important; }
+  .about-btn.apps-btn.active { border-color:var(--accent); color:var(--accent); }
 </style>
 
 <div class="sr-only">
@@ -1433,13 +1456,14 @@
 
   <!-- Main nav -->
   <nav id="main-nav" aria-label="Channel groups" style="position:relative;">
-    <!-- Group buttons injected here dynamically by buildNavButtons() -->
-    <!-- Live Now appears after group buttons, before fixed buttons -->
+    <!-- CHANNELS opens the groups (Forecasters, Storm Chasers, Other Creators, NWS…) as a row
+         under the video; picking one opens its channels. buildNavButtons() fills that row. -->
+    <button type="button" id="channels-btn" class="nav-btn" onclick="showPanel('channels', event)" aria-label="Channel groups">📡 CHANNELS</button>
     <button type="button" id="live-now-btn" class="nav-btn" onclick="showPanel('live-now', event)" style="display:none;" aria-label="View live channels">
       <span class="live-dot" style="margin-right:4px;" aria-hidden="true"></span>LIVE NOW
     </button>
-    <button type="button" id="favorites-btn" class="nav-btn" onclick="showPanel('favorites', event)" style="display:none;" aria-label="View favorite channels">★ FAVORITES</button>
     <button type="button" id="highlights-btn" class="nav-btn" onclick="showPanel('highlights', event)" style="display:none;" aria-label="View highlighted videos curated by WeatherTV">★ HIGHLIGHTS <span class="new-badge" aria-hidden="true">NEW</span></button>
+    <button type="button" id="favorites-btn" class="nav-btn" onclick="showPanel('favorites', event)" style="display:none;" aria-label="View favorite channels">★ FAVORITES</button>
     <button type="button" id="radar-btn" class="nav-btn" onclick="showPanel('radar', event)" aria-label="Live radar and weather alerts">
       <span class="radar-icon" aria-hidden="true"></span>LIVE RADAR
     </button>
@@ -1462,8 +1486,10 @@
     <!-- Right-side utility nav buttons — wrapped so mobile can hide the group on search open -->
     <div id="nav-right-btns">
       <button type="button" class="nav-btn" onclick="showPanel('weatherstar', event)" aria-label="WeatherStar weather display">📺 WeatherStar</button>
-      <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlist">▶ Weather Playlist</button>
-      <button type="button" class="nav-btn" onclick="showPanel('apps', event)" aria-label="Weather apps">📱 Weather Apps</button>
+      <!-- Weatherscan: shown once /weatherscan/ is in place (WEATHERSCAN_READY) -->
+      <button type="button" id="weatherscan-btn" class="nav-btn" onclick="showPanel('weatherscan', event)" aria-label="Weatherscan local weather" style="display:none">🌤 Weatherscan</button>
+      <button type="button" class="nav-btn" onclick="showPanel('playlist', event)" aria-label="Weather playlists">▶ Playlists</button>
+      <button type="button" id="radio-btn" class="nav-btn" onclick="showPanel('radio', event)" aria-label="NOAA Weather Radio, live">📻 Radio</button>
     </div>
   </nav>
 
@@ -1475,7 +1501,16 @@
   <div id="panels" role="region" aria-label="Channel list">
 
     <!-- Hint shown in bar when no group is selected -->
-    <div id="panel-hint">↑ Select a group above to begin</div>
+    <div id="panel-hint">↑ Pick Channels, Live Now or Highlights above</div>
+
+    <!-- CHANNELS: the group picker (filled by buildNavButtons) -->
+    <div class="panel" id="channels-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+      <div id="channels-groups"></div>
+    </div>
+
+    <!-- RADIO: NOAA Weather Radio stations, yours first (filled by buildRadioPanel) -->
+    <div class="panel" id="radio-panel" style="display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;">
+    </div>
 
     <!-- Group panels are injected dynamically by buildChannelPanels() -->
 
@@ -1546,6 +1581,8 @@
     <span id="chat-btn-slot" style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;flex-shrink:0;"></span>
     <button type="button" class="about-btn" id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen" aria-label="Fullscreen">⛶<span class="fs-label"> Fullscreen</span></button>
     <a class="about-btn guide-btn" href="/guide" title="Switch to the Channel Guide" aria-label="Channel Guide" style="text-decoration:none">📺<span class="fs-label"> Guide</span></a>
+    <!-- Weather Apps (the other weather apps we recommend): website and the Google Play app; not in the Xbox / Windows apps -->
+    <button type="button" class="about-btn apps-btn" onclick="showPanel('apps', event)" title="Other weather apps we recommend" aria-label="Weather apps">📱<span class="fs-label"> Weather Apps</span></button>
     <button type="button" class="about-btn get-app-btn" onclick="showGetApp()" title="Get Weather TV for Windows, Xbox or Android" aria-label="Get the app">📲<span class="fs-label"> Get the App</span></button>
     <a class="about-btn" href="/shop.html" title="Every dollar goes to servers & new features" style="text-decoration:none">👕 Support</a>
     <button type="button" class="about-btn" onclick="showHelp()">Help</button>
@@ -1950,22 +1987,22 @@ async function loadGroupsFromServer() {
 
 // Build nav buttons dynamically from loaded groups
 function buildNavButtons() {
-  const nav = document.getElementById('main-nav');
-  // Remove existing group buttons
-  nav.querySelectorAll('.nav-btn.group-btn').forEach(b => b.remove());
-
-  // Insert group buttons before the Live Now button
-  const liveNowBtn = document.getElementById('live-now-btn');
-
+  // The groups now sit behind CHANNELS: one card per group in the row under the video
+  const row = document.getElementById('channels-groups');
+  if (!row) return;
+  row.innerHTML = '';
   GROUPS.forEach(group => {
     const btn = document.createElement('button');
-    btn.className = 'nav-btn group-btn';
-    btn.textContent = group.icon + ' ' + group.label;
+    btn.type = 'button';
+    btn.className = 'ch-group-pill';
     btn.dataset.group = group.id;
+    const n = (group.channels || []).filter(c => c && c.enabled !== false && !c.guideOnly).length;
+    btn.innerHTML = '<b>' + escHtmlMenu((group.icon || '') + ' ' + group.label) + '</b>' + (n ? '<small>' + n + ' channels</small>' : '');
     btn.onclick = (e) => showPanel(group.id, e);
-    nav.insertBefore(btn, liveNowBtn);
+    row.appendChild(btn);
   });
 }
+function escHtmlMenu(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 // Build channel panels dynamically from loaded groups
 function buildChannelPanels() {
@@ -1982,6 +2019,15 @@ function buildChannelPanels() {
     panel.setAttribute('role', 'region');
   panel.setAttribute('aria-label', group.label + ' channels');
   panel.style.cssText = 'display:none;flex-direction:row;align-items:center;width:100%;height:100%;overflow:hidden;';
+
+    // "‹ Channels": back to the group picker
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'ch-back';
+    back.textContent = '‹ ' + (group.icon || '') + ' ' + group.label;
+    back.title = 'Back to all channel groups';
+    back.onclick = (e) => { e.stopPropagation(); showPanel('channels'); };
+    panel.appendChild(back);
 
     // Simple scrollable list — arrows added after channels are populated
     const list = document.createElement('div');
@@ -2003,10 +2049,10 @@ function buildChannelPanels() {
 // PANEL NAVIGATION
 // ═══════════════════════════════════════════
 // Group lists open the card row; tapping the same group again closes it.
-const TOGGLE_PANELS = ['live-now','favorites','highlights','apps','playlist'];
+const TOGGLE_PANELS = ['live-now','favorites','highlights','apps','playlist','channels','radio'];
 function collapsePanels() {
   document.body.classList.remove('panels-open');
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-btn, .apps-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
   closeRecentOverlay();
   document.querySelectorAll('.collection-overlay').forEach(o => o.style.display = 'none');
@@ -2030,8 +2076,12 @@ function showPanel(name, e) {
   }
   // Update nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  const btn = e ? e.currentTarget : document.querySelector('[data-group="' + name + '"]') || document.getElementById('live-now-btn');
+  const isGroupPanel = GROUPS.some(g => g.id === name);
+  const btn = isGroupPanel || name === 'channels' ? document.getElementById('channels-btn')   // a group lives under CHANNELS
+    : (e && e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('nav-btn') ? e.currentTarget
+    : document.querySelector('.nav-btn[onclick*="\'' + name + '\'"]') || (name === 'live-now' ? document.getElementById('live-now-btn') : null));
   if (btn) btn.classList.add('active');
+  document.querySelectorAll('.apps-btn').forEach(b => b.classList.toggle('active', name === 'apps'));
 
   // Collapse search suggestions if navigating away from search
   if (name !== 'search') {
@@ -2087,6 +2137,12 @@ function showPanel(name, e) {
   }
   if (name === 'highlights') {
     buildHighlightsPanel();
+  }
+  if (name === 'radio') {
+    buildRadioPanel();
+  }
+  if (name === 'weatherscan') {
+    launchWeatherscan();
   }
 
   // Add channel list arrows when a group panel or live-now panel is shown
@@ -4385,6 +4441,74 @@ async function loadHighlights() {
   } catch(e) {
     console.warn('[WeatherTV] Could not load highlights:', e.message);
   }
+}
+
+// ═══════════════════════════════════════════
+// RADIO — NOAA Weather Radio, live (GWES · weatherradio.org)
+// ═══════════════════════════════════════════
+// The station list comes from our server (/api/wxradio), which reads GWES's feeds;
+// your station is the one covering your county (/api/wxradio/local). A station plays
+// in the player on /wxradio.html, like a channel.
+let _wxrList = null, _wxrMine = null, _wxrPlaying = null;
+function wxrPlace() {
+  try { const p = JSON.parse(localStorage.getItem(WTV_PLACE_KEY) || 'null'); if (p && isFinite(p.lat) && isFinite(p.lon)) return p; } catch (_) {}
+  try { const s = wsAllSettings && wsAllSettings['4000']; if (s && isFinite(s.lat) && isFinite(s.lon) && s.lat) return { lat: s.lat, lon: s.lon }; } catch (_) {}
+  return null;
+}
+async function buildRadioPanel() {
+  const panel = document.getElementById('radio-panel');
+  if (!panel) return;
+  if (!_wxrList) panel.innerHTML = '<div style="display:flex;align-items:center;gap:0.5rem;color:var(--muted);font-size:0.8rem;padding:0 1rem"><div class="spinner"></div> Loading Weather Radio…</div>';
+  try {
+    if (!_wxrList) { const j = await (await fetch('/api/wxradio')).json(); _wxrList = (j && j.stations) || []; }
+    const p = wxrPlace();
+    if (p && _wxrMine === null) {
+      try { const j = await (await fetch('/api/wxradio/local?lat=' + (+p.lat).toFixed(2) + '&lon=' + (+p.lon).toFixed(2))).json(); _wxrMine = (j && j.call) || ''; } catch (_) { _wxrMine = ''; }
+    }
+  } catch (_) {
+    panel.innerHTML = '<span style="color:var(--muted);font-size:0.8rem;padding:0 1rem">Weather Radio isn’t available right now — try again in a minute.</span>';
+    return;
+  }
+  if (!_wxrList.length) { panel.innerHTML = '<span style="color:var(--muted);font-size:0.8rem;padding:0 1rem">No Weather Radio stations are on the air right now.</span>'; return; }
+  const mine = _wxrList.find(s => s.call === _wxrMine);
+  const list = mine ? [mine, ..._wxrList.filter(s => s !== mine)] : _wxrList;
+  panel.innerHTML = '<div id="highlights-header"><div class="hl-title">📻 NOAA Weather Radio</div><div class="hl-sub">' + (mine ? 'Your station first · ' : '') + list.length + ' live stations · via GWES</div></div><div id="radio-list"></div>';
+  const row = document.getElementById('radio-list');
+  list.forEach(st => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'wxr-card' + (st === mine ? ' mine' : '') + (st.call === _wxrPlaying ? ' on' : '');
+    b.innerHTML = '<b>' + escHtmlMenu(st.city + ' Weather Radio' + (st.note ? ' (' + st.note + ')' : '')) + '</b>'
+      + '<small>' + escHtmlMenu([st.call, st.st, st.freq ? st.freq + ' MHz' : ''].filter(Boolean).join(' · ')) + '</small>'
+      + (st === mine ? '<small class="tag">📍 YOUR LOCAL STATION</small>' : '');
+    b.onclick = () => playWxr(st);
+    row.appendChild(b);
+  });
+  setTimeout(() => {
+    row.parentElement.querySelectorAll('.radio-arrow').forEach(a => a.remove());
+    const { leftBtn, rightBtn } = createScrollArrows(row);
+    leftBtn.classList.add('radio-arrow'); rightBtn.classList.add('radio-arrow');
+    row.parentElement.insertBefore(leftBtn, row); row.parentElement.appendChild(rightBtn);
+  }, 30);
+}
+function playWxr(st) {
+  try { wtvPauseMusic(); } catch (_) {}
+  _wxrPlaying = st.call;
+  loadIframe('/wxradio.html?call=' + encodeURIComponent(st.call) + (st.call === _wxrMine ? '&mine=1' : ''), st.city + ' Weather Radio', false);
+  document.querySelectorAll('.wxr-card').forEach(c => c.classList.toggle('on', c.querySelector('small') && c.querySelector('small').textContent.startsWith(st.call + ' ')));
+}
+
+// ═══════════════════════════════════════════
+// WEATHERSCAN — self-hosted at /weatherscan/ (rewired to NWS data). The button stays
+// hidden until it's in place: set WEATHERSCAN_READY = true.
+// ═══════════════════════════════════════════
+const WEATHERSCAN_READY = false;
+(function () { const b = document.getElementById('weatherscan-btn'); if (b && WEATHERSCAN_READY) b.style.display = ''; })();
+function launchWeatherscan() {
+  if (!WEATHERSCAN_READY) return;
+  try { wtvPauseMusic(); } catch (_) {}
+  const p = wxrPlace();
+  loadIframe('/weatherscan/' + (p ? '?' + encodeURIComponent((p.label || '').split(',').slice(0, 2).join(',') || (p.lat + ',' + p.lon)) : ''), 'Weatherscan', false);
 }
 
 function buildHighlightsPanel() {

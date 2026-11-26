@@ -1,0 +1,99 @@
+<!-- WeatherTV — NOAA Weather Radio player (plays in the video area) — updated 2026-11-26T17:40:00Z build.1795714800 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOAA Weather Radio · Weather TV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#0a0a14;overflow:hidden}
+  body{font-family:'Barlow Condensed',system-ui,sans-serif;color:#fff;display:flex;flex-direction:column;background:linear-gradient(180deg,#1b2f8f 0%,#24379e 45%,#3a2a7a 100%)}
+  #top{display:flex;justify-content:space-between;align-items:center;padding:2.2vh 3.2vw;background:linear-gradient(180deg,#d66a1c,#8f3b0a);border-bottom:.5vh solid #ffb347}
+  #top b{font-size:clamp(16px,5.6vh,52px);letter-spacing:.06em;text-shadow:3px 3px 0 #000}
+  #clock{font-size:clamp(14px,4.6vh,42px);color:#ffe9a8;text-shadow:2px 2px 0 #000}
+  #mid{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.4vh;text-align:center;padding:0 4vw}
+  #now{font-size:clamp(12px,3.6vh,30px);color:#a8c4ff;letter-spacing:.2em}
+  #name{font-size:clamp(20px,8.6vh,76px);font-weight:700;color:#ffef7a;text-shadow:3px 3px 0 #000;line-height:1.05}
+  #by{font-size:clamp(13px,4.4vh,38px);text-shadow:2px 2px 0 #000}
+  #wx{font-size:clamp(13px,4.4vh,38px);text-shadow:2px 2px 0 #000;min-height:1em}
+  #wx b{font-size:1.2em;margin-right:.3em}
+  #eq{display:flex;gap:.8vw;align-items:flex-end;height:8vh;margin-top:1vh}
+  #eq i{display:block;width:1.4vw;min-width:6px;background:#ffc93c;animation:eq 1s ease-in-out infinite}
+  #eq i:nth-child(2){animation-delay:-.2s}#eq i:nth-child(3){animation-delay:-.5s}#eq i:nth-child(4){animation-delay:-.7s}#eq i:nth-child(5){animation-delay:-.3s}#eq i:nth-child(6){animation-delay:-.9s}
+  @keyframes eq{0%,100%{height:20%}50%{height:100%}}
+  body.paused #eq i{animation-play-state:paused}
+  #go{display:none;font:inherit;font-size:clamp(16px,5vh,40px);font-weight:700;letter-spacing:.08em;background:#ffc93c;color:#111;border:0;border-radius:8px;padding:1vh 3vw;cursor:pointer}
+  body.needtap #go{display:block}
+  #foot{font-size:clamp(10px,2.6vh,20px);color:#c9d4ff;text-align:center;padding:0 2vw 2vh;opacity:.85}
+  #foot a{color:#ffe9a8}
+</style>
+</head>
+<body class="paused">
+  <div id="top"><b>NOAA WEATHER RADIO</b><span id="clock"></span></div>
+  <div id="mid">
+    <div id="now">CONNECTING…</div>
+    <div id="name"></div>
+    <div id="by"></div>
+    <div id="wx"></div>
+    <div id="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <button id="go" type="button">▶ LISTEN</button>
+  </div>
+  <div id="foot">Live from the National Weather Service · streamed by <a href="https://weatherradio.org" target="_blank" rel="noopener">GWES · weatherradio.org</a></div>
+  <audio id="aud" preload="none"></audio>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const q = new URLSearchParams(location.search), call = (q.get('call') || '').toUpperCase(), mine = q.get('mine') === '1';
+  const aud = $('aud');
+  let st = null, tries = 0;
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function tick() { $('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }); }
+  setInterval(tick, 1000); tick();
+  function state(t) { $('now').textContent = t; document.body.classList.toggle('paused', t !== 'ON THE AIR'); }
+  function play() {
+    if (!st) return;
+    const p = aud.play();
+    if (p && p.catch) p.catch(() => { document.body.classList.add('needtap'); state('PRESS LISTEN'); });
+  }
+  $('go').onclick = () => { document.body.classList.remove('needtap'); state('CONNECTING…'); aud.src = st.url; play(); };
+  aud.addEventListener('playing', () => { tries = 0; document.body.classList.remove('needtap'); state('ON THE AIR'); });
+  aud.addEventListener('waiting', () => state('CONNECTING…'));
+  // A live stream that drops: reconnect a few times (3 s, 6 s, 9 s…)
+  function reconnect() {
+    if (!st || tries >= 5) { state('OFF THE AIR'); return; }
+    state('RECONNECTING…');
+    setTimeout(() => { aud.src = st.url + (st.url.includes('?') ? '&' : '?') + 'r=' + Date.now(); play(); }, 3000 * (++tries));
+  }
+  aud.addEventListener('error', reconnect);
+  aud.addEventListener('ended', reconnect);
+  // Weather TV asks players to go quiet when something else starts
+  addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.action === 'pauseMusic') aud.pause(); });
+
+  async function weather() {
+    let p = null; try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
+    if (!p || !isFinite(p.lat) || !isFinite(p.lon)) return;
+    try {
+      const j = await (await fetch('/api/forecast?lat=' + (+p.lat).toFixed(4) + '&lon=' + (+p.lon).toFixed(4))).json();
+      const t = j && j.current && j.current.temperature_2m;
+      const name = (p.label || (j.location && j.location.name) || '').split(',').slice(0, 2).join(',');
+      $('wx').innerHTML = (isFinite(t) ? '<b>' + Math.round(t) + '°</b>' : '') + esc(name);
+    } catch (e) {}
+  }
+  (async function start() {
+    try {
+      const j = await (await fetch('/api/wxradio')).json();
+      st = ((j && j.stations) || []).find((s) => s.call === call) || null;
+    } catch (e) {}
+    if (!st) { $('name').textContent = call ? call + ' isn’t on the air' : 'No station picked'; state('OFF THE AIR'); return; }
+    document.title = st.city + ' Weather Radio · Weather TV';
+    $('name').textContent = st.city + ' Weather Radio' + (st.note ? ' (' + st.note + ')' : '');
+    $('by').textContent = [st.call, st.freq ? st.freq + ' MHz' : '', mine ? '📍 Your local station' : (st.wfo ? 'NWS ' + st.wfo : '')].filter(Boolean).join(' · ');
+    aud.src = st.url; play();
+    weather();
+  })();
+})();
+</script>
+</body>
+</html>
