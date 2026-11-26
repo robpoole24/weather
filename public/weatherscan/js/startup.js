@@ -141,7 +141,9 @@ requestAnimationFrame(animate);
     audioPlayer.initializeAudio()
     audioPlayer.startPlaying(audioPlayer.playlist, true);
 
+    window.wtvStep = 'location'
     await locationJS()
+    window.wtvStep = 'data'
     // WTV: build the radar maps now, so they load while the weather data comes in
     try { initializeRadars(); window.wtvRadarsMade = true; } catch (e) { console.error(e) }
 
@@ -239,6 +241,7 @@ requestAnimationFrame(animate);
 
     await Promise.all([wtvAllData, wtvTicker, wtvCrawl]);
     console.log("weatherData", weatherData)
+    window.wtvStep = 'start'
     await startPrograms()
 }
 

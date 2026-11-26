@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-26T23:15:00Z build.1795738500 -->
+<!-- WeatherTV App — updated 2026-11-26T23:40:00Z build.1795740300 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -980,6 +980,8 @@
   .tv-mode a[href*="youtube.com"],
   .tv-mode #playlist-yt-link { display: none !important; }
   .tv-mode .wtv-store-link { pointer-events: none; }
+  /* TV apps can't open Discord: the address stays readable to join from a phone */
+  .tv-mode .discord-link { pointer-events: none; text-decoration: none; }
   /* Official store badges: website only. Inside any of our apps (Xbox/Windows,
      Android, Samsung TV) a "get the app" button makes no sense, so it's hidden. */
   .store-badges { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-top:0.9rem; }
@@ -1758,7 +1760,9 @@
         <div style="font-size:0.85rem;color:var(--muted);line-height:1.6;">
           Something not loading, a camera not working, or a channel to suggest?
           <a href="#" onclick="hideAbout();showHelp();return false;" style="color:var(--accent);font-weight:600;">Open Help →</a><br>
-          <a href="mailto:contact@altruisticapps.com" style="color:var(--accent)">contact@altruisticapps.com</a>
+          Join us on Discord for tech support, app suggestions and news, with a room for every Altruistic Apps app:
+          <a class="discord-link" href="https://discord.gg/QATANJmgA7" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">discord.gg/QATANJmgA7</a><br>
+          Or email <a href="mailto:contact@altruisticapps.com" style="color:var(--accent)">contact@altruisticapps.com</a>
         </div>
       </div>
 
@@ -1884,7 +1888,8 @@
     <div class="help-sec">
       <div class="help-h">Still stuck? Report a problem</div>
       <div class="help-p">
-        Email <a href="mailto:contact@altruisticapps.com?subject=Weather%20TV%20problem" style="color:var(--accent);font-weight:600">contact@altruisticapps.com</a>.
+        Ask in the Weather TV room on our Discord, <a class="discord-link" href="https://discord.gg/QATANJmgA7" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">discord.gg/QATANJmgA7</a>,
+        or email <a href="mailto:contact@altruisticapps.com?subject=Weather%20TV%20problem" style="color:var(--accent);font-weight:600">contact@altruisticapps.com</a>.
         It helps to include your device and browser (or app), what you were looking at, and a screenshot if you can.<br>
         Channel suggestions are welcome too, and so are corrections: we do our best to match creators with their app sponsors, but sponsorships change and we can get things wrong.
       </div>

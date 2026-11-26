@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T23:30:00Z build.1795739400
+// Weather TV glue for Weatherscan v2 — updated 2026-11-26T23:25:00Z build.1795740000
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -91,17 +91,23 @@
   // Map check: if any map hasn't drawn 45 seconds in (or the device's graphics dropped one),
   // show one small line at the top left saying what's wrong, so a photo of the screen tells us.
   // Add #diag to the address to always show it.
+  // Remember the last few script errors, for the check line below
+  var lastErrs = [];
+  addEventListener('error', function (e) { lastErrs.push(String(e.message || e.error || 'error').slice(0, 90)); lastErrs = lastErrs.slice(-2); });
+  addEventListener('unhandledrejection', function (e) { var r = e.reason; lastErrs.push(String((r && (r.message || r.statusText)) || r || 'rejected').slice(0, 90)); lastErrs = lastErrs.slice(-2); });
   function mapCheck(force) {
     var M = window.WTV_MAPS || [], loaded = 0, lost = 0, errs = [];
     M.forEach(function (m) { if (m._wtv) { if (m._wtv.loaded) loaded++; if (m._wtv.lost) lost++; if (m._wtv.err && errs.indexOf(m._wtv.err) < 0) errs.push(m._wtv.err); } });
-    if (!force && loaded === M.length && !lost && !errs.length) return;
+    var st = document.getElementById('startup'), stuck = st && getComputedStyle(st).display !== 'none';
+    if (!force && !stuck && loaded === M.length && !lost && !errs.length) { var old = document.getElementById('wtv-diag'); if (old) old.remove(); return; }
     var gpu = '';
     try { var c = document.createElement('canvas').getContext('webgl'); var d = c && c.getExtension('WEBGL_debug_renderer_info'); gpu = c ? (d ? c.getParameter(d.UNMASKED_RENDERER_WEBGL) : 'webgl ok') : 'NO WEBGL'; } catch (e) { gpu = 'webgl error'; }
     var el = document.getElementById('wtv-diag') || document.body.appendChild(Object.assign(document.createElement('div'), { id: 'wtv-diag' }));
     el.style.cssText = 'position:fixed;left:8px;top:8px;z-index:100001;max-width:70%;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,.8);color:#ffd000;font:600 14px/1.3 Barlow,system-ui,sans-serif';
-    el.textContent = 'Map check' + (window.WTV_LITE ? ' (light maps)' : '') + ': ' + loaded + '/' + M.length + ' drawn' + (lost ? ', ' + lost + ' dropped by graphics' : '') + (errs.length ? ' · ' + errs.join(' | ') : '') + ' · ' + gpu;
+    el.textContent = (stuck ? 'Still starting (step: ' + (window.wtvStep || '?') + ')' + (lastErrs.length ? ' · error: ' + lastErrs.join(' | ') : '') + ' · ' : '')
+      + 'Map check' + (window.WTV_LITE ? ' (light maps)' : '') + ': ' + loaded + '/' + M.length + ' drawn' + (lost ? ', ' + lost + ' dropped by graphics' : '') + (errs.length ? ' · ' + errs.join(' | ') : '') + ' · ' + gpu;
   }
-  setTimeout(function () { mapCheck(/diag/.test(location.hash)); setInterval(function () { mapCheck(/diag/.test(location.hash)); }, 15000); }, 45000);
+  setTimeout(function () { mapCheck(/diag/.test(location.hash)); setInterval(function () { mapCheck(/diag/.test(location.hash)); }, 10000); }, 40000);
 
   // Our extra layers follow Weatherscan's own switches: lakes show when any land layer shows;
   // lake shores show with the coastlines.

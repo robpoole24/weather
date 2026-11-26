@@ -2563,15 +2563,19 @@ async function startPrograms() {
     lBarData.radarUnavailable = true
   }
   
-  alignDataMaps()
-  createMiniradarCities()
-  
-  initTravelForecast()
-  await preloadRadars();//decides whether radars are unavailable
+  // WTV: one slow or failing step must never leave the startup screen up for good
+  window.wtvStep = 'maps'
+  try { alignDataMaps() } catch (e) { console.error(e) }
+  try { createMiniradarCities() } catch (e) { console.error(e) }
+  try { initTravelForecast() } catch (e) { console.error(e) }
+  window.wtvStep = 'radar'
+  try { await Promise.race([preloadRadars(), new Promise((ok) => setTimeout(ok, 30000))]) } catch (e) { console.error(e) }//decides whether radars are unavailable
 
-  slideKickOff()
+  window.wtvStep = 'slides'
+  try { slideKickOff() } catch (e) { console.error(e) }
 
   $('#startup').fadeOut(0);
+  window.wtvStep = 'running'
 }
 
 setInterval(function () {
