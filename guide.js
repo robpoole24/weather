@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-25T19:00:00Z build.1795633200
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T03:30:00Z build.1795663800
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -176,12 +176,74 @@ function trackTitle(file) {
   }
   return t.replace(/\s+/g, ' ').trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
-function radioTracks() {
+// A song's own tags (title, artist, album) from its ID3 header, or the old ID3v1 tag at the end.
+// Read once per file (and again only if the file changes); only the start of the file is read.
+const tagMemo = {};
+function id3Text(d, enc) {
+  let s;
+  if (enc === 1 || enc === 2) {
+    let be = enc === 2;
+    if (d[0] === 0xff && d[1] === 0xfe) { d = d.subarray(2); be = false; } else if (d[0] === 0xfe && d[1] === 0xff) { d = d.subarray(2); be = true; }
+    const c = Buffer.from(d.subarray(0, d.length & ~1)); if (be) c.swap16();
+    s = c.toString('utf16le');
+  } else s = d.toString(enc === 3 ? 'utf8' : 'latin1');
+  return s.split('\u0000')[0].replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+function songTags(file) {
+  let fd = null;
   try {
-    return fs.readdirSync(MUSIC_DIR).filter((f) => /\.(mp3|m4a|ogg)$/i.test(f)).sort()
-      .map((f) => ({ t: trackTitle(f), src: '/weatherstar/music/default/' + encodeURIComponent(f) }));
+    const st = fs.statSync(file), m = tagMemo[file];
+    if (m && m.at === st.mtimeMs) return m.tags;
+    const tags = {};
+    fd = fs.openSync(file, 'r');
+    const h = Buffer.alloc(10); fs.readSync(fd, h, 0, 10, 0);
+    if (h.toString('latin1', 0, 3) === 'ID3') {
+      const v = h[3], size = ((h[6] & 0x7f) << 21) | ((h[7] & 0x7f) << 14) | ((h[8] & 0x7f) << 7) | (h[9] & 0x7f);
+      const len = Math.min(size, 1024 * 1024), b = Buffer.alloc(len); fs.readSync(fd, b, 0, len, 10);
+      const KEYS = v === 2 ? { TT2: 't', TP1: 'a', TAL: 'al' } : { TIT2: 't', TPE1: 'a', TALB: 'al' };
+      const idLen = v === 2 ? 3 : 4, hdr = v === 2 ? 6 : 10;
+      let i = 0;
+      if (v > 2 && (h[5] & 0x40)) i = v === 4 ? ((b[0] & 0x7f) << 21 | (b[1] & 0x7f) << 14 | (b[2] & 0x7f) << 7 | (b[3] & 0x7f)) : b.readUInt32BE(0) + 4;   // extended header
+      while (i + hdr <= len) {
+        const id = b.toString('latin1', i, i + idLen); if (!/^[A-Z0-9]+$/.test(id)) break;
+        let sz = v === 2 ? (b[i + 3] << 16 | b[i + 4] << 8 | b[i + 5]) : b.readUInt32BE(i + 4);
+        if (v === 4) sz = ((sz >>> 24) & 0x7f) << 21 | ((sz >>> 16) & 0x7f) << 14 | ((sz >>> 8) & 0x7f) << 7 | (sz & 0x7f);
+        if (sz <= 0 || i + hdr + sz > len) break;
+        if (KEYS[id]) { const t = id3Text(b.subarray(i + hdr + 1, i + hdr + sz), b[i + hdr]); if (t) tags[KEYS[id]] = t; }
+        i += hdr + sz;
+      }
+    }
+    if (!tags.t) {                                                  // ID3v1: the last 128 bytes
+      const t1 = Buffer.alloc(128);
+      if (st.size > 128 && fs.readSync(fd, t1, 0, 128, st.size - 128) === 128 && t1.toString('latin1', 0, 3) === 'TAG') {
+        const f = (a, z) => t1.toString('latin1', a, z).split('\u0000')[0].trim();
+        if (f(3, 33)) { tags.t = f(3, 33); if (f(33, 63)) tags.a = f(33, 63); if (f(63, 93)) tags.al = f(63, 93); }
+      }
+    }
+    tagMemo[file] = { at: st.mtimeMs, tags };
+    return tags;
+  } catch (e) { return {}; } finally { if (fd != null) try { fs.closeSync(fd); } catch (e) {} }
+}
+// The songs in a music folder: title (its tag, else a tidied file name), artist, album
+const MUSIC_ROOT = path.join(__dirname, 'public', 'weatherstar', 'music');
+const FOLDER_RE = /^[A-Za-z0-9 _-]{1,40}$/;
+function folderTracks(folder) {
+  if (!FOLDER_RE.test(folder || '')) return [];
+  try {
+    return fs.readdirSync(path.join(MUSIC_ROOT, folder)).filter((f) => /\.(mp3|m4a|ogg)$/i.test(f)).sort().map((f) => {
+      const g = /\.mp3$/i.test(f) ? songTags(path.join(MUSIC_ROOT, folder, f)) : {};
+      const x = { t: g.t || trackTitle(f), src: '/weatherstar/music/' + encodeURIComponent(folder) + '/' + encodeURIComponent(f) };
+      if (g.a) x.a = g.a; if (g.al) x.al = g.al;
+      return x;
+    });
   } catch (e) { return []; }
 }
+// The music folders you can give a channel as its soundtrack (subfolders of weatherstar/music)
+function musicFolders() {
+  try { return fs.readdirSync(MUSIC_ROOT, { withFileTypes: true }).filter((d) => d.isDirectory() && FOLDER_RE.test(d.name)).map((d) => d.name).sort(); }
+  catch (e) { return []; }
+}
+function radioTracks() { return folderTracks('default'); }
 // Playlist channels (a YouTube playlist that plays on repeat), set in admin. Until you
 // save your own list, these holiday Yule logs are used, Nov 1 – Dec 31. Each one can also
 // be switched off (hidden) and back on in admin without losing it.
@@ -220,7 +282,7 @@ function builtins(data, cfg, all) {
   out.push({ id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', block: 'audio', n: 9999 });
   extrasOf(cfg).forEach((e) => {
     if (!all && !inSeason(e)) return;                                   // out of season: not in the guide
-    out.push({ id: 'x-' + e.playlistId, name: e.title, call: callSign(e.title), kind: 'list', block: e.block || 'seasonal', playlistId: e.playlistId, repeat: true });
+    out.push({ id: 'x-' + e.playlistId, name: e.title, call: callSign(e.title), kind: 'list', block: e.block || 'seasonal', playlistId: e.playlistId, repeat: true, music: e.music || undefined });
   });
   return out.map((b) => ({ ...b, builtin: true }));
 }
@@ -490,7 +552,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     if (ch.id === 'highlights') return { ...base, cells: (data.highlights || []).slice(0, 30).map((h) => ({ v: h.videoId, t: h.title || '' })) };
     const pl = cache.playlist[ch.playlistId];
     const cells = ((pl && pl.items) || []).map((it) => ({ v: it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId, t: (it.snippet && it.snippet.title) || '' })).filter((x) => x.v);
-    return { ...base, playlistId: ch.playlistId, cells, needsFetch: !cells.length };
+    return { ...base, playlistId: ch.playlistId, cells, needsFetch: !cells.length, soundtrack: ch.music && folderTracks(ch.music).length ? ch.music : undefined };
   }
 
   function build() {
@@ -506,9 +568,12 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     // Live Now: everyone live, except the 24/7 radar channels
     const liveRows = [];
     out.forEach((b) => { if (b.id === 'radar') return; b.channels.forEach((c) => { if (c.live) liveRows.push({ ...c, block: b.label, home: b.id }); }); });
+    // Soundtracks: the songs of each music folder a channel plays instead of its videos' sound
+    const music = {};
+    out.forEach((b) => b.channels.forEach((c) => { if (c.soundtrack && !music[c.soundtrack]) music[c.soundtrack] = folderTracks(c.soundtrack); }));
     return {
       generatedAt: new Date().toISOString(),
-      networks,
+      networks, music,
       blocks: [
         { id: 'live', label: 'LIVE NOW · ' + liveRows.length + (liveRows.length === 1 ? ' CHANNEL' : ' CHANNELS'), range: 'CH 1 · UNDER THEIR HOME NUMBERS', n: 1, channels: liveRows },
         ...out,
@@ -537,6 +602,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       const x = { playlistId: e.playlistId, title: cleanLabel(e.title) || 'Playlist', block: ID_RE.test(e.block || '') ? e.block : 'seasonal' };
       if (MMDD_RE.test(e.from || '') && MMDD_RE.test(e.to || '')) { x.from = e.from; x.to = e.to; }
       if (e.on === false) x.on = false;
+      if (FOLDER_RE.test(e.music || '')) x.music = e.music;     // play this music folder instead of the videos' sound
       extras.push(x);
     });
     builtins(data, body && Array.isArray(body.extras) ? { extras } : configOf(data), true).forEach((b) => known.add(b.id));
@@ -587,6 +653,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       config: cfg || configOf(data),
       extras: extrasOf(cfg || configOf(data)).map((e) => ({ ...e, inSeason: inSeason(e) })),
       today: todayMMDD(),
+      musicFolders: musicFolders().map((f) => ({ id: f, songs: folderTracks(f).length })),
     };
   }
   app.get('/api/admin/guide', (req, res) => {

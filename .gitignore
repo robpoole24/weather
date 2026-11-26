@@ -14,3 +14,6 @@ WTV_update.tar
 fourthwall-shop-custom-code.html
 Tizen/author.p12
 public/camera-count.js
+
+# Files waiting to be deleted by hand — never commit
+_to_delete/

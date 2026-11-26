@@ -1,4 +1,4 @@
-<!-- WeatherTV Admin — Channel Guide — updated 2026-11-25T19:00:00Z build.1795633200 -->
+<!-- WeatherTV Admin — Channel Guide — updated 2026-11-26T03:30:00Z build.1795663800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -139,7 +139,8 @@
   <details class="panel" id="x-panel" open>
     <summary><h2>Playlist channels <small>A YouTube playlist as a channel that plays on repeat — like the holiday Yule logs in Seasonal Channels (9000s).
       Each one shows in the guide only when it's <strong>on</strong> and, if you give dates, between them (MM-DD; Nov 1 – Dec 31 is 11-01 to 12-31). Switch them off after the season and back on next year.
-      Renumber or move them in the channel list like any other channel.</small></h2></summary>
+      Renumber or move them in the channel list like any other channel.
+      <strong>Sound</strong>: keep the videos' own, or pick a music folder (a subfolder of weatherstar/music) to play over them muted.</small></h2></summary>
     <table class="src"><tbody id="extras"></tbody></table>
     <div class="xadd">
       <input id="x-url" placeholder="Playlist link or ID" style="flex:1 1 16rem">
@@ -281,6 +282,11 @@
       + '<td class="k"><label title="On: in the guide (between its dates). Off: hidden until you switch it back on."><input type="checkbox" data-xon="' + i + '"' + (e.on !== false ? ' checked' : '') + '> ' + (seasonOk(e) ? 'Showing' : e.on === false ? 'Off' : 'Out of season') + '</label></td>'
       + '<td><input class="ttl" data-xt="' + i + '" value="' + esc(e.title) + '" maxlength="40"> <a class="yt" style="font-size:.72rem;color:#ff6b6b" href="https://www.youtube.com/playlist?list=' + esc(e.playlistId) + '" target="_blank" rel="noopener noreferrer">playlist ↗</a></td>'
       + '<td><select data-xb="' + i + '">' + bOpts(e.block || 'seasonal') + '</select></td>'
+      + '<td><select data-xm="' + i + '" title="Sound: the videos\' own, or a music folder (weatherstar/music/…) played over the muted videos">'
+        + '<option value="">🔊 Video sound</option>'
+        + (V.musicFolders || []).map((m) => '<option value="' + esc(m.id) + '"' + (m.id === e.music ? ' selected' : '') + '>♪ ' + esc(m.id) + ' (' + m.songs + ' songs)</option>').join('')
+        + (e.music && !(V.musicFolders || []).some((m) => m.id === e.music) ? '<option value="' + esc(e.music) + '" selected>♪ ' + esc(e.music) + ' (folder missing)</option>' : '')
+        + '</select></td>'
       + '<td><input class="mmdd" data-xf="' + i + '" value="' + esc(e.from || '') + '" placeholder="MM-DD"> – <input class="mmdd" data-xto="' + i + '" value="' + esc(e.to || '') + '" placeholder="MM-DD"></td>'
       + '<td><button class="ib" data-xdel="' + i + '" title="Remove this channel">✕</button></td></tr>').join('')
       : '<tr><td class="muted">No playlist channels yet.</td></tr>';
@@ -625,10 +631,11 @@
   const MMDD = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
   $('extras').addEventListener('change', (e) => {
     const t = e.target, d = t.dataset;
-    const i = +(d.xon || d.xt || d.xb || d.xf || d.xto); const x = draft.extras[i]; if (!x) return;
+    const i = +(d.xon || d.xt || d.xb || d.xm || d.xf || d.xto); const x = draft.extras[i]; if (!x) return;
     if (d.xon !== undefined) { if (t.checked) delete x.on; else x.on = false; }
     else if (d.xt !== undefined) x.title = t.value.trim() || x.title;
     else if (d.xb !== undefined) x.block = t.value;
+    else if (d.xm !== undefined) { if (t.value) x.music = t.value; else delete x.music; }   // its soundtrack
     else {
       const v = t.value.trim();
       if (v && !MMDD.test(v)) { t.style.borderColor = 'var(--red)'; return; }
