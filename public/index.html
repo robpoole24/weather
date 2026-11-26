@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-26T21:00:00Z build.1795726800 -->
+<!-- WeatherTV App — updated 2026-11-26T22:10:00Z build.1795731000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1381,6 +1381,8 @@
   html.native-app .guide-btn, html.in-app .guide-btn { display:none !important; }
   /* Weather Apps: on the website and in the Google Play app (native-app), not in the Xbox / Windows apps */
   html.in-app:not(.native-app) .apps-btn { display:none !important; }
+  /* TV and Xbox: no Fullscreen button. The app already fills the screen, and B (Back) closes the app there */
+  html.tv-mode #fullscreen-btn, html.tv-mode #exit-max-btn { display:none !important; }
   .about-btn.apps-btn.active { border-color:var(--accent); color:var(--accent); }
 </style>
 
@@ -4116,6 +4118,10 @@ function _initChaserMap(lat, lng, deg, moving, name) {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:13, attribution:'&copy; OpenStreetMap contributors' }).addTo(_chaserMap);
   _chaserNexrad = L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png', { opacity:0.65, zIndex:10, maxNativeZoom:9, maxZoom:13 }).addTo(_chaserMap);
   _chaserDot = L.marker([lat,lng], { icon:_chaserDotIcon(deg,moving), zIndexOffset:1000, interactive:false }).addTo(_chaserMap);
+  // Radar blends into the map (multiply) instead of covering it, so roads and town names stay readable under heavy rain
+  try { const rc = _chaserNexrad.getContainer(); rc.style.mixBlendMode = 'multiply'; _chaserNexrad.setOpacity(0.85); } catch (_) {}
+  // TV / Xbox: the stick moves the map pointer and LB/RB zoom here too, like on the radar
+  if (window.WTV_TV && WTV_TV.addMap) WTV_TV.addMap(_chaserMap);
 
   const lbl = document.getElementById('chaser-map-label');
   if (lbl) lbl.textContent = '📍 ' + name;
@@ -5570,6 +5576,13 @@ function setPlayerFullscreen(on) {
   setTimeout(() => window.dispatchEvent(new Event('resize')), 60);
 }
 function toggleFullscreen() { setPlayerFullscreen(!document.body.classList.contains('player-max')); }
+// TV / Xbox: if the player is ever fullscreen, Back (B) leaves fullscreen instead of closing the app
+document.addEventListener('DOMContentLoaded', () => {
+  if (window.WTV_TV && WTV_TV.active) WTV_TV.onBack(() => {
+    if (!document.body.classList.contains('player-max')) return false;
+    setPlayerFullscreen(false); return true;
+  });
+});
 // The Exit pill shows for a few seconds, then fades so it doesn't cover the
 // picture; a tap anywhere brings it back.
 let _exitPillTimer = null;
@@ -5651,7 +5664,7 @@ init();
 </div>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1793300000"></script>
+<script src="/js/wtv-tv.js?v=1795731000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing

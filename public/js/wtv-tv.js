@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — build.1793300000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-26T22:10:00Z build.1795731000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -25,10 +25,13 @@
     || /Tizen|SMART-TV|SmartTV|SMARTTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey|Xbox/i.test(ua)
     || (window.parent !== window && (() => { try { return !!window.parent.WTV_TV && window.parent.WTV_TV.active; } catch (_) { return false; } })());
   const keyHooks = [];
+  const tvMaps = [];                   // maps added with WTV_TV.addMap()
   const onKey = (fn) => keyHooks.push(fn);   // fn(keyCode, key) returns true when it used the key
   const api = { active: isTV, onBack, onMedia, onKey, focusFirst, focusEl: (el) => setFocus(el),   // focusEl: move the highlight only
     // Press OK at the map pointer (e.g. the hodograph's right-stick click)
-    pointerClick: () => { const m = window.WTV_TV_MAP; if (!m || !ptr.on) return false; ptrClick(m); return true; },
+    pointerClick: () => { const m = mapOf(current) || window.WTV_TV_MAP; if (!m || !ptr.on) return false; ptrClick(m); return true; },
+    // Other Leaflet maps (e.g. the chaser map under a live stream) get the same pointer and zoom
+    addMap: (m) => { if (m && tvMaps.indexOf(m) < 0) tvMaps.push(m); },
     // The Xbox app (1.3+) reads the right stick itself and calls this ~30×/s: v = -1…1
     stick: (v) => { if (Math.abs(v) < 0.15) return; rsAt = performance.now(); wheelAt(Math.sign(v) * ((Math.abs(v) - 0.15) / 0.85) ** 1.5 * 38); } };
   window.WTV_TV = api;
@@ -630,7 +633,11 @@
     clearTimeout(hintTimer); hintTimer = setTimeout(() => { h.style.display = 'none'; }, 5000);
   }
   function hideMapHint() { const h = document.getElementById('tv-map-hint'); if (h) h.style.display = 'none'; }
-  function mapOf(el) { const m = window.WTV_TV_MAP; return el && el.classList.contains('leaflet-container') && m && m.getContainer && m.getContainer() === el ? m : null; }
+  function mapOf(el) {
+    if (!el || !el.classList.contains('leaflet-container')) return null;
+    for (let i = tvMaps.length - 1; i >= 0; i--) { try { if (!document.contains(tvMaps[i].getContainer())) tvMaps.splice(i, 1); } catch (_) { tvMaps.splice(i, 1); } }   // drop removed maps
+    return [window.WTV_TV_MAP].concat(tvMaps).find(m => m && m.getContainer && m.getContainer() === el) || null;
+  }
 
   // ── Pointer on the map ────────────────────────────────────────────────────
   // With the map highlighted, a big pointer works like a mouse: the stick or
@@ -647,6 +654,7 @@
       ptr.el.innerHTML = '<svg viewBox="0 0 32 32" width="38" height="38" aria-hidden="true"><path d="M3 2 L3 26 L9.5 20 L14 30 L18.5 28 L14 18.5 L23 18.5 Z" fill="#ffd000" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>';
       document.body.appendChild(ptr.el);
     }
+    if (ptr.map !== m) { ptr.map = m; ptr.set = false; }  // a different map: start in its middle
     if (!ptr.set) {                                       // first time: middle of the map
       const r = m.getContainer().getBoundingClientRect();
       ptr.x = Math.round(r.left + r.width / 2); ptr.y = Math.round(r.top + r.height / 2); ptr.set = true;
