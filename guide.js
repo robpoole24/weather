@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T17:00:00Z build.1795712400
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T20:30:00Z build.1795725000
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -277,7 +277,8 @@ function builtins(data, cfg, all) {
     { id: 'forecast', name: 'Your Forecast', call: 'FCST', kind: 'forecast', block: 'wtv', n: 2 },
     { id: 'radar', name: 'Live Radar', call: 'RADAR', kind: 'radar', block: 'wtv', n: 3 },
     { id: 'weatherstar', name: 'WeatherStar', call: 'WSTAR', kind: 'wstar', block: 'wtv', n: 4 },
-    { id: 'highlights', name: 'Weather TV Highlights', call: 'HILITE', kind: 'list', block: 'wtv', n: 5 },
+    { id: 'weatherscan', name: 'Weatherscan', call: 'WSCAN', kind: 'wscan', block: 'wtv', n: 5 },
+    { id: 'highlights', name: 'Weather TV Highlights', call: 'HILITE', kind: 'list', block: 'wtv', n: 6 },
   ];
   ((data && data.playlists) || []).forEach((p) => { if (p && p.playlistId) out.push({ id: 'pl-' + p.playlistId, name: p.title || 'Playlist', call: callSign(p.title), kind: 'list', block: 'wtv', playlistId: p.playlistId }); });
   out.push({ id: 'wsradio', name: 'WeatherStar Radio', call: 'WXRADIO', kind: 'radio', block: 'audio', n: 9999 });
@@ -552,6 +553,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
     if (ch.kind === 'forecast') return { ...base, cells: ['Current Conditions', 'Hourly', '7-Day Forecast', 'Records & Normals'].map((t) => ({ t })) };
     if (ch.kind === 'radar') return { ...base, cells: ['Live NEXRAD radar', 'Warnings & watches', 'Storm chasers on the map', 'Future radar'].map((t) => ({ t })) };
     if (ch.kind === 'wstar') return { ...base, cells: ['Current Conditions', 'Local Forecast', 'Extended Forecast', 'Regional Radar'].map((t) => ({ t })) };
+    if (ch.kind === 'wscan') return { ...base, cells: ['Currently', 'Local Doppler Radar', 'Local Forecast', 'Travel & International'].map((t) => ({ t })) };
     if (ch.kind === 'radio') return { ...base, cells: radioTracks() };
     if (ch.kind === 'wxr') {                                       // a live NOAA Weather Radio stream
       const s = ch.wxr || {};

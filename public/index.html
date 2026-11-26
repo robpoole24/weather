@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-26T18:00:00Z build.1795716000 -->
+<!-- WeatherTV App — updated 2026-11-26T21:00:00Z build.1795726800 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1669,7 +1669,11 @@
         <div style="font-size:0.82rem;color:var(--muted);line-height:1.5">
           <div>WeatherStar 4000+ by Matt Walsh (<a href="https://github.com/netbymatt/ws4kp" target="_blank" rel="noopener" style="color:var(--accent)">netbymatt</a>)</div>
           <div>WeatherSTAR 4000 icon collection (1990–2014) by <a href="https://www.deviantart.com/malekmasoud" target="_blank" rel="noopener" style="color:var(--accent)">malekmasoud</a></div>
+          <div>Weatherscan v2 by Mist Weather Media (<a href="https://github.com/MistWeatherMedia/weatherscan-v2" target="_blank" rel="noopener" style="color:var(--accent)">GitHub</a>), GPL-3.0; adapted for Weather TV</div>
+          <div>NOAA Weather Radio streams by the Global Weather &amp; EAS Society (<a href="https://weatherradio.org" target="_blank" rel="noopener" style="color:var(--accent)">weatherradio.org</a>)</div>
           <div>Weather, marine, tide and airport data: NOAA, National Weather Service, FAA Aviation Weather Center</div>
+          <div>Forecast data by <a href="https://open-meteo.com" target="_blank" rel="noopener" style="color:var(--accent)">Open-Meteo.com</a> (CC BY 4.0) · radar and satellite via Iowa State University's Iowa Environmental Mesonet</div>
+          <div>Maps: Natural Earth, U.S. Census Bureau, © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" style="color:var(--accent)">OpenStreetMap</a> contributors</div>
         </div>
       </div>
 
@@ -4502,13 +4506,13 @@ function playWxr(st) {
 // WEATHERSCAN — self-hosted at /weatherscan/ (rewired to NWS data). The button stays
 // hidden until it's in place: set WEATHERSCAN_READY = true.
 // ═══════════════════════════════════════════
-const WEATHERSCAN_READY = false;
+const WEATHERSCAN_READY = true;
 (function () { const b = document.getElementById('weatherscan-btn'); if (b && WEATHERSCAN_READY) b.style.display = ''; })();
 function launchWeatherscan() {
   if (!WEATHERSCAN_READY) return;
   try { wtvPauseMusic(); } catch (_) {}
   const p = wxrPlace();
-  loadIframe('/weatherscan/' + (p ? '?' + encodeURIComponent((p.label || '').split(',').slice(0, 2).join(',') || (p.lat + ',' + p.lon)) : ''), 'Weatherscan', false);
+  loadIframe('/weatherscan/' + (p ? '?' + (+p.lat).toFixed(3) + ',' + (+p.lon).toFixed(3) + ';' + encodeURIComponent(String(p.label || '').split(',')[0]) : ''), 'Weatherscan', false);
 }
 
 function buildHighlightsPanel() {

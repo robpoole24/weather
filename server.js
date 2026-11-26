@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-25T01:00:00Z build.1795568400
+// WeatherTV Server — updated 2026-11-26T19:30:00Z build.1795721400
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -2995,6 +2995,8 @@ require('./records')(app, { rGet, rSet });
 // built only from cached data — no quota per request. Unlisted page at /guide.
 // Admin: /admin/guide.html (block, number and tag for every channel; saved in data.guide)
 require('./guide')(app, { loadData, saveData, cache, filterRecent: _filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError });
+// Weatherscan (public/weatherscan/, channel 5): answers its weather.com-style requests from NWS + Open-Meteo
+require('./weatherscan-api').mount(app);
 app.get('/guide', (req, res) => res.sendFile(path.join(__dirname, 'public', 'guide.html')));
 
 // Replaces the old bbox-based endpoint — state-level loading is far more

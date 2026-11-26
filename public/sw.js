@@ -1,4 +1,4 @@
-// Weather TV Service Worker — build.1790654400
+// Weather TV Service Worker — build.1795721400
 // Minimal SW — just enough to satisfy PWA requirements
 // Weather TV is a live content platform so we don't cache aggressively
 importScripts('/js/wtv-alerts-core.js');
@@ -40,6 +40,8 @@ self.addEventListener('fetch', e => {
   // Skip the WeatherStar players and live API data. Wrapping them turned every
   // real network problem into a vague "503 (Offline)", hiding the actual error.
   if (url.pathname.startsWith('/weatherstar') || url.pathname.startsWith('/api/')) return;
+  // Same for Weatherscan and its weather data (/wxapi)
+  if (url.pathname.startsWith('/weatherscan') || url.pathname.startsWith('/wxapi/')) return;
 
   e.respondWith(
     fetch(e.request).catch(() =>

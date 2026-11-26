@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T17:20:00Z build.1795713600 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T20:30:00Z build.1795725000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -333,7 +333,7 @@ button{font-family:inherit}
       <button type="button" class="btn ghost" id="srbtn" title="Search channels and videos ( / )" aria-label="Search">🔍</button>
       <button type="button" class="btn green" data-app="radar">LIVE RADAR</button>
       <button type="button" class="btn ghost" data-app="forecast">FORECAST</button>
-      <button type="button" class="btn ghost" data-app="wstar">WEATHERSTAR</button>
+      <!-- WeatherStar (channel 4) and Weatherscan (channel 5) are channels in the guide, not buttons here -->
       <button type="button" class="btn ghost" id="fullbtn" hidden>⛶ FULL</button>
       <a class="btn ghost" id="origbtn" href="/" title="Switch back to the original Weather TV layout">ORIGINAL</a>
       <button type="button" class="chip" id="musicbtn" title="Play WeatherStar Radio behind the guide" aria-label="WeatherStar Radio music" aria-pressed="false">♪</button>
@@ -599,6 +599,7 @@ button{font-family:inherit}
     if (ch.kind === 'radio') return c.a || ('Song ' + (k + 1) + ' of ' + ch.cells.length);   // its artist (from the song's tags)
     if (ch.kind === 'wxr') { const st = ch.station || {}; return (isMyWxr(ch) ? '📍 YOUR LOCAL STATION · ' : '') + 'Live NOAA Weather Radio' + (st.freq ? ' · ' + st.freq + ' MHz' : ''); }
     if (ch.kind === 'wstar') return 'Opens the WeatherStar menu';
+    if (ch.kind === 'wscan') return 'Opens Weatherscan for your area';
     if (ch.kind === 'list') return (ch.id === 'highlights' ? 'Clip ' + (k + 1) : (k + 1) + ' of ' + ch.cells.length);
     if (c.live) return 'Live now';
     return ago(c.at);
@@ -648,7 +649,7 @@ button{font-family:inherit}
     else if (top + el.offsetHeight > rowsEl.scrollTop + h - 40) rowsEl.scrollTop = top + el.offsetHeight - h + 40;
   }
 
-  function isPage(ch) { return ch && (ch.kind === 'forecast' || ch.kind === 'radar' || ch.kind === 'wstar'); }   // channels that open a page
+  function isPage(ch) { return ch && (ch.kind === 'forecast' || ch.kind === 'radar' || ch.kind === 'wstar' || ch.kind === 'wscan'); }   // channels that open a page
   function current() { const it = flat[sel.r]; return it && it.ch ? { it, ch: it.ch, c: it.ch.cells[sel.c] } : null; }
 
   function select(r, c, force) {
@@ -709,6 +710,7 @@ button{font-family:inherit}
     if (ch.kind === 'forecast') { status = 'Opens your full forecast'; next = 'Hourly · 7-day · alerts · records'; action = 'OPEN FORECAST'; }
     else if (ch.kind === 'radar') { status = 'Opens Live Radar'; next = 'Radar · warnings · chasers on the map'; action = 'OPEN RADAR'; }
     else if (ch.kind === 'wstar') { status = 'Opens the WeatherStar menu'; next = 'Pick screens, music and look'; action = 'OPEN WEATHERSTAR'; }
+    else if (ch.kind === 'wscan') { status = 'Local weather around the clock, the way cable did it'; next = 'Conditions · radar · forecast · travel'; action = 'OPEN WEATHERSCAN'; }
     else if (ch.kind === 'list') { status = (ch.repeat ? 'Plays on repeat · ' : 'Plays straight through · ') + (ch.soundtrack ? '♪ with our own music · ' : '') + cellSub(it, c, k); if (ch.repeat && !nxt && ch.cells.length) next = 'Then back to: ' + ch.cells[0].t; }
     else if (ch.kind === 'wxr') {
       const st = ch.station || {};
@@ -1029,6 +1031,9 @@ button{font-family:inherit}
     radar: '/radar.html?embed=guide',
     forecast: '/radar.html?embed=guide&view=forecast',
     wstar: '/?ws=1&embed=guide',
+    // Weatherscan (channel 5) for your saved place: /weatherscan/?lat,lon;Name
+    wscan: () => { let p = null; try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
+      return '/weatherscan/' + (p && isFinite(p.lat) && isFinite(p.lon) ? '?' + (+p.lat).toFixed(3) + ',' + (+p.lon).toFixed(3) + ';' + encodeURIComponent(String(p.label || '').split(',')[0]) : ''); },
     about: '/?about=1&embed=guide',
     getapp: '/?getapp=1&embed=guide',
     support: '/shop.html?embed=guide',
@@ -1045,12 +1050,12 @@ button{font-family:inherit}
     if (!APPS[name]) return;
     closeNav(); clearTimeout(pvT);
     stopPlayer();                                                 // the channel stops; Back to Ch … returns to it
-    if (name === 'wstar') stopRadioAudio();                        // WeatherStar has its own music
+    if (name === 'wstar' || name === 'wscan') stopRadioAudio();     // WeatherStar and Weatherscan have their own music
     $('chatf').src = 'about:blank';
     full = false; mode = 'app'; app = name;
     stage.classList.remove('guiding', 'watching', 'full'); stage.classList.add('apping');
     const f = $('appframe');
-    if (f.dataset.app !== name) { f.dataset.app = name; f.src = APPS[name]; }
+    if (f.dataset.app !== name) { f.dataset.app = name; f.src = typeof APPS[name] === 'function' ? APPS[name]() : APPS[name]; }
     f.style.display = 'block';
     placeApp(); updateBar();
     try { f.focus(); } catch (e) {}
@@ -1084,6 +1089,7 @@ button{font-family:inherit}
     if (cur.ch.kind === 'forecast') { openApp('forecast'); return; }
     if (cur.ch.kind === 'radar') { openApp('radar'); return; }
     if (cur.ch.kind === 'wstar') { openApp('wstar'); return; }
+    if (cur.ch.kind === 'wscan') { openApp('wscan'); return; }
     if (!cur.c) return;
     clearTimeout(pvT);
     mode = 'watch';
