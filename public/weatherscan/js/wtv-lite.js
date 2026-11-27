@@ -1,4 +1,4 @@
-// Weather TV — light map drawer for Weatherscan — updated 2026-11-26T23:30:00Z build.1795739400
+// Weather TV — light map drawer for Weatherscan — updated 2026-11-27T00:10:00Z build.1795741800
 //
 // Weatherscan draws its radar, satellite and data screens with 11–15 MapLibre maps. Each one
 // needs its own WebGL graphics context, and the Xbox (and some TVs) can't hold that many: they
@@ -87,6 +87,9 @@
     return '#000';
   }
   var num = function (v, d) { return typeof v === 'number' ? v : d; };
+  // Maps skipped while hidden get drawn as soon as their slide shows
+  var LIVE = new Set();
+  setInterval(function () { LIVE.forEach(function (m) { if (!m._dirty) { LIVE.delete(m); return; } if (m._el.offsetParent) { LIVE.delete(m); m._paint(); } }); }, 250);
 
   function LiteMap(opts) {
     var self = this;
@@ -207,6 +210,14 @@
   };
   P._draw = function () {
     if (!this._w || !this._h) { this.resize(); if (!this._w) return; }
+    // Hidden map (its slide isn't on screen): don't draw; it's redrawn when Weatherscan resizes or changes it
+    if (!this._el.offsetParent && getComputedStyle(this._el).position !== 'fixed') {
+      this._dirty = true; LIVE.add(this);
+      var v0 = this._view(), self0 = this;   // still fetch the radar pictures, so the loop is ready when it shows
+      this._layers.forEach(function (l) { if (l.type === 'raster') self0._drawRaster(null, l, v0); });
+      return;
+    }
+    this._dirty = false;
     var ctx = this._ctx, v = this._view(), self = this;
     ctx.clearRect(0, 0, this._w, this._h);
     // Runs of vector layers are drawn once into a cached picture; radar frames on top/between
@@ -221,6 +232,14 @@
   P._drawVectors = function (ctx, idxs, v) {
     var self = this, vis = idxs.map(function (i) { return self._layers[i]; }).filter(function (l) { return l.layout.visibility !== 'none'; });
     if (!vis.length) return;
+    // No radar showing on this map: draw the outlines straight onto it (no second picture kept in
+    // memory; the Xbox's graphics memory is small, and running out shows as a black flash)
+    var self2 = this;
+    if (!this._layers.some(function (l) { return l.type === 'raster' && self2._showsLayer(l.id); })) {
+      if (this._vc) this._vc = null;
+      vis.forEach(function (l) { self._drawVecLayer(ctx, l, v); });
+      return;
+    }
     var key = this._vecVer + '|' + idxs.join(',') + '|' + this._w + 'x' + this._h;
     this._vc = this._vc || {};
     var c = this._vc[idxs.join(',')];
@@ -280,7 +299,8 @@
     if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 80) return;   // way too zoomed out for this layer
     var op = num(l.paint['raster-opacity'], 1), show = l.layout.visibility !== 'none' && op > 0, self = this;
     var redraw = function () { if (show || self._showsLayer(l.id)) self._paint(); };
-    ctx.globalAlpha = op;
+    if (!ctx) show = false;
+    if (ctx) ctx.globalAlpha = op;
     for (var ty = ty0; ty <= ty1; ty++) for (var tx = tx0; tx <= tx1; tx++) {
       var wx = ((tx % n) + n) % n;
       var t = tileImg(tileUrl(s.tiles[0], z, wx, ty), redraw);   // always load (keeps radar loops ready), draw only when shown
@@ -288,7 +308,7 @@
         try { ctx.drawImage(t.img, Math.round(tx * size - v.ox), Math.round(ty * size - v.oy), Math.ceil(size) + 1, Math.ceil(size) + 1); } catch (e) {}
       }
     }
-    ctx.globalAlpha = 1;
+    if (ctx) ctx.globalAlpha = 1;
   };
   P._showsLayer = function (id) { var l = this.getLayer(id); return l && l.layout.visibility !== 'none' && num(l.paint['raster-opacity'], 1) > 0; };
 

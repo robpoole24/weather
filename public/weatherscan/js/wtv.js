@@ -449,16 +449,18 @@
     ['mousemove', 'touchstart', 'keydown', 'click'].forEach(function (ev) { addEventListener(ev, show, { passive: true }); });
     paint();
 
-    // While local data loads (10–20 seconds), say so; the note fades once the first screen is up
-    var note = document.createElement('div'); note.id = 'wtv-note';
+    // Once the show starts, a brief pointer to 📍 Location (in case we guessed the wrong place)
     var q = decodeURIComponent(location.search.slice(1)).split(';')[1];
-    note.textContent = 'Loading local weather' + (q ? ' for ' + q : '') + '… this takes about 10–20 seconds. Wrong place? Use 📍 Location at the bottom right.';
-    document.body.appendChild(note);
     var t0 = Date.now(), seen = false, poll = setInterval(function () {
       var st = document.getElementById('startup'), up = st && getComputedStyle(st).display !== 'none';
-      if (up) seen = true;                                         // the startup screen appears a moment after load…
-      var done = seen && !up;                                       // …and the note goes when it does
-      if (done || Date.now() - t0 > 40000) { clearInterval(poll); note.classList.add('gone'); setTimeout(function () { note.remove(); }, 900); }
+      if (up) seen = true;
+      if (!(seen && !up) && Date.now() - t0 < 60000) return;
+      clearInterval(poll);
+      if (!q || (seen && up)) return;
+      var note = document.createElement('div'); note.id = 'wtv-note';
+      note.textContent = 'Weather for ' + q + '. Wrong place? Use 📍 Location at the bottom right.';
+      document.body.appendChild(note);
+      setTimeout(function () { note.classList.add('gone'); setTimeout(function () { note.remove(); }, 900); }, 6000);
     }, 500);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', controls); else controls();
