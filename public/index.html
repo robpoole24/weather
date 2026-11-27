@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-27T02:50:00Z build.1795773600 -->
+<!-- WeatherTV App — updated 2026-11-27T02:50:00Z build.1795821000 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1379,9 +1379,9 @@
 <style>
   html.embed-guide #main-nav, html.embed-guide #search-suggestions, html.embed-guide #status-bar,
   html.embed-guide .skip-link, html.embed-guide #channel-hint { display:none !important; }
-  /* The Channel Guide: on the website and in the Google Play app (native-app; it turns the phone sideways for it).
-     Not yet inside the Xbox / Windows / TV apps */
-  html.in-app:not(.native-app) .guide-btn { display:none !important; }
+  /* The Channel Guide: on the website, in the Google Play app (native-app; it turns the phone sideways for it)
+     and in the Xbox app (tv-mode). Not yet in the Windows app */
+  html.in-app:not(.native-app):not(.tv-mode) .guide-btn { display:none !important; }   /* Xbox (tv-mode) shows it; the Windows app doesn't yet */
   /* Weather Apps: on the website and in the Google Play app (native-app), not in the Xbox / Windows apps */
   html.in-app:not(.native-app) .apps-btn { display:none !important; }
   /* TV and Xbox: no Fullscreen button. The app already fills the screen, and B (Back) closes the app there */
@@ -1883,6 +1883,18 @@
         Weather TV isn't an official warning service, and data or streams can be delayed. When severe weather threatens, rely on the
         National Weather Service (<a href="https://www.weather.gov" target="_blank" rel="noopener" style="color:var(--accent)">weather.gov</a>),
         NOAA Weather Radio, Wireless Emergency Alerts on your phone, and local officials.
+      </div>
+    </div>
+
+    <div class="help-sec">
+      <div class="help-h">What Weather TV runs best on</div>
+      <div class="help-p">
+        Weather TV streams video and draws live radar at the same time, so it likes a reasonably recent device.<br>
+        <b>Best:</b> a computer with a current Chrome, Edge, Firefox or Safari. About 8 GB of memory is comfortable with radar and a stream open together.<br>
+        <b>Consoles:</b> Xbox Series X and Series S run it well, in our Xbox app or the Edge browser. The older Xbox One, One S and One X work but are slower, and heavier screens can lag.<br>
+        <b>Phones and tablets:</b> a phone or tablet from about the last five years, with its system and browser kept up to date.<br>
+        <b>Smart TVs:</b> a TV's built-in browser is usually slow with Weather TV. For the big screen, use an Xbox or a computer connected to the TV, or cast a browser tab from a computer or phone.<br>
+        If things slow down, close other apps and tabs, and keep the app and browser updated.
       </div>
     </div>
 
@@ -5681,7 +5693,7 @@ init();
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fill); else fill();
   })();
 </script>
-<script src="/js/wtv-tv.js?v=1795745100"></script>
+<script src="/js/wtv-tv.js?v=1795821000"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing

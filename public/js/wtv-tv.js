@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-27T00:45:00Z build.1795745100
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-27T00:45:00Z build.1795821000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -541,6 +541,11 @@
   const CURSOR_OK = /WeatherTVXbox\/(1\.([4-9]|\d\d)|[2-9])/.test(ua);
   api.cursorMode = (on, announce) => {
     document.documentElement.classList.toggle('tv-cursor', !!on);
+    if (!document.getElementById('tv-cursor-css')) {          // the Xbox cursor does the pointing: no highlight box
+      const st = document.createElement('style'); st.id = 'tv-cursor-css';
+      st.textContent = 'html.tv-cursor .tv-focus{outline:none!important;box-shadow:none!important}';
+      document.head.appendChild(st);
+    }
     if (on) { ptrHide(); hideMapHint(); }
     if (announce) showTip(on ? 'Cursor on: left stick moves it, A clicks, right stick scrolls · View turns it off' : 'Cursor off: the D-pad moves the highlight · View turns the cursor back on', 5000);
     try { [...document.querySelectorAll('iframe')].forEach(f => { try { f.contentWindow.WTV_TV && f.contentWindow.WTV_TV.cursorMode(on, false); } catch (_) {} }); } catch (_) {}
@@ -812,6 +817,22 @@
     b.textContent = 'Zoom ' + z; b.style.display = 'block';
     clearTimeout(zoomBadge.t); zoomBadge.t = setTimeout(() => { b.style.display = 'none'; }, 1200);
   }
+  // Where the (Xbox) mouse cursor is, for zooming around it
+  let mousePt = null, cursorZoom = null;
+  document.addEventListener('mousemove', (e) => { mousePt = { x: e.clientX, y: e.clientY }; }, true);
+  function zoomAtPoint(x, y, dir) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return false;
+    if (el.tagName === 'IFRAME') {                                      // the radar in a frame: let it zoom itself
+      try { const r = el.getBoundingClientRect(), w = el.contentWindow; return !!(w.WTV_TV && w.WTV_TV.zoomAt && w.WTV_TV.zoomAt(x - r.left, y - r.top, dir)); } catch (_) { return false; }
+    }
+    const m = mapOf(el.closest && el.closest('.leaflet-container'));
+    if (!m) return false;
+    cursorZoom = { x, y };
+    zoomStep(m, dir);
+    return true;
+  }
+  api.zoomAt = zoomAtPoint;
   function zoomStep(m, dir) {
     const base = zoomQ.target != null ? zoomQ.target : m.getZoom();
     zoomQ.target = Math.max(m.getMinZoom(), Math.min(m.getMaxZoom(), Math.round(base) + dir));
@@ -832,7 +853,10 @@
     m.once('zoomend', done);
     zoomQ.guard = setTimeout(done, 900);                                 // never get stuck waiting
     const r = m.getContainer().getBoundingClientRect();
-    try { if (ptr.on) m.setZoomAround(L.point(ptr.x - r.left, ptr.y - r.top), z); else m.setZoom(z); }
+    try {
+      if (cursorZoom && document.documentElement.classList.contains('tv-cursor')) m.setZoomAround(L.point(cursorZoom.x - r.left, cursorZoom.y - r.top), z);
+      else if (ptr.on) m.setZoomAround(L.point(ptr.x - r.left, ptr.y - r.top), z); else m.setZoom(z);
+    }
     catch (_) { try { m.setZoom(z); } catch (__) { done(); } }
   }
   function openOverlays() {
@@ -983,6 +1007,10 @@
       }
       return;
     }
+    // Xbox cursor on: RB/LB zoom the map that's under the cursor, around the cursor
+    if (document.documentElement.classList.contains('tv-cursor') && mousePt && (key === '+' || key === '-' || k === PAD_RB || k === PAD_LB)) {
+      if (zoomAtPoint(mousePt.x, mousePt.y, (key === '+' || k === PAD_RB) ? 1 : -1)) { e.preventDefault(); return; }
+    }
     const m = mapOf(current);
     // LB/RB (the Xbox app sends them as - and +), CH ▲/▼: a page at a time in lists and panels
     if (!m && !typing && (k === PAD_RB || k === PAD_LB || k === 427 || k === 428 || key === 'PageUp' || key === 'PageDown' || key === '+' || key === '-')) {
@@ -1050,8 +1078,6 @@
     // Samsung app wrapper: tell it the site really opened (it hides its loading screen on this)
     if (inShell) { try { window.parent.postMessage({ wtvTv: 'shell-ready' }, '*'); } catch (_) {} }
     if (!inFrame) setTimeout(focusFirst, 400);
-    // Which copy is running, for a few seconds at startup (the same line is in About)
-    if (!inFrame && window.WTV_VERSION) setTimeout(() => showTip(window.WTV_VERSION, 4500), 1200);
     if (!inFrame && CURSOR_OK) setTimeout(() => { try { if (!sessionStorage.getItem('wtvCursorTip') && !document.documentElement.classList.contains('tv-cursor')) { sessionStorage.setItem('wtvCursorTip', '1'); showTip('Tip: press View for a mouse cursor', 6000); } } catch (_) {} }, 6500);
     // A frame opened while the cursor is on starts with it on too
     try { if (inFrame && window.parent.document.documentElement.classList.contains('tv-cursor')) api.cursorMode(true, false); } catch (_) {}

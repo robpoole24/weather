@@ -1,4 +1,4 @@
-<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T21:50:00Z build.1795729800 -->
+<!-- WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T21:50:00Z build.1795819200 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1561,8 +1561,14 @@ html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.
   // (digits 48–57, keypad 96–105, the TV's own 0–9 / channel / back codes)
   const TV_KEYS = { 13: 'Enter', 33: 'PageUp', 34: 'PageDown', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown',
     427: 'ChannelUp', 428: 'ChannelDown', 10009: 'GoBack', 461: 'GoBack', 166: 'GoBack', 10252: 'MediaPlayPause', 415: 'MediaPlay', 19: 'MediaPause', 179: 'MediaPlayPause' };
+  // Xbox app (it turns the controller into key presses): A = OK, B = Back, RB/LB = next/previous block,
+  // X = the block list (guide) or side panel (watching), Y = favorite (guide) or info (watching)
+  const PAD = { GamepadA: 'Enter', GamepadB: 'GoBack', '+': 'PageDown', '-': 'PageUp' };
   function keyName(e) {
     const k = e.key;
+    if (PAD[k]) return PAD[k];
+    if (k === 'GamepadX') return mode === 'guide' ? 'b' : 'm';
+    if (k === 'GamepadY') return mode === 'guide' ? 'h' : 'i';
     if (k && k !== 'Unidentified' && k !== 'Process') return k;
     const c = e.keyCode || e.which || 0;
     if (c >= 48 && c <= 57) return String(c - 48);
@@ -1615,6 +1621,8 @@ html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.
       else if (k === 'PageDown' || k === 'ChannelDown') jumpBlock(1);
       else if (k === 'Enter' || k === ' ') activate();
       else if ((k === 'Escape' || k === 'Backspace' || k === 'GoBack') && watched) backToWatched();
+      // Xbox app: Back on the plain guide goes to Weather TV's main screen (B there closes the app)
+      else if (k === 'GoBack' && /WeatherTVXbox/.test(navigator.userAgent)) location.href = '/';
       else if (k === 's' || k === 'S') toggleSkin();
       else if (k === 'p' || k === 'P' || k === 'MediaPlayPause' || k === 'MediaPause' || k === 'MediaPlay') toggleScroll();
       else if (k === 'f' || k === 'F' || k === 'h' || k === 'H') { const cur = current(); if (cur) toggleFav(cur.ch); }
