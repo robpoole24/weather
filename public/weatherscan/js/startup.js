@@ -142,7 +142,12 @@ requestAnimationFrame(animate);
     audioPlayer.startPlaying(audioPlayer.playlist, true);
 
     window.wtvStep = 'location'
-    await locationJS()
+    // WTV: no lookup may hang the startup. Every data request gives up after 20 seconds, and
+    // the place lookups as a whole get 35 seconds; whatever is found by then is used.
+    try { $.ajaxSetup({ timeout: 20000 }) } catch (e) {}
+    try {
+      await Promise.race([locationJS(), new Promise((ok) => setTimeout(() => { console.warn('place lookups still running after 35 s: going ahead'); ok() }, 35000))])
+    } catch (e) { console.error(e) }
     window.wtvStep = 'data'
     // WTV: build the radar maps now, so they load while the weather data comes in
     try { initializeRadars(); window.wtvRadarsMade = true; } catch (e) { console.error(e) }
