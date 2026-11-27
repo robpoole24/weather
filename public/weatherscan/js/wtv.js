@@ -1,4 +1,4 @@
-// Weather TV glue for Weatherscan v2 — updated 2026-11-26T23:25:00Z build.1795740000
+// Weather TV glue for Weatherscan v2 — updated 2026-11-27T05:55:00Z build.1795758900
 // Loaded before Weatherscan's own scripts. Weatherscan was written for weather.com's paid
 // services and Mapbox; this file gives it Weather TV's instead:
 //   • maps: our own self-hosted style (Natural Earth land/coast/borders, Census states/counties)
@@ -63,6 +63,9 @@
     if (/#lite\b/.test(location.hash)) return true;
     var ua = navigator.userAgent || '';
     if (/Xbox|WeatherTVXbox|Tizen|SMART-TV|SmartTV|Web0S|WebOS|NetCast|HbbTV|BRAVIA|AFT[A-Z]|Android TV|GoogleTV|CrKey/i.test(ua)) return true;
+    // Phones and tablets too: iPhone Safari closes a page that opens this many 3D maps (it crashed
+    // right away), and Android phones have the same tight memory. iPads report themselves as Macs.
+    if (/iPhone|iPad|iPod|Android|Mobile/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return true;
     try { if (localStorage.getItem('wtvLiteMaps') === '1') return true; } catch (e) {}
     try { var c = document.createElement('canvas'); if (!(c.getContext('webgl') || c.getContext('experimental-webgl'))) return true; } catch (e) { return true; }
     return false;

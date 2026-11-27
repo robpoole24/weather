@@ -1,4 +1,4 @@
-// Weather TV — light map drawer for Weatherscan — updated 2026-11-27T00:10:00Z build.1795741800
+// Weather TV — light map drawer for Weatherscan — updated 2026-11-27T05:55:00Z build.1795758900
 //
 // Weatherscan draws its radar, satellite and data screens with 11–15 MapLibre maps. Each one
 // needs its own WebGL graphics context, and the Xbox (and some TVs) can't hold that many: they
@@ -55,6 +55,9 @@
 
   // ── Raster tiles: one picture per address, shared by every map ──
   var tileCache = {}, tileCount = 0;
+  // Pictures kept in memory: fewer on phones and tablets, which close a page that uses too much
+  var SMALL = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent || '') || (/Macintosh/.test(navigator.userAgent || '') && navigator.maxTouchPoints > 1);
+  var CACHE_MAX = SMALL ? 260 : 900;
   function tileImg(url, onload) {
     var t = tileCache[url];
     if (t) { t.used = Date.now(); if (!t.ok && onload && t.waiting.indexOf(onload) < 0) t.waiting.push(onload); return t; }
@@ -63,12 +66,12 @@
     t.img.onload = function () { t.ok = true; var w = t.waiting; t.waiting = []; w.forEach(function (f) { try { f(); } catch (e) {} }); };
     t.img.onerror = function () { t.bad = true; t.waiting = []; };
     t.img.src = url;
-    if (++tileCount % 200 === 0) prune();
+    if (++tileCount % (SMALL ? 60 : 200) === 0) prune();
     return t;
   }
   function prune() {   // keep memory in check on small devices: forget the oldest pictures
-    var keys = Object.keys(tileCache); if (keys.length < 900) return;
-    keys.sort(function (a, b) { return tileCache[a].used - tileCache[b].used; }).slice(0, keys.length - 700).forEach(function (k) { delete tileCache[k]; });
+    var keys = Object.keys(tileCache); if (keys.length < CACHE_MAX) return;
+    keys.sort(function (a, b) { return tileCache[a].used - tileCache[b].used; }).slice(0, keys.length - Math.round(CACHE_MAX * 0.75)).forEach(function (k) { delete tileCache[k]; });
   }
   function tileUrl(tpl, z, x, y) {
     var n = Math.pow(2, z), R = 20037508.342789244, size = 2 * R / n;
