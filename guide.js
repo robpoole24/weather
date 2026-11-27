@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-27T03:35:00Z build.1795750500
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-27T10:00:00Z build.1795773600
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -269,6 +269,7 @@ function inSeason(e) {
   const t = todayMMDD();
   return e.from <= e.to ? t >= e.from && t <= e.to : t >= e.from || t <= e.to;
 }
+const WEATHERSCAN_ON = false;
 const extrasOf = (cfg) => (cfg && Array.isArray(cfg.extras) ? cfg.extras : DEFAULT_EXTRAS);
 
 // Weather TV's own channels, laid out like any other channel
@@ -277,7 +278,8 @@ function builtins(data, cfg, all) {
     { id: 'forecast', name: 'Your Forecast', call: 'FCST', kind: 'forecast', block: 'wtv', n: 2 },
     { id: 'radar', name: 'Live Radar', call: 'RADAR', kind: 'radar', block: 'wtv', n: 3 },
     { id: 'weatherstar', name: 'WeatherStar', call: 'WSTAR', kind: 'wstar', block: 'wtv', n: 4 },
-    { id: 'weatherscan', name: 'Weatherscan', call: 'WSCAN', kind: 'wscan', block: 'wtv', n: 5 },
+    // Weatherscan (channel 5) is off while it's reworked for Xbox and phones; set WEATHERSCAN_ON to bring it back
+    ...(WEATHERSCAN_ON ? [{ id: 'weatherscan', name: 'Weatherscan', call: 'WSCAN', kind: 'wscan', block: 'wtv', n: 5 }] : []),
     { id: 'highlights', name: 'Weather TV Highlights', call: 'HILITE', kind: 'list', block: 'wtv', n: 6 },
   ];
   ((data && data.playlists) || []).forEach((p) => { if (p && p.playlistId) out.push({ id: 'pl-' + p.playlistId, name: p.title || 'Playlist', call: callSign(p.title), kind: 'list', block: 'wtv', playlistId: p.playlistId }); });

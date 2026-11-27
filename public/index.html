@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-27T02:50:00Z build.1795745100 -->
+<!-- WeatherTV App — updated 2026-11-27T02:50:00Z build.1795773600 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4519,7 +4519,7 @@ function playWxr(st) {
 // WEATHERSCAN — self-hosted at /weatherscan/ (rewired to NWS data). The button stays
 // hidden until it's in place: set WEATHERSCAN_READY = true.
 // ═══════════════════════════════════════════
-const WEATHERSCAN_READY = true;
+const WEATHERSCAN_READY = false;   // Nov 27, 2026: pulled while it's reworked to run on Xbox and phones (still reachable at /weatherscan/ for testing)
 (function () { const b = document.getElementById('weatherscan-btn'); if (b && WEATHERSCAN_READY) b.style.display = ''; })();
 function launchWeatherscan() {
   if (!WEATHERSCAN_READY) return;
