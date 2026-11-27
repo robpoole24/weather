@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-27T00:45:00Z build.1795743900
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-27T00:45:00Z build.1795745100
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -1050,7 +1050,9 @@
     // Samsung app wrapper: tell it the site really opened (it hides its loading screen on this)
     if (inShell) { try { window.parent.postMessage({ wtvTv: 'shell-ready' }, '*'); } catch (_) {} }
     if (!inFrame) setTimeout(focusFirst, 400);
-    if (!inFrame && CURSOR_OK) setTimeout(() => { try { if (!sessionStorage.getItem('wtvCursorTip') && !document.documentElement.classList.contains('tv-cursor')) { sessionStorage.setItem('wtvCursorTip', '1'); showTip('Tip: press View for a mouse cursor', 6000); } } catch (_) {} }, 4000);
+    // Which copy is running, for a few seconds at startup (the same line is in About)
+    if (!inFrame && window.WTV_VERSION) setTimeout(() => showTip(window.WTV_VERSION, 4500), 1200);
+    if (!inFrame && CURSOR_OK) setTimeout(() => { try { if (!sessionStorage.getItem('wtvCursorTip') && !document.documentElement.classList.contains('tv-cursor')) { sessionStorage.setItem('wtvCursorTip', '1'); showTip('Tip: press View for a mouse cursor', 6000); } } catch (_) {} }, 6500);
     // A frame opened while the cursor is on starts with it on too
     try { if (inFrame && window.parent.document.documentElement.classList.contains('tv-cursor')) api.cursorMode(true, false); } catch (_) {}
     setTimeout(() => { if (window.WTV_TV_MAP) radarTip(); }, 2500);       // the radar: say how to get around

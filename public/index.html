@@ -1,4 +1,4 @@
-<!-- WeatherTV App — updated 2026-11-26T23:40:00Z build.1795740300 -->
+<!-- WeatherTV App — updated 2026-11-27T02:50:00Z build.1795745100 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1763,6 +1763,7 @@
           Join us on Discord for tech support, app suggestions and news, with a room for every Altruistic Apps app:
           <a class="discord-link" href="https://discord.gg/QATANJmgA7" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">discord.gg/QATANJmgA7</a><br>
           Or email <a href="mailto:contact@altruisticapps.com" style="color:var(--accent)">contact@altruisticapps.com</a>
+          <div id="wtv-version" style="margin-top:0.6rem;font-size:0.72rem;opacity:0.75"></div>
         </div>
       </div>
 
@@ -5670,7 +5671,17 @@ init();
 </div>
 
 <!-- TV remote navigation (Samsung Tizen etc.) — only active on TVs or with ?tv=1 -->
-<script src="/js/wtv-tv.js?v=1795743900"></script>
+<script>
+  // Version line (About; and briefly on TVs at startup): tells us which copy someone is running
+  window.WTV_BUILD = '1795745100';
+  (function () {
+    var m = /WeatherTV(\w*)\/([\d.]+)/.exec(navigator.userAgent || '');
+    window.WTV_VERSION = 'Website build ' + window.WTV_BUILD + (m ? ' · ' + (m[1] || 'app') + ' app ' + m[2] : '');
+    var fill = function () { var el = document.getElementById('wtv-version'); if (el) el.textContent = window.WTV_VERSION; };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fill); else fill();
+  })();
+</script>
+<script src="/js/wtv-tv.js?v=1795745100"></script>
 <script>
   if (window.WTV_TV && WTV_TV.active) {
     // ▶❚❚ on the remote: pause/resume WeatherStar's rotation when it's showing
