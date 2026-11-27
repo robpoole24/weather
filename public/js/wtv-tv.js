@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-26T22:10:00Z build.1795731000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-27T00:45:00Z build.1795743900
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -213,7 +213,8 @@
   function onMedia(fn) { mediaHandlers.push(fn); }
 
   // ── What can be highlighted ───────────────────────────────────────────────
-  const SELECTOR = 'a[href], button, input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"]), [onclick], .leaflet-container, iframe[data-tv-frame]';
+  // .video-thumb / [role=button]: clickable tiles made in script (their onclick isn't an attribute), e.g. Highlights
+  const SELECTOR = 'a[href], button, input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"]), [onclick], .video-thumb, [role="button"], .leaflet-container, iframe[data-tv-frame]';
   function visible(el) {
     if (el.hasAttribute('data-tv-skip') || el.closest('[data-tv-skip]') || el.disabled) return false;
     const r = el.getBoundingClientRect();
@@ -420,7 +421,8 @@
     }
     tvFocusing = false;
     try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {}
-    if (el.classList.contains('leaflet-container')) { showMapHint(); const pm = mapOf(el); if (pm) ptrShow(pm); }
+    if (el.classList.contains('leaflet-container') && document.documentElement.classList.contains('tv-cursor')) { hideMapHint(); ptrHide(); }   // the Xbox cursor is doing the pointing
+    else if (el.classList.contains('leaflet-container')) { showMapHint(); const pm = mapOf(el); if (pm) ptrShow(pm); }
     else { hideMapHint(); ptrHide(); }
     if (el.tagName === 'IFRAME' && !(opts && opts.noEnter)) enterFrame(el, (opts && opts.dir) || 'down');
     return true;
@@ -534,8 +536,18 @@
     h.textContent = text; h.style.display = 'block';
     clearTimeout(hintTimer); clearTimeout(tipTimer); tipTimer = setTimeout(() => { h.style.display = 'none'; }, ms || 6000);
   }
+  // ── Xbox mouse cursor (app 1.4+: the View button switches it on/off) ──
+  // While it's on, the Xbox's own cursor does the pointing, so our map pointer and highlight step aside.
+  const CURSOR_OK = /WeatherTVXbox\/(1\.([4-9]|\d\d)|[2-9])/.test(ua);
+  api.cursorMode = (on, announce) => {
+    document.documentElement.classList.toggle('tv-cursor', !!on);
+    if (on) { ptrHide(); hideMapHint(); }
+    if (announce) showTip(on ? 'Cursor on: left stick moves it, A clicks, right stick scrolls · View turns it off' : 'Cursor off: the D-pad moves the highlight · View turns the cursor back on', 5000);
+    try { [...document.querySelectorAll('iframe')].forEach(f => { try { f.contentWindow.WTV_TV && f.contentWindow.WTV_TV.cursorMode(on, false); } catch (_) {} }); } catch (_) {}
+  };
   function radarTip() {
-    if (/Xbox/i.test(ua)) { if (XY_OK) showTip('Tip: press X to use the map pointer · Y for the top buttons'); }
+    if (document.documentElement.classList.contains('tv-cursor')) return;
+    if (/Xbox/i.test(ua)) { if (XY_OK) showTip('Tip: press X to use the map pointer · Y for the top buttons' + (CURSOR_OK ? ' · View for a mouse cursor' : '')); }
     else showTip('Tip: BLUE key for the map pointer · YELLOW key for the top buttons');
   }
 
@@ -1038,6 +1050,9 @@
     // Samsung app wrapper: tell it the site really opened (it hides its loading screen on this)
     if (inShell) { try { window.parent.postMessage({ wtvTv: 'shell-ready' }, '*'); } catch (_) {} }
     if (!inFrame) setTimeout(focusFirst, 400);
+    if (!inFrame && CURSOR_OK) setTimeout(() => { try { if (!sessionStorage.getItem('wtvCursorTip') && !document.documentElement.classList.contains('tv-cursor')) { sessionStorage.setItem('wtvCursorTip', '1'); showTip('Tip: press View for a mouse cursor', 6000); } } catch (_) {} }, 4000);
+    // A frame opened while the cursor is on starts with it on too
+    try { if (inFrame && window.parent.document.documentElement.classList.contains('tv-cursor')) api.cursorMode(true, false); } catch (_) {}
     setTimeout(() => { if (window.WTV_TV_MAP) radarTip(); }, 2500);       // the radar: say how to get around
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
