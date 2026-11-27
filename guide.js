@@ -1,4 +1,4 @@
-// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-26T20:30:00Z build.1795725000
+// WeatherTV Channel Guide (2.0 prototype) — updated 2026-11-27T03:35:00Z build.1795750500
 // One call that returns the whole cable-style guide: blocks of numbered channels,
 // each with its live stream (if any) and newest uploads. Built ONLY from data the
 // server already caches (live statuses, the twice-daily recent-video fetch,
@@ -293,9 +293,10 @@ function builtins(data, cfg, all) {
 const netName = (label) => cleanLabel(String(label || '').replace(/\s*(chasers?|network)\s*$/i, '')) || cleanLabel(label);
 const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Math.round(+v); return Number.isFinite(n) ? n : null; };
 
-module.exports = function guide(app, { loadData, saveData, cache, filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError }) {
+module.exports = function guide(app, { loadData, saveData, cache, filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError, redis }) {
   let memo = { at: 0, body: null };
-  WXR.mount(app);
+  WXR.mount(app, { redis });
+  WXR.onChange(() => { memo = { at: 0, body: null }; });   // stations arrived or changed: rebuild the guide with them
 
   function videoCells(channelId) {
     const entry = cache.recentVideos[channelId];

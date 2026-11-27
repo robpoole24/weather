@@ -1,4 +1,4 @@
-// WeatherTV Server — updated 2026-11-26T21:20:00Z build.1795728000
+// WeatherTV Server — updated 2026-11-27T03:35:00Z build.1795750500
 const express = require('express');
 const compression = require('compression');
 const { applySecurityMiddleware, applyErrorHandler } = require('./security-middleware');
@@ -3072,7 +3072,7 @@ require('./records')(app, { rGet, rSet });
 // Channel Guide 2.0 prototype (guide.js + public/guide.html): cable-style guide
 // built only from cached data — no quota per request. Unlisted page at /guide.
 // Admin: /admin/guide.html (block, number and tag for every channel; saved in data.guide)
-require('./guide')(app, { loadData, saveData, cache, filterRecent: _filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError });
+require('./guide')(app, { loadData, saveData, cache, filterRecent: _filterRecent, ytFetch, getApiKey, trackBurn, checkQuotaError, redis });   // redis: Weather Radio keeps its last station list
 // Weatherscan (public/weatherscan/, channel 5): answers its weather.com-style requests from NWS + Open-Meteo
 require('./weatherscan-api').mount(app);
 app.get('/guide', (req, res) => res.sendFile(path.join(__dirname, 'public', 'guide.html')));

@@ -1,4 +1,4 @@
-// WeatherTV — NOAA Weather Radio streams (GWES · weatherradio.org) — updated 2026-11-26T17:00:00Z build.1795712400
+// WeatherTV — NOAA Weather Radio streams (GWES · weatherradio.org) — updated 2026-11-27T03:35:00Z build.1795750500
 //
 // The Global Weather & EAS Society streams about 73 NOAA Weather Radio transmitters live
 // (https://weatherradio.org). Two public feeds describe them:
@@ -20,6 +20,9 @@ const STREAM_EVERY = 10 * 60 * 1000, TX_EVERY = 24 * 60 * 60 * 1000;
 const FIPS = { AL: '01', AK: '02', AZ: '04', AR: '05', CA: '06', CO: '08', CT: '09', DE: '10', DC: '11', FL: '12', GA: '13', HI: '15', ID: '16', IL: '17', IN: '18', IA: '19', KS: '20', KY: '21', LA: '22', ME: '23', MD: '24', MA: '25', MI: '26', MN: '27', MS: '28', MO: '29', MT: '30', NE: '31', NV: '32', NH: '33', NJ: '34', NM: '35', NY: '36', NC: '37', ND: '38', OH: '39', OK: '40', OR: '41', PA: '42', RI: '44', SC: '45', SD: '46', TN: '47', TX: '48', UT: '49', VT: '50', VA: '51', WA: '53', WV: '54', WI: '55', WY: '56', AS: '60', GU: '66', MP: '69', PR: '72', VI: '78' };
 
 let streams = [], tx = {}, streamsAt = 0, txAt = 0, busy = false;
+let redis = null;                                 // the last good list is kept here, so a restart starts with it
+const SAVE_KEY = 'wt:wxradio';
+const listeners = [];                             // told when the station list changes (the guide rebuilds)
 const localMemo = new Map();                       // rounded lat,lon → { result, at }
 
 async function getJson(url, ms) {
@@ -60,7 +63,8 @@ async function refresh(force) {
             lat: parseFloat(t.LAT), lon: parseFloat(t.LON), same: Array.isArray(t.SAME) ? t.SAME : [],
           });
         });
-        if (out.length) { out.sort((a, b) => a.st.localeCompare(b.st) || a.city.localeCompare(b.city) || a.call.localeCompare(b.call)); streams = out; streamsAt = now; }
+        if (out.length) { out.sort((a, b) => a.st.localeCompare(b.st) || a.city.localeCompare(b.city) || a.call.localeCompare(b.call)); const was = streams.length; streams = out; streamsAt = now; if (out.length !== was) listeners.forEach((f) => { try { f(); } catch (_) {} });
+          if (redis) redis.set(SAVE_KEY, JSON.stringify({ at: now, streams: out }), 'EX', 30 * 24 * 3600).catch(() => {}); }
       } catch (e) { console.warn('[wxradio] streams:', e.message); }
     }
   } finally { busy = false; }
@@ -96,9 +100,22 @@ async function localFor(lat, lon) {
   return { call: pick.s.call, by: covers.length ? 'county' : 'nearest', miles: Math.round(pick.d), county: same || undefined };
 }
 
-function mount(app) {
-  setTimeout(() => refresh(true), 5000);
+function mount(app, opts) {
+  redis = (opts && opts.redis) || null;
+  // Start with the last good list from Redis (instant, and still there if GWES is down at a restart);
+  // the fresh check below replaces it moments later
+  if (redis) redis.get(SAVE_KEY).then((v) => {
+    const saved = v && JSON.parse(v);
+    if (!streams.length && saved && Array.isArray(saved.streams) && saved.streams.length) {
+      streams = saved.streams; streamsAt = 0;          // 0: still due for a fresh check
+      console.log('[wxradio] ' + streams.length + ' stations from the saved list');
+      listeners.forEach((f) => { try { f(); } catch (_) {} });
+    }
+  }).catch((e) => console.warn('[wxradio] saved list:', e.message));
+  refresh(true);                                   // right away: a guide built before this lands would miss the stations
   setInterval(() => refresh(), STREAM_EVERY);
+  // Still empty (the first try failed)? Try again every minute until it works
+  setInterval(() => { if (!streams.length) refresh(true); }, 60 * 1000);
 
   // The station list (for the original site's Radio picker)
   app.get('/api/wxradio', (req, res) => {
@@ -123,4 +140,4 @@ function mount(app) {
   });
 }
 
-module.exports = { mount, stations, refresh, parseName, miles, _set(s, t) { streams = s; tx = t || tx; streamsAt = Date.now(); } };
+module.exports = { mount, stations, refresh, parseName, miles, onChange: (f) => listeners.push(f), _set(s, t) { streams = s; tx = t || tx; streamsAt = Date.now(); } };
