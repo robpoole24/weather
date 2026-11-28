@@ -1,4 +1,4 @@
-// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-27T18:00:00Z build.1795888000
+// WeatherTV — TV remote navigation (Samsung Tizen + other smart TVs) — updated 2026-11-28T04:40:00Z build.1795927000
 //
 // Loaded by index.html and radar.html. Only switches on for TVs (or ?tv=1 for
 // testing on a computer), so phones and desktops are unaffected.
@@ -657,7 +657,9 @@
 
   // ── Map hint (radar) ──────────────────────────────────────────────────────
   let hintTimer = null;
+  const freeCursor = () => document.documentElement.classList.contains('tv-cursor') || !!cursorTop();   // the Xbox cursor is doing the pointing
   function showMapHint() {
+    if (freeCursor()) return;
     let h = document.getElementById('tv-map-hint');
     if (!h) { h = document.createElement('div'); h.id = 'tv-map-hint'; document.body.appendChild(h); }
     h.textContent = /Xbox/i.test(ua)
@@ -683,6 +685,7 @@
   const ptr = { el: null, x: 0, y: 0, on: false, hover: null, lastAt: 0, streak: 0, set: false };
   let mapReturn = null;
   function ptrShow(m) {
+    if (freeCursor()) return;                                           // never a second pointer next to the Xbox cursor
     if (!ptr.el) {
       ptr.el = document.createElement('div'); ptr.el.id = 'tv-pointer';
       ptr.el.innerHTML = '<svg viewBox="0 0 32 32" width="38" height="38" aria-hidden="true"><path d="M3 2 L3 26 L9.5 20 L14 30 L18.5 28 L14 18.5 L23 18.5 Z" fill="#ffd000" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>';

@@ -1,4 +1,4 @@
-// WeatherTV — free cursor for the Xbox app — updated 2026-11-28T01:10:00Z build.1795914000
+// WeatherTV — free cursor for the Xbox app — updated 2026-11-28T04:40:00Z build.1795927000
 //
 // A mouse-style cursor that goes anywhere on the screen, so a controller can
 // do what a mouse does: point at any button, click the radar, open menus.
@@ -361,7 +361,23 @@
       setTimeout(hover, 200); return;
     }
     if (XBOX_APP && isTextField(el) && !hasTV(t.win)) { askText(el); return; }   // pages without wtv-tv.js (the guide)
+    // On a map: make sure the map itself hears the click (the hodograph, the radar's own
+    // map clicks). If the click didn't reach it, hand it to the map directly, once.
+    let lm = null, heard = false;
+    const box = !t.hot && el.closest && el.closest('.leaflet-container');
+    if (box) { try { lm = t.win.WTV_TV && t.win.WTV_TV.mapFor ? t.win.WTV_TV.mapFor(box) : null; } catch (_) {} }
+    const onMap = () => { heard = true; };
+    if (lm) lm.on('click', onMap);
     fire(t, 'mousedown'); fire(t, 'mouseup'); fire(t, 'click');
+    if (lm) {
+      lm.off('click', onMap);
+      if (!heard) {
+        try {
+          const r = box.getBoundingClientRect(), cp = t.win.L.point(t.x - r.left, t.y - r.top);
+          lm.fire('click', { latlng: lm.containerPointToLatLng(cp), containerPoint: cp, layerPoint: lm.containerPointToLayerPoint(cp), originalEvent: null });
+        } catch (_) {}
+      }
+    }
     if (/^(INPUT|TEXTAREA)$/.test(el.tagName) && !XBOX_APP) { try { el.focus(); } catch (_) {} }
     setTimeout(hover, 250);
   }
