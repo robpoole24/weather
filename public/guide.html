@@ -90,7 +90,10 @@ button{font-family:inherit}
 #chm-line{font-size:19px;color:var(--text)}
 #chm-status{font-size:18px;color:var(--muted)}
 #chm .btns{justify-content:flex-start;margin-top:10px}
-.chan b{font-size:19px;color:var(--num)}.chan span{font-size:14px;font-weight:600;margin-top:2px;letter-spacing:.04em}
+.chan b{font-size:19px;color:var(--num)}.chan span{font-size:14px;font-weight:600;margin-top:2px;letter-spacing:.04em;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Long call letters (up to 7) plus a state: smaller type so they fit between the role icon and the network logos */
+.chan.c-m span{font-size:12.5px;letter-spacing:.01em}.chan.c-l span{font-size:11.5px;letter-spacing:0}
+.chan.has-ri{padding-left:38px}.chan.no-ns{padding-right:6px}
 .cell{flex:1 1 0;min-width:0;margin:0;box-sizing:border-box;border:2px solid transparent;border-radius:0;background:var(--cell);color:var(--text);text-align:left;padding:1px 8px;display:flex;flex-direction:column;justify-content:center;cursor:pointer}
 .cell .l{display:flex;align-items:center;min-width:0}
 .cell .t{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -705,8 +708,9 @@ html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.
     // Under the number: the networks it's in
     // Right: up to two network logos stacked — one sits in the bottom box, a second fills the top
     const strip = nets.slice(0, 2).map((n, j) => '<span class="ns s' + j + '" aria-hidden="true">' + (n.logo ? '<img src="' + esc(n.logo) + '" alt="">' : '<i>' + esc(((n.name.match(/[A-Z0-9]/g) || []).join('') || n.name).slice(0, 2).toUpperCase()) + '</i>') + '</span>').join('');   // no logo yet: WF, WW, AW…
+    const tagLen = String(ch.call || '').length + (code ? code.length - 1 : 0) + (isFav(ch.homeId || ch.id) ? 1 : 0);
     const tip = ch.name + (nets.length ? ' · ' + nets.map((n) => n.name).join(' & ') : '');
-    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + (isMyWxr(ch) ? ' mine' : '') + '" id="r' + i + '"><button type="button" class="chan" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + role + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span>' + strip + '</button>' + cells + '</div>';
+    return '<div class="row' + (it.b.theme ? ' th-' + it.b.theme : '') + (isMyWxr(ch) ? ' mine' : '') + '" id="r' + i + '"><button type="button" class="chan' + (role ? ' has-ri' : '') + (strip ? '' : ' no-ns') + (tagLen > 11 ? ' c-l' : tagLen > 8 ? ' c-m' : '') + '" data-chm="' + i + '" title="' + esc(tip) + '" aria-label="About ' + esc(tip) + '">' + role + '<b>' + ch.n + '</b><span>' + (isFav(ch.homeId || ch.id) ? '<i class="fv">♥</i>' : '') + esc(ch.call + code) + '</span>' + strip + '</button>' + cells + '</div>';
   }
   function renderGrid() {
     rowsEl.innerHTML = flat.map((it, i) => it.band
@@ -1929,6 +1933,6 @@ html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.
   setInterval(loadWx, 15 * 60 * 1000);
 })();
 </script>
-<script src="/js/wtv-cursor.js?v=1795888000"></script>
+<script src="/js/wtv-cursor.js?v=1795914000"></script>
 </body>
 </html>

@@ -1,9 +1,10 @@
-// WeatherTV — free cursor for the Xbox app — updated 2026-11-27T18:00:00Z build.1795888000
+// WeatherTV — free cursor for the Xbox app — updated 2026-11-28T01:10:00Z build.1795914000
 //
 // A mouse-style cursor that goes anywhere on the screen, so a controller can
 // do what a mouse does: point at any button, click the radar, open menus.
 //
 //   Left stick / D-pad → move the cursor (faster the longer you hold)
+//   A on a scroll bar → grab it: the bar follows the cursor up and down; A or B lets go
 //   A                 → click what's under it (the radar opens a hodograph, a
 //                       text box opens the Xbox keyboard, a list opens a picker)
 //   Right stick       → scroll whatever is under it (About, Help, lists…)
@@ -166,6 +167,7 @@
     let nx = C.x + dx, ny = C.y + dy, px = 0, py = 0;
     if (nx < 2) { px = nx - 2; nx = 2; } if (nx > W) { px = nx - W; nx = W; }
     if (ny < 2) { py = ny - 2; ny = 2; } if (ny > H) { py = ny - H; ny = H; }
+    if (C.grab) { grabMove(nx, ny); return; }
     C.x = nx; C.y = ny; draw(); wake();
     if (px || py) { const ma = mapAt(C.x, C.y); if (ma) { try { ma.m.panBy([px * 2.5, py * 2.5], { animate: false }); } catch (_) {} } }   // pushed past the edge over a map: move the map
     clearTimeout(shift.save); shift.save = setTimeout(() => { try { sessionStorage.setItem('wtvCursorAt', JSON.stringify({ x: Math.round(C.x), y: Math.round(C.y) })); } catch (_) {} }, 400);
@@ -260,7 +262,7 @@
     bigCache = { t: now, el: win };
     return win;
   }
-  function scrollerAtCursor() {
+  function scrollerAtCursor(noFallback) {
     const d = deepAt(C.x, C.y);
     if (d) {
       let el = d.el, win = d.win;
@@ -275,7 +277,7 @@
         el = fe.parentElement; win = fe.ownerDocument.defaultView;      // up out of the frame
       }
     }
-    return biggest();
+    return noFallback ? null : biggest();
   }
   C.scrollBy = (dy) => {
     const sc = scrollerAtCursor();
@@ -288,11 +290,68 @@
   C.stick = (v) => { if (Math.abs(v) < 0.15) return; C.scrollBy(Math.sign(v) * ((Math.abs(v) - 0.15) / 0.85) ** 1.5 * 42); };
   C.move = (dx, dy) => { if (C.on) { shift(dx, dy); hover(); } };     // for a later app that sends the left stick directly
 
+  // ── Scroll bars: A grabs the bar, it then follows the cursor, A or B lets go ──
+  // (works on the page and inside the radar frame; positions are in the top page)
+  function offsetOf(win) {
+    let x = 0, y = 0;
+    for (let w = win; w && w !== window; ) {
+      let fe = null; try { fe = w.frameElement; } catch (_) {}
+      if (!fe) break;
+      const r = fe.getBoundingClientRect(); x += r.left + fe.clientLeft; y += r.top + fe.clientTop;
+      w = fe.ownerDocument.defaultView;
+    }
+    return { x, y };
+  }
+  function boxOf(sc) {
+    const doc = sc.ownerDocument, win = doc.defaultView, o = offsetOf(win);
+    if (sc === doc.scrollingElement || sc === doc.documentElement || sc === doc.body)
+      return { left: o.x, top: o.y, right: o.x + win.innerWidth, bottom: o.y + win.innerHeight, bar: Math.max(0, win.innerWidth - doc.documentElement.clientWidth) };
+    const r = sc.getBoundingClientRect(), cs = win.getComputedStyle(sc);
+    const bar = Math.max(0, sc.offsetWidth - sc.clientWidth - (parseFloat(cs.borderLeftWidth) || 0) - (parseFloat(cs.borderRightWidth) || 0));
+    return { left: r.left + o.x, top: r.top + o.y, right: r.right + o.x, bottom: r.bottom + o.y, bar };
+  }
+  function scrollbarAt(x, y) {
+    for (const dx of [0, -12, 12]) {
+      const saveX = C.x; C.x = x + dx;
+      let sc = null; try { sc = scrollerAtCursor(true); } finally { C.x = saveX; }
+      if (!sc) continue;
+      const b = boxOf(sc), zone = Math.max(b.bar, 8) + 16;              // the bar, or the strip just inside it
+      if (x >= b.right - zone && x <= b.right + 8 && y >= b.top && y <= b.bottom) return sc;
+    }
+    return null;
+  }
+  function grabTo(y) {
+    const sc = C.grab; if (!sc || !sc.isConnected) return grabEnd();
+    const b = boxOf(sc), track = b.bottom - b.top, total = sc.scrollHeight, view = sc.clientHeight || track;
+    const thumb = Math.max(24, track * view / Math.max(1, total));
+    const f = Math.max(0, Math.min(1, (y - b.top - thumb / 2) / Math.max(1, track - thumb)));
+    sc.scrollTop = f * (total - view);
+  }
+  function grabMove(nx, ny) {
+    const b = boxOf(C.grab);
+    C.x = Math.min(b.right - 4, Math.max(b.right - 18, nx)); C.y = Math.max(b.top + 2, Math.min(b.bottom - 2, ny));
+    draw(); wake(); grabTo(C.y);
+  }
+  function grabStart(sc) {
+    C.grab = sc; if (C.el) C.el.classList.add('hot');
+    tip('Scroll bar: move up/down to scroll · A or B to let go', 4000);
+    grabMove(C.x, C.y);
+  }
+  function grabEnd() {
+    C.grab = null;
+    const t = document.getElementById('wtv-cursor-tip'); if (t) t.style.display = 'none';
+    setTimeout(hover, 50);
+    return true;
+  }
+
   // ── Clicking ──────────────────────────────────────────────────────────────
   const isTextField = (el) => !!el && !el.disabled && !el.readOnly && (el.tagName === 'TEXTAREA'
     || (el.tagName === 'INPUT' && /^(text|search|url|email|tel|number|)$/i.test(el.getAttribute('type') || '')));
   function click() {
     wake();
+    if (C.grab) { grabEnd(); return; }                                   // A again: let go of the bar
+    const bar = scrollbarAt(C.x, C.y);
+    if (bar) { grabStart(bar); return; }
     const t = target(); if (!t || !t.el) return;
     const el = t.el;
     const sel = el.closest && el.closest('select');
@@ -391,7 +450,7 @@
       if (sc && hasTV(window)) { sc.scrollTop += dirZ * Math.max(60, sc.clientHeight * 0.85); setTimeout(hover, 120); return true; }
       return false;                                                     // the guide: RB/LB = next/previous block
     }
-    if (key === 'GamepadB' || k === 196 || key === 'GoBack' || (TEST && key === 'Escape' && e.isTrusted)) return back();
+    if (key === 'GamepadB' || k === 196 || key === 'GoBack' || (TEST && key === 'Escape' && e.isTrusted)) { if (C.grab) { lastBack = Date.now(); return grabEnd(); } return back(); }
     return false;
   };
   window.addEventListener('keydown', (e) => {
