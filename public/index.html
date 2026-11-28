@@ -973,7 +973,7 @@
      window. Inside a TV app there is no browser to open, so these buttons would do
      nothing, which fails store testing. Phones and computers still show them. */
   .tv-mode .ch-btn.subscribe,
-  .tv-mode a[href="/shop.html"],
+  .tv-mode:not(.xbox-app) a[href="/shop.html"],   /* the Xbox app can: checkout opens in the Xbox's browser */
   /* Android app (Google Play): no shop link, so the app stays plainly non-commercial
      (Play "non-trader" status). The shop stays on the website. */
   .native-app a[href="/shop.html"],
@@ -1358,6 +1358,8 @@
         document.documentElement.classList.add('native-app'); } catch (_) {}
       // Our own apps name themselves in the browser identity (e.g. "WeatherTVXbox")
       if (/WeatherTV/i.test(navigator.userAgent || '')) document.documentElement.classList.add('in-app');
+      // The Xbox app opens outside links (the shop's checkout) in the Xbox's browser, so it can show Support
+      if (/WeatherTVXbox/.test(navigator.userAgent || '')) document.documentElement.classList.add('xbox-app');
       // Windows app from the Microsoft Store: it opens the site with this referrer (first page only,
       // so remember it for the session). Any installed copy runs without browser chrome.
       try {
