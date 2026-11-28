@@ -89,7 +89,7 @@ const DEFAULT_PINS = { UCvBVK2ymNzPLRJrgip2GeQQ: 11, 'UCJHAT3Uvv-g3I8H3GhHWV7w':
 // Role icons next to the channel number (default from the section; per channel in admin)
 const ROLE_ICON = {
   forecaster: '/images/role-forecaster.png', chaser: '/images/role-chaser.png', hurricane: '/images/role-hurricane.png',
-  radar: '/images/role-radar.png', nws: '/images/role-forecaster.png', wtv: '/images/icon-192.png', aa: '/images/role-altruistic-apps.png',
+  radar: '/images/role-radar.png', nws: '/images/role-nws.svg', wtv: '/images/icon-192.png', aa: '/images/role-altruistic-apps.png',
 };
 const ROLE_CHOICES = ['forecaster', 'chaser', 'hurricane', 'radar', 'nws', 'none'];
 // Block colors, like the old PPV and premium-channel bands (set per block in admin)
@@ -146,6 +146,52 @@ function callSign(name) {
   if (!w.length) return '';
   if (w.length === 1) return w[0].slice(0, 6).toUpperCase();
   return (w[0].slice(0, 3) + w[1].slice(0, 3)).toUpperCase();
+}
+// NWS channels: the city's airport code, the letters people already know (MKE Milwaukee,
+// LSE La Crosse, ORD Chicago) instead of "NWSMIL" — the NWS logo already says it's the NWS.
+// Offices named for a small town use the city they serve (Sullivan → MKE, Morristown → TYS).
+// Cities that two offices share are told apart by the state ('city|ST'). A call set in admin wins.
+const NWS_IDS = {
+  'birmingham': 'BHM', 'huntsville': 'HSV', 'mobile': 'MOB', 'anchorage': 'ANC', 'fairbanks': 'FAI', 'juneau': 'JNU',
+  'flagstaff': 'FLG', 'phoenix': 'PHX', 'tucson': 'TUS', 'little rock': 'LIT', 'eureka': 'ACV', 'hanford': 'FAT', 'fresno': 'FAT',
+  'los angeles': 'LAX', 'sacramento': 'SMF', 'san diego': 'SAN', 'bay area': 'SFO', 'san francisco': 'SFO', 'monterey': 'SFO',
+  'boulder': 'DEN', 'denver': 'DEN', 'grand junction': 'GJT', 'pueblo': 'PUB', 'jacksonville': 'JAX', 'key west': 'EYW',
+  'melbourne': 'MLB', 'miami': 'MIA', 'tallahassee': 'TLH', 'tampa': 'TPA', 'peachtree': 'ATL', 'atlanta': 'ATL',
+  'honolulu': 'HNL', 'hawaii': 'HNL', 'boise': 'BOI', 'pocatello': 'PIH', 'chicago': 'ORD', 'lincoln|IL': 'SPI', 'central illinois': 'SPI',
+  'indianapolis': 'IND', 'northern indiana': 'FWA', 'des moines': 'DSM', 'quad cities': 'MLI', 'dodge city': 'DDC',
+  'goodland': 'GLD', 'topeka': 'FOE', 'wichita': 'ICT', 'jackson|KY': 'JKL', 'louisville': 'SDF', 'paducah': 'PAH',
+  'lake charles': 'LCH', 'new orleans': 'MSY', 'shreveport': 'SHV', 'caribou': 'CAR', 'gray': 'PWM', 'portland|ME': 'PWM',
+  'baltimore': 'BWI', 'washington dc': 'DCA', 'sterling': 'BWI', 'boston': 'BOS', 'norton': 'BOS', 'detroit': 'DTW',
+  'gaylord': 'GLR', 'grand rapids': 'GRR', 'marquette': 'MQT', 'duluth': 'DLH', 'twin cities': 'MSP', 'chanhassen': 'MSP',
+  'jackson|MS': 'JAN', 'kansas city': 'MCI', 'st louis': 'STL', 'saint louis': 'STL', 'springfield|MO': 'SGF', 'billings': 'BIL',
+  'glasgow': 'GGW', 'great falls': 'GTF', 'missoula': 'MSO', 'hastings': 'GRI', 'north platte': 'LBF', 'omaha': 'OMA',
+  'elko': 'EKO', 'las vegas': 'LAS', 'reno': 'RNO', 'mount holly': 'PHL', 'philadelphia': 'PHL', 'albuquerque': 'ABQ',
+  'albany': 'ALB', 'binghamton': 'BGM', 'buffalo': 'BUF', 'new york': 'NYC', 'upton': 'NYC', 'morehead city': 'EWN',
+  'newport': 'EWN', 'raleigh': 'RDU', 'wilmington|NC': 'ILM', 'bismarck': 'BIS', 'grand forks': 'GFK', 'cleveland': 'CLE',
+  'wilmington|OH': 'CVG', 'norman': 'OKC', 'oklahoma city': 'OKC', 'tulsa': 'TUL', 'medford': 'MFR', 'pendleton': 'PDT',
+  'portland|OR': 'PDX', 'pittsburgh': 'PIT', 'state college': 'SCE', 'central pennsylvania': 'SCE', 'san juan': 'SJU',
+  'puerto rico': 'SJU', 'charleston|SC': 'CHS', 'columbia': 'CAE', 'greenville': 'GSP', 'spartanburg': 'GSP', 'aberdeen': 'ABR',
+  'rapid city': 'RAP', 'sioux falls': 'FSD', 'memphis': 'MEM', 'morristown': 'TYS', 'knoxville': 'TYS', 'nashville': 'BNA', 'amarillo': 'AMA',
+  'austin': 'AUS', 'san antonio': 'SAT', 'brownsville': 'BRO', 'corpus christi': 'CRP', 'fort worth': 'DFW', 'dallas': 'DFW',
+  'el paso': 'ELP', 'houston': 'IAH', 'galveston': 'IAH', 'lubbock': 'LBB', 'midland': 'MAF', 'san angelo': 'SJT',
+  'salt lake': 'SLC', 'burlington': 'BTV', 'blacksburg': 'ROA', 'roanoke': 'ROA', 'wakefield': 'ORF', 'norfolk': 'ORF', 'seattle': 'SEA', 'spokane': 'GEG',
+  'charleston|WV': 'CRW', 'green bay': 'GRB', 'la crosse': 'LSE', 'lacrosse': 'LSE', 'milwaukee': 'MKE', 'sullivan': 'MKE',
+  'cheyenne': 'CYS', 'riverton': 'RIW', 'guam': 'GUM', 'pago pago': 'PPG', 'american samoa': 'PPG',
+  // National centers keep their own well-known names
+  'storm prediction': 'SPC', 'hurricane center': 'NHC', 'weather prediction': 'WPC', 'climate prediction': 'CPC',
+  'aviation weather': 'AWC', 'space weather': 'SWPC', 'ocean prediction': 'OPC', 'central pacific': 'CPHC',
+};
+const NWS_KEYS = Object.keys(NWS_IDS).sort((a, b) => b.length - a.length);   // "grand rapids" before "rapid"
+function nwsCall(name, area) {
+  const n = ' ' + String(name || '').toLowerCase().replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ') + ' ';
+  const st = (/^US-([A-Z]{2})$/.exec(area || '') || [])[1] || (/^(PR|GU|AS)$/.test(area || '') ? area : '');
+  for (const k of NWS_KEYS) {
+    const [city, kst] = k.split('|');
+    if (n.includes(' ' + city + ' ') && (!kst || !st || kst === st)) return NWS_IDS[k];
+  }
+  // Not a known office: the name without "NWS" / "National Weather Service"
+  const rest = String(name || '').replace(/national weather service|\bnws\b|\bnoaa\b/ig, ' ').trim();
+  return rest ? callSign(rest) : '';
 }
 const cleanTag = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9+&'-]/g, '').slice(0, 7);
 const cleanLabel = (s) => String(s || '').replace(/[<>]/g, '').trim().slice(0, 40);
@@ -464,7 +510,7 @@ module.exports = function guide(app, { loadData, saveData, cache, filterRecent, 
       // Its role icon: yours → our own channels → radar → by section
       const roleSet = ROLE_CHOICES.includes(c.icon) ? c.icon : null;
       const role = roleSet || (ch.builtin ? 'wtv' : OWN_ROLE[ch.id] || (block === 'radar' ? 'radar' : /hurricane|cyclone|tropical/i.test(ch.name || '') ? 'hurricane' : sec === 'fc' ? 'forecaster' : sec === 'ch' ? 'chaser' : sec === 'nws' ? 'nws' : (block !== 'creators' && block !== 'react' && meta[block] && meta[block].parent ? 'forecaster' : 'none')));
-      info[ch.id] = { block, area, by, own: by === 'you', region, regionBy, role, roleSet, call: cleanTag(c.call) || ch.call || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) != null ? num(c.n) : (ch.builtin && ch.n && block === ch.block ? ch.n : null), nSet: num(c.n) != null };
+      info[ch.id] = { block, area, by, own: by === 'you', region, regionBy, role, roleSet, call: cleanTag(c.call) || ch.call || (role === 'nws' && nwsCall(ch.name, area)) || callSign(ch.name), pos: num(c.pos), fixed: num(c.n) != null ? num(c.n) : (ch.builtin && ch.n && block === ch.block ? ch.n : null), nSet: num(c.n) != null };
     });
     // A creator's other channels go where the lead is (unless you placed them yourself)
     const leadOf = {};
