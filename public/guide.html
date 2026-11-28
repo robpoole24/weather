@@ -219,7 +219,7 @@ html.phone .chan span{font-size:16px}
 html.phone .band{height:26px;font-size:18px}
 html.phone #ghead div{font-size:20px}
 html.phone #bar .btn{font-size:19px}
-html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.phone #bar [data-app="about"], html.phone #bar #wx{display:none}
+html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.phone #bar [data-app="about"], html.phone #bar [data-app="help"], html.phone #bar #wx{display:none}
 #bar{position:absolute;left:0;right:0;bottom:0;height:46px;z-index:8;background:var(--bar);border-top:2px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 12px;box-sizing:border-box;gap:10px}
 #bar .k{display:flex;gap:8px;align-items:center;min-width:0}
 #bar .btn{font-size:16px;padding:4px 12px}
@@ -392,6 +392,7 @@ html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.
       <span id="barclock"></span>
       <button type="button" class="btn ghost" data-app="getapp">GET THE APP</button>
       <button type="button" class="btn ghost" data-app="support">SUPPORT</button>
+      <button type="button" class="btn ghost" data-app="help">HELP</button>
       <button type="button" class="btn ghost" data-app="about">ABOUT</button>
     </div>
   </div>
@@ -1114,6 +1115,7 @@ html.phone #bar [data-app="support"], html.phone #bar [data-app="getapp"], html.
     wscan: () => { let p = null; try { p = JSON.parse(localStorage.getItem('wtv-radar-place') || 'null'); } catch (e) {}
       return '/weatherscan/' + (p && isFinite(p.lat) && isFinite(p.lon) ? '?' + (+p.lat).toFixed(3) + ',' + (+p.lon).toFixed(3) + ';' + encodeURIComponent(String(p.label || '').split(',')[0]) : ''); },
     about: '/?about=1&embed=guide',
+    help: '/?help=1&embed=guide',
     getapp: '/?getapp=1&embed=guide',
     support: '/shop.html?embed=guide',
   };

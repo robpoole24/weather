@@ -1951,6 +1951,13 @@ let currentChannel = null;
 // INIT — loads groups from server then builds UI
 // ═══════════════════════════════════════════
 async function init() {
+  // Opened from the Channel Guide's bottom bar for About / Help / Get the App: only that box is
+  // needed, so show it right away and skip loading the channels (that wait made it feel slow)
+  const _gq = new URLSearchParams(location.search);
+  if (_gq.get('embed') === 'guide' && (_gq.has('about') || _gq.has('help') || _gq.has('getapp'))) {
+    try { if (_gq.has('help')) showHelp(); else if (_gq.has('getapp')) showGetApp(); else showAbout(); } catch (e) {}
+    return;
+  }
   startClock();
   applyFavoritesFromURL();
   await loadGroupsFromServer();
@@ -5643,6 +5650,7 @@ function showGetApp() {
 function hideAbout() {
   const overlay = document.getElementById('about-overlay');
   overlay.style.display = 'none';
+  guideBoxClosed();
 }
 
 // HELP MODAL
@@ -5653,6 +5661,17 @@ function showHelp() {
 }
 function hideHelp() {
   document.getElementById('help-overlay').style.display = 'none';
+  guideBoxClosed();
+}
+// In the Channel Guide, closing the last box goes back to the guide (not to an empty page)
+function guideBoxClosed() {
+  if (!document.documentElement.classList.contains('embed-guide')) return;
+  const q = new URLSearchParams(location.search);
+  if (!(q.has('about') || q.has('help') || q.has('getapp'))) return;
+  setTimeout(() => {
+    const open = ['about-overlay', 'help-overlay'].some(id => { const o = document.getElementById(id); return o && o.style.display !== 'none'; });
+    if (!open) { try { window.parent.postMessage({ action: 'minimizeRadar' }, location.origin); } catch (_) {} }
+  }, 0);
 }
 
 // Close on Escape key
